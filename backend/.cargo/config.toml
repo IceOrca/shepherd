@@ -1,0 +1,3 @@
+[build]
+target-dir = "./target/linux-amd64"
+jobs = 4

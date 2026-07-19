@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE hr_attendance_sessions\n            SET check_out_at = CURRENT_TIMESTAMP - INTERVAL '1 hour',\n                check_out_by_account_id = $3,\n                updated_at = CURRENT_TIMESTAMP\n            WHERE tenant_id = $1 AND id = $2\n            RETURNING worked_seconds AS \"worked_seconds!\"\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "worked_seconds!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "hr_attendance_sessions",
+            "name": "worked_seconds"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "78f70e38221be11efbefc397b1b3219daf68f9b3ee6b476996fbebdf766ad4cb"
+}

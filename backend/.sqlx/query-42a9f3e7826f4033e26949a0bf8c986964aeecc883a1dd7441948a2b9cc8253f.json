@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM hr_working_schedule_periods WHERE tenant_id = $1 AND schedule_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "42a9f3e7826f4033e26949a0bf8c986964aeecc883a1dd7441948a2b9cc8253f"
+}

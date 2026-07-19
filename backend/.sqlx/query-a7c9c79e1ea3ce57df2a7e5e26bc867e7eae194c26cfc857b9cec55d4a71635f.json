@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT NULLIF(current_setting('app.tenant_id', true), '')::UUID AS \"tenant_id?\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "tenant_id?",
+        "type_info": "Uuid",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "a7c9c79e1ea3ce57df2a7e5e26bc867e7eae194c26cfc857b9cec55d4a71635f"
+}

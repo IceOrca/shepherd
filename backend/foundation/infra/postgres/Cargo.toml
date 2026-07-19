@@ -1,0 +1,20 @@
+[package]
+name = "foundation-postgres"
+version.workspace = true
+edition.workspace = true
+
+# [[bin]]
+# name = "foundation-dev-db-seeding"
+# path = "src/bin/dev_db_seeding.rs"
+
+[dependencies]
+tokio.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+# crates of the solution
+foundation-kernel.workspace = true
+
+[lints]
+workspace = true

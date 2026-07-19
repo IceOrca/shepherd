@@ -1,0 +1,37 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO hr_employee_assignments (\n                id, tenant_id, employee_id, branch_id, facility_id, department_id, job_id, manager_employee_id,\n                date_start, is_primary, created_by_account_id\n            )\n            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, TRUE, $10)\n            ON CONFLICT (tenant_id, employee_id) WHERE is_primary AND date_end IS NULL DO UPDATE\n            SET branch_id = EXCLUDED.branch_id,\n                facility_id = EXCLUDED.facility_id,\n                department_id = EXCLUDED.department_id,\n                job_id = EXCLUDED.job_id,\n                manager_employee_id = EXCLUDED.manager_employee_id,\n                date_start = EXCLUDED.date_start\n            RETURNING id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "hr_employee_assignments",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Date",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "39b2e96f2409166f4e78401cf076adaa3ef0f09e404e56eb4176c32262c9ad4d"
+}

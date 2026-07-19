@@ -1,0 +1,30 @@
+{
+	"name": "Shepherd Rust Backend",
+	"dockerComposeFile": "../../compose.yaml",
+	"service": "backend",
+	"workspaceFolder": "/app/shepherd_backend",
+	"postCreateCommand": "cargo fetch",
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"rust-lang.rust-analyzer",
+				"tamasfe.even-better-toml",
+				"usernamehw.errorlens"
+			],
+			"settings": {
+				"rust-analyzer.check.command": "clippy",
+				"rust-analyzer.cargo.extraEnv": {
+					"DATABASE_URL": "${containerEnv:DATABASE_URL}"
+				},
+				"rust-analyzer.runnables.extraEnv": {
+					"DATABASE_URL": "${containerEnv:DATABASE_URL}"
+				}
+			}
+		}
+	},
+	"remoteEnv": {
+		"DATABASE_URL": "${containerEnv:DATABASE_URL}"
+	},
+	"remoteUser": "root",
+	"containerUser": "root"
+}

@@ -1,0 +1,33 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO facilities (\n                    id, tenant_id, branch_id, code, name, created_by_account_id, updated_by_account_id\n                )\n                VALUES ($1, $2, $3, $4, $5, $6, $6)\n                ON CONFLICT (tenant_id, branch_id, lower(code)) DO UPDATE\n                SET name = EXCLUDED.name,\n                    status = 'active',\n                    updated_at = CURRENT_TIMESTAMP,\n                    updated_by_account_id = EXCLUDED.updated_by_account_id\n                RETURNING id\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "facilities",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5a98c3427ad0d01773571d7396e284b9ff2baeedb69d1b85cc876919c7ce092d"
+}

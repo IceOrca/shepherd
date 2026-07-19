@@ -1,0 +1,77 @@
+services:
+  postgresql-db:
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER_PROD:?required}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_DB: ${POSTGRES_DB_PROD:?required}
+      POSTGRES_PORT: ${POSTGRES_PORT_PROD:?required}
+    secrets:
+      - source: postgres_password
+        target: postgres_password
+    mem_limit: ${POSTGRES_MEMORY_LIMIT:-1g}
+    cpus: ${POSTGRES_CPU_LIMIT:-1.5}
+    pids_limit: ${POSTGRES_PIDS_LIMIT:-128}
+
+  redis-cache:
+    restart: unless-stopped
+    command: [ "redis-server", "--appendonly", "yes" ]
+    mem_limit: ${REDIS_MEMORY_LIMIT:-256m}
+    cpus: ${REDIS_CPU_LIMIT:-0.5}
+    pids_limit: ${REDIS_PIDS_LIMIT:-64}
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+      target: runner
+    image: iceorca/shepherd-backend:0.1.0
+    restart: unless-stopped
+    environment:
+      APP_ENV: production
+      HOST_IP: 0.0.0.0
+      HOST_PORT: ${BACKEND_PORT_PROD:?required}
+      TRUSTED_PROXY_CIDRS: 127.0.0.1/32,::1/128,172.16.0.0/12
+      RUST_LOG: ${RUST_LOG:-info}
+      JWT_PRIVATE_KEY_PATH: /run/secrets/jwt_private_key
+      JWT_PUBLIC_KEY_PATH: /run/secrets/jwt_public_key
+    secrets:
+      - source: jwt_private_key
+        target: jwt_private_key
+      - source: jwt_public_key
+        target: jwt_public_key
+      - source: server_prod_env
+        target: server_prod_env
+    expose:
+      - ${BACKEND_PORT_PROD:?required}
+    mem_limit: ${BACKEND_MEMORY_LIMIT:-768m}
+    cpus: ${BACKEND_CPU_LIMIT:-1.5}
+    pids_limit: ${BACKEND_PIDS_LIMIT:-256}
+    stop_grace_period: 30s
+
+  frontend:
+    build:
+      context: ./frontend/web
+      dockerfile: Dockerfile.prod
+      target: runner
+    image: iceorca/shepherd-frontend:0.1.0
+    restart: unless-stopped
+    ports: !override
+      - "127.0.0.1:${FRONTEND_HTTP_PORT:?required}:80"
+    mem_limit: ${FRONTEND_MEMORY_LIMIT:-128m}
+    cpus: ${FRONTEND_CPU_LIMIT:-0.25}
+    pids_limit: ${FRONTEND_PIDS_LIMIT:-64}
+
+volumes: !override
+  pg_data:
+  redis_data:
+
+secrets:
+  postgres_password:
+    file: ${SVR_SECRETS_DIR:?SVR_SECRETS_DIR_must_be_set}/postgres_pw
+  jwt_private_key:
+    file: ${SVR_SECRETS_DIR:?SVR_SECRETS_DIR_must_be_set}/jwt_private.pem
+  jwt_public_key:
+    file: ${SVR_SECRETS_DIR:?SVR_SECRETS_DIR_must_be_set}/jwt_public.pem
+  server_prod_env:
+    file: ${SVR_SECRETS_DIR:?SVR_SECRETS_DIR_must_be_set}/server.prod.env

@@ -1,0 +1,94 @@
+services:
+  postgresql-db:
+    image: postgres:18-alpine
+    container_name: shepherd-postgresql
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+    ports:
+      - "${POSTGRES_PORT:-5432}:${POSTGRES_PORT:-5432}"
+    volumes:
+      - pg_data:/var/lib/postgresql
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  redis-cache:
+    image: redis:8-alpine
+    container_name: shepherd-redis
+    ports:
+      - "${REDIS_PORT:-6379}:${REDIS_PORT:-6379}"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: builder
+    image: iceorca/shepherd-backend:0.1.0_dev
+    container_name: shepherd-backend
+    working_dir: /app/shepherd_backend
+    ports:
+      - "${BACKEND_PORT:-8000}:${BACKEND_PORT:-8000}"
+    env_file:
+      - ./env_file_server
+    environment:
+      APP_ENV: development
+      DATABASE_URL: postgres://${PG_APP_USER}:${PG_APP_PASSWORD}@postgresql-db:${POSTGRES_PORT}/${POSTGRES_DB}
+      REDIS_CACHE_URL: ${REDIS_CACHE_URL}
+      REDIS_QUEUE_URL: ${REDIS_QUEUE_URL}
+      HOST_IP: 0.0.0.0
+      HOST_PORT: ${BACKEND_PORT:-8000}
+      TRUSTED_PROXY_CIDRS: 127.0.0.1/32,::1/128,172.16.0.0/12
+      RUST_LOG: ${RUST_LOG:-debug}
+      JWT_PRIVATE_KEY_PATH: ${JWT_PRIVATE_KEY_PATH}
+      JWT_PUBLIC_KEY_PATH: ${JWT_PUBLIC_KEY_PATH}
+    volumes:
+      - ./backend:/app/shepherd_backend
+      - cargo_registry:/usr/local/cargo/registry
+      - cargo_git:/usr/local/cargo/git
+      - server_target:/app/shepherd_backend/target
+    command: sleep infinity
+    depends_on:
+      postgresql-db:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend/web
+      dockerfile: Dockerfile
+      target: builder
+    image: iceorca/shepherd-frontend:0.1.0_dev
+    container_name: shepherd-frontend
+    working_dir: /app/shepherd_frontend
+    ports:
+      - "${FRONTEND_DEV_PORT:-5173}:${FRONTEND_DEV_PORT:-5173}"
+    env_file:
+      - ./env_file_client
+    environment:
+      VITE_SHEPHERD_DEV_PROXY_TARGET: http://backend:${BACKEND_PORT:-8000}
+    volumes:
+      - ./frontend/web:/app/shepherd_frontend
+      - client_node_modules:/app/shepherd_frontend/node_modules
+      - npm_cache:/root/.npm
+    command: sleep infinity
+    depends_on:
+      - backend
+
+volumes:
+  pg_data:
+  cargo_registry:
+  cargo_git:
+  server_target:
+  client_node_modules:
+  npm_cache:

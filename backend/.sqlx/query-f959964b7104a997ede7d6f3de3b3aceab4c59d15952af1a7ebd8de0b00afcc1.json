@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE accounts\n            SET password_hash = $3,\n                password_changed_at = CURRENT_TIMESTAMP,\n                auth_version = auth_version + 1,\n                updated_at = CURRENT_TIMESTAMP,\n                updated_by_account_id = $4\n            WHERE tenant_id = $1 AND id = $2\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f959964b7104a997ede7d6f3de3b3aceab4c59d15952af1a7ebd8de0b00afcc1"
+}

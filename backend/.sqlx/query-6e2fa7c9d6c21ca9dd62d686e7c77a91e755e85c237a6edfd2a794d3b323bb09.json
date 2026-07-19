@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT EXISTS (\n                SELECT 1\n                FROM hr_employee_compensations\n                WHERE tenant_id = $1\n                  AND employee_id = $2\n                  AND effective_from <= COALESCE($4, 'infinity'::DATE)\n                  AND COALESCE(effective_to, 'infinity'::DATE) >= $3\n            ) AS \"exists!\"\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Date",
+        "Date"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "6e2fa7c9d6c21ca9dd62d686e7c77a91e755e85c237a6edfd2a794d3b323bb09"
+}

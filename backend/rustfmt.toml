@@ -1,0 +1,4 @@
+reorder_imports = false
+max_width = 120
+#use_small_heuristics = "Max"
+#use_small_heuristics = "Off"

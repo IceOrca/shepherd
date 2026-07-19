@@ -1,0 +1,26 @@
+FROM rust:1-slim-bookworm AS base
+WORKDIR /app/shepherd_backend
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+
+
+FROM base AS builder
+
+COPY . .
+ENV SQLX_OFFLINE=true
+RUN cargo build --release -p shepherd-runtime --bin shepherd-server
+
+
+
+FROM debian:bookworm-slim AS runner
+WORKDIR /app
+
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=builder /app/shepherd_backend/target/linux-amd64/release/shepherd-server /app/shepherd-server
+
+EXPOSE 8000
+CMD ["/app/shepherd-server"]

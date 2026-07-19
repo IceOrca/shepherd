@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT (rolsuper OR rolbypassrls) AS \"bypasses_rls!\"\n            FROM pg_catalog.pg_roles\n            WHERE rolname = CURRENT_USER\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "bypasses_rls!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "0ae441887fff87f5b9f22dc474c2f557fd67b5cf9b6d6bb1362609f7b0123c39"
+}

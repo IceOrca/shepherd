@@ -1,0 +1,1 @@
+docker compose --env-file .env --env-file /etc/shepherd/secrets/.env config > /etc/shepherd/secrets/compose.yaml

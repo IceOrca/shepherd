@@ -1,0 +1,12 @@
+[package]
+name = "foundation-redis"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+redis.workspace = true
+tracing.workspace = true
+foundation-kernel = { workspace = true, features = ["debugging"] }
+
+[lints]
+workspace = true

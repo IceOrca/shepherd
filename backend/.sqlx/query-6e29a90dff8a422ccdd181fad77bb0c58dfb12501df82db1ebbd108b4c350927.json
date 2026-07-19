@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO accounts (id, tenant_id, username, password_hash, primary_role_code)\n            VALUES ($1, $2, 'rls-cross-tenant', '$argon2id$v=19$test-only-password-hash', 'employee')\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6e29a90dff8a422ccdd181fad77bb0c58dfb12501df82db1ebbd108b4c350927"
+}

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO payroll_employee_results (\n            id, tenant_id, payroll_run_id, employee_id, worked_seconds,\n            base_amount, facility_amount, time_amount, overtime_amount, gross_amount, currency\n        )\n        SELECT\n            MD5($2::UUID::TEXT || ':' || line.employee_id::TEXT || ':result')::UUID,\n            $1,\n            $2,\n            line.employee_id,\n            SUM(line.worked_seconds) FILTER (WHERE line.component = 'base')::BIGINT,\n            COALESCE(SUM(line.amount) FILTER (WHERE line.component = 'base'), 0),\n            COALESCE(SUM(line.amount) FILTER (WHERE line.component = 'facility'), 0),\n            COALESCE(SUM(line.amount) FILTER (WHERE line.component = 'time_band'), 0),\n            COALESCE(SUM(line.amount) FILTER (WHERE line.component = 'overtime'), 0),\n            SUM(line.amount),\n            $3\n        FROM payroll_run_lines AS line\n        WHERE line.tenant_id = $1 AND line.payroll_run_id = $2\n        GROUP BY line.employee_id\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fa0ce162368e7f6226f1bcef88a7a39b216eedcd69acc05ec57f9b5acc3810af"
+}

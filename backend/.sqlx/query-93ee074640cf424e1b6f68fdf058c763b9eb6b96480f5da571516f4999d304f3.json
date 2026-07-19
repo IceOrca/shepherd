@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO hr_attendance_sessions (\n            id, tenant_id, employee_id, facility_id, check_in_at, check_out_at,\n            check_in_by_account_id, check_out_by_account_id\n        )\n        VALUES (\n            $1,\n            $2,\n            $3,\n            $8,\n            (\n                ((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Bangkok')::date - $5::integer) + $6::time\n            ) AT TIME ZONE 'Asia/Bangkok',\n            (\n                ((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Bangkok')::date - $5::integer + 1) + $7::time\n            ) AT TIME ZONE 'Asia/Bangkok',\n            $4,\n            $4\n        )\n        ON CONFLICT (id) DO UPDATE\n        SET employee_id = EXCLUDED.employee_id,\n            facility_id = EXCLUDED.facility_id,\n            check_in_at = EXCLUDED.check_in_at,\n            check_out_at = EXCLUDED.check_out_at,\n            check_in_by_account_id = EXCLUDED.check_in_by_account_id,\n            check_out_by_account_id = EXCLUDED.check_out_by_account_id,\n            updated_at = CURRENT_TIMESTAMP\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Int4",
+        "Time",
+        "Time",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "93ee074640cf424e1b6f68fdf058c763b9eb6b96480f5da571516f4999d304f3"
+}

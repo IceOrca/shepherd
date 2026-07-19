@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO hr_departments (\n            id, tenant_id, code, name, status, created_by_account_id, updated_by_account_id\n        )\n        VALUES ($1, $2, 'operations', 'Operations', 'active', $3, $3)\n        ON CONFLICT (tenant_id, lower(code)) DO UPDATE\n        SET name = EXCLUDED.name,\n            status = 'active',\n            updated_at = CURRENT_TIMESTAMP,\n            updated_by_account_id = EXCLUDED.updated_by_account_id\n        RETURNING id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "hr_departments",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "29b9c4286868af5a201b16643e9a01df936cee734435d771f79dcbd4ffaa73b7"
+}

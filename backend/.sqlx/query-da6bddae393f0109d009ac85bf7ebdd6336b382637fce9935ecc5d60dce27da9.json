@@ -1,0 +1,126 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT id, code, name, threshold_minutes,\n                   premium_multiplier::TEXT AS \"premium_multiplier!\",\n                   hourly_adjustment::TEXT AS \"hourly_adjustment!\",\n                   priority, effective_from, effective_to, is_active\n            FROM payroll_overtime_rules\n            WHERE tenant_id = $1\n            ORDER BY threshold_minutes, priority DESC, effective_from DESC\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "payroll_overtime_rules",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "payroll_overtime_rules",
+            "name": "code"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "payroll_overtime_rules",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "threshold_minutes",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "payroll_overtime_rules",
+            "name": "threshold_minutes"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "premium_multiplier!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "hourly_adjustment!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "priority",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "payroll_overtime_rules",
+            "name": "priority"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "effective_from",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "payroll_overtime_rules",
+            "name": "effective_from"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "effective_to",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "payroll_overtime_rules",
+            "name": "effective_to"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "is_active",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "payroll_overtime_rules",
+            "name": "is_active"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "da6bddae393f0109d009ac85bf7ebdd6336b382637fce9935ecc5d60dce27da9"
+}

@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT permission_code AS \"permission_code!\"\n                FROM role_permissions\n                WHERE role_code = $1\n                ORDER BY permission_code\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "permission_code!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "role_permissions",
+            "name": "permission_code"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "74ef0d11046bbb664ec792478cffcdc84d6e09262bea20becd30281140b538c7"
+}

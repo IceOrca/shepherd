@@ -1,0 +1,20 @@
+[package]
+name = "foundation-authz"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+axum.workspace = true
+casbin.workspace = true
+foundation-auth.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+sqlx-adapter = { workspace = true, optional = true }
+
+[features]
+default = []
+postgres = ["dep:sqlx-adapter"]
+
+[lints]
+workspace = true

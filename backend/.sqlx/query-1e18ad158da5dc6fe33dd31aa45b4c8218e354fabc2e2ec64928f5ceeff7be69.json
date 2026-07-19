@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "ROLLBACK TO SAVEPOINT duplicate_open_attendance_session",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "1e18ad158da5dc6fe33dd31aa45b4c8218e354fabc2e2ec64928f5ceeff7be69"
+}

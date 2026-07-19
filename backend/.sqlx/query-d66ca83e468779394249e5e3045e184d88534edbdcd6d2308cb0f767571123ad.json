@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO payroll_overtime_rules (\n                id, tenant_id, code, name, threshold_minutes, premium_multiplier,\n                hourly_adjustment, priority, effective_from, is_active, created_by_account_id\n            )\n            VALUES ($1, $2, $3, $4, $5, $6::TEXT::NUMERIC, 0, 10, $7, TRUE, $8)\n            ON CONFLICT (tenant_id, code, effective_from) DO UPDATE\n            SET name = EXCLUDED.name,\n                threshold_minutes = EXCLUDED.threshold_minutes,\n                premium_multiplier = EXCLUDED.premium_multiplier,\n                hourly_adjustment = EXCLUDED.hourly_adjustment,\n                priority = EXCLUDED.priority,\n                effective_to = NULL,\n                is_active = TRUE,\n                created_by_account_id = EXCLUDED.created_by_account_id\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Int4",
+        "Text",
+        "Date",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d66ca83e468779394249e5e3045e184d88534edbdcd6d2308cb0f767571123ad"
+}
