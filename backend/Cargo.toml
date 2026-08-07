@@ -10,6 +10,7 @@ members = [
     "foundation/host",
     "foundation/app-sdk",
     "foundation/jobs",
+    "foundation/worker",
     "applications/hrm",
     "runtime",
 ]
@@ -24,6 +25,7 @@ serde = { version = "*", features = ["derive"] }
 serde_json = { version = "*" }
 tokio = { version = "*", features = ["full"] }
 tokio-macros = { version = "*" }
+tokio-util = { version = "*", features = ["rt"] }
 futures-util = { version = "*" }
 async-trait = { version = "*" }
 axum = { version = "*", features = ["multipart"] }
@@ -68,6 +70,7 @@ foundation-redis = { path = "foundation/infra/redis" }
 foundation-host = { path = "foundation/host" }
 foundation-app-sdk = { path = "foundation/app-sdk" }
 foundation-jobs = { path = "foundation/jobs" }
+foundation-worker = { path = "foundation/worker" }
 # installed applications
 app-hrm = { path = "applications/hrm" }
 

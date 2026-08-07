@@ -10,7 +10,7 @@ use axum::{Router, middleware::from_fn_with_state};
 use crate::{AppContext, auth::middleware::require_authenticated, ratelimiting};
 
 pub fn routes(context: Arc<AppContext>) -> Router {
-    let auth = Arc::clone(&context.auth);
+    let auth: Arc<foundation_auth::AuthService> = Arc::clone(&context.auth);
     let hr_routes = Router::new()
         .merge(people::host::routes())
         .merge(working_schedule::host::routes())

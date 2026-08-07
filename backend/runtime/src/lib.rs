@@ -6,7 +6,8 @@ use utoipa::OpenApi;
 
 pub async fn build() -> (Arc<FoundationHostState>, Router) {
     let foundation: Arc<FoundationHostState> = FoundationHostState::new_arc().await;
-    let hrm = app_hrm::AppContext::new_arc(Arc::clone(&foundation.auth), Arc::clone(&foundation.database));
+    let hrm: Arc<app_hrm::AppContext> =
+        app_hrm::AppContext::new_arc(Arc::clone(&foundation.auth), Arc::clone(&foundation.database));
 
     let router: Router = foundation_host::route::routes(Arc::clone(&foundation))
         .merge(app_hrm::routes(hrm))
@@ -16,7 +17,7 @@ pub async fn build() -> (Arc<FoundationHostState>, Router) {
 }
 
 pub fn api_document() -> utoipa::openapi::OpenApi {
-    let mut document = foundation_auth::openapi::AuthApiDoc::openapi();
+    let mut document: utoipa::openapi::OpenApi = foundation_auth::openapi::AuthApiDoc::openapi();
     document.merge(app_hrm::openapi::HrmApiDoc::openapi());
     document
 }
