@@ -1,0 +1,12 @@
+[package]
+name = "infra-redis"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+redis.workspace = true
+tracing.workspace = true
+infra-kernel = { workspace = true, features = ["debugging"] }
+
+[lints]
+workspace = true

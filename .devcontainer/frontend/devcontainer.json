@@ -1,8 +1,8 @@
 {
 	"name": "Shepherd JS Frontend",
 	"dockerComposeFile": "../../compose.yaml",
-	"service": "frontend",
-	"workspaceFolder": "/app/shepherd_frontend",
+	"service": "client",
+	"workspaceFolder": "/app/shepherd_client",
 	"postCreateCommand": "npm ci",
 	"remoteUser": "root",
 	"containerUser": "root"

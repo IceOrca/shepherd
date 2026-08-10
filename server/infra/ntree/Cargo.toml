@@ -1,0 +1,27 @@
+[package]
+name = "infra-ntree"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+parking_lot.workspace = true
+cfg-if.workspace = true
+tokio = { workspace = true, optional = true }
+
+[features]
+# default = ["single-threaded"]
+default = ["multi-threaded", "parking-lot", "rwlock", "use-VecDeque-as-childlist"]
+# full = ["serialization", "parallel"]
+single-threaded = []
+multi-threaded = []
+parking-lot = []
+std-sync = []
+mutex = []
+rwlock = []
+rcu = []
+use-VecDeque-as-childlist = []
+depth-inlined = []
+tokio-lock = ["dep:tokio"]
+
+[lints]
+workspace = true

@@ -1,8 +1,8 @@
 {
   "name": "Shepherd Rust Backend",
   "dockerComposeFile": "../../compose.yaml",
-  "service": "backend",
-  "workspaceFolder": "/app/shepherd_backend",
+  "service": "server",
+  "workspaceFolder": "/app/shepherd_server",
   "postCreateCommand": "cargo fetch",
   "customizations": {
     "vscode": {
@@ -23,13 +23,14 @@
     },
   },
   "containerEnv": {
-    "DATABASE_URL": "${containerEnv:DATABASE_URL}",
+    // "DATABASE_URL": "${containerEnv:DATABASE_URL}",
     // "PATH": "/usr/local/cargo/bin:${containerEnv:PATH}",
   },
   "remoteEnv": {
-    "DATABASE_URL": "${containerEnv:DATABASE_URL}",
+    // "DATABASE_URL": "${containerEnv:DATABASE_URL}",
     "PATH": "/usr/local/cargo/bin:${containerEnv:PATH}",
   },
+  // "runArgs": ["--env-file", ".devcontainer/backend/devcontainer.env"],
   "remoteUser": "root",
   "containerUser": "root",
 }

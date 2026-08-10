@@ -15,17 +15,17 @@ services:
 
   redis-cache:
     restart: unless-stopped
-    command: [ "redis-server", "--appendonly", "yes" ]
+    command: ["redis-server", "--appendonly", "yes"]
     mem_limit: ${REDIS_MEMORY_LIMIT:-256m}
     cpus: ${REDIS_CPU_LIMIT:-0.5}
     pids_limit: ${REDIS_PIDS_LIMIT:-64}
 
-  backend:
+  server:
     build:
-      context: ./backend
+      context: ./server
       dockerfile: Dockerfile.prod
       target: runner
-    image: iceorca/shepherd-backend:0.1.0
+    image: iceorca/shepherd-srv:0.1.0
     restart: unless-stopped
     environment:
       APP_ENV: production
@@ -49,12 +49,12 @@ services:
     pids_limit: ${BACKEND_PIDS_LIMIT:-256}
     stop_grace_period: 30s
 
-  frontend:
+  client:
     build:
-      context: ./frontend/web
+      context: ./client/web
       dockerfile: Dockerfile.prod
       target: runner
-    image: iceorca/shepherd-frontend:0.1.0
+    image: iceorca/shepherd-cli:0.1.0
     restart: unless-stopped
     ports: !override
       - "127.0.0.1:${FRONTEND_HTTP_PORT:?required}:80"
