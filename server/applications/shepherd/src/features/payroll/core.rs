@@ -184,6 +184,7 @@ pub struct PayrollLine {
     pub id: Uuid,
     pub employee_id: Uuid,
     pub attendance_session_id: Option<Uuid>,
+    pub staffing_assignment_id: Option<Uuid>,
     pub facility_id: Option<Uuid>,
     pub work_date: NaiveDate,
     pub component: String,

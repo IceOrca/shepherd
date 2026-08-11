@@ -201,6 +201,7 @@ struct PayrollLineRow {
     id: Uuid,
     employee_id: Uuid,
     attendance_session_id: Option<Uuid>,
+    staffing_assignment_id: Option<Uuid>,
     facility_id: Option<Uuid>,
     work_date: NaiveDate,
     component: String,
@@ -219,6 +220,7 @@ impl From<PayrollLineRow> for PayrollLine {
             id: row.id,
             employee_id: row.employee_id,
             attendance_session_id: row.attendance_session_id,
+            staffing_assignment_id: row.staffing_assignment_id,
             facility_id: row.facility_id,
             work_date: row.work_date,
             component: row.component,
@@ -649,6 +651,7 @@ impl PayrollRepo for PayrollProvider {
         .map_err(|error| mutation_failure("create payroll run", tenant_id, error))?;
 
         insert_base_and_facility_lines(&mut transaction, tenant_id, payroll_run_id, input).await?;
+        insert_staffing_assignment_lines(&mut transaction, tenant_id, payroll_run_id, input).await?;
         insert_time_band_lines(&mut transaction, tenant_id, payroll_run_id, input).await?;
         insert_overtime_lines(&mut transaction, tenant_id, payroll_run_id, input).await?;
         aggregate_employee_results(&mut transaction, tenant_id, payroll_run_id, &input.currency).await?;
@@ -982,6 +985,62 @@ async fn insert_base_and_facility_lines(
     Ok(())
 }
 
+async fn insert_staffing_assignment_lines(
+    transaction: &mut TenantTransaction,
+    tenant_id: Uuid,
+    payroll_run_id: Uuid,
+    input: &PayrollRunInput,
+) -> Result<(), PayrollError> {
+    sqlx::query!(
+        r#"
+        INSERT INTO payroll_run_lines (
+            id, tenant_id, payroll_run_id, employee_id, attendance_session_id,
+            staffing_assignment_id, facility_id, work_date, component, rule_code,
+            worked_seconds, base_hourly_rate, multiplier, hourly_adjustment, amount, description
+        )
+        SELECT
+            MD5($2::UUID::TEXT || ':' || assignment.id::TEXT || ':staffing')::UUID,
+            $1,
+            $2,
+            assignment.employee_id,
+            NULL,
+            assignment.id,
+            NULL,
+            (shift.starts_at AT TIME ZONE $5)::DATE,
+            'staffing',
+            agreement.code,
+            assignment.worked_seconds,
+            assignment.worker_hourly_rate_snapshot,
+            0,
+            0,
+            assignment.worker_amount,
+            'Approved customer staffing assignment'
+        FROM business_shift_assignments AS assignment
+        INNER JOIN business_staffing_shifts AS shift
+            ON shift.tenant_id = assignment.tenant_id
+           AND shift.id = assignment.shift_id
+        LEFT JOIN business_staffing_rate_agreements AS agreement
+            ON agreement.tenant_id = assignment.tenant_id
+           AND agreement.id = assignment.rate_agreement_id
+        WHERE assignment.tenant_id = $1
+          AND assignment.status = 'approved'
+          AND assignment.currency = $6
+          AND (shift.starts_at AT TIME ZONE $5)::DATE >= $3
+          AND (shift.starts_at AT TIME ZONE $5)::DATE < $4
+        "#,
+        tenant_id,
+        payroll_run_id,
+        input.period_start,
+        input.period_end,
+        input.time_zone,
+        input.currency,
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(|error| database_failure("insert staffing assignment payroll lines", tenant_id, error))?;
+    Ok(())
+}
+
 async fn insert_time_band_lines(
     transaction: &mut TenantTransaction,
     tenant_id: Uuid,
@@ -1282,8 +1341,8 @@ async fn aggregate_employee_results(
             $1,
             $2,
             line.employee_id,
-            SUM(line.worked_seconds) FILTER (WHERE line.component = 'base')::BIGINT,
-            COALESCE(SUM(line.amount) FILTER (WHERE line.component = 'base'), 0),
+            SUM(line.worked_seconds) FILTER (WHERE line.component IN ('base', 'staffing'))::BIGINT,
+            COALESCE(SUM(line.amount) FILTER (WHERE line.component IN ('base', 'staffing')), 0),
             COALESCE(SUM(line.amount) FILTER (WHERE line.component = 'facility'), 0),
             COALESCE(SUM(line.amount) FILTER (WHERE line.component = 'time_band'), 0),
             COALESCE(SUM(line.amount) FILTER (WHERE line.component = 'overtime'), 0),
@@ -1369,7 +1428,7 @@ async fn load_run(
     let lines: Vec<PayrollLineRow> = sqlx::query_as!(
         PayrollLineRow,
         r#"
-        SELECT id, employee_id, attendance_session_id, facility_id, work_date,
+        SELECT id, employee_id, attendance_session_id, staffing_assignment_id, facility_id, work_date,
                component, rule_code, worked_seconds,
                base_hourly_rate::TEXT AS "base_hourly_rate!",
                multiplier::TEXT AS "multiplier!",

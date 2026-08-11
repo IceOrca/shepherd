@@ -11,7 +11,7 @@ members = [
     "infra/app-sdk",
     "infra/jobs",
     "infra/worker",
-    "applications/hrm",
+    "applications/shepherd",
     "runtime",
 ]
 
@@ -72,7 +72,7 @@ infra-app-sdk = { path = "infra/app-sdk" }
 infra-jobs = { path = "infra/jobs" }
 infra-worker = { path = "infra/worker" }
 # installed applications
-app-hrm = { path = "applications/hrm" }
+shepherd = { path = "applications/shepherd" }
 
 [workspace.lints.clippy]
 unwrap_used = "deny"

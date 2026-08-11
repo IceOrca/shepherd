@@ -21,7 +21,7 @@ utoipa.workspace = true
 infra-kernel = { workspace = true, features = ["debugging"] }
 infra-auth.workspace = true
 infra-host.workspace = true
-app-hrm.workspace = true
+shepherd.workspace = true
 
 [lints]
 workspace = true

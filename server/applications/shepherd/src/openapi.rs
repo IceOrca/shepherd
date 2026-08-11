@@ -5,6 +5,17 @@ use utoipa::OpenApi;
     paths(
         crate::features::organization::host::list_branches,
         crate::features::organization::host::list_facilities,
+        crate::business::staffing::host::list_customers,
+        crate::business::staffing::host::create_customer,
+        crate::business::staffing::host::list_customer_facilities,
+        crate::business::staffing::host::create_customer_facility,
+        crate::business::staffing::host::list_rate_agreements,
+        crate::business::staffing::host::create_rate_agreement,
+        crate::business::staffing::host::list_shifts,
+        crate::business::staffing::host::create_shift,
+        crate::business::staffing::host::list_shift_assignments,
+        crate::business::staffing::host::create_shift_assignment,
+        crate::business::staffing::host::approve_shift_assignment,
         crate::features::payroll::host::list_compensations,
         crate::features::payroll::host::create_compensation,
         crate::features::payroll::host::list_facility_rules,
@@ -45,6 +56,22 @@ use utoipa::OpenApi;
     components(schemas(
         crate::features::organization::core::BranchSummary,
         crate::features::organization::core::FacilitySummary,
+        crate::business::staffing::host::CustomerCreateRequest,
+        crate::business::staffing::host::CustomerFacilityCreateRequest,
+        crate::business::staffing::host::StaffingRateAgreementCreateRequest,
+        crate::business::staffing::host::StaffingShiftCreateRequest,
+        crate::business::staffing::host::ManualRateOverrideRequest,
+        crate::business::staffing::host::ShiftAssignmentCreateRequest,
+        crate::business::staffing::host::ShiftAssignmentApproveRequest,
+        crate::business::staffing::core::BusinessRecordStatus,
+        crate::business::staffing::core::StaffingShiftStatus,
+        crate::business::staffing::core::ShiftAssignmentStatus,
+        crate::business::staffing::core::RateSource,
+        crate::business::staffing::core::Customer,
+        crate::business::staffing::core::CustomerFacility,
+        crate::business::staffing::core::StaffingRateAgreement,
+        crate::business::staffing::core::StaffingShift,
+        crate::business::staffing::core::ShiftAssignment,
         crate::features::payroll::host::EmployeeCompensationCreateRequest,
         crate::features::payroll::host::FacilityRateRuleCreateRequest,
         crate::features::payroll::host::TimeBandRuleCreateRequest,
@@ -80,9 +107,10 @@ use utoipa::OpenApi;
         crate::features::working_schedule::core::EmployeeScheduleAssignment
     )),
     tags(
-        (name = "business", description = "Tenant-scoped branch and facility directory APIs"),
+        (name = "business", description = "Tenant organization and staffing customer APIs"),
+        (name = "staffing", description = "Customer rates, shifts, assignments, approval, and margin APIs"),
         (name = "hr", description = "Tenant-scoped employee directory and organization APIs"),
         (name = "payroll", description = "Tenant-scoped compensation, wage rule, and payroll run APIs")
     )
 )]
-pub struct HrmApiDoc;
+pub struct ShepherdApiDoc;

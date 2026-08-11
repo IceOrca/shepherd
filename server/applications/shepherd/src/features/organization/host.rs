@@ -1,23 +1,15 @@
 use std::sync::Arc;
 
-use axum::{Extension, Json, Router, extract::State, http::StatusCode, middleware::from_fn_with_state, routing::get};
+use axum::{Extension, Json, Router, extract::State, http::StatusCode, routing::get};
 use infra_kernel::debug::*;
 use crate::features::organization::core::{BranchSummary, FacilitySummary, OrganizationError};
 
-use crate::{
-    AppContext,
-    auth::{AuthenticatedUser, middleware::require_authenticated},
-    ratelimiting,
-};
+use crate::{AppContext, auth::AuthenticatedUser};
 
-pub fn routes(host: Arc<AppContext>) -> Router {
-    let auth = Arc::clone(&host.auth);
+pub fn routes() -> Router<Arc<AppContext>> {
     Router::new()
         .route("/branches", get(list_branches))
         .route("/facilities", get(list_facilities))
-        .layer(ratelimiting::RateLimiter::protected_route_layer())
-        .route_layer(from_fn_with_state(auth, require_authenticated))
-        .with_state(host)
 }
 
 #[utoipa::path(

@@ -265,6 +265,7 @@ async fn seed_tenant(
 
     seed_branches_and_facilities(database, tenant_id, tenant, owner.id).await?;
     seed_hr_infra(database, tenant_id, tenant, &seeded_accounts, owner.id).await?;
+    seed_staffing_business(database, tenant_id, tenant, owner.id).await?;
 
     log_notice!(
         "Development tenant seed completed: tenant_slug={} tenant_id={} accounts={} branches={} facilities={} employees={}",
@@ -279,6 +280,249 @@ async fn seed_tenant(
         seeded_accounts.len()
     );
     Ok(())
+}
+
+async fn seed_staffing_business(
+    database: &DatabaseAdapter,
+    tenant_id: Uuid,
+    tenant: &DevTenant,
+    owner_account_id: Uuid,
+) -> Result<(), io::Error> {
+    let mut transaction = database.begin_tenant(tenant_id).await.map_err(io::Error::other)?;
+    let effective_date =
+        NaiveDate::from_ymd_opt(2026, 1, 1).ok_or_else(|| io::Error::other("invalid staffing seed date"))?;
+    let job_id: Uuid = sqlx::query_scalar!(
+        "SELECT id FROM hr_jobs WHERE tenant_id = $1 AND code = 'employee'",
+        tenant_id,
+    )
+    .fetch_one(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    let employee_id: Uuid = sqlx::query_scalar!(
+        r#"
+        SELECT employee.id
+        FROM hr_employees AS employee
+        INNER JOIN hr_employee_assignments AS assignment
+            ON assignment.tenant_id = employee.tenant_id
+           AND assignment.employee_id = employee.id
+           AND assignment.job_id = $2
+           AND assignment.date_end IS NULL
+        WHERE employee.tenant_id = $1 AND employee.status = 'active'
+        ORDER BY employee.employee_code
+        LIMIT 1
+        "#,
+        tenant_id,
+        job_id,
+    )
+    .fetch_one(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+
+    let karaoke_a_id =
+        ensure_staffing_customer(&mut transaction, tenant_id, "karaoke-a", "Karaoke A", owner_account_id).await?;
+    let karaoke_a_facility_id = ensure_customer_facility(
+        &mut transaction,
+        tenant_id,
+        karaoke_a_id,
+        "main",
+        "Karaoke A Main",
+        owner_account_id,
+    )
+    .await?;
+    let karaoke_b_id =
+        ensure_staffing_customer(&mut transaction, tenant_id, "karaoke-b", "Karaoke B", owner_account_id).await?;
+    let karaoke_b_facility_id = ensure_customer_facility(
+        &mut transaction,
+        tenant_id,
+        karaoke_b_id,
+        "main",
+        "Karaoke B Main",
+        owner_account_id,
+    )
+    .await?;
+
+    ensure_staffing_rate(
+        &mut transaction,
+        tenant_id,
+        "karaoke-a-default",
+        "Karaoke A default staff rate",
+        karaoke_a_id,
+        Some(karaoke_a_facility_id),
+        None,
+        job_id,
+        "150000.0000",
+        "120000.0000",
+        0,
+        effective_date,
+        owner_account_id,
+    )
+    .await?;
+    ensure_staffing_rate(
+        &mut transaction,
+        tenant_id,
+        "karaoke-b-default",
+        "Karaoke B default staff rate",
+        karaoke_b_id,
+        Some(karaoke_b_facility_id),
+        None,
+        job_id,
+        "180000.0000",
+        "135000.0000",
+        0,
+        effective_date,
+        owner_account_id,
+    )
+    .await?;
+    ensure_staffing_rate(
+        &mut transaction,
+        tenant_id,
+        "karaoke-b-worker-special",
+        "Karaoke B worker-specific rate",
+        karaoke_b_id,
+        Some(karaoke_b_facility_id),
+        Some(employee_id),
+        job_id,
+        "180000.0000",
+        "145000.0000",
+        100,
+        effective_date,
+        owner_account_id,
+    )
+    .await?;
+
+    transaction.commit().await.map_err(io::Error::other)?;
+    log_notice!(
+        "Development staffing business committed: tenant_slug={} tenant_id={} sample_employee_id={}",
+        tenant.slug,
+        tenant_id,
+        employee_id
+    );
+    Ok(())
+}
+
+async fn ensure_staffing_customer(
+    transaction: &mut infra_postgres::TenantTransaction,
+    tenant_id: Uuid,
+    code: &str,
+    name: &str,
+    owner_account_id: Uuid,
+) -> Result<Uuid, io::Error> {
+    sqlx::query_scalar!(
+        r#"
+        INSERT INTO business_customers (
+            id, tenant_id, code, name, status, created_by_account_id, updated_by_account_id
+        )
+        VALUES ($1, $2, $3, $4, 'active', $5, $5)
+        ON CONFLICT (tenant_id, lower(code)) DO UPDATE
+        SET name = EXCLUDED.name,
+            status = 'active',
+            updated_at = CURRENT_TIMESTAMP,
+            updated_by_account_id = EXCLUDED.updated_by_account_id
+        RETURNING id
+        "#,
+        Uuid::new_v4(),
+        tenant_id,
+        code,
+        name,
+        owner_account_id,
+    )
+    .fetch_one(transaction.connection())
+    .await
+    .map_err(io::Error::other)
+}
+
+async fn ensure_customer_facility(
+    transaction: &mut infra_postgres::TenantTransaction,
+    tenant_id: Uuid,
+    customer_id: Uuid,
+    code: &str,
+    name: &str,
+    owner_account_id: Uuid,
+) -> Result<Uuid, io::Error> {
+    sqlx::query_scalar!(
+        r#"
+        INSERT INTO business_customer_facilities (
+            id, tenant_id, customer_id, code, name, time_zone, status,
+            created_by_account_id, updated_by_account_id
+        )
+        VALUES ($1, $2, $3, $4, $5, 'Asia/Bangkok', 'active', $6, $6)
+        ON CONFLICT (tenant_id, customer_id, lower(code)) DO UPDATE
+        SET name = EXCLUDED.name,
+            status = 'active',
+            updated_at = CURRENT_TIMESTAMP,
+            updated_by_account_id = EXCLUDED.updated_by_account_id
+        RETURNING id
+        "#,
+        Uuid::new_v4(),
+        tenant_id,
+        customer_id,
+        code,
+        name,
+        owner_account_id,
+    )
+    .fetch_one(transaction.connection())
+    .await
+    .map_err(io::Error::other)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn ensure_staffing_rate(
+    transaction: &mut infra_postgres::TenantTransaction,
+    tenant_id: Uuid,
+    code: &str,
+    name: &str,
+    customer_id: Uuid,
+    customer_facility_id: Option<Uuid>,
+    employee_id: Option<Uuid>,
+    job_id: Uuid,
+    bill_hourly_rate: &str,
+    worker_hourly_rate: &str,
+    priority: i16,
+    effective_from: NaiveDate,
+    owner_account_id: Uuid,
+) -> Result<Uuid, io::Error> {
+    sqlx::query_scalar!(
+        r#"
+        INSERT INTO business_staffing_rate_agreements (
+            id, tenant_id, code, name, customer_id, customer_facility_id, employee_id, job_id,
+            currency, bill_hourly_rate, worker_hourly_rate, priority, effective_from,
+            is_active, created_by_account_id
+        )
+        VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, 'VND',
+            $9::TEXT::NUMERIC, $10::TEXT::NUMERIC, $11, $12, TRUE, $13
+        )
+        ON CONFLICT (tenant_id, code, effective_from) DO UPDATE
+        SET name = EXCLUDED.name,
+            customer_id = EXCLUDED.customer_id,
+            customer_facility_id = EXCLUDED.customer_facility_id,
+            employee_id = EXCLUDED.employee_id,
+            job_id = EXCLUDED.job_id,
+            currency = EXCLUDED.currency,
+            bill_hourly_rate = EXCLUDED.bill_hourly_rate,
+            worker_hourly_rate = EXCLUDED.worker_hourly_rate,
+            priority = EXCLUDED.priority,
+            effective_to = NULL,
+            is_active = TRUE
+        RETURNING id
+        "#,
+        Uuid::new_v4(),
+        tenant_id,
+        code,
+        name,
+        customer_id,
+        customer_facility_id,
+        employee_id,
+        job_id,
+        bill_hourly_rate,
+        worker_hourly_rate,
+        priority,
+        effective_from,
+        owner_account_id,
+    )
+    .fetch_one(transaction.connection())
+    .await
+    .map_err(io::Error::other)
 }
 
 async fn seed_hr_infra(
@@ -732,11 +976,11 @@ async fn seed_payroll_configuration(
                         id, tenant_id, employee_id, currency, pay_basis, hourly_rate,
                         effective_from, created_by_account_id
                     )
-                    VALUES ($1, $2, $3, 'THB', 'hourly', 120, $4, $5)
+                    VALUES ($1, $2, $3, 'VND', 'hourly', 120000, $4, $5)
                     ON CONFLICT (tenant_id, employee_id, effective_from) DO UPDATE
-                    SET currency = 'THB',
+                    SET currency = 'VND',
                         pay_basis = 'hourly',
-                        hourly_rate = 120,
+                        hourly_rate = 120000,
                         monthly_rate = NULL,
                         standard_monthly_hours = NULL,
                         effective_to = NULL,
@@ -754,9 +998,9 @@ async fn seed_payroll_configuration(
             }
             Role::Supervisor | Role::TenantOwner => {
                 let monthly_rate: &str = if account.role == Role::TenantOwner {
-                    "50000"
+                    "50000000"
                 } else {
-                    "30000"
+                    "30000000"
                 };
                 sqlx::query!(
                     r#"
@@ -764,9 +1008,9 @@ async fn seed_payroll_configuration(
                         id, tenant_id, employee_id, currency, pay_basis, monthly_rate,
                         standard_monthly_hours, effective_from, created_by_account_id
                     )
-                    VALUES ($1, $2, $3, 'THB', 'monthly', $4::TEXT::NUMERIC, 160, $5, $6)
+                    VALUES ($1, $2, $3, 'VND', 'monthly', $4::TEXT::NUMERIC, 160, $5, $6)
                     ON CONFLICT (tenant_id, employee_id, effective_from) DO UPDATE
-                    SET currency = 'THB',
+                    SET currency = 'VND',
                         pay_basis = 'monthly',
                         hourly_rate = NULL,
                         monthly_rate = EXCLUDED.monthly_rate,
@@ -909,7 +1153,7 @@ async fn seed_payroll_configuration(
     }
 
     log_info!(
-        "Development payroll configuration ensured: tenant_slug={} tenant_id={} compensations={} warehouse_rules={} time_rules=1 overtime_rules=2 currency=THB",
+        "Development payroll configuration ensured: tenant_slug={} tenant_id={} compensations={} warehouse_rules={} time_rules=1 overtime_rules=2 currency=VND",
         tenant.slug,
         tenant_id,
         accounts.len(),
