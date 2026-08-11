@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use ts_rs::TS;
 use validator::Validate;
 
 use crate::account::{AccountPermission, AccountStatus, Role};
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Validate, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Validate, TS)]
 pub struct AuthRequest {
     /// Human-readable workspace slug from the platform tenant registry.
     #[validate(length(min = 2, max = 63, message = "Tenant must be between 2 and 63 characters"))]
@@ -25,14 +25,14 @@ impl AuthRequest {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, TS)]
 pub struct AuthResponse {
     pub access_token: String,
     pub token_type: String,
     pub expires_in: usize,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
 pub struct AccessClaims {
     /// Account UUID from the shared accounts table.
     pub sub: String,
@@ -53,7 +53,7 @@ pub struct AccessClaims {
     pub permissions: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, ToSchema, Validate)]
+#[derive(Debug, Deserialize, TS, Validate)]
 pub struct RegisterUserRequest {
     #[validate(length(min = 3, max = 128, message = "Username must be between 3 and 128 characters"))]
     pub username: String,
@@ -101,12 +101,12 @@ fn normalize_tenant(tenant: &str) -> Option<String> {
     Some(normalized)
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize, TS)]
 pub struct MessageResponse {
     pub msg: String,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize, TS)]
 pub struct AuthProfileResponse {
     pub tenant_id: String,
     pub account_id: String,
@@ -117,25 +117,23 @@ pub struct AuthProfileResponse {
     pub permissions: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, TS)]
 pub struct UpdateAccountStatusRequest {
     pub status: AccountStatus,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, TS)]
 pub struct UpdateAccountRolesRequest {
     pub primary_role: Role,
-    #[schema(max_items = 64)]
     pub roles: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, TS)]
 pub struct UpdateAccountPermissionsRequest {
-    #[schema(max_items = 256)]
     pub permissions: Vec<AccountPermission>,
 }
 
-#[derive(Debug, Deserialize, Validate, ToSchema)]
+#[derive(Debug, Deserialize, Validate, TS)]
 pub struct ChangePasswordRequest {
     #[validate(length(min = 8, max = 256))]
     pub current_passphrase: String,
@@ -143,13 +141,13 @@ pub struct ChangePasswordRequest {
     pub new_passphrase: String,
 }
 
-#[derive(Debug, Deserialize, Validate, ToSchema)]
+#[derive(Debug, Deserialize, Validate, TS)]
 pub struct ResetPasswordRequest {
     #[validate(length(min = 8, max = 256))]
     pub new_passphrase: String,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize, TS)]
 pub struct InvalidCredentialsResponse {
     pub error: String,
     pub remaining_attempts: u32,

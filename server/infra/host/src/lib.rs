@@ -1,3 +1,5 @@
+#![cfg_attr(debug_assertions, allow(unused))]
+
 pub mod app_routes;
 pub mod audit;
 pub mod client_identifying;

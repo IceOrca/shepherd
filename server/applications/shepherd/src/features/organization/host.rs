@@ -12,13 +12,6 @@ pub fn routes() -> Router<Arc<AppContext>> {
         .route("/facilities", get(list_facilities))
 }
 
-#[utoipa::path(
-    get,
-    path = "/business/branches",
-    tag = "business",
-    security(("bearer_auth" = [])),
-    responses((status = 200, body = [BranchSummary]), (status = 403), (status = 503))
-)]
 pub async fn list_branches(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -32,13 +25,6 @@ pub async fn list_branches(
         .map_err(|error| business_status("list branches", &user, error))
 }
 
-#[utoipa::path(
-    get,
-    path = "/business/facilities",
-    tag = "business",
-    security(("bearer_auth" = [])),
-    responses((status = 200, body = [FacilitySummary]), (status = 403), (status = 503))
-)]
 pub async fn list_facilities(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,

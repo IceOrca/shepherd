@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, NaiveTime, Timelike, Utc};
 use serde::Serialize;
-use utoipa::ToSchema;
+use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::features::people::core::{HrError, HrRecordStatus, validate_code_and_name};
@@ -12,7 +12,7 @@ const MINUTES_PER_DAY: u32 = 24 * 60;
 const MINUTES_PER_WEEK: u32 = 7 * MINUTES_PER_DAY;
 const MAX_PERIODS_PER_SCHEDULE: usize = 64;
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct WorkingPeriod {
     pub id: Uuid,
     pub weekday: i16,
@@ -22,7 +22,7 @@ pub struct WorkingPeriod {
     pub unpaid_break_minutes: i16,
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct WorkingSchedule {
     pub id: Uuid,
     pub code: String,
@@ -52,7 +52,7 @@ pub struct WorkingScheduleInput {
     pub periods: Vec<WorkingPeriodInput>,
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct EmployeeScheduleAssignment {
     pub id: Uuid,
     pub employee_id: Uuid,

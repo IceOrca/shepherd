@@ -1,8 +1,10 @@
+#![cfg_attr(debug_assertions, allow(unused))]
+
 pub mod authz;
 pub mod business;
 pub mod features;
 pub mod hr;
-pub mod openapi;
+pub mod typescript;
 
 use std::sync::Arc;
 

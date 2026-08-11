@@ -5,8 +5,6 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "api:schema": "mkdir -p src/api/generated && cargo run --manifest-path ../../server/Cargo.toml -p shepherd-runtime --bin shepherd-openapi > src/api/generated/openapi.json",
-    "api:types": "npm run api:schema && openapi-typescript src/api/generated/openapi.json -o src/api/generated/schema.d.ts",
     "build": "tsc -b && vite build",
     "deploy:ubuntu": "npm run build && bash scripts/deploy-ubuntu.sh",
     "preview": "vite preview --host 0.0.0.0",
@@ -23,7 +21,6 @@
     "@types/node": "*",
     "@types/react": "*",
     "@types/react-dom": "*",
-    "openapi-typescript": "*",
     "tailwindcss": "*"
   }
 }

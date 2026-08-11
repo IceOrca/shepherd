@@ -14,13 +14,6 @@ use super::dto::{EmployeeScheduleAssignmentCreateRequest, WorkingScheduleUpsertR
 use super::dto::EmployeeScheduleAssignmentView;
 use crate::features::people::host::handler::{hr_status, require_permission};
 
-#[utoipa::path(
-    get,
-    path = "/hr/working-schedules",
-    tag = "hr",
-    security(("bearer_auth" = [])),
-    responses((status = 200, body = [WorkingSchedule]), (status = 403), (status = 503))
-)]
 pub async fn list_working_schedules(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -34,14 +27,6 @@ pub async fn list_working_schedules(
         .map_err(|error| hr_status("list working schedules", &user, error))
 }
 
-#[utoipa::path(
-    post,
-    path = "/hr/working-schedules",
-    tag = "hr",
-    security(("bearer_auth" = [])),
-    request_body = WorkingScheduleUpsertRequest,
-    responses((status = 201, body = WorkingSchedule), (status = 400), (status = 403), (status = 409), (status = 503))
-)]
 pub async fn create_working_schedule(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -57,14 +42,6 @@ pub async fn create_working_schedule(
     Ok((StatusCode::CREATED, Json(schedule)))
 }
 
-#[utoipa::path(
-    get,
-    path = "/hr/working-schedules/{schedule_id}",
-    tag = "hr",
-    security(("bearer_auth" = [])),
-    params(("schedule_id" = Uuid, Path)),
-    responses((status = 200, body = WorkingSchedule), (status = 403), (status = 404), (status = 503))
-)]
 pub async fn get_working_schedule(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -80,15 +57,6 @@ pub async fn get_working_schedule(
         .ok_or(StatusCode::NOT_FOUND)
 }
 
-#[utoipa::path(
-    put,
-    path = "/hr/working-schedules/{schedule_id}",
-    tag = "hr",
-    security(("bearer_auth" = [])),
-    params(("schedule_id" = Uuid, Path)),
-    request_body = WorkingScheduleUpsertRequest,
-    responses((status = 200, body = WorkingSchedule), (status = 400), (status = 403), (status = 404), (status = 409), (status = 503))
-)]
 pub async fn update_working_schedule(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -104,14 +72,6 @@ pub async fn update_working_schedule(
         .map_err(|error| hr_status("update working schedule", &user, error))
 }
 
-#[utoipa::path(
-    get,
-    path = "/hr/employees/{employee_id}/working-schedule-assignments",
-    tag = "hr",
-    security(("bearer_auth" = [])),
-    params(("employee_id" = Uuid, Path)),
-    responses((status = 200, body = [EmployeeScheduleAssignmentView]), (status = 403), (status = 404), (status = 503))
-)]
 pub async fn list_employee_schedule_assignments(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -127,13 +87,6 @@ pub async fn list_employee_schedule_assignments(
     load_assignment_views(&host, &user, assignments).await.map(Json)
 }
 
-#[utoipa::path(
-    get,
-    path = "/hr/employees/me/working-schedule-assignments",
-    tag = "hr",
-    security(("bearer_auth" = [])),
-    responses((status = 200, body = [EmployeeScheduleAssignmentView]), (status = 403), (status = 404), (status = 503))
-)]
 pub async fn list_own_schedule_assignments(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -155,15 +108,6 @@ pub async fn list_own_schedule_assignments(
     load_assignment_views(&host, &user, assignments).await.map(Json)
 }
 
-#[utoipa::path(
-    post,
-    path = "/hr/employees/{employee_id}/working-schedule-assignments",
-    tag = "hr",
-    security(("bearer_auth" = [])),
-    params(("employee_id" = Uuid, Path)),
-    request_body = EmployeeScheduleAssignmentCreateRequest,
-    responses((status = 201, body = EmployeeScheduleAssignment), (status = 400), (status = 403), (status = 404), (status = 409), (status = 503))
-)]
 pub async fn create_employee_schedule_assignment(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,

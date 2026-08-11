@@ -37,18 +37,6 @@ use super::{
     },
 };
 
-#[utoipa::path(
-    post,
-    path = "/auth/login",
-    tag = "auth",
-    request_body = AuthRequest,
-    responses(
-        (status = 200, description = "Authenticated successfully", body = AuthResponse),
-        (status = 400, description = "Invalid login payload"),
-        (status = 401, description = "Invalid tenant or credentials", body = InvalidCredentialsResponse),
-        (status = 503, description = "Authentication server unavailable")
-    )
-)]
 pub async fn login(
     State(ctx): State<Arc<AuthService>>,
     Extension(payload): Extension<AuthRequest>,
@@ -199,7 +187,6 @@ async fn issue_login_response(
         .into_response())
 }
 
-#[utoipa::path(post, path = "/auth/logout", tag = "auth", responses((status = 200), (status = 401)))]
 pub async fn logout(
     State(ctx): State<Arc<AuthService>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -232,7 +219,6 @@ pub async fn logout(
     message_with_cleared_cookie("Logged out successfully")
 }
 
-#[utoipa::path(post, path = "/auth/logout-all", tag = "auth", responses((status = 200), (status = 401)))]
 pub async fn logout_all(
     State(ctx): State<Arc<AuthService>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -261,7 +247,6 @@ pub async fn logout_all(
     message_with_cleared_cookie("Logged out all sessions successfully")
 }
 
-#[utoipa::path(post, path = "/auth/refresh", tag = "auth", responses((status = 200), (status = 401)))]
 pub async fn refresh_session(State(ctx): State<Arc<AuthService>>, headers: HeaderMap) -> Response {
     let cookie: RefreshSessionCookie = match extract_refresh_session_cookie(&headers) {
         Some(cookie) => cookie,
@@ -440,7 +425,6 @@ async fn refresh_session_inner(ctx: &Arc<AuthService>, cookie: &RefreshSessionCo
         .into_response())
 }
 
-#[utoipa::path(get, path = "/auth/profile", tag = "auth", responses((status = 200, body = AuthProfileResponse)))]
 pub async fn get_profile(Extension(user): Extension<AuthenticatedUser>) -> impl IntoResponse {
     (
         sensitive_headers(None),
@@ -456,12 +440,6 @@ pub async fn get_profile(Extension(user): Extension<AuthenticatedUser>) -> impl 
     )
 }
 
-#[utoipa::path(
-    get,
-    path = "/auth/accounts",
-    tag = "auth",
-    responses((status = 200, body = [AccountSummary]), (status = 403), (status = 503))
-)]
 pub async fn list_accounts(
     State(ctx): State<Arc<AuthService>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -478,12 +456,6 @@ pub async fn list_accounts(
     Ok((sensitive_headers(None), Json(accounts)))
 }
 
-#[utoipa::path(
-    get,
-    path = "/auth/roles",
-    tag = "auth",
-    responses((status = 200, body = AuthorizationCatalog), (status = 403), (status = 503))
-)]
 pub async fn get_authorization_catalog(
     State(ctx): State<Arc<AuthService>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -504,13 +476,6 @@ pub async fn get_authorization_catalog(
     Ok((sensitive_headers(None), Json(catalog)))
 }
 
-#[utoipa::path(
-    put,
-    path = "/auth/password",
-    tag = "auth",
-    request_body = ChangePasswordRequest,
-    responses((status = 200), (status = 400), (status = 401), (status = 503))
-)]
 pub async fn change_own_password(
     State(ctx): State<Arc<AuthService>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -538,14 +503,6 @@ pub async fn change_own_password(
     message_with_cleared_cookie("Password changed; all sessions were revoked")
 }
 
-#[utoipa::path(
-    put,
-    path = "/auth/accounts/{account_id}/password",
-    tag = "auth",
-    request_body = ResetPasswordRequest,
-    params(("account_id" = Uuid, Path)),
-    responses((status = 200), (status = 400), (status = 403), (status = 404), (status = 503))
-)]
 pub async fn reset_account_password(
     State(ctx): State<Arc<AuthService>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -567,14 +524,6 @@ pub async fn reset_account_password(
     ))
 }
 
-#[utoipa::path(
-    put,
-    path = "/auth/accounts/{account_id}/status",
-    tag = "auth",
-    request_body = UpdateAccountStatusRequest,
-    params(("account_id" = Uuid, Path)),
-    responses((status = 200), (status = 400), (status = 403), (status = 404), (status = 409), (status = 503))
-)]
 pub async fn update_account_status(
     State(ctx): State<Arc<AuthService>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -598,14 +547,6 @@ pub async fn update_account_status(
     ))
 }
 
-#[utoipa::path(
-    put,
-    path = "/auth/accounts/{account_id}/roles",
-    tag = "auth",
-    request_body = UpdateAccountRolesRequest,
-    params(("account_id" = Uuid, Path)),
-    responses((status = 200), (status = 400), (status = 403), (status = 404), (status = 409), (status = 503))
-)]
 pub async fn update_account_roles(
     State(ctx): State<Arc<AuthService>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -632,14 +573,6 @@ pub async fn update_account_roles(
     ))
 }
 
-#[utoipa::path(
-    put,
-    path = "/auth/accounts/{account_id}/permissions",
-    tag = "auth",
-    request_body = UpdateAccountPermissionsRequest,
-    params(("account_id" = Uuid, Path)),
-    responses((status = 200), (status = 400), (status = 403), (status = 404), (status = 503))
-)]
 pub async fn update_account_permissions(
     State(ctx): State<Arc<AuthService>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -660,13 +593,6 @@ pub async fn update_account_permissions(
     ))
 }
 
-#[utoipa::path(
-    post,
-    path = "/auth/register",
-    tag = "auth",
-    request_body = RegisterUserRequest,
-    responses((status = 201), (status = 400), (status = 401), (status = 403), (status = 409))
-)]
 pub async fn register_new_user(
     State(ctx): State<Arc<AuthService>>,
     Extension(user): Extension<AuthenticatedUser>,

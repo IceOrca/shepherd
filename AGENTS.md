@@ -4,7 +4,7 @@
 
 Reusable server capabilities live in `server/crates/foundation/`. `kernel` owns neutral primitives and debugging; `infra/postgres` and `infra/redis` are thin adapters; `auth` owns authentication; and `host` owns `HostContext`, `AppRoutes`, Axum policies, logging, audit, and rate limiting. Host enables its Cargo `auth` feature by default; use `default-features = false` only intentionally. HRM code lives in `server/crates/applications/hrm/`, `server/runtime/` is the composition root, and migrations remain in `server/migrations`.
 
-The Vite/React application is under `client/web/src`; API helpers and generated OpenAPI types belong in `src/api`. Deployment configuration is in `deploy/` and the root Compose files. Treat `server/target`, `client/web/dist`, and generated API files as build outputs.
+The Vite/React application is under `client/web/src`; API helpers and generated `ts-rs` contracts belong in `src/api`. Deployment configuration is in `deploy/` and the root Compose files. Treat `server/target`, `client/web/dist`, and generated API files as build outputs.
 
 ## Build, Test, and Development Commands
 
@@ -13,7 +13,7 @@ The user starts Compose before development. Run install, build, format, lint, an
 - `docker compose exec -T server bash -c 'cargo test --workspace'` runs server tests.
 - `docker compose exec -T server bash -c 'cargo clippy --workspace && cargo check --workspace'` validates Rust.
 - `docker compose exec -T client bash -c 'npm run lint'` checks TypeScript; replace `lint` with `build` or `dev` as needed.
-- `docker compose exec -T client bash -c 'npm run api:types'` regenerates OpenAPI TypeScript definitions.
+- `bash scripts/generate-api-types.sh` regenerates TypeScript DTO contracts using Cargo inside `server`.
 Use `-it` for an interactive shell and `-T` for non-interactive automation.
 
 ## Container and Database Rules

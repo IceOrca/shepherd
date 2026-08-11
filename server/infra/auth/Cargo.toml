@@ -22,7 +22,7 @@ sqlx.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tokio.workspace = true
-utoipa.workspace = true
+ts-rs.workspace = true
 validator.workspace = true
 uuid.workspace = true
 infra-kernel = { workspace = true, features = ["debugging"] }

@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::Serialize;
-use utoipa::ToSchema;
+use ts_rs::TS;
 use uuid::Uuid;
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct BranchSummary {
     pub id: Uuid,
     pub code: String,
@@ -13,7 +13,7 @@ pub struct BranchSummary {
     pub time_zone: String,
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct FacilitySummary {
     pub id: Uuid,
     pub branch_id: Uuid,

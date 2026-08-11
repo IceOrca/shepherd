@@ -1,9 +1,9 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use ts_rs::TS;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
     TenantOwner,
@@ -30,7 +30,7 @@ impl Role {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum AccountStatus {
     Active,
@@ -57,7 +57,7 @@ impl AccountStatus {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionEffect {
     Allow,
@@ -73,14 +73,14 @@ impl PermissionEffect {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 pub struct AccountPermission {
     pub code: String,
     pub effect: PermissionEffect,
     pub expires_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, TS)]
 pub struct AccountSummary {
     pub id: Uuid,
     pub username: String,
@@ -96,7 +96,7 @@ pub struct AccountSummary {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, TS)]
 pub struct RoleSummary {
     pub code: String,
     pub display_name: String,
@@ -106,13 +106,13 @@ pub struct RoleSummary {
     pub permissions: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, TS)]
 pub struct PermissionSummary {
     pub code: String,
     pub description: String,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, TS)]
 pub struct AuthorizationCatalog {
     pub roles: Vec<RoleSummary>,
     pub permissions: Vec<PermissionSummary>,

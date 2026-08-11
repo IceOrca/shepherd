@@ -57,7 +57,7 @@ redis = { version = "*", features = ["tokio-comp", "connection-manager"] }
 arc-swap = { version = "*" }
 chrono = { version = "*", features = ["serde"] }
 time = { version = "*", features = ["parsing", "macros"] }
-utoipa = { version = "*", features = ["axum_extras", "chrono", "uuid"] }
+ts-rs = { version = "12.0", features = ["chrono-impl", "uuid-impl"] }
 calamine = { version = "*" }
 rust_xlsxwriter = { version = "*" }
 # reusable infra crates
@@ -81,3 +81,4 @@ indexing_slicing = "deny"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+# unused = { level = "allow" }

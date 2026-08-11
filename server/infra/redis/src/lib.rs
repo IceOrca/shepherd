@@ -1,3 +1,5 @@
+#![cfg_attr(debug_assertions, allow(unused))]
+
 use std::sync::Arc;
 use redis::{aio::MultiplexedConnection, RedisResult};
 use infra_kernel::debug::*;

@@ -13,12 +13,13 @@ use crate::features::payroll::core::{
     EmployeeCompensation, EmployeeCompensationInput, FacilityRateRule, FacilityRateRuleInput, OvertimeRule,
     OvertimeRuleInput, PayBasis, PayrollError, PayrollRun, TimeBandRule, TimeBandRuleInput,
 };
-use utoipa::ToSchema;
+use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::{AppContext, auth::AuthenticatedUser};
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(optional_fields = nullable)]
 pub struct EmployeeCompensationCreateRequest {
     pub currency: String,
     pub pay_basis: PayBasis,
@@ -43,7 +44,8 @@ impl From<EmployeeCompensationCreateRequest> for EmployeeCompensationInput {
     }
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(optional_fields = nullable)]
 pub struct FacilityRateRuleCreateRequest {
     pub code: String,
     pub name: String,
@@ -74,7 +76,8 @@ impl From<FacilityRateRuleCreateRequest> for FacilityRateRuleInput {
     }
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(optional_fields = nullable)]
 pub struct TimeBandRuleCreateRequest {
     pub code: String,
     pub name: String,
@@ -109,7 +112,8 @@ impl From<TimeBandRuleCreateRequest> for TimeBandRuleInput {
     }
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(optional_fields = nullable)]
 pub struct OvertimeRuleCreateRequest {
     pub code: String,
     pub name: String,
@@ -138,7 +142,7 @@ impl From<OvertimeRuleCreateRequest> for OvertimeRuleInput {
     }
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, TS)]
 pub struct PayrollCalculateRequest {
     pub year: i32,
     pub month: u32,
@@ -163,14 +167,6 @@ pub fn routes() -> Router<Arc<AppContext>> {
         .route("/runs/{run_id}/approve", post(approve_run))
 }
 
-#[utoipa::path(
-    get,
-    path = "/hr/payroll/employees/{employee_id}/compensations",
-    tag = "payroll",
-    security(("bearer_auth" = [])),
-    params(("employee_id" = Uuid, Path)),
-    responses((status = 200, body = [EmployeeCompensation]), (status = 403), (status = 404), (status = 503))
-)]
 pub async fn list_compensations(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -185,22 +181,6 @@ pub async fn list_compensations(
         .map_err(|error| payroll_status("list compensations", &user, error))
 }
 
-#[utoipa::path(
-    post,
-    path = "/hr/payroll/employees/{employee_id}/compensations",
-    tag = "payroll",
-    security(("bearer_auth" = [])),
-    params(("employee_id" = Uuid, Path)),
-    request_body = EmployeeCompensationCreateRequest,
-    responses(
-        (status = 201, body = EmployeeCompensation),
-        (status = 400),
-        (status = 403),
-        (status = 404),
-        (status = 409),
-        (status = 503)
-    )
-)]
 pub async fn create_compensation(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -217,13 +197,6 @@ pub async fn create_compensation(
     Ok((StatusCode::CREATED, Json(compensation)))
 }
 
-#[utoipa::path(
-    get,
-    path = "/hr/payroll/facility-rules",
-    tag = "payroll",
-    security(("bearer_auth" = [])),
-    responses((status = 200, body = [FacilityRateRule]), (status = 403), (status = 503))
-)]
 pub async fn list_facility_rules(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -237,21 +210,6 @@ pub async fn list_facility_rules(
         .map_err(|error| payroll_status("list facility rules", &user, error))
 }
 
-#[utoipa::path(
-    post,
-    path = "/hr/payroll/facility-rules",
-    tag = "payroll",
-    security(("bearer_auth" = [])),
-    request_body = FacilityRateRuleCreateRequest,
-    responses(
-        (status = 201, body = FacilityRateRule),
-        (status = 400),
-        (status = 403),
-        (status = 404),
-        (status = 409),
-        (status = 503)
-    )
-)]
 pub async fn create_facility_rule(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -267,13 +225,6 @@ pub async fn create_facility_rule(
     Ok((StatusCode::CREATED, Json(rule)))
 }
 
-#[utoipa::path(
-    get,
-    path = "/hr/payroll/time-band-rules",
-    tag = "payroll",
-    security(("bearer_auth" = [])),
-    responses((status = 200, body = [TimeBandRule]), (status = 403), (status = 503))
-)]
 pub async fn list_time_band_rules(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -287,20 +238,6 @@ pub async fn list_time_band_rules(
         .map_err(|error| payroll_status("list time band rules", &user, error))
 }
 
-#[utoipa::path(
-    post,
-    path = "/hr/payroll/time-band-rules",
-    tag = "payroll",
-    security(("bearer_auth" = [])),
-    request_body = TimeBandRuleCreateRequest,
-    responses(
-        (status = 201, body = TimeBandRule),
-        (status = 400),
-        (status = 403),
-        (status = 409),
-        (status = 503)
-    )
-)]
 pub async fn create_time_band_rule(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -316,13 +253,6 @@ pub async fn create_time_band_rule(
     Ok((StatusCode::CREATED, Json(rule)))
 }
 
-#[utoipa::path(
-    get,
-    path = "/hr/payroll/overtime-rules",
-    tag = "payroll",
-    security(("bearer_auth" = [])),
-    responses((status = 200, body = [OvertimeRule]), (status = 403), (status = 503))
-)]
 pub async fn list_overtime_rules(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -336,20 +266,6 @@ pub async fn list_overtime_rules(
         .map_err(|error| payroll_status("list overtime rules", &user, error))
 }
 
-#[utoipa::path(
-    post,
-    path = "/hr/payroll/overtime-rules",
-    tag = "payroll",
-    security(("bearer_auth" = [])),
-    request_body = OvertimeRuleCreateRequest,
-    responses(
-        (status = 201, body = OvertimeRule),
-        (status = 400),
-        (status = 403),
-        (status = 409),
-        (status = 503)
-    )
-)]
 pub async fn create_overtime_rule(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -365,13 +281,6 @@ pub async fn create_overtime_rule(
     Ok((StatusCode::CREATED, Json(rule)))
 }
 
-#[utoipa::path(
-    get,
-    path = "/hr/payroll/runs",
-    tag = "payroll",
-    security(("bearer_auth" = [])),
-    responses((status = 200, body = [PayrollRun]), (status = 403), (status = 503))
-)]
 pub async fn list_runs(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -385,21 +294,6 @@ pub async fn list_runs(
         .map_err(|error| payroll_status("list payroll runs", &user, error))
 }
 
-#[utoipa::path(
-    post,
-    path = "/hr/payroll/runs",
-    tag = "payroll",
-    security(("bearer_auth" = [])),
-    request_body = PayrollCalculateRequest,
-    responses(
-        (status = 201, body = PayrollRun),
-        (status = 400),
-        (status = 403),
-        (status = 409),
-        (status = 422),
-        (status = 503)
-    )
-)]
 pub async fn calculate_run(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -422,14 +316,6 @@ pub async fn calculate_run(
     Ok((StatusCode::CREATED, Json(run)))
 }
 
-#[utoipa::path(
-    get,
-    path = "/hr/payroll/runs/{run_id}",
-    tag = "payroll",
-    security(("bearer_auth" = [])),
-    params(("run_id" = Uuid, Path)),
-    responses((status = 200, body = PayrollRun), (status = 403), (status = 404), (status = 503))
-)]
 pub async fn get_run(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -445,20 +331,6 @@ pub async fn get_run(
         .ok_or(StatusCode::NOT_FOUND)
 }
 
-#[utoipa::path(
-    post,
-    path = "/hr/payroll/runs/{run_id}/approve",
-    tag = "payroll",
-    security(("bearer_auth" = [])),
-    params(("run_id" = Uuid, Path)),
-    responses(
-        (status = 200, body = PayrollRun),
-        (status = 403),
-        (status = 404),
-        (status = 409),
-        (status = 503)
-    )
-)]
 pub async fn approve_run(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,

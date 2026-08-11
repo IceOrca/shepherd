@@ -3,10 +3,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use ts_rs::TS;
 use uuid::Uuid;
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum BusinessRecordStatus {
     Active,
@@ -30,7 +30,7 @@ impl BusinessRecordStatus {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ToSchema)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum StaffingShiftStatus {
     Open,
@@ -53,7 +53,7 @@ impl StaffingShiftStatus {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ToSchema)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ShiftAssignmentStatus {
     Assigned,
@@ -72,7 +72,7 @@ impl ShiftAssignmentStatus {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ToSchema)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum RateSource {
     Agreement,
@@ -89,7 +89,7 @@ impl RateSource {
     }
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct Customer {
     pub id: Uuid,
     pub code: String,
@@ -100,7 +100,7 @@ pub struct Customer {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct CustomerFacility {
     pub id: Uuid,
     pub customer_id: Uuid,
@@ -113,7 +113,7 @@ pub struct CustomerFacility {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct StaffingRateAgreement {
     pub id: Uuid,
     pub code: String,
@@ -132,7 +132,7 @@ pub struct StaffingRateAgreement {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct StaffingShift {
     pub id: Uuid,
     pub customer_id: Uuid,
@@ -147,7 +147,7 @@ pub struct StaffingShift {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct ShiftAssignment {
     pub id: Uuid,
     pub shift_id: Uuid,

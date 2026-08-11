@@ -1,3 +1,5 @@
+#![cfg_attr(debug_assertions, allow(unused))]
+
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;

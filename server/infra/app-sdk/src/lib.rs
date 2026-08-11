@@ -1,3 +1,4 @@
+#![cfg_attr(debug_assertions, allow(unused))]
 use serde::Serialize;
 
 /// Static metadata exposed by an application compiled into the runtime.

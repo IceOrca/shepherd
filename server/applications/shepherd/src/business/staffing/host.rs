@@ -9,7 +9,7 @@ use axum::{
 use chrono::{DateTime, NaiveDate, Utc};
 use infra_kernel::debug::*;
 use serde::Deserialize;
-use utoipa::ToSchema;
+use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::{AppContext, auth::AuthenticatedUser};
@@ -20,7 +20,8 @@ use super::core::{
     StaffingShift, StaffingShiftInput,
 };
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(optional_fields = nullable)]
 pub struct CustomerCreateRequest {
     pub code: String,
     pub name: String,
@@ -39,7 +40,8 @@ impl From<CustomerCreateRequest> for CustomerInput {
     }
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(optional_fields = nullable)]
 pub struct CustomerFacilityCreateRequest {
     pub code: String,
     pub name: String,
@@ -60,7 +62,8 @@ impl From<CustomerFacilityCreateRequest> for CustomerFacilityInput {
     }
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(optional_fields = nullable)]
 pub struct StaffingRateAgreementCreateRequest {
     pub code: String,
     pub name: String,
@@ -97,7 +100,8 @@ impl From<StaffingRateAgreementCreateRequest> for StaffingRateAgreementInput {
     }
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(optional_fields = nullable)]
 pub struct StaffingShiftCreateRequest {
     pub customer_id: Uuid,
     pub customer_facility_id: Uuid,
@@ -122,7 +126,7 @@ impl From<StaffingShiftCreateRequest> for StaffingShiftInput {
     }
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, TS)]
 pub struct ManualRateOverrideRequest {
     pub currency: String,
     pub bill_hourly_rate: String,
@@ -139,7 +143,8 @@ impl From<ManualRateOverrideRequest> for ManualRateOverride {
     }
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(optional_fields = nullable)]
 pub struct ShiftAssignmentCreateRequest {
     pub employee_id: Uuid,
     pub manual_rate: Option<ManualRateOverrideRequest>,
@@ -154,7 +159,7 @@ impl From<ShiftAssignmentCreateRequest> for ShiftAssignmentInput {
     }
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, TS)]
 pub struct ShiftAssignmentApproveRequest {
     pub worked_seconds: i64,
 }
@@ -181,13 +186,6 @@ pub fn routes() -> Router<Arc<AppContext>> {
         )
 }
 
-#[utoipa::path(
-    get,
-    path = "/business/customers",
-    tag = "business",
-    security(("bearer_auth" = [])),
-    responses((status = 200, body = [Customer]), (status = 403), (status = 503))
-)]
 pub async fn list_customers(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -202,14 +200,6 @@ pub async fn list_customers(
         .map_err(|error| staffing_status("list customers", &user, error))
 }
 
-#[utoipa::path(
-    post,
-    path = "/business/customers",
-    tag = "business",
-    security(("bearer_auth" = [])),
-    request_body = CustomerCreateRequest,
-    responses((status = 201, body = Customer), (status = 400), (status = 403), (status = 409), (status = 503))
-)]
 pub async fn create_customer(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -225,14 +215,6 @@ pub async fn create_customer(
     Ok((StatusCode::CREATED, Json(customer)))
 }
 
-#[utoipa::path(
-    get,
-    path = "/business/customers/{customer_id}/facilities",
-    tag = "business",
-    security(("bearer_auth" = [])),
-    params(("customer_id" = Uuid, Path)),
-    responses((status = 200, body = [CustomerFacility]), (status = 403), (status = 503))
-)]
 pub async fn list_customer_facilities(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -248,21 +230,6 @@ pub async fn list_customer_facilities(
         .map_err(|error| staffing_status("list customer facilities", &user, error))
 }
 
-#[utoipa::path(
-    post,
-    path = "/business/customers/{customer_id}/facilities",
-    tag = "business",
-    security(("bearer_auth" = [])),
-    params(("customer_id" = Uuid, Path)),
-    request_body = CustomerFacilityCreateRequest,
-    responses(
-        (status = 201, body = CustomerFacility),
-        (status = 400),
-        (status = 403),
-        (status = 409),
-        (status = 503)
-    )
-)]
 pub async fn create_customer_facility(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -279,13 +246,6 @@ pub async fn create_customer_facility(
     Ok((StatusCode::CREATED, Json(facility)))
 }
 
-#[utoipa::path(
-    get,
-    path = "/business/staffing/rate-agreements",
-    tag = "staffing",
-    security(("bearer_auth" = [])),
-    responses((status = 200, body = [StaffingRateAgreement]), (status = 403), (status = 503))
-)]
 pub async fn list_rate_agreements(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -300,20 +260,6 @@ pub async fn list_rate_agreements(
         .map_err(|error| staffing_status("list rate agreements", &user, error))
 }
 
-#[utoipa::path(
-    post,
-    path = "/business/staffing/rate-agreements",
-    tag = "staffing",
-    security(("bearer_auth" = [])),
-    request_body = StaffingRateAgreementCreateRequest,
-    responses(
-        (status = 201, body = StaffingRateAgreement),
-        (status = 400),
-        (status = 403),
-        (status = 409),
-        (status = 503)
-    )
-)]
 pub async fn create_rate_agreement(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -329,13 +275,6 @@ pub async fn create_rate_agreement(
     Ok((StatusCode::CREATED, Json(agreement)))
 }
 
-#[utoipa::path(
-    get,
-    path = "/business/staffing/shifts",
-    tag = "staffing",
-    security(("bearer_auth" = [])),
-    responses((status = 200, body = [StaffingShift]), (status = 403), (status = 503))
-)]
 pub async fn list_shifts(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -350,14 +289,6 @@ pub async fn list_shifts(
         .map_err(|error| staffing_status("list shifts", &user, error))
 }
 
-#[utoipa::path(
-    post,
-    path = "/business/staffing/shifts",
-    tag = "staffing",
-    security(("bearer_auth" = [])),
-    request_body = StaffingShiftCreateRequest,
-    responses((status = 201, body = StaffingShift), (status = 400), (status = 403), (status = 503))
-)]
 pub async fn create_shift(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -373,14 +304,6 @@ pub async fn create_shift(
     Ok((StatusCode::CREATED, Json(shift)))
 }
 
-#[utoipa::path(
-    get,
-    path = "/business/staffing/shifts/{shift_id}/assignments",
-    tag = "staffing",
-    security(("bearer_auth" = [])),
-    params(("shift_id" = Uuid, Path)),
-    responses((status = 200, body = [ShiftAssignment]), (status = 403), (status = 503))
-)]
 pub async fn list_shift_assignments(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -396,22 +319,6 @@ pub async fn list_shift_assignments(
         .map_err(|error| staffing_status("list shift assignments", &user, error))
 }
 
-#[utoipa::path(
-    post,
-    path = "/business/staffing/shifts/{shift_id}/assignments",
-    tag = "staffing",
-    security(("bearer_auth" = [])),
-    params(("shift_id" = Uuid, Path)),
-    request_body = ShiftAssignmentCreateRequest,
-    responses(
-        (status = 201, body = ShiftAssignment),
-        (status = 400),
-        (status = 403),
-        (status = 409),
-        (status = 422),
-        (status = 503)
-    )
-)]
 pub async fn create_shift_assignment(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -428,15 +335,6 @@ pub async fn create_shift_assignment(
     Ok((StatusCode::CREATED, Json(assignment)))
 }
 
-#[utoipa::path(
-    post,
-    path = "/business/staffing/assignments/{assignment_id}/approve",
-    tag = "staffing",
-    security(("bearer_auth" = [])),
-    params(("assignment_id" = Uuid, Path)),
-    request_body = ShiftAssignmentApproveRequest,
-    responses((status = 200, body = ShiftAssignment), (status = 400), (status = 403), (status = 409), (status = 503))
-)]
 pub async fn approve_shift_assignment(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,

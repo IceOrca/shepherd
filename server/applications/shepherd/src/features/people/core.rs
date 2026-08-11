@@ -3,10 +3,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use ts_rs::TS;
 use uuid::Uuid;
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum EmployeeStatus {
     Active,
@@ -33,7 +33,7 @@ impl EmployeeStatus {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum HrRecordStatus {
     Active,
@@ -57,7 +57,7 @@ impl HrRecordStatus {
     }
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct Employee {
     pub id: Uuid,
     pub account_id: Option<Uuid>,
@@ -73,7 +73,7 @@ pub struct Employee {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct Department {
     pub id: Uuid,
     pub code: String,
@@ -85,7 +85,7 @@ pub struct Department {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct JobPosition {
     pub id: Uuid,
     pub code: String,
@@ -96,7 +96,7 @@ pub struct JobPosition {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct EmployeeAssignment {
     pub id: Uuid,
     pub employee_id: Uuid,
@@ -113,7 +113,7 @@ pub struct EmployeeAssignment {
 
 /// One contiguous employee work session. A workday can contain multiple
 /// completed sessions, for example before and after an unpaid break.
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct AttendanceSession {
     pub id: Uuid,
     pub employee_id: Uuid,

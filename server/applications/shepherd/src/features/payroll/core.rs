@@ -5,10 +5,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use ts_rs::TS;
 use uuid::Uuid;
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum PayBasis {
     Hourly,
@@ -32,7 +32,7 @@ impl PayBasis {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum PayrollRunStatus {
     Draft,
@@ -53,7 +53,7 @@ impl PayrollRunStatus {
     }
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct EmployeeCompensation {
     pub id: Uuid,
     pub employee_id: Uuid,
@@ -78,7 +78,7 @@ pub struct EmployeeCompensationInput {
     pub effective_to: Option<NaiveDate>,
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct FacilityRateRule {
     pub id: Uuid,
     pub code: String,
@@ -107,7 +107,7 @@ pub struct FacilityRateRuleInput {
     pub is_active: bool,
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct TimeBandRule {
     pub id: Uuid,
     pub code: String,
@@ -140,7 +140,7 @@ pub struct TimeBandRuleInput {
     pub is_active: bool,
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct OvertimeRule {
     pub id: Uuid,
     pub code: String,
@@ -167,7 +167,7 @@ pub struct OvertimeRuleInput {
     pub is_active: bool,
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct PayrollEmployeeResult {
     pub employee_id: Uuid,
     pub worked_seconds: i64,
@@ -179,7 +179,7 @@ pub struct PayrollEmployeeResult {
     pub currency: String,
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct PayrollLine {
     pub id: Uuid,
     pub employee_id: Uuid,
@@ -197,7 +197,7 @@ pub struct PayrollLine {
     pub description: String,
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct PayrollRun {
     pub id: Uuid,
     pub period_start: NaiveDate,

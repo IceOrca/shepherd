@@ -7,12 +7,11 @@ use crate::features::{
         WorkingScheduleInput,
     },
 };
-use utoipa::ToSchema;
+use ts_rs::TS;
 use uuid::Uuid;
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, TS)]
 pub struct WorkingPeriodRequest {
-    #[schema(minimum = 1, maximum = 7)]
     pub weekday: i16,
     pub start_time: NaiveTime,
     pub end_time: NaiveTime,
@@ -20,7 +19,7 @@ pub struct WorkingPeriodRequest {
     pub unpaid_break_minutes: i16,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize, TS)]
 pub struct EmployeeScheduleAssignmentView {
     pub assignment: EmployeeScheduleAssignment,
     pub schedule: WorkingSchedule,
@@ -38,7 +37,7 @@ impl From<WorkingPeriodRequest> for WorkingPeriodInput {
     }
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, TS)]
 pub struct WorkingScheduleUpsertRequest {
     pub code: String,
     pub name: String,
@@ -59,7 +58,8 @@ impl From<WorkingScheduleUpsertRequest> for WorkingScheduleInput {
     }
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(optional_fields = nullable)]
 pub struct EmployeeScheduleAssignmentCreateRequest {
     pub schedule_id: Uuid,
     pub date_start: NaiveDate,

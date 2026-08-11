@@ -15,10 +15,6 @@ export default defineConfig({
         target: proxyTarget,
         changeOrigin: true,
       },
-      "/openapi.json": {
-        target: proxyTarget,
-        changeOrigin: true,
-      },
     },
   },
 });

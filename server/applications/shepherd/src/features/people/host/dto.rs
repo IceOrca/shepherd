@@ -3,15 +3,16 @@ use serde::Deserialize;
 use crate::features::people::core::{
     DepartmentInput, EmployeeAssignmentInput, EmployeeInput, EmployeeStatus, HrRecordStatus, JobPositionInput,
 };
-use utoipa::ToSchema;
+use ts_rs::TS;
 use uuid::Uuid;
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, TS)]
 pub struct AttendanceCheckInRequest {
     pub facility_id: Uuid,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(optional_fields = nullable)]
 pub struct EmployeeUpsertRequest {
     pub account_id: Option<Uuid>,
     pub employee_code: String,
@@ -40,7 +41,8 @@ impl From<EmployeeUpsertRequest> for EmployeeInput {
     }
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(optional_fields = nullable)]
 pub struct DepartmentUpsertRequest {
     pub code: String,
     pub name: String,
@@ -61,7 +63,8 @@ impl From<DepartmentUpsertRequest> for DepartmentInput {
     }
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(optional_fields = nullable)]
 pub struct JobPositionUpsertRequest {
     pub code: String,
     pub name: String,
@@ -80,7 +83,8 @@ impl From<JobPositionUpsertRequest> for JobPositionInput {
     }
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(optional_fields = nullable)]
 pub struct EmployeeAssignmentCreateRequest {
     pub branch_id: Uuid,
     pub facility_id: Option<Uuid>,

@@ -1,3 +1,5 @@
+#![cfg_attr(debug_assertions, allow(unused))]
+
 mod async_queue;
 mod asynchronous;
 mod blocking;

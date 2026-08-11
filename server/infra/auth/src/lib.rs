@@ -1,3 +1,5 @@
+#![cfg_attr(debug_assertions, allow(unused))]
+
 pub mod access_revocation;
 pub mod account;
 pub mod bruteforce;
@@ -7,12 +9,12 @@ pub mod handler;
 pub mod jwks;
 pub mod jwt;
 pub mod middleware;
-pub mod openapi;
 pub mod postgres;
 pub mod route;
 pub mod service;
 pub mod session;
 pub mod token_blacklist_pubsub;
+pub mod typescript;
 
 pub use feature::{AuthFeature, AuthService, AuthenticatedUser, TenantContext};
 pub use postgres::AuthProvider;

@@ -1,3 +1,5 @@
+#![cfg_attr(debug_assertions, allow(unused))]
+
 #[cfg(any(feature = "multi-threaded", feature = "single-threaded"))]
 mod ntree;
 #[cfg(feature = "tokio-lock")]

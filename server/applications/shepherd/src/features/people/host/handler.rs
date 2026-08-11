@@ -16,13 +16,6 @@ use super::dto::{
     JobPositionUpsertRequest,
 };
 
-#[utoipa::path(
-    get,
-    path = "/hr/employees",
-    tag = "hr",
-    security(("bearer_auth" = [])),
-    responses((status = 200, body = [Employee]), (status = 403), (status = 503))
-)]
 pub async fn list_employees(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -36,14 +29,6 @@ pub async fn list_employees(
         .map_err(|error| hr_status("list employees", &user, error))
 }
 
-#[utoipa::path(
-    post,
-    path = "/hr/employees",
-    tag = "hr",
-    security(("bearer_auth" = [])),
-    request_body = EmployeeUpsertRequest,
-    responses((status = 201, body = Employee), (status = 400), (status = 403), (status = 409), (status = 503))
-)]
 pub async fn create_employee(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -59,13 +44,6 @@ pub async fn create_employee(
     Ok((StatusCode::CREATED, Json(employee)))
 }
 
-#[utoipa::path(
-    get,
-    path = "/hr/employees/me",
-    tag = "hr",
-    security(("bearer_auth" = [])),
-    responses((status = 200, body = Employee), (status = 403), (status = 404), (status = 503))
-)]
 pub async fn get_own_employee(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -80,13 +58,6 @@ pub async fn get_own_employee(
         .ok_or(StatusCode::NOT_FOUND)
 }
 
-#[utoipa::path(
-    get,
-    path = "/hr/attendance/me",
-    tag = "hr",
-    security(("bearer_auth" = [])),
-    responses((status = 200, body = [AttendanceSession]), (status = 403), (status = 404), (status = 503))
-)]
 pub async fn list_own_attendance_sessions(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -107,14 +78,6 @@ pub async fn list_own_attendance_sessions(
         .map_err(|error| hr_status("list own attendance sessions", &user, error))
 }
 
-#[utoipa::path(
-    post,
-    path = "/hr/attendance/check-in",
-    tag = "hr",
-    security(("bearer_auth" = [])),
-    request_body = AttendanceCheckInRequest,
-    responses((status = 201, body = AttendanceSession), (status = 403), (status = 404), (status = 409), (status = 503))
-)]
 pub async fn check_in(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -137,13 +100,6 @@ pub async fn check_in(
     Ok((StatusCode::CREATED, Json(session)))
 }
 
-#[utoipa::path(
-    post,
-    path = "/hr/attendance/check-out",
-    tag = "hr",
-    security(("bearer_auth" = [])),
-    responses((status = 200, body = AttendanceSession), (status = 403), (status = 404), (status = 503))
-)]
 pub async fn check_out(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -164,14 +120,6 @@ pub async fn check_out(
         .map_err(|error| hr_status("check out", &user, error))
 }
 
-#[utoipa::path(
-    get,
-    path = "/hr/employees/{employee_id}",
-    tag = "hr",
-    security(("bearer_auth" = [])),
-    params(("employee_id" = Uuid, Path)),
-    responses((status = 200, body = Employee), (status = 403), (status = 404), (status = 503))
-)]
 pub async fn get_employee(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -187,14 +135,6 @@ pub async fn get_employee(
         .ok_or(StatusCode::NOT_FOUND)
 }
 
-#[utoipa::path(
-    get,
-    path = "/hr/employees/{employee_id}/attendance",
-    tag = "hr",
-    security(("bearer_auth" = [])),
-    params(("employee_id" = Uuid, Path)),
-    responses((status = 200, body = [AttendanceSession]), (status = 403), (status = 404), (status = 503))
-)]
 pub async fn list_employee_attendance_sessions(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -209,15 +149,6 @@ pub async fn list_employee_attendance_sessions(
         .map_err(|error| hr_status("list employee attendance sessions", &user, error))
 }
 
-#[utoipa::path(
-    put,
-    path = "/hr/employees/{employee_id}",
-    tag = "hr",
-    security(("bearer_auth" = [])),
-    params(("employee_id" = Uuid, Path)),
-    request_body = EmployeeUpsertRequest,
-    responses((status = 200, body = Employee), (status = 400), (status = 403), (status = 404), (status = 409), (status = 503))
-)]
 pub async fn update_employee(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -233,14 +164,6 @@ pub async fn update_employee(
         .map_err(|error| hr_status("update employee", &user, error))
 }
 
-#[utoipa::path(
-    get,
-    path = "/hr/employees/{employee_id}/assignments",
-    tag = "hr",
-    security(("bearer_auth" = [])),
-    params(("employee_id" = Uuid, Path)),
-    responses((status = 200, body = [EmployeeAssignment]), (status = 403), (status = 404), (status = 503))
-)]
 pub async fn list_employee_assignments(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -255,15 +178,6 @@ pub async fn list_employee_assignments(
         .map_err(|error| hr_status("list employee assignments", &user, error))
 }
 
-#[utoipa::path(
-    post,
-    path = "/hr/employees/{employee_id}/assignments",
-    tag = "hr",
-    security(("bearer_auth" = [])),
-    params(("employee_id" = Uuid, Path)),
-    request_body = EmployeeAssignmentCreateRequest,
-    responses((status = 201, body = EmployeeAssignment), (status = 400), (status = 403), (status = 404), (status = 409), (status = 503))
-)]
 pub async fn create_employee_assignment(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -280,13 +194,6 @@ pub async fn create_employee_assignment(
     Ok((StatusCode::CREATED, Json(assignment)))
 }
 
-#[utoipa::path(
-    get,
-    path = "/hr/departments",
-    tag = "hr",
-    security(("bearer_auth" = [])),
-    responses((status = 200, body = [Department]), (status = 403), (status = 503))
-)]
 pub async fn list_departments(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -300,14 +207,6 @@ pub async fn list_departments(
         .map_err(|error| hr_status("list departments", &user, error))
 }
 
-#[utoipa::path(
-    post,
-    path = "/hr/departments",
-    tag = "hr",
-    security(("bearer_auth" = [])),
-    request_body = DepartmentUpsertRequest,
-    responses((status = 201, body = Department), (status = 400), (status = 403), (status = 409), (status = 503))
-)]
 pub async fn create_department(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -323,15 +222,6 @@ pub async fn create_department(
     Ok((StatusCode::CREATED, Json(department)))
 }
 
-#[utoipa::path(
-    put,
-    path = "/hr/departments/{department_id}",
-    tag = "hr",
-    security(("bearer_auth" = [])),
-    params(("department_id" = Uuid, Path)),
-    request_body = DepartmentUpsertRequest,
-    responses((status = 200, body = Department), (status = 400), (status = 403), (status = 404), (status = 409), (status = 503))
-)]
 pub async fn update_department(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -347,13 +237,6 @@ pub async fn update_department(
         .map_err(|error| hr_status("update department", &user, error))
 }
 
-#[utoipa::path(
-    get,
-    path = "/hr/jobs",
-    tag = "hr",
-    security(("bearer_auth" = [])),
-    responses((status = 200, body = [JobPosition]), (status = 403), (status = 503))
-)]
 pub async fn list_jobs(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -367,14 +250,6 @@ pub async fn list_jobs(
         .map_err(|error| hr_status("list jobs", &user, error))
 }
 
-#[utoipa::path(
-    post,
-    path = "/hr/jobs",
-    tag = "hr",
-    security(("bearer_auth" = [])),
-    request_body = JobPositionUpsertRequest,
-    responses((status = 201, body = JobPosition), (status = 400), (status = 403), (status = 409), (status = 503))
-)]
 pub async fn create_job(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -390,15 +265,6 @@ pub async fn create_job(
     Ok((StatusCode::CREATED, Json(job)))
 }
 
-#[utoipa::path(
-    put,
-    path = "/hr/jobs/{job_id}",
-    tag = "hr",
-    security(("bearer_auth" = [])),
-    params(("job_id" = Uuid, Path)),
-    request_body = JobPositionUpsertRequest,
-    responses((status = 200, body = JobPosition), (status = 400), (status = 403), (status = 404), (status = 409), (status = 503))
-)]
 pub async fn update_job(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,

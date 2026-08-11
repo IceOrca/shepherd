@@ -33,7 +33,6 @@ redis.workspace = true
 arc-swap.workspace = true
 chrono.workspace = true
 time.workspace = true
-utoipa.workspace = true
 argon2.workspace = true
 # crates of the solution
 infra-kernel.workspace = true
