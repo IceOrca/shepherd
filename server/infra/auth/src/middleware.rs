@@ -12,8 +12,9 @@ use axum::{
 use jsonwebtoken::{Algorithm, Header, TokenData, Validation, decode, decode_header};
 use infra_kernel::debug::*;
 use infra_kernel::request::PrincipalRateLimitKey;
-use crate::account::UserAccount;
 use crate::account::Role;
+#[cfg(feature = "password-auth")]
+use crate::account::UserAccount;
 
 use super::{AuthService, AuthenticatedUser, TenantContext, dto::AccessClaims, jwt::KID_MAIN};
 
@@ -71,6 +72,7 @@ pub async fn require_authenticated(
     if token_data.claims.iat > now.saturating_add(60) {
         return Err(StatusCode::UNAUTHORIZED);
     }
+    #[cfg(feature = "session-revocation")]
     if auth_ctx.access_revocation.is_revoked(&token_data.claims.jti).await {
         return Err(StatusCode::UNAUTHORIZED);
     }
@@ -79,6 +81,7 @@ pub async fn require_authenticated(
         log_notice!("JWT contains an invalid tenant or account UUID");
         StatusCode::UNAUTHORIZED
     })?;
+    #[cfg(feature = "password-auth")]
     let current_account: UserAccount = auth_ctx
         .core_entity
         .get_current_account_by_username(user.tenant_id, &user.username)
@@ -101,6 +104,7 @@ pub async fn require_authenticated(
             );
             StatusCode::UNAUTHORIZED
         })?;
+    #[cfg(feature = "password-auth")]
     log_trace!(
         "Current account authorization confirmed: tenant_id={} account_id={} auth_version={}",
         user.tenant_id,

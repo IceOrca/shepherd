@@ -51,6 +51,10 @@ services:
       RUST_LOG: ${RUST_LOG:-info}
       JWT_PRIVATE_KEY_PATH: /run/secrets/jwt_private_key
       JWT_PUBLIC_KEY_PATH: /run/secrets/jwt_public_key
+      KEYCLOAK_ISSUER_URL: ${KEYCLOAK_ISSUER_URL_PROD:?required}
+      KEYCLOAK_JWKS_URL: ${KEYCLOAK_JWKS_URL_PROD:-http://keycloak:8081/realms/shepherd/protocol/openid-connect/certs}
+      KEYCLOAK_AUDIENCE: ${KEYCLOAK_API_AUDIENCE_PROD:-shepherd-api}
+      KEYCLOAK_ACCEPT_FORWARDED_ACCESS_TOKEN: "true"
     secrets:
       - source: jwt_private_key
         target: jwt_private_key
@@ -88,7 +92,8 @@ services:
       - |
         export KC_DB_PASSWORD="$$(< /run/secrets/keycloak_db_password)"
         export KC_BOOTSTRAP_ADMIN_PASSWORD="$$(< /run/secrets/keycloak_admin_password)"
-        exec /opt/keycloak/bin/kc.sh start
+        export OAUTH2_PROXY_CLIENT_SECRET="$$(< /run/secrets/oauth2_proxy_client_secret)"
+        exec /opt/keycloak/bin/kc.sh start --import-realm
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME_PROD:?required}
       KC_BOOTSTRAP_ADMIN_PASSWORD: !reset null
@@ -97,16 +102,21 @@ services:
       KC_HOSTNAME_STRICT: "true"
       KC_PROXY_HEADERS: xforwarded
       OAUTH2_PROXY_CLIENT_SECRET: !reset null
+      OAUTH2_PROXY_REDIRECT_URL_PROD: ${OAUTH2_PROXY_REDIRECT_URL_PROD:?required}
+      SHEPHERD_WEB_ORIGIN_PROD: ${SHEPHERD_WEB_ORIGIN_PROD:?required}
       KEYCLOAK_DEV_USER_PASSWORD: !reset null
     ports: !reset []
     expose:
       - "8081"
-    volumes: !reset []
+    volumes: !override
+      - ./deploy/keycloak/prod:/opt/keycloak/data/import:ro
     secrets:
       - source: keycloak_db_password
         target: keycloak_db_password
       - source: keycloak_admin_password
         target: keycloak_admin_password
+      - source: oauth2_proxy_client_secret
+        target: oauth2_proxy_client_secret
     mem_limit: ${KEYCLOAK_MEMORY_LIMIT:-2g}
     cpus: ${KEYCLOAK_CPU_LIMIT:-2}
     pids_limit: ${KEYCLOAK_PIDS_LIMIT:-256}
@@ -122,6 +132,9 @@ services:
       OAUTH2_PROXY_COOKIE_SECRET_FILE: /run/secrets/oauth2_proxy_cookie_secret
       OAUTH2_PROXY_OIDC_ISSUER_URL: ${KEYCLOAK_ISSUER_URL_PROD:?required}
       OAUTH2_PROXY_REDIRECT_URL: ${OAUTH2_PROXY_REDIRECT_URL_PROD:?required}
+      OAUTH2_PROXY_ALLOWED_ROLES: ${OAUTH2_PROXY_ALLOWED_ROLES_PROD:?required}
+      # Keep proxy sessions isolated from Shepherd's Redis DB 0.
+      OAUTH2_PROXY_REDIS_CONNECTION_URL: redis://redis-cache:6379/1
       OAUTH2_PROXY_UPSTREAMS: http://server:${BACKEND_PORT_PROD:?required}/auth/,http://server:${BACKEND_PORT_PROD:?required}/api/,http://server:${BACKEND_PORT_PROD:?required}/business/,http://client:80/
       OAUTH2_PROXY_COOKIE_NAME: __Host-shepherd_session
       OAUTH2_PROXY_COOKIE_SECURE: "true"

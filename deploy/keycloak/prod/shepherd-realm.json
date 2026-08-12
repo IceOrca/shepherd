@@ -2,7 +2,7 @@
   "realm": "shepherd",
   "enabled": true,
   "displayName": "Shepherd",
-  "sslRequired": "none",
+  "sslRequired": "external",
   "registrationAllowed": false,
   "resetPasswordAllowed": true,
   "loginWithEmailAllowed": true,
@@ -36,10 +36,10 @@
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": false,
       "redirectUris": [
-        "http://localhost:4180/oauth2/callback"
+        "${OAUTH2_PROXY_REDIRECT_URL_PROD}"
       ],
       "webOrigins": [
-        "http://localhost:4180"
+        "${SHEPHERD_WEB_ORIGIN_PROD}"
       ],
       "protocolMappers": [
         {
@@ -66,26 +66,6 @@
           "web-access"
         ]
       }
-    }
-  ],
-  "users": [
-    {
-      "username": "shepherd-dev",
-      "enabled": true,
-      "emailVerified": true,
-      "email": "dev@shepherd.local",
-      "firstName": "Shepherd",
-      "lastName": "Developer",
-      "groups": [
-        "/shepherd-users"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "${KEYCLOAK_DEV_USER_PASSWORD}",
-          "temporary": false
-        }
-      ]
     }
   ]
 }

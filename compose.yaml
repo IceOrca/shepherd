@@ -14,7 +14,7 @@ services:
       KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-shepherd-keycloak-dev-db-password}
       SHEPHERD_POSTGRES_BOOTSTRAP_IN_CONTAINER: "1"
     ports:
-      - "${POSTGRES_PORT:-5432}:${POSTGRES_PORT:-5432}"
+      - "localhost:${POSTGRES_PORT:-5432}:${POSTGRES_PORT:-5432}"
     volumes:
       - pg_data:/var/lib/postgresql
       - ./scripts/bootstrap-postgres.sh:/docker-entrypoint-initdb.d/10-bootstrap-postgres.sh:ro
@@ -28,7 +28,7 @@ services:
     image: redis:8-alpine
     container_name: shepherd-redis
     ports:
-      - "${REDIS_PORT:-6379}:${REDIS_PORT:-6379}"
+      - "localhost:${REDIS_PORT:-6379}:${REDIS_PORT:-6379}"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -44,7 +44,7 @@ services:
     container_name: shepherd-server
     working_dir: /app/shepherd_server
     ports:
-      - "${BACKEND_PORT:-8000}:${BACKEND_PORT:-8000}"
+      - "localhost:${BACKEND_PORT:-8000}:${BACKEND_PORT:-8000}"
     env_file:
       - ./env_file_server
     environment:
@@ -58,6 +58,10 @@ services:
       RUST_LOG: ${RUST_LOG:-debug}
       JWT_PRIVATE_KEY_PATH: ${JWT_PRIVATE_KEY_PATH}
       JWT_PUBLIC_KEY_PATH: ${JWT_PUBLIC_KEY_PATH}
+      KEYCLOAK_ISSUER_URL: http://keycloak.localhost:8081/realms/shepherd
+      KEYCLOAK_JWKS_URL: http://keycloak:8081/realms/shepherd/protocol/openid-connect/certs
+      KEYCLOAK_AUDIENCE: shepherd-api
+      KEYCLOAK_ACCEPT_FORWARDED_ACCESS_TOKEN: "true"
     volumes:
       - ./server:/app/shepherd_server
       - cargo_registry:/usr/local/cargo/registry
@@ -69,6 +73,8 @@ services:
         condition: service_healthy
       redis-cache:
         condition: service_healthy
+      keycloak:
+        condition: service_healthy
 
   client:
     build:
@@ -79,7 +85,7 @@ services:
     container_name: shepherd-client
     working_dir: /app/shepherd_client
     ports:
-      - "${FRONTEND_DEV_PORT:-5173}:${FRONTEND_DEV_PORT:-5173}"
+      - "localhost:${FRONTEND_DEV_PORT:-5173}:${FRONTEND_DEV_PORT:-5173}"
     env_file:
       - ./env_file_client
     environment:
@@ -93,7 +99,7 @@ services:
       - server
 
   keycloak:
-    image: quay.io/keycloak/keycloak:26.7.0
+    image: quay.io/keycloak/keycloak:26.7
     container_name: shepherd-keycloak
     command: ["start-dev", "--import-realm"]
     environment:
@@ -110,7 +116,7 @@ services:
       OAUTH2_PROXY_CLIENT_SECRET: ${OAUTH2_PROXY_CLIENT_SECRET:-shepherd-dev-oauth2-client-secret}
       KEYCLOAK_DEV_USER_PASSWORD: ${KEYCLOAK_DEV_USER_PASSWORD:-shepherd-dev-password}
     ports:
-      - "8081:8081"
+      - "localhost:8081:8081"
     volumes:
       - ./deploy/keycloak/dev:/opt/keycloak/data/import:ro
     networks:
@@ -132,7 +138,7 @@ services:
         condition: service_healthy
 
   oauth2-proxy:
-    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.3
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15
     container_name: shepherd-oauth2-proxy
     environment:
       OAUTH2_PROXY_PROVIDER: keycloak-oidc
@@ -143,9 +149,11 @@ services:
       OAUTH2_PROXY_CODE_CHALLENGE_METHOD: S256
       OAUTH2_PROXY_SCOPE: openid profile email
       OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      OAUTH2_PROXY_ALLOWED_ROLES: ${OAUTH2_PROXY_ALLOWED_ROLES:-shepherd-web:web-access}
       OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
       OAUTH2_PROXY_UPSTREAMS: http://server:${BACKEND_PORT:-8000}/auth/,http://server:${BACKEND_PORT:-8000}/api/,http://server:${BACKEND_PORT:-8000}/business/,http://client:${FRONTEND_DEV_PORT:-5173}/
       OAUTH2_PROXY_SESSION_STORE_TYPE: redis
+      # Redis DB 1 is reserved for oauth2-proxy session tickets.
       OAUTH2_PROXY_REDIS_CONNECTION_URL: redis://redis-cache:6379/1
       OAUTH2_PROXY_COOKIE_NAME: shepherd_oauth2
       OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET:-shepherd-dev-cookie-secret-32chx}
@@ -161,7 +169,7 @@ services:
       OAUTH2_PROXY_REVERSE_PROXY: "false"
       OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
     ports:
-      - "4180:4180"
+      - "localhost:4180:4180"
     depends_on:
       keycloak:
         condition: service_healthy

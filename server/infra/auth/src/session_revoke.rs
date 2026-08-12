@@ -6,6 +6,8 @@ use moka::future::Cache;
 
 use infra_kernel::debug::*;
 
+pub mod token_blacklist;
+
 struct RevokedJtiExpiry;
 
 impl Expiry<String, u64> for RevokedJtiExpiry {

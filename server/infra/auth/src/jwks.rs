@@ -29,7 +29,7 @@ pub struct JwkKey {
 }
 
 pub async fn jwks_handler(State(auth_ctx): State<Arc<AuthService>>) -> impl IntoResponse {
-    let public_key: &Vec<u8> = auth_ctx.jwt.key_public();
+    let public_key: &[u8] = auth_ctx.jwt.key_public();
 
     let jwk: JwkKey = JwkKey {
         kty: "OKP".to_string(),

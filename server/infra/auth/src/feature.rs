@@ -1,13 +1,23 @@
 use std::sync::Arc;
 
-use infra_postgres::DatabaseAdapter;
-use infra_redis::RedisAdapter;
 use uuid::Uuid;
 
-use crate::{
-    AuthMngtEntity, AuthProvider, DynAccountRepo, access_revocation::AccessRevocationCache, account::Role,
-    bruteforce::BruteForceGuard, dto::AccessClaims, jwt::JwtHandle, session::AuthSessionHandle,
-};
+use crate::{account::Role, dto::AccessClaims, jwt::JwtHandle};
+
+#[cfg(feature = "legacy-api")]
+use infra_postgres::DatabaseAdapter;
+#[cfg(feature = "legacy-api")]
+use infra_redis::RedisAdapter;
+#[cfg(feature = "password-auth")]
+use crate::AuthMngtEntity;
+#[cfg(feature = "legacy-api")]
+use crate::{AuthProvider, DynAccountRepo};
+#[cfg(feature = "brute-force")]
+use crate::brute_force::BruteForceGuard;
+#[cfg(feature = "session")]
+use crate::session::AuthSessionHandle;
+#[cfg(feature = "session-revocation")]
+use crate::session_revoke::AccessRevocationCache;
 
 /// Verified tenant identity made available to tenant-aware request handlers.
 #[derive(Clone, Debug)]
@@ -77,14 +87,34 @@ impl AuthenticatedUser {
 }
 
 pub struct AuthService {
-    pub core_entity: Arc<AuthMngtEntity>,
     pub jwt: JwtHandle,
+    #[cfg(feature = "password-auth")]
+    pub core_entity: Arc<AuthMngtEntity>,
+    #[cfg(feature = "session")]
     pub sessions: Arc<AuthSessionHandle>,
+    #[cfg(feature = "session-revocation")]
     pub access_revocation: Arc<AccessRevocationCache>,
+    #[cfg(feature = "brute-force")]
     pub brute_force: Arc<BruteForceGuard>,
 }
 
 impl AuthService {
+    #[cfg(all(
+        not(feature = "jwt-encode"),
+        not(feature = "password-auth"),
+        not(feature = "session"),
+        not(feature = "session-revocation"),
+        not(feature = "brute-force"),
+    ))]
+    pub fn validation_only_from_env() -> Arc<Self> {
+        let public_key_path: String = std::env::var("JWT_PUBLIC_KEY_PATH")
+            .unwrap_or_else(|_| panic!("JWT_PUBLIC_KEY_PATH not set, cannot initialize JWT validation"));
+        Arc::new(Self {
+            jwt: JwtHandle::from_public_key_path(&public_key_path),
+        })
+    }
+
+    #[cfg(feature = "legacy-api")]
     pub fn new_arc(core_entity: Arc<AuthMngtEntity>, redis: Arc<RedisAdapter>) -> Arc<Self> {
         Arc::new(Self {
             core_entity,
@@ -105,6 +135,7 @@ impl AuthService {
     pub async fn init(&self) {}
 
     /// Build the complete auth service from reusable infrastructure adapters.
+    #[cfg(feature = "legacy-api")]
     pub async fn from_adapters(database: Arc<DatabaseAdapter>, redis: Arc<RedisAdapter>) -> Arc<Self> {
         let repository: Arc<AuthProvider> = AuthProvider::new_arc(database);
         let core_entity: Arc<AuthMngtEntity> = AuthMngtEntity::new_arc(repository as DynAccountRepo).await;
@@ -116,10 +147,12 @@ impl AuthService {
 
 /// Authentication feature assembled from its domain, persistence, and web adapters.
 #[derive(Clone)]
+#[cfg(feature = "legacy-api")]
 pub struct AuthFeature {
     pub service: Arc<AuthService>,
 }
 
+#[cfg(feature = "legacy-api")]
 impl AuthFeature {
     pub async fn new_arc(database: Arc<DatabaseAdapter>, redis: Arc<RedisAdapter>) -> Arc<Self> {
         let service: Arc<AuthService> = AuthService::from_adapters(database, redis).await;

@@ -3,31 +3,81 @@ name = "infra-auth"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = ["keycloak"]
+keycloak = [
+    "dep:reqwest",
+    "dep:thiserror",
+    "dep:tokio",
+]
+jwt-decode = ["dep:uuid"]
+jwt-encode = ["jwt-decode"]
+jwks = ["jwt-encode", "dep:base64"]
+password-auth = [
+    "dep:async-trait",
+    "dep:chrono",
+    "dep:infra-postgres",
+    "dep:sqlx",
+    "dep:tokio",
+    "dep:ts-rs",
+    "dep:uuid",
+    "dep:validator",
+]
+session = [
+    "dep:async-trait",
+    "dep:base64",
+    "dep:infra-redis",
+    "dep:redis",
+    "dep:serde_json",
+    "dep:sha2",
+    "dep:thiserror",
+    "dep:tokio",
+]
+brute-force = [
+    "password-auth",
+    "dep:infra-redis",
+    "dep:redis",
+    "dep:serde_json",
+]
+session-revocation = [
+    "session",
+    "dep:futures-util",
+    "dep:moka",
+]
+legacy-api = [
+    "brute-force",
+    "jwks",
+    "password-auth",
+    "session",
+    "session-revocation",
+    "dep:rand",
+]
+full = ["legacy-api"]
+
 [dependencies]
-argon2.workspace = true
-async-trait.workspace = true
+async-trait = { workspace = true, optional = true }
 axum.workspace = true
-base64.workspace = true
-chrono.workspace = true
-ed25519-dalek.workspace = true
-futures-util.workspace = true
+base64 = { workspace = true, optional = true }
+chrono = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
 jsonwebtoken.workspace = true
-moka.workspace = true
-rand.workspace = true
-redis.workspace = true
+moka = { workspace = true, optional = true }
+rand = { workspace = true, optional = true }
+redis = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
 serde.workspace = true
-serde_json.workspace = true
-sha2.workspace = true
-sqlx.workspace = true
-thiserror.workspace = true
+serde_json = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+sqlx = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
 tracing.workspace = true
-tokio.workspace = true
-ts-rs.workspace = true
-validator.workspace = true
-uuid.workspace = true
+ts-rs = { workspace = true, optional = true }
+validator = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
 infra-kernel = { workspace = true, features = ["debugging"] }
-infra-postgres.workspace = true
-infra-redis.workspace = true
+infra-postgres = { workspace = true, optional = true }
+infra-redis = { workspace = true, optional = true }
 
 [lints]
 workspace = true

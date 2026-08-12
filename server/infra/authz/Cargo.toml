@@ -6,7 +6,7 @@ edition.workspace = true
 [dependencies]
 axum.workspace = true
 casbin.workspace = true
-infra-auth.workspace = true
+infra-auth = { path = "../auth", default-features = false, features = ["jwt-decode"] }
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true

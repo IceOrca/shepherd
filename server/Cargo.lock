@@ -1628,12 +1628,10 @@ dependencies = [
 name = "infra-auth"
 version = "0.0.1"
 dependencies = [
- "argon2",
  "async-trait",
  "axum",
  "base64 0.23.1",
  "chrono",
- "ed25519-dalek 3.0.0",
  "futures-util",
  "infra-kernel",
  "infra-postgres",
@@ -1642,6 +1640,7 @@ dependencies = [
  "moka",
  "rand 0.10.2",
  "redis",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2 0.11.0",

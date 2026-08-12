@@ -1,9 +1,13 @@
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[cfg(feature = "password-auth")]
+use chrono::{DateTime, Utc};
+#[cfg(feature = "password-auth")]
+use ts_rs::TS;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "password-auth", derive(TS))]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
     TenantOwner,
@@ -30,6 +34,7 @@ impl Role {
     }
 }
 
+#[cfg(feature = "password-auth")]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum AccountStatus {
@@ -38,6 +43,7 @@ pub enum AccountStatus {
     Disabled,
 }
 
+#[cfg(feature = "password-auth")]
 impl AccountStatus {
     pub fn as_code(self) -> &'static str {
         match self {
@@ -57,6 +63,7 @@ impl AccountStatus {
     }
 }
 
+#[cfg(feature = "password-auth")]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionEffect {
@@ -64,6 +71,7 @@ pub enum PermissionEffect {
     Deny,
 }
 
+#[cfg(feature = "password-auth")]
 impl PermissionEffect {
     pub fn as_code(self) -> &'static str {
         match self {
@@ -73,6 +81,7 @@ impl PermissionEffect {
     }
 }
 
+#[cfg(feature = "password-auth")]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 pub struct AccountPermission {
     pub code: String,
@@ -80,6 +89,7 @@ pub struct AccountPermission {
     pub expires_at: Option<DateTime<Utc>>,
 }
 
+#[cfg(feature = "password-auth")]
 #[derive(Debug, Clone, Serialize, TS)]
 pub struct AccountSummary {
     pub id: Uuid,
@@ -96,6 +106,7 @@ pub struct AccountSummary {
     pub updated_at: DateTime<Utc>,
 }
 
+#[cfg(feature = "password-auth")]
 #[derive(Debug, Clone, Serialize, TS)]
 pub struct RoleSummary {
     pub code: String,
@@ -106,18 +117,21 @@ pub struct RoleSummary {
     pub permissions: Vec<String>,
 }
 
+#[cfg(feature = "password-auth")]
 #[derive(Debug, Clone, Serialize, TS)]
 pub struct PermissionSummary {
     pub code: String,
     pub description: String,
 }
 
+#[cfg(feature = "password-auth")]
 #[derive(Debug, Clone, Serialize, TS)]
 pub struct AuthorizationCatalog {
     pub roles: Vec<RoleSummary>,
     pub permissions: Vec<PermissionSummary>,
 }
 
+#[cfg(feature = "password-auth")]
 #[derive(Clone, Debug)]
 pub struct UserAccount {
     pub id: Uuid,
