@@ -1,4 +1,6 @@
 pub mod core;
 pub mod host;
 pub mod model;
-pub mod work_session;
+
+#[cfg(test)]
+mod tests;

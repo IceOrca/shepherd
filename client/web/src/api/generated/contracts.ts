@@ -84,7 +84,7 @@ export type StaffingRateAgreement = { id: string, code: string, name: string, cu
 
 export type StaffingShift = { id: string, customer_id: string, customer_facility_id: string, job_id: string, starts_at: string, ends_at: string, required_workers: number, status: StaffingShiftStatus, notes: string | null, created_at: string, updated_at: string, };
 
-export type ShiftAssignment = { id: string, shift_id: string, employee_id: string, rate_agreement_id: string | null, rate_source: RateSource, currency: string, bill_hourly_rate_snapshot: string, worker_hourly_rate_snapshot: string, status: ShiftAssignmentStatus, worked_seconds: number | null, customer_amount: string | null, worker_amount: string | null, margin_amount: string | null, approved_at: string | null, created_at: string, };
+export type ShiftAssignment = { id: string, shift_id: string, employee_id: string, rate_agreement_id: string | null, rate_source: RateSource, currency: string, bill_hourly_rate_snapshot: string, worker_hourly_rate_snapshot: string, status: ShiftAssignmentStatus, worked_seconds: number | null, observed_worked_seconds: number | null, approval_adjustment_reason: string | null, customer_amount: string | null, worker_amount: string | null, margin_amount: string | null, approved_at: string | null, created_at: string, };
 
 export type CustomerCreateRequest = { code: string, name: string, billing_email?: string | null, status: BusinessRecordStatus, };
 
@@ -98,7 +98,13 @@ export type ManualRateOverrideRequest = { currency: string, bill_hourly_rate: st
 
 export type ShiftAssignmentCreateRequest = { employee_id: string, manual_rate?: ManualRateOverrideRequest | null, };
 
-export type ShiftAssignmentApproveRequest = { worked_seconds: number, };
+export type ShiftAssignmentApproveRequest = { worked_seconds?: number | null, adjustment_reason?: string | null, };
+
+export type ShiftWorkSession = { id: string, assignment_id: string, employee_id: string, started_at: string, ended_at: string | null, worked_seconds: number | null, started_latitude: number | null, started_longitude: number | null, started_accuracy_meters: number | null, ended_latitude: number | null, ended_longitude: number | null, ended_accuracy_meters: number | null, created_at: string, updated_at: string, };
+
+export type OwnStaffingAssignment = { assignment_id: string, shift_id: string, customer_name: string, customer_facility_name: string, starts_at: string, ends_at: string, status: ShiftAssignmentStatus, observed_worked_seconds: number, is_working: boolean, };
+
+export type ShiftWorkActionRequest = { latitude?: number | null, longitude?: number | null, accuracy_meters?: number | null, };
 
 export type PayBasis = "hourly" | "monthly";
 

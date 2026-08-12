@@ -11,9 +11,13 @@
     "lint": "tsc -b --noEmit"
   },
   "dependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@tanstack/react-query": "^5.101.4",
     "@vitejs/plugin-react": "*",
+    "lucide-react": "^1.31.0",
     "react": "*",
     "react-dom": "*",
+    "react-router-dom": "^7.18.2",
     "typescript": "*",
     "vite": "*"
   },

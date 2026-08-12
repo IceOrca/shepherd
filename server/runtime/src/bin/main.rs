@@ -2,11 +2,8 @@
 
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::Arc;
 
-use axum::Router;
 use infra_kernel::debug::*;
-use infra_host::HostContext;
 use tokio::signal;
 
 #[tokio::main]
@@ -14,19 +11,24 @@ async fn main() {
     load_environment();
     Debugging::init();
 
-    let (context, router): (Arc<HostContext>, Router) = shepherd_runtime::build().await;
+    let shepherd_runtime::RuntimeParts {
+        context,
+        router,
+        worker,
+    } = shepherd_runtime::build().await;
     log_notice!("Starting server on {}:{}", context.ip, context.port);
 
     let address: String = format!("{}:{}", context.ip, context.port);
-    axum::serve(
+    let result = axum::serve(
         tokio::net::TcpListener::bind(&address)
             .await
             .unwrap_or_else(|error| panic!("failed to bind server to {address}: {error}")),
         router.into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown_signal())
-    .await
-    .unwrap_or_else(|error| panic!("server failed: {error}"));
+    .await;
+    worker.shutdown().await;
+    result.unwrap_or_else(|error| panic!("server failed: {error}"));
 }
 
 fn load_environment() {

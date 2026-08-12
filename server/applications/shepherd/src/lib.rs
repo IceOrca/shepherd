@@ -4,6 +4,7 @@ pub mod authz;
 pub mod business;
 pub mod features;
 pub mod hr;
+pub mod notifications;
 pub mod typescript;
 
 use std::sync::Arc;
@@ -12,7 +13,11 @@ use axum::{Router, middleware::from_fn_with_state};
 use infra_app_sdk::{AppManifest, FoundationApp};
 use infra_postgres::DatabaseAdapter;
 
-use business::staffing::{core::StaffingService, model::StaffingProvider};
+use business::staffing::{
+    core::StaffingService,
+    model::StaffingProvider,
+    work_session::{core::StaffingWorkService, model::StaffingWorkProvider},
+};
 use features::{
     organization::{core::OrganizationService, model::OrganizationProvider},
     payroll::{core::PayrollService, model::PayrollProvider},
@@ -30,6 +35,7 @@ pub struct ApplicationCore {
     pub working_schedules: Arc<WorkingScheduleService>,
     pub payroll: Arc<PayrollService>,
     pub staffing: Arc<StaffingService>,
+    pub staffing_work: Arc<StaffingWorkService>,
 }
 
 impl ApplicationCore {
@@ -39,7 +45,8 @@ impl ApplicationCore {
         let working_schedules =
             WorkingScheduleService::new_arc(WorkingScheduleProvider::new_arc(Arc::clone(&database)));
         let payroll = PayrollService::new_arc(PayrollProvider::new_arc(Arc::clone(&database)));
-        let staffing = StaffingService::new_arc(StaffingProvider::new_arc(database));
+        let staffing = StaffingService::new_arc(StaffingProvider::new_arc(Arc::clone(&database)));
+        let staffing_work = StaffingWorkService::new_arc(StaffingWorkProvider::new_arc(database));
 
         Arc::new(Self {
             organization,
@@ -47,6 +54,7 @@ impl ApplicationCore {
             working_schedules,
             payroll,
             staffing,
+            staffing_work,
         })
     }
 }
@@ -55,13 +63,17 @@ impl ApplicationCore {
 pub struct AppContext {
     pub auth: Arc<auth::AuthService>,
     pub core: Arc<ApplicationCore>,
+    pub notifications: Arc<notifications::NotificationDispatcher>,
 }
 
 impl AppContext {
     pub fn new_arc(auth: Arc<auth::AuthService>, database: Arc<DatabaseAdapter>) -> Arc<Self> {
+        let notifications = notifications::NotificationDispatcher::new_arc(Arc::clone(&database));
+        let core = ApplicationCore::new_arc(database);
         Arc::new(Self {
             auth,
-            core: ApplicationCore::new_arc(database),
+            core,
+            notifications,
         })
     }
 }

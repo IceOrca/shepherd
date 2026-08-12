@@ -179,6 +179,8 @@ struct AssignmentRow {
     worker_hourly_rate_snapshot: String,
     status: String,
     worked_seconds: Option<i64>,
+    observed_worked_seconds: Option<i64>,
+    approval_adjustment_reason: Option<String>,
     customer_amount: Option<String>,
     worker_amount: Option<String>,
     margin_amount: Option<String>,
@@ -199,6 +201,8 @@ impl TryFrom<AssignmentRow> for ShiftAssignment {
             currency: row.currency,
             bill_hourly_rate_snapshot: row.bill_hourly_rate_snapshot,
             worker_hourly_rate_snapshot: row.worker_hourly_rate_snapshot,
+            observed_worked_seconds: row.observed_worked_seconds,
+            approval_adjustment_reason: row.approval_adjustment_reason,
             status: ShiftAssignmentStatus::from_code(&row.status).ok_or(StaffingError::BackendUnavailable)?,
             worked_seconds: row.worked_seconds,
             customer_amount: row.customer_amount,
@@ -632,6 +636,7 @@ impl StaffingRepo for StaffingProvider {
                       bill_hourly_rate_snapshot::TEXT AS "bill_hourly_rate_snapshot!",
                       worker_hourly_rate_snapshot::TEXT AS "worker_hourly_rate_snapshot!",
                       status, worked_seconds,
+                      observed_worked_seconds, approval_adjustment_reason,
                       customer_amount::TEXT AS customer_amount,
                       worker_amount::TEXT AS worker_amount,
                       margin_amount::TEXT AS margin_amount,
@@ -689,35 +694,68 @@ impl StaffingRepo for StaffingProvider {
         &self,
         tenant_id: Uuid,
         assignment_id: Uuid,
-        worked_seconds: i64,
+        worked_seconds: Option<i64>,
+        adjustment_reason: Option<String>,
         audit_account_id: Uuid,
     ) -> Result<ShiftAssignment, StaffingError> {
         let mut transaction = self.begin_tenant(tenant_id).await?;
         let row: Option<AssignmentRow> = sqlx::query_as!(
             AssignmentRow,
             r#"
-            UPDATE business_shift_assignments
+            WITH observed AS (
+                SELECT COALESCE(SUM(worked_seconds), 0)::BIGINT AS total
+                FROM business_shift_work_sessions
+                WHERE tenant_id = $1 AND assignment_id = $2 AND ended_at IS NOT NULL
+            )
+            UPDATE business_shift_assignments AS assignment
             SET status = 'approved',
-                worked_seconds = $3::BIGINT,
-                customer_amount = ROUND(bill_hourly_rate_snapshot * $3::BIGINT::NUMERIC / 3600, 4),
-                worker_amount = ROUND(worker_hourly_rate_snapshot * $3::BIGINT::NUMERIC / 3600, 4),
-                margin_amount = ROUND(bill_hourly_rate_snapshot * $3::BIGINT::NUMERIC / 3600, 4)
-                    - ROUND(worker_hourly_rate_snapshot * $3::BIGINT::NUMERIC / 3600, 4),
+                worked_seconds = COALESCE($3::BIGINT, observed.total),
+                observed_worked_seconds = observed.total,
+                approval_adjustment_reason = $4::TEXT,
+                customer_amount = ROUND(
+                    assignment.bill_hourly_rate_snapshot * COALESCE($3::BIGINT, observed.total)::NUMERIC / 3600,
+                    4
+                ),
+                worker_amount = ROUND(
+                    assignment.worker_hourly_rate_snapshot * COALESCE($3::BIGINT, observed.total)::NUMERIC / 3600,
+                    4
+                ),
+                margin_amount = ROUND(
+                    assignment.bill_hourly_rate_snapshot * COALESCE($3::BIGINT, observed.total)::NUMERIC / 3600,
+                    4
+                ) - ROUND(
+                    assignment.worker_hourly_rate_snapshot * COALESCE($3::BIGINT, observed.total)::NUMERIC / 3600,
+                    4
+                ),
                 approved_at = CURRENT_TIMESTAMP,
-                approved_by_account_id = $4
-            WHERE tenant_id = $1 AND id = $2 AND status = 'assigned'
-            RETURNING id, shift_id, employee_id, rate_agreement_id, rate_source, currency,
-                      bill_hourly_rate_snapshot::TEXT AS "bill_hourly_rate_snapshot!",
-                      worker_hourly_rate_snapshot::TEXT AS "worker_hourly_rate_snapshot!",
-                      status, worked_seconds,
-                      customer_amount::TEXT AS customer_amount,
-                      worker_amount::TEXT AS worker_amount,
-                      margin_amount::TEXT AS margin_amount,
-                      approved_at, created_at
+                approved_by_account_id = $5
+            FROM observed
+            WHERE assignment.tenant_id = $1
+              AND assignment.id = $2
+              AND assignment.status = 'assigned'
+              AND observed.total > 0
+              AND NOT EXISTS (
+                  SELECT 1 FROM business_shift_work_sessions AS open_session
+                  WHERE open_session.tenant_id = $1
+                    AND open_session.assignment_id = $2
+                    AND open_session.ended_at IS NULL
+              )
+              AND ($3::BIGINT IS NULL OR $3::BIGINT = observed.total OR $4::TEXT IS NOT NULL)
+            RETURNING assignment.id, assignment.shift_id, assignment.employee_id,
+                      assignment.rate_agreement_id, assignment.rate_source, assignment.currency,
+                      assignment.bill_hourly_rate_snapshot::TEXT AS "bill_hourly_rate_snapshot!",
+                      assignment.worker_hourly_rate_snapshot::TEXT AS "worker_hourly_rate_snapshot!",
+                      assignment.status, assignment.worked_seconds, assignment.observed_worked_seconds,
+                      assignment.approval_adjustment_reason,
+                      assignment.customer_amount::TEXT AS customer_amount,
+                      assignment.worker_amount::TEXT AS worker_amount,
+                      assignment.margin_amount::TEXT AS margin_amount,
+                      assignment.approved_at, assignment.created_at
             "#,
             tenant_id,
             assignment_id,
             worked_seconds,
+            adjustment_reason,
             audit_account_id,
         )
         .fetch_optional(transaction.connection())
@@ -765,6 +803,7 @@ async fn list_assignments(
                bill_hourly_rate_snapshot::TEXT AS "bill_hourly_rate_snapshot!",
                worker_hourly_rate_snapshot::TEXT AS "worker_hourly_rate_snapshot!",
                status, worked_seconds,
+               observed_worked_seconds, approval_adjustment_reason,
                customer_amount::TEXT AS customer_amount,
                worker_amount::TEXT AS worker_amount,
                margin_amount::TEXT AS margin_amount,

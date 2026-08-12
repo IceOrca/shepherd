@@ -15,6 +15,8 @@ const ACME1_TENANT_ID: &str = "00000000-0000-4000-8000-000000000002";
 const ACME2_TENANT_ID: &str = "00000000-0000-4000-8000-000000000003";
 const DEFAULT_DEV_PASSWORD: &str = "shepherd-dev-password";
 const DEV_ATTENDANCE_ID_NAMESPACE: u128 = 0xd3a7_7e00_0000_4000_8000_0000_0000_0000;
+const DEV_STAFFING_SHIFT_ID_NAMESPACE: u128 = 0x51f7_0000_0000_4000_8000_0000_0000_0000;
+const DEV_STAFFING_ASSIGNMENT_ID_NAMESPACE: u128 = 0xa551_0000_0000_4000_8000_0000_0000_0000;
 
 struct DevTenant {
     id: &'static str,
@@ -305,6 +307,10 @@ async fn seed_staffing_business(
         INNER JOIN hr_employee_assignments AS assignment
             ON assignment.tenant_id = employee.tenant_id
            AND assignment.employee_id = employee.id
+        INNER JOIN accounts AS account
+            ON account.tenant_id = employee.tenant_id
+           AND account.id = employee.account_id
+           AND account.primary_role_code = 'employee'
            AND assignment.job_id = $2
            AND assignment.date_end IS NULL
         WHERE employee.tenant_id = $1 AND employee.status = 'active'
@@ -373,7 +379,7 @@ async fn seed_staffing_business(
         owner_account_id,
     )
     .await?;
-    ensure_staffing_rate(
+    let rate_agreement_id = ensure_staffing_rate(
         &mut transaction,
         tenant_id,
         "karaoke-b-worker-special",
@@ -389,13 +395,59 @@ async fn seed_staffing_business(
         owner_account_id,
     )
     .await?;
+    let shift_id = Uuid::from_u128(tenant_id.as_u128() ^ DEV_STAFFING_SHIFT_ID_NAMESPACE);
+    let assignment_id = Uuid::from_u128(tenant_id.as_u128() ^ DEV_STAFFING_ASSIGNMENT_ID_NAMESPACE);
+    sqlx::query!(
+        r#"
+        INSERT INTO business_staffing_shifts (
+            id, tenant_id, customer_id, customer_facility_id, job_id, starts_at, ends_at,
+            required_workers, status, notes, created_by_account_id, updated_by_account_id
+        )
+        VALUES (
+            $1, $2, $3, $4, $5, CURRENT_TIMESTAMP - INTERVAL '15 minutes',
+            CURRENT_TIMESTAMP + INTERVAL '6 hours', 1, 'filled',
+            'Development shift for testing employee start and end actions', $6, $6
+        )
+        ON CONFLICT (id) DO NOTHING
+        "#,
+        shift_id,
+        tenant_id,
+        karaoke_b_id,
+        karaoke_b_facility_id,
+        job_id,
+        owner_account_id,
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    sqlx::query!(
+        r#"
+        INSERT INTO business_shift_assignments (
+            id, tenant_id, shift_id, employee_id, rate_agreement_id, rate_source, currency,
+            bill_hourly_rate_snapshot, worker_hourly_rate_snapshot, created_by_account_id
+        )
+        VALUES ($1, $2, $3, $4, $5, 'agreement', 'VND', 180000, 145000, $6)
+        ON CONFLICT (id) DO NOTHING
+        "#,
+        assignment_id,
+        tenant_id,
+        shift_id,
+        employee_id,
+        rate_agreement_id,
+        owner_account_id,
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
 
     transaction.commit().await.map_err(io::Error::other)?;
     log_notice!(
-        "Development staffing business committed: tenant_slug={} tenant_id={} sample_employee_id={}",
+        "Development staffing business committed: tenant_slug={} tenant_id={} sample_employee_id={} sample_shift_id={} sample_assignment_id={}",
         tenant.slug,
         tenant_id,
-        employee_id
+        employee_id,
+        shift_id,
+        assignment_id
     );
     Ok(())
 }

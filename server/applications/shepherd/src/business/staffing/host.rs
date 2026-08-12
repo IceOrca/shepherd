@@ -160,8 +160,10 @@ impl From<ShiftAssignmentCreateRequest> for ShiftAssignmentInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
+#[ts(optional_fields = nullable)]
 pub struct ShiftAssignmentApproveRequest {
-    pub worked_seconds: i64,
+    pub worked_seconds: Option<i64>,
+    pub adjustment_reason: Option<String>,
 }
 
 pub fn routes() -> Router<Arc<AppContext>> {
@@ -345,7 +347,13 @@ pub async fn approve_shift_assignment(
     context
         .core
         .staffing
-        .approve_shift_assignment(user.tenant_id, assignment_id, payload.worked_seconds, user.account_id)
+        .approve_shift_assignment(
+            user.tenant_id,
+            assignment_id,
+            payload.worked_seconds,
+            normalize_optional(payload.adjustment_reason),
+            user.account_id,
+        )
         .await
         .map(Json)
         .map_err(|error| staffing_status("approve shift assignment", &user, error))

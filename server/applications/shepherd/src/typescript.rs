@@ -11,6 +11,10 @@ use crate::{
             ShiftAssignmentApproveRequest, ShiftAssignmentCreateRequest, StaffingRateAgreementCreateRequest,
             StaffingShiftCreateRequest,
         },
+        work_session::{
+            core::{OwnStaffingAssignment, ShiftWorkSession},
+            host::ShiftWorkActionRequest,
+        },
     },
     features::{
         organization::core::{BranchSummary, FacilitySummary},
@@ -66,6 +70,9 @@ pub fn contract() -> String {
     push::<ManualRateOverrideRequest>(&mut output, &config);
     push::<ShiftAssignmentCreateRequest>(&mut output, &config);
     push::<ShiftAssignmentApproveRequest>(&mut output, &config);
+    push::<ShiftWorkSession>(&mut output, &config);
+    push::<OwnStaffingAssignment>(&mut output, &config);
+    push::<ShiftWorkActionRequest>(&mut output, &config);
     push::<PayBasis>(&mut output, &config);
     push::<PayrollRunStatus>(&mut output, &config);
     push::<EmployeeCompensation>(&mut output, &config);

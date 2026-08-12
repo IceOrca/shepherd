@@ -19,6 +19,7 @@ tracing.workspace = true
 infra-kernel = { workspace = true, features = ["debugging"] }
 infra-auth.workspace = true
 infra-host.workspace = true
+infra-worker.workspace = true
 shepherd.workspace = true
 
 [lints]

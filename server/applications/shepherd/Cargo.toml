@@ -10,6 +10,7 @@ path = "src/bin/dev_db_seeding.rs"
 [dependencies]
 axum.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -33,6 +34,7 @@ infra-auth.workspace = true
 infra-authz.workspace = true
 infra-host.workspace = true
 infra-postgres.workspace = true
+infra-notifier.workspace = true
 
 [lints]
 workspace = true

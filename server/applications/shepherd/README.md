@@ -34,3 +34,22 @@ feature service. `runtime` supplies infrastructure dependencies and mounts the c
 2. Define repository traits in `core.rs`, then inject their implementations into the core service.
 3. For nested modules such as `host`, keep `host.rs` beside `host/`, which contains handler and DTO modules.
 4. Register the service in `ApplicationCore` and mount routes from the owning business area.
+
+## Staffing Work and Notifications
+
+Authenticated employees use:
+
+- `GET /business/staffing/assignments/me`
+- `POST /business/staffing/assignments/{assignment_id}/start`
+- `POST /business/staffing/assignments/{assignment_id}/end`
+
+Start and end require an `Idempotency-Key` UUID header and accept optional latitude, longitude, and accuracy. The server
+owns timestamps, derives employee/customer/location from the assignment, and queues notifications in the same transaction. Approval uses
+the sum of completed work sessions unless a supervisor supplies both an override and an adjustment reason.
+
+Configure provider credentials with `TELEGRAM_BOT_TOKEN` and `ZALO_OA_ACCESS_TOKEN`. Configure tenant recipients in
+`notification_destinations` using channel `telegram` or `zalo`; tokens never belong in the database. Telegram
+destinations are chat IDs. Zalo destinations are OA user IDs and remain subject to Zalo's recipient/message eligibility
+rules. A bounded Tokio `mpsc` channel wakes the dispatcher after a committed action; polling still defaults to two seconds
+via `NOTIFICATION_POLL_INTERVAL_SECS` for recovery after restarts or missed signals. Failed transient deliveries retry
+from the durable `notification_outbox`; a provider failure never rolls back a recorded work session.

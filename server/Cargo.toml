@@ -10,6 +10,7 @@ members = [
     "infra/host",
     "infra/app-sdk",
     "infra/jobs",
+    "infra/notifier",
     "infra/worker",
     "applications/shepherd",
     "runtime",
@@ -60,6 +61,7 @@ time = { version = "*", features = ["parsing", "macros"] }
 ts-rs = { version = "12.0", features = ["chrono-impl", "uuid-impl"] }
 calamine = { version = "*" }
 rust_xlsxwriter = { version = "*" }
+reqwest = { version = "*", default-features = false, features = ["json", "rustls-tls"] }
 # reusable infra crates
 infra-kernel = { path = "infra/kernel" }
 infra-ntree = { path = "infra/ntree" }
@@ -70,6 +72,7 @@ infra-redis = { path = "infra/redis" }
 infra-host = { path = "infra/host" }
 infra-app-sdk = { path = "infra/app-sdk" }
 infra-jobs = { path = "infra/jobs" }
+infra-notifier = { path = "infra/notifier" }
 infra-worker = { path = "infra/worker" }
 # installed applications
 shepherd = { path = "applications/shepherd" }

@@ -159,6 +159,8 @@ pub struct ShiftAssignment {
     pub worker_hourly_rate_snapshot: String,
     pub status: ShiftAssignmentStatus,
     pub worked_seconds: Option<i64>,
+    pub observed_worked_seconds: Option<i64>,
+    pub approval_adjustment_reason: Option<String>,
     pub customer_amount: Option<String>,
     pub worker_amount: Option<String>,
     pub margin_amount: Option<String>,
@@ -289,7 +291,8 @@ pub trait StaffingRepo {
         &self,
         tenant_id: Uuid,
         assignment_id: Uuid,
-        worked_seconds: i64,
+        worked_seconds: Option<i64>,
+        adjustment_reason: Option<String>,
         audit_account_id: Uuid,
     ) -> Result<ShiftAssignment, StaffingError>;
 }
@@ -414,16 +417,31 @@ impl StaffingService {
         &self,
         tenant_id: Uuid,
         assignment_id: Uuid,
-        worked_seconds: i64,
+        worked_seconds: Option<i64>,
+        adjustment_reason: Option<String>,
         audit_account_id: Uuid,
     ) -> Result<ShiftAssignment, StaffingError> {
-        if worked_seconds <= 0 {
-            return Err(StaffingError::InvalidInput("worked seconds must be positive"));
-        }
+        validate_approval_input(worked_seconds, adjustment_reason.as_deref())?;
         self.repo
-            .approve_shift_assignment(tenant_id, assignment_id, worked_seconds, audit_account_id)
+            .approve_shift_assignment(
+                tenant_id,
+                assignment_id,
+                worked_seconds,
+                adjustment_reason,
+                audit_account_id,
+            )
             .await
     }
+}
+
+fn validate_approval_input(worked_seconds: Option<i64>, adjustment_reason: Option<&str>) -> Result<(), StaffingError> {
+    if worked_seconds.is_some_and(|seconds| seconds <= 0) {
+        return Err(StaffingError::InvalidInput("worked seconds must be positive"));
+    }
+    if adjustment_reason.is_some_and(|reason| reason.len() < 3 || reason.len() > 500 || reason != reason.trim()) {
+        return Err(StaffingError::InvalidInput("approval adjustment reason is invalid"));
+    }
+    Ok(())
 }
 
 fn validate_identity(code: &str, name: &str) -> Result<(), StaffingError> {
@@ -481,7 +499,7 @@ fn validate_positive_decimal(value: &str) -> Result<(), StaffingError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_identity, validate_positive_decimal};
+    use super::{validate_approval_input, validate_identity, validate_positive_decimal};
 
     #[test]
     fn validates_financial_rate_without_using_floating_point() {
@@ -494,5 +512,25 @@ mod tests {
     fn validates_normalized_business_codes() {
         assert!(validate_identity("karaoke-a", "Karaoke A").is_ok());
         assert!(validate_identity("-karaoke", "Karaoke A").is_err());
+    }
+
+    #[test]
+    fn approval_accepts_observed_time_or_a_normalized_adjustment() {
+        assert!(validate_approval_input(None, None).is_ok());
+        assert!(validate_approval_input(Some(3600), None).is_ok());
+        assert!(validate_approval_input(Some(3900), Some("Customer confirmed extra setup time")).is_ok());
+    }
+
+    #[test]
+    fn approval_rejects_non_positive_time() {
+        assert!(validate_approval_input(Some(0), None).is_err());
+        assert!(validate_approval_input(Some(-1), Some("Correction")).is_err());
+    }
+
+    #[test]
+    fn approval_rejects_invalid_adjustment_reasons() {
+        assert!(validate_approval_input(Some(3900), Some("no")).is_err());
+        assert!(validate_approval_input(Some(3900), Some(" padded reason ")).is_err());
+        assert!(validate_approval_input(Some(3900), Some(&"x".repeat(501))).is_err());
     }
 }

@@ -4,15 +4,34 @@ use std::sync::Arc;
 
 use axum::Router;
 use infra_host::HostContext as FoundationHostState;
+use infra_worker::Worker;
 
-pub async fn build() -> (Arc<FoundationHostState>, Router) {
+pub struct RuntimeParts {
+    pub context: Arc<FoundationHostState>,
+    pub router: Router,
+    pub worker: Worker,
+}
+
+pub async fn build() -> RuntimeParts {
     let infra: Arc<FoundationHostState> = FoundationHostState::new_arc().await;
     let shepherd: Arc<shepherd::AppContext> =
         shepherd::AppContext::new_arc(Arc::clone(&infra.auth), Arc::clone(&infra.database));
+    let dispatcher = Arc::clone(&shepherd.notifications);
+    let worker = Worker::new();
+    worker
+        .asynchronous()
+        .spawn("notification-outbox", move |cancellation| async move {
+            dispatcher.run(cancellation).await;
+        })
+        .unwrap_or_else(|error| panic!("failed to start notification dispatcher: {error}"));
 
     let router: Router = infra_host::route::routes(Arc::clone(&infra)).merge(shepherd::routes(shepherd));
     let router: Router = infra_host::route::apply_layers(router, Arc::clone(&infra));
-    (infra, router)
+    RuntimeParts {
+        context: infra,
+        router,
+        worker,
+    }
 }
 
 pub fn typescript_contract() -> String {
