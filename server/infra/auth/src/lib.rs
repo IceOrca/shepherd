@@ -1,17 +1,19 @@
 #![cfg_attr(debug_assertions, allow(unused))]
 
-#[cfg(any(feature = "jwt-decode", feature = "password-auth"))]
+#[cfg(any(feature = "jwt", feature = "password-auth"))]
 pub mod account;
-#[cfg(feature = "jwt-decode")]
+#[cfg(feature = "jwt")]
 pub mod dto;
-#[cfg(feature = "jwt-decode")]
+#[cfg(feature = "jwt")]
 mod feature;
-#[cfg(feature = "jwt-decode")]
+#[cfg(feature = "jwt")]
 pub mod jwt;
 #[cfg(feature = "keycloak")]
 pub mod keycloak;
-#[cfg(feature = "jwt-decode")]
+#[cfg(feature = "jwt")]
 pub mod middleware;
+#[cfg(feature = "keycloak")]
+mod service;
 
 #[cfg(feature = "brute-force")]
 pub mod brute_force;
@@ -30,8 +32,10 @@ pub mod session_revoke;
 #[cfg(feature = "legacy-api")]
 pub mod typescript;
 
-#[cfg(feature = "jwt-decode")]
-pub use feature::{AuthService, AuthenticatedUser, TenantContext};
+#[cfg(feature = "jwt")]
+pub use feature::{AuthenticatedUser, LegacyAuthService, TenantContext};
+#[cfg(feature = "keycloak")]
+pub use service::AuthService;
 
 #[cfg(feature = "legacy-api")]
 pub use feature::AuthFeature;

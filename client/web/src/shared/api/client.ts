@@ -1,4 +1,3 @@
-import type { AuthRequest, AuthResponse } from "../../api/generated/contracts";
 import { fetchWithTimeout, RequestTimeoutError } from "../../api/fetch";
 
 export class ApiError extends Error {
@@ -11,16 +10,10 @@ export class ApiError extends Error {
   }
 }
 
-let accessToken: string | null = null;
-let refreshPromise: Promise<string> | null = null;
 let authenticationLostHandler: (() => void) | null = null;
 
 export function setAuthenticationLostHandler(handler: (() => void) | null): void {
   authenticationLostHandler = handler;
-}
-
-export function clearAccessToken(): void {
-  accessToken = null;
 }
 
 async function readPayload(response: Response): Promise<unknown> {
@@ -28,7 +21,6 @@ async function readPayload(response: Response): Promise<unknown> {
   if (!text) {
     return null;
   }
-
   try {
     return JSON.parse(text) as unknown;
   } catch {
@@ -36,18 +28,11 @@ async function readPayload(response: Response): Promise<unknown> {
   }
 }
 
-async function rawRequest<T>(
-  path: string,
-  init: RequestInit,
-  includeAccessToken: boolean,
-): Promise<T> {
+export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
   if (typeof init.body === "string" && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
-  }
-  if (includeAccessToken && accessToken) {
-    headers.set("Authorization", `Bearer ${accessToken}`);
   }
 
   const response = await fetchWithTimeout(path, {
@@ -56,63 +41,13 @@ async function rawRequest<T>(
     headers,
   });
   const payload = await readPayload(response);
-
   if (!response.ok) {
+    if (response.status === 401) {
+      authenticationLostHandler?.();
+    }
     throw new ApiError(response.status, payload);
   }
-
   return payload as T;
-}
-
-async function refreshAccessToken(): Promise<string> {
-  if (!refreshPromise) {
-    refreshPromise = rawRequest<AuthResponse>("/auth/refresh", { method: "POST" }, false)
-      .then((response) => {
-        accessToken = response.access_token;
-        return response.access_token;
-      })
-      .finally(() => {
-        refreshPromise = null;
-      });
-  }
-
-  return refreshPromise;
-}
-
-export async function restoreAccessToken(): Promise<void> {
-  await refreshAccessToken();
-}
-
-export async function loginAccessToken(input: AuthRequest): Promise<void> {
-  const response = await rawRequest<AuthResponse>(
-    "/auth/login",
-    {
-      method: "POST",
-      body: JSON.stringify(input),
-    },
-    false,
-  );
-  accessToken = response.access_token;
-}
-
-export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
-  try {
-    return await rawRequest<T>(path, init, true);
-  } catch (error) {
-    if (!(error instanceof ApiError) || error.status !== 401) {
-      throw error;
-    }
-
-    try {
-      await refreshAccessToken();
-    } catch (refreshError) {
-      clearAccessToken();
-      authenticationLostHandler?.();
-      throw refreshError;
-    }
-
-    return rawRequest<T>(path, init, true);
-  }
 }
 
 export function friendlyApiError(error: unknown, fallback: string): string {

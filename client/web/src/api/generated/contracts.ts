@@ -1,68 +1,6 @@
 // This file is generated from Rust API DTOs. Do not edit it manually.
 
-export type Role = "tenant_owner" | "supervisor" | "employee";
-
-export type AccountStatus = "active" | "locked" | "disabled";
-
-export type PermissionEffect = "allow" | "deny";
-
-export type AccountPermission = { code: string, effect: PermissionEffect, expires_at: string | null, };
-
-export type AccountSummary = { id: string, username: string, status: AccountStatus, 
-/**
- * Built-in role used for authentication policy such as JWT lifetime.
- */
-primary_role: Role, 
-/**
- * Every active role assigned to the account, including custom roles.
- */
-roles: Array<string>, auth_version: number, password_changed_at: string, last_authenticated_at: string | null, created_at: string, updated_at: string, };
-
-export type RoleSummary = { code: string, display_name: string, description: string | null, is_system: boolean, is_active: boolean, permissions: Array<string>, };
-
-export type PermissionSummary = { code: string, description: string, };
-
-export type AuthorizationCatalog = { roles: Array<RoleSummary>, permissions: Array<PermissionSummary>, };
-
-export type AuthRequest = { 
-/**
- * Human-readable workspace slug from the platform tenant registry.
- */
-tenant: string, username: string, passphrase: string, };
-
-export type AuthResponse = { access_token: string, token_type: string, expires_in: number, };
-
-export type AccessClaims = { 
-/**
- * Account UUID from the shared accounts table.
- */
-sub: string, 
-/**
- * Tenant UUID from the shared tenants table.
- */
-tid: string, iss: string, aud: string, exp: number, nbf: number, iat: number, jti: string, sid: string, username: string, role: Role, roles: Array<string>, 
-/**
- * Account authorization version at token issuance.
- */
-ver: number, permissions: Array<string>, };
-
-export type RegisterUserRequest = { username: string, passphrase: string, role: Role, };
-
-export type MessageResponse = { msg: string, };
-
-export type AuthProfileResponse = { tenant_id: string, account_id: string, username: string, role: Role, roles: Array<string>, auth_version: number, permissions: Array<string>, };
-
-export type UpdateAccountStatusRequest = { status: AccountStatus, };
-
-export type UpdateAccountRolesRequest = { primary_role: Role, roles: Array<string>, };
-
-export type UpdateAccountPermissionsRequest = { permissions: Array<AccountPermission>, };
-
-export type ChangePasswordRequest = { current_passphrase: string, new_passphrase: string, };
-
-export type ResetPasswordRequest = { new_passphrase: string, };
-
-export type InvalidCredentialsResponse = { error: string, remaining_attempts: number, };
+export type CurrentUserProfile = { tenant_id: string, account_id: string, username: string, primary_role: string, roles: Array<string>, permissions: Array<string>, };
 
 export type BranchSummary = { id: string, code: string, name: string, time_zone: string, };
 

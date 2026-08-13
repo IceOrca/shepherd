@@ -1,4 +1,4 @@
-docker compose exec -T postgresql-db \
+docker compose exec -T postgres-db \
     createdb \
     --username postgresroot \
     --owner shepherdapp \

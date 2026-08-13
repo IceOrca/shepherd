@@ -35,12 +35,8 @@
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": false,
-      "redirectUris": [
-        "http://localhost:4180/oauth2/callback"
-      ],
-      "webOrigins": [
-        "http://localhost:4180"
-      ],
+      "redirectUris": ["${OAUTH2_PROXY_REDIRECT_URL}"],
+      "webOrigins": ["${SHEPHERD_PUBLIC_URL}"],
       "protocolMappers": [
         {
           "name": "shepherd-api-audience",
@@ -62,23 +58,20 @@
       "name": "shepherd-users",
       "path": "/shepherd-users",
       "clientRoles": {
-        "shepherd-web": [
-          "web-access"
-        ]
+        "shepherd-web": ["web-access"]
       }
     }
   ],
   "users": [
     {
-      "username": "shepherd-dev",
+      "id": "16f7594f-a100-414f-b0d0-3c02a611889a",
+      "username": "phuongdorca",
       "enabled": true,
       "emailVerified": true,
-      "email": "dev@shepherd.local",
-      "firstName": "Shepherd",
-      "lastName": "Developer",
-      "groups": [
-        "/shepherd-users"
-      ],
+      "email": "vampirephuong@gmail.com",
+      "firstName": "IceOrca",
+      "lastName": "Dev",
+      "groups": ["/shepherd-users"],
       "credentials": [
         {
           "type": "password",

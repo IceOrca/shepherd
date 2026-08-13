@@ -182,7 +182,7 @@ export function OperationsOverviewPage() {
           <p className="mt-3 max-w-xl text-sm leading-6 text-blue-50">
             Mở danh sách ca để xem nơi làm việc và ghi nhận bắt đầu hoặc kết thúc ngay tại hiện trường.
           </p>
-          <Link className="mt-6 inline-flex min-h-11 items-center rounded-xl bg-white px-5 text-sm font-bold text-blue-700 shadow-lg" to="/van-hanh/ca-lam-cua-toi">
+          <Link className="mt-6 inline-flex min-h-11 items-center rounded-xl bg-white px-5 text-sm font-bold text-blue-700 shadow-lg" to="/operations/my-shifts">
             Mở ca làm của tôi
           </Link>
         </section>

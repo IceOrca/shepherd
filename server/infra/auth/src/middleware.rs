@@ -16,7 +16,7 @@ use crate::account::Role;
 #[cfg(feature = "password-auth")]
 use crate::account::UserAccount;
 
-use super::{AuthService, AuthenticatedUser, TenantContext, dto::AccessClaims, jwt::KID_MAIN};
+use super::{AuthenticatedUser, LegacyAuthService, TenantContext, dto::AccessClaims, jwt::KID_MAIN};
 
 fn build_jwt_validation() -> Validation {
     let mut validation = Validation::new(Algorithm::EdDSA);
@@ -30,7 +30,7 @@ fn build_jwt_validation() -> Validation {
 }
 
 pub async fn require_authenticated(
-    State(auth_ctx): State<Arc<AuthService>>,
+    State(auth_ctx): State<Arc<LegacyAuthService>>,
     mut request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {

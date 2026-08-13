@@ -41,7 +41,9 @@ impl HostContext {
         let database: Arc<DatabaseAdapter> = DatabaseAdapter::new_arc().await;
         let redis: Arc<RedisAdapter> = RedisAdapter::new_arc();
         #[cfg(feature = "auth")]
-        let auth: Arc<AuthService> = AuthService::from_adapters(Arc::clone(&database), Arc::clone(&redis)).await;
+        let auth: Arc<AuthService> = AuthService::from_env()
+            .await
+            .unwrap_or_else(|error| panic!("failed to initialize Keycloak authentication: {error}"));
 
         Arc::new(Self {
             database,

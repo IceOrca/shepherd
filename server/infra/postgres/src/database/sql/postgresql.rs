@@ -281,8 +281,8 @@ mod tests {
         let mut tenant_a_transaction: TenantTransaction = client.begin_tenant(tenant_a).await?;
         sqlx::query!(
             r#"
-            INSERT INTO accounts (id, tenant_id, username, password_hash, primary_role_code)
-            VALUES ($1, $2, 'rls-test-user', '$argon2id$v=19$test-only-password-hash', 'employee')
+            INSERT INTO accounts (id, tenant_id, username, primary_role_code)
+            VALUES ($1, $2, 'rls-test-user', 'employee')
             "#,
             account_a,
             tenant_a,
@@ -309,8 +309,8 @@ mod tests {
 
         let cross_tenant_insert: Result<sqlx::postgres::PgQueryResult, sqlx::Error> = sqlx::query!(
             r#"
-            INSERT INTO accounts (id, tenant_id, username, password_hash, primary_role_code)
-            VALUES ($1, $2, 'rls-cross-tenant', '$argon2id$v=19$test-only-password-hash', 'employee')
+            INSERT INTO accounts (id, tenant_id, username, primary_role_code)
+            VALUES ($1, $2, 'rls-cross-tenant', 'employee')
             "#,
             Uuid::new_v4(),
             tenant_a,
@@ -351,8 +351,8 @@ mod tests {
         let mut transaction: TenantTransaction = client.begin_tenant(tenant_id).await?;
         sqlx::query!(
             r#"
-            INSERT INTO accounts (id, tenant_id, username, password_hash, primary_role_code)
-            VALUES ($1, $2, 'attendance-test-user', '$argon2id$v=19$test-only-password-hash', 'employee')
+            INSERT INTO accounts (id, tenant_id, username, primary_role_code)
+            VALUES ($1, $2, 'attendance-test-user', 'employee')
             "#,
             account_id,
             tenant_id,

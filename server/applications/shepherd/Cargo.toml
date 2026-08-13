@@ -30,7 +30,7 @@ calamine.workspace = true
 rust_xlsxwriter.workspace = true
 infra-app-sdk.workspace = true
 infra-kernel = { workspace = true, features = ["debugging"] }
-infra-auth = { path = "../../infra/auth", default-features = false, features = ["full"] }
+infra-auth = { path = "../../infra/auth", default-features = false, features = ["keycloak"] }
 infra-authz.workspace = true
 infra-host.workspace = true
 infra-postgres.workspace = true

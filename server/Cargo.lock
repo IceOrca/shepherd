@@ -1657,9 +1657,7 @@ dependencies = [
 name = "infra-authz"
 version = "0.0.1"
 dependencies = [
- "axum",
  "casbin",
- "infra-auth",
  "sqlx-adapter",
  "thiserror 2.0.19",
  "tokio",
@@ -3048,7 +3046,6 @@ version = "0.0.1"
 dependencies = [
  "axum",
  "dotenvy",
- "infra-auth",
  "infra-host",
  "infra-kernel",
  "infra-worker",

@@ -1,13 +1,10 @@
 use jsonwebtoken::DecodingKey;
 
-#[cfg(feature = "jwt-encode")]
 use crate::account::Role;
-#[cfg(feature = "jwt-encode")]
 use jsonwebtoken::EncodingKey;
 
 pub mod claims;
 mod decode;
-#[cfg(feature = "jwt-encode")]
 mod encode;
 #[cfg(feature = "jwks")]
 mod public_key;
@@ -24,23 +21,18 @@ pub use crate::KID_MAIN;
 /// JWT material enabled by the selected Cargo capabilities.
 ///
 /// The default build loads only a public decoding key. Private signing
-/// material and legacy token lifetime policy exist only with jwt-encode.
+/// material and legacy token lifetime policy exist only with jwt.
 pub struct JwtHandle {
     decoding_key: DecodingKey,
-    #[cfg(feature = "jwt-encode")]
     encoding_key: EncodingKey,
-    #[cfg(feature = "jwt-encode")]
     tenant_owner_expiration_secs: usize,
-    #[cfg(feature = "jwt-encode")]
     supervisor_expiration_secs: usize,
-    #[cfg(feature = "jwt-encode")]
     employee_expiration_secs: usize,
-    #[cfg(feature = "jwks")]
     public_key_bytes: Vec<u8>,
 }
 
 impl JwtHandle {
-    #[cfg(not(feature = "jwt-encode"))]
+    #[cfg(not(feature = "jwt"))]
     pub fn from_public_key_path(public_pem_path: &str) -> Self {
         let public_pem: Vec<u8> = decode::read_public_key(public_pem_path);
         let decoding_key: DecodingKey = decode::parse_public_key(public_pem_path, &public_pem);
@@ -49,7 +41,6 @@ impl JwtHandle {
         Self { decoding_key }
     }
 
-    #[cfg(feature = "jwt-encode")]
     pub fn new(private_pem_path: &str, public_pem_path: &str) -> Self {
         let public_pem: Vec<u8> = decode::read_public_key(public_pem_path);
         let decoding_key: DecodingKey = decode::parse_public_key(public_pem_path, &public_pem);
@@ -71,12 +62,10 @@ impl JwtHandle {
         &self.decoding_key
     }
 
-    #[cfg(feature = "jwt-encode")]
     pub fn encoding(&self) -> &EncodingKey {
         &self.encoding_key
     }
 
-    #[cfg(feature = "jwt-encode")]
     pub fn expiration_for_role(&self, role: &Role) -> usize {
         if matches!(role, Role::TenantOwner) {
             self.tenant_owner_expiration_secs

@@ -6,27 +6,24 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { AuthProfileResponse, AuthRequest } from "../../api/generated/contracts";
-import {
-  clearAccessToken,
-  setAuthenticationLostHandler,
-} from "../../shared/api/client";
-import { loginSession, logoutSession, restoreSession } from "./api";
+import type { CurrentUserProfile } from "../../api/generated/contracts";
+import { setAuthenticationLostHandler } from "../../shared/api/client";
+import { beginLogin, logoutSession, restoreSession } from "./api";
 
 type AuthStatus = "loading" | "authenticated" | "anonymous";
 
 interface AuthContextValue {
   status: AuthStatus;
-  profile: AuthProfileResponse | null;
-  login(input: AuthRequest): Promise<void>;
-  logout(): Promise<void>;
+  profile: CurrentUserProfile | null;
+  login(returnTo?: string): void;
+  logout(): void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>("loading");
-  const [profile, setProfile] = useState<AuthProfileResponse | null>(null);
+  const [profile, setProfile] = useState<CurrentUserProfile | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -40,7 +37,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })
       .catch(() => {
         if (active) {
-          clearAccessToken();
           setProfile(null);
           setStatus("anonymous");
         }
@@ -64,16 +60,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () => ({
       status,
       profile,
-      async login(input) {
-        const authenticatedProfile = await loginSession(input);
-        setProfile(authenticatedProfile);
-        setStatus("authenticated");
-      },
-      async logout() {
-        await logoutSession();
-        setProfile(null);
-        setStatus("anonymous");
-      },
+      login: beginLogin,
+      logout: logoutSession,
     }),
     [profile, status],
   );

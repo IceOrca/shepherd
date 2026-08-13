@@ -41,8 +41,8 @@ impl Fixture {
         let mut setup = database.begin_tenant(tenant_id).await?;
         sqlx::query!(
             r#"
-            INSERT INTO accounts (id, tenant_id, username, password_hash, primary_role_code)
-            VALUES ($1, $2, 'staffing-work-cases', '$argon2id$v=19$test-only-password-hash', 'employee')
+            INSERT INTO accounts (id, tenant_id, username, primary_role_code)
+            VALUES ($1, $2, 'staffing-work-cases', 'employee')
             "#,
             account_id,
             tenant_id,

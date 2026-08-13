@@ -36,8 +36,7 @@ pub async fn build() -> RuntimeParts {
 
 pub fn typescript_contract() -> String {
     format!(
-        "// This file is generated from Rust API DTOs. Do not edit it manually.\n\n{}{}",
-        infra_auth::typescript::contract(),
+        "// This file is generated from Rust API DTOs. Do not edit it manually.\n\n{}",
         shepherd::typescript::contract()
     )
 }
@@ -48,7 +47,7 @@ mod tests {
     fn typescript_contract_uses_json_wire_types() {
         let contract = super::typescript_contract();
 
-        assert!(contract.contains("export type AuthRequest"));
+        assert!(contract.contains("export type CurrentUserProfile"));
         assert!(contract.contains("export type StaffingShiftCreateRequest"));
         assert!(contract.contains("worked_seconds: number"));
         assert!(!contract.contains("bigint"));

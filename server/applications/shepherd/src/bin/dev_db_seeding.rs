@@ -2,18 +2,13 @@ use std::{collections::HashMap, error::Error, io, sync::Arc};
 
 use chrono::{NaiveDate, NaiveTime};
 use infra_kernel::debug::*;
-use infra_auth::{
-    AuthMngtEntity, AuthenticateUserError, CreateAccountError,
-    account::{Role, UserAccount},
-};
-use infra_auth::AuthProvider;
 use infra_postgres::DatabaseAdapter;
 use uuid::Uuid;
 
 const ACME_TENANT_ID: &str = "00000000-0000-4000-8000-000000000001";
 const ACME1_TENANT_ID: &str = "00000000-0000-4000-8000-000000000002";
 const ACME2_TENANT_ID: &str = "00000000-0000-4000-8000-000000000003";
-const DEFAULT_DEV_PASSWORD: &str = "shepherd-dev-password";
+const DEV_KEYCLOAK_SUBJECT: &str = "16f7594f-a100-414f-b0d0-3c02a611889a";
 const DEV_ATTENDANCE_ID_NAMESPACE: u128 = 0xd3a7_7e00_0000_4000_8000_0000_0000_0000;
 const DEV_STAFFING_SHIFT_ID_NAMESPACE: u128 = 0x51f7_0000_0000_4000_8000_0000_0000_0000;
 const DEV_STAFFING_ASSIGNMENT_ID_NAMESPACE: u128 = 0xa551_0000_0000_4000_8000_0000_0000_0000;
@@ -39,7 +34,31 @@ struct DevFacility {
 
 struct DevAccount {
     username: &'static str,
-    role: Role,
+    role: DevRole,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DevRole {
+    TenantOwner,
+    Supervisor,
+    Employee,
+}
+
+impl DevRole {
+    const fn as_code(self) -> &'static str {
+        match self {
+            Self::TenantOwner => "tenant_owner",
+            Self::Supervisor => "supervisor",
+            Self::Employee => "employee",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct SeedAccount {
+    id: Uuid,
+    username: String,
+    role: DevRole,
 }
 
 const HEAD_OFFICE_FACILITIES: &[DevFacility] = &[
@@ -82,61 +101,61 @@ const DEV_BRANCHES: &[DevBranch] = &[
 const ACME_ACCOUNTS: &[DevAccount] = &[
     DevAccount {
         username: "owner",
-        role: Role::TenantOwner,
+        role: DevRole::TenantOwner,
     },
     DevAccount {
         username: "supervisor",
-        role: Role::Supervisor,
+        role: DevRole::Supervisor,
     },
     DevAccount {
         username: "employee",
-        role: Role::Employee,
+        role: DevRole::Employee,
     },
 ];
 
 const ACME1_ACCOUNTS: &[DevAccount] = &[
     DevAccount {
         username: "acme1Owner",
-        role: Role::TenantOwner,
+        role: DevRole::TenantOwner,
     },
     DevAccount {
         username: "acme1Supervisor1",
-        role: Role::Supervisor,
+        role: DevRole::Supervisor,
     },
     DevAccount {
         username: "acme1Supervisor2",
-        role: Role::Supervisor,
+        role: DevRole::Supervisor,
     },
     DevAccount {
         username: "acme1Employee1",
-        role: Role::Employee,
+        role: DevRole::Employee,
     },
     DevAccount {
         username: "acme1Employee2",
-        role: Role::Employee,
+        role: DevRole::Employee,
     },
 ];
 
 const ACME2_ACCOUNTS: &[DevAccount] = &[
     DevAccount {
         username: "acme2Owner",
-        role: Role::TenantOwner,
+        role: DevRole::TenantOwner,
     },
     DevAccount {
         username: "acme2Supervisor1",
-        role: Role::Supervisor,
+        role: DevRole::Supervisor,
     },
     DevAccount {
         username: "acme2Supervisor2",
-        role: Role::Supervisor,
+        role: DevRole::Supervisor,
     },
     DevAccount {
         username: "acme2Employee1",
-        role: Role::Employee,
+        role: DevRole::Employee,
     },
     DevAccount {
         username: "acme2Employee2",
-        role: Role::Employee,
+        role: DevRole::Employee,
     },
 ];
 
@@ -166,22 +185,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Debugging::init();
     log_notice!("Development seed started: configured_tenants={}", DEV_TENANTS.len());
     require_development_environment()?;
+    let keycloak_issuer = std::env::var("KEYCLOAK_ISSUER_URL")
+        .map_err(|_| io::Error::other("KEYCLOAK_ISSUER_URL is required for development seeding"))?;
     log_debug!("Development environment guard accepted APP_ENV=development");
 
     log_info!("Connecting to PostgreSQL; migrations must already be applied with the SQLx CLI");
     let database: Arc<DatabaseAdapter> = DatabaseAdapter::new_arc().await;
-    let repository = AuthProvider::new_arc(Arc::clone(&database));
-    let authentication = AuthMngtEntity::new_arc(repository).await;
-    let password: String = std::env::var("DEV_SEED_PASSWORD").unwrap_or_else(|_| DEFAULT_DEV_PASSWORD.to_owned());
-    let password_source: &str = if std::env::var_os("DEV_SEED_PASSWORD").is_some() {
-        "DEV_SEED_PASSWORD"
-    } else {
-        "built-in development default"
-    };
-    log_info!("Development account password selected: source={password_source}; value is not logged");
-
     for tenant in DEV_TENANTS {
-        if let Err(error) = seed_tenant(&database, &authentication, tenant, &password).await {
+        if let Err(error) = seed_tenant(&database, tenant, &keycloak_issuer).await {
             log_error!(
                 "Development tenant seed failed: tenant_slug={} tenant_id={} error={}",
                 tenant.slug,
@@ -201,18 +212,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("Development data seeded successfully");
     println!("tenant_slugs=acme,acme1,acme2");
     println!("accounts_created_or_verified={account_count}");
-    println!("password_source={password_source}");
-    if password_source == "built-in development default" {
-        println!("default_password={DEFAULT_DEV_PASSWORD}");
-    }
+    println!("keycloak_identity_issuer={keycloak_issuer}");
+    println!("keycloak_identity_subject={DEV_KEYCLOAK_SUBJECT}");
     Ok(())
 }
 
 async fn seed_tenant(
     database: &Arc<DatabaseAdapter>,
-    authentication: &Arc<AuthMngtEntity>,
     tenant: &DevTenant,
-    password: &str,
+    keycloak_issuer: &str,
 ) -> Result<(), io::Error> {
     let tenant_id: Uuid = Uuid::parse_str(tenant.id).map_err(io::Error::other)?;
     log_notice!(
@@ -235,30 +243,31 @@ async fn seed_tenant(
     let owner_definition: &DevAccount = tenant
         .accounts
         .iter()
-        .find(|account: &&DevAccount| account.role == Role::TenantOwner)
+        .find(|account: &&DevAccount| account.role == DevRole::TenantOwner)
         .ok_or_else(|| io::Error::other(format!("tenant '{}' has no owner seed definition", tenant.slug)))?;
-    let owner: UserAccount = ensure_account(
-        authentication,
+    let owner: SeedAccount = ensure_account(
+        database,
         tenant_id,
         owner_definition.username,
-        password,
-        owner_definition.role.clone(),
+        owner_definition.role,
         None,
     )
     .await?;
+    if tenant.id == ACME_TENANT_ID {
+        ensure_identity(database, keycloak_issuer, tenant_id, owner.id).await?;
+    }
 
-    let mut seeded_accounts: Vec<UserAccount> = vec![owner.clone()];
+    let mut seeded_accounts: Vec<SeedAccount> = vec![owner.clone()];
     for account_definition in tenant
         .accounts
         .iter()
-        .filter(|account: &&DevAccount| account.role != Role::TenantOwner)
+        .filter(|account: &&DevAccount| account.role != DevRole::TenantOwner)
     {
-        let account: UserAccount = ensure_account(
-            authentication,
+        let account: SeedAccount = ensure_account(
+            database,
             tenant_id,
             account_definition.username,
-            password,
-            account_definition.role.clone(),
+            account_definition.role,
             Some(owner.id),
         )
         .await?;
@@ -581,7 +590,7 @@ async fn seed_hr_infra(
     database: &DatabaseAdapter,
     tenant_id: Uuid,
     tenant: &DevTenant,
-    accounts: &[UserAccount],
+    accounts: &[SeedAccount],
     owner_account_id: Uuid,
 ) -> Result<(), io::Error> {
     let mut transaction = database.begin_tenant(tenant_id).await.map_err(io::Error::other)?;
@@ -713,8 +722,8 @@ async fn seed_hr_infra(
         .ok_or_else(|| io::Error::other("seeded owner employee was not found"))?;
     let supervisor_employee_ids: Vec<Uuid> = accounts
         .iter()
-        .filter(|account: &&UserAccount| account.role == Role::Supervisor)
-        .filter_map(|account: &UserAccount| employee_ids.get(&account.id).copied())
+        .filter(|account: &&SeedAccount| account.role == DevRole::Supervisor)
+        .filter_map(|account: &SeedAccount| employee_ids.get(&account.id).copied())
         .collect();
     let operations_manager_id: Uuid = supervisor_employee_ids.first().copied().unwrap_or(owner_employee_id);
 
@@ -795,14 +804,14 @@ async fn seed_hr_infra(
             .get(&account.id)
             .ok_or_else(|| io::Error::other("seeded employee account mapping was not found"))?;
         let (branch_id, facility_id, department_id, job_id, manager_employee_id) = match account.role {
-            Role::TenantOwner => (
+            DevRole::TenantOwner => (
                 head_office_branch_id,
                 head_office_facility_id,
                 administration_department_id,
                 owner_job_id,
                 None,
             ),
-            Role::Supervisor => {
+            DevRole::Supervisor => {
                 let use_north_branch: bool = supervisor_index % 2 == 1;
                 supervisor_index += 1;
                 (
@@ -821,7 +830,7 @@ async fn seed_hr_infra(
                     Some(owner_employee_id),
                 )
             }
-            Role::Employee => {
+            DevRole::Employee => {
                 let use_north_branch: bool = employee_index % 2 == 1;
                 let manager_employee_id: Uuid = supervisor_employee_ids
                     .get(employee_index % supervisor_employee_ids.len().max(1))
@@ -1010,7 +1019,7 @@ async fn seed_payroll_configuration(
     transaction: &mut infra_postgres::TenantTransaction,
     tenant_id: Uuid,
     tenant: &DevTenant,
-    accounts: &[UserAccount],
+    accounts: &[SeedAccount],
     employee_ids: &HashMap<Uuid, Uuid>,
     owner_account_id: Uuid,
     effective_date: NaiveDate,
@@ -1021,7 +1030,7 @@ async fn seed_payroll_configuration(
             .copied()
             .ok_or_else(|| io::Error::other("seeded payroll employee mapping was not found"))?;
         match account.role {
-            Role::Employee => {
+            DevRole::Employee => {
                 sqlx::query!(
                     r#"
                     INSERT INTO hr_employee_compensations (
@@ -1048,8 +1057,8 @@ async fn seed_payroll_configuration(
                 .await
                 .map_err(io::Error::other)?;
             }
-            Role::Supervisor | Role::TenantOwner => {
-                let monthly_rate: &str = if account.role == Role::TenantOwner {
+            DevRole::Supervisor | DevRole::TenantOwner => {
+                let monthly_rate: &str = if account.role == DevRole::TenantOwner {
                     "50000000"
                 } else {
                     "30000000"
@@ -1218,7 +1227,7 @@ async fn seed_attendance_sessions(
     transaction: &mut infra_postgres::TenantTransaction,
     tenant_id: Uuid,
     tenant: &DevTenant,
-    accounts: &[UserAccount],
+    accounts: &[SeedAccount],
     employee_ids: &HashMap<Uuid, Uuid>,
     employee_facility_ids: &HashMap<Uuid, Uuid>,
 ) -> Result<(usize, usize), io::Error> {
@@ -1243,7 +1252,7 @@ async fn seed_attendance_sessions(
 
     for account in accounts
         .iter()
-        .filter(|account: &&UserAccount| account.role == Role::Employee)
+        .filter(|account: &&SeedAccount| account.role == DevRole::Employee)
     {
         let employee_id: Uuid = employee_ids
             .get(&account.id)
@@ -1630,91 +1639,95 @@ fn require_development_environment() -> Result<(), io::Error> {
 }
 
 async fn ensure_account(
-    authentication: &AuthMngtEntity,
+    database: &DatabaseAdapter,
     tenant_id: Uuid,
     username: &str,
-    password: &str,
-    role: Role,
+    role: DevRole,
     audit_account_id: Option<Uuid>,
-) -> Result<UserAccount, io::Error> {
-    log_debug!(
-        "Looking up development account: tenant_id={} username={} expected_role={}",
+) -> Result<SeedAccount, io::Error> {
+    let mut transaction = database.begin_tenant(tenant_id).await.map_err(io::Error::other)?;
+    let existing = sqlx::query!(
+        "SELECT id, username, primary_role_code FROM accounts WHERE tenant_id = $1 AND lower(username) = lower($2)",
         tenant_id,
         username,
-        role.as_code()
-    );
-    let account = if let Some(account) = authentication
-        .get_current_account_by_username(tenant_id, username)
-        .await
-        .map_err(io::Error::other)?
-    {
-        log_info!(
-            "Reusing existing development account: tenant_id={} account_id={} username={} role={}",
-            tenant_id,
-            account.id,
-            username,
-            account.role.as_code()
-        );
-        account
+    )
+    .fetch_optional(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+
+    let account_id = if let Some(account) = existing {
+        if account.primary_role_code != role.as_code() {
+            return Err(io::Error::other(format!(
+                "existing development account '{username}' has role {}, expected {}",
+                account.primary_role_code,
+                role.as_code()
+            )));
+        }
+        account.id
     } else {
-        log_info!(
-            "Creating development account: tenant_id={} username={} role={} audit_account_id={:?}",
+        sqlx::query_scalar!(
+            r#"
+            INSERT INTO accounts (
+                id, tenant_id, username, status, primary_role_code,
+                created_by_account_id, updated_by_account_id
+            )
+            VALUES ($1, $2, $3, 'active', $4, $5, $5)
+            RETURNING id
+            "#,
+            Uuid::new_v4(),
             tenant_id,
             username,
             role.as_code(),
-            audit_account_id
-        );
-        let created_account: UserAccount = authentication
-            .create_account(tenant_id, username, password, role.clone(), audit_account_id)
-            .await
-            .map_err(|error: CreateAccountError| io::Error::other(format!("failed to seed '{username}': {error:?}")))?;
-        log_notice!(
-            "Development account created: tenant_id={} account_id={} username={} role={}",
-            tenant_id,
-            created_account.id,
-            username,
-            created_account.role.as_code()
-        );
-        created_account
+            audit_account_id,
+        )
+        .fetch_one(transaction.connection())
+        .await
+        .map_err(io::Error::other)?
     };
 
-    if account.role != role {
-        log_error!(
-            "Development account role mismatch: tenant_id={} account_id={} username={} actual_role={} expected_role={}",
-            tenant_id,
-            account.id,
-            username,
-            account.role.as_code(),
-            role.as_code()
-        );
-        return Err(io::Error::other(format!(
-            "existing development account '{username}' has role {:?}, expected {role:?}",
-            account.role
-        )));
-    }
+    sqlx::query!(
+        r#"
+        INSERT INTO account_roles (tenant_id, account_id, role_code, assigned_by_account_id)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (tenant_id, account_id, role_code) DO NOTHING
+        "#,
+        tenant_id,
+        account_id,
+        role.as_code(),
+        audit_account_id,
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    transaction.commit().await.map_err(io::Error::other)?;
 
-    log_debug!(
-        "Verifying development account credentials: tenant_id={} account_id={} username={} role={}",
+    Ok(SeedAccount {
+        id: account_id,
+        username: username.to_owned(),
+        role,
+    })
+}
+
+async fn ensure_identity(
+    database: &DatabaseAdapter,
+    issuer: &str,
+    tenant_id: Uuid,
+    account_id: Uuid,
+) -> Result<(), io::Error> {
+    sqlx::query!(
+        r#"
+        INSERT INTO account_identities (issuer, subject, tenant_id, account_id)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (tenant_id, account_id) DO UPDATE
+        SET issuer = EXCLUDED.issuer, subject = EXCLUDED.subject
+        "#,
+        issuer,
+        DEV_KEYCLOAK_SUBJECT,
         tenant_id,
-        account.id,
-        username,
-        account.role.as_code()
-    );
-    let authenticated_account: UserAccount = authentication
-        .authenticate_user(tenant_id, username, password)
-        .await
-        .map_err(|error: AuthenticateUserError| {
-            io::Error::other(format!(
-                "development account '{username}' does not accept DEV_SEED_PASSWORD: {error:?}"
-            ))
-        })?;
-    log_info!(
-        "Development account verified: tenant_id={} account_id={} username={} role={} active={}",
-        tenant_id,
-        authenticated_account.id,
-        username,
-        authenticated_account.role.as_code(),
-        authenticated_account.active
-    );
-    Ok(authenticated_account)
+        account_id,
+    )
+    .execute(database.client().pool())
+    .await
+    .map_err(io::Error::other)?;
+    Ok(())
 }

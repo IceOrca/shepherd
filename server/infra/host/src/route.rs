@@ -10,7 +10,7 @@ use axum::{
     routing::{MethodRouter, get},
 };
 #[cfg(feature = "auth")]
-use axum::middleware::{from_fn, from_fn_with_state};
+use axum::middleware::from_fn_with_state;
 use infra_kernel::debug::*;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::timeout::TimeoutLayer;
@@ -35,8 +35,6 @@ pub async fn init() -> (Arc<HostContext>, Router) {
 
 pub fn routes(host_ctx: Arc<HostContext>) -> Router {
     let host_router: Router = make_route_with_state("/", get(get_root), Arc::clone(&host_ctx));
-    #[cfg(feature = "auth")]
-    let host_router: Router = host_router.nest("/auth", auth_routes(&host_ctx.auth));
     log_notice!("Infra host routes initialized");
     host_router
 }
@@ -45,7 +43,8 @@ pub fn routes(host_ctx: Arc<HostContext>) -> Router {
 ///
 /// This API is available when the host's default `auth` feature is enabled.
 /// Applications keep ownership of handlers and state; the host owns common
-/// authentication, tenant-owner, and rate-limit layers.
+/// authentication and rate-limit layers. Application authorization remains
+/// owned by the application because Keycloak only establishes identity here.
 #[cfg(feature = "auth")]
 pub fn mount_app_routes(router: Router, routes: AppRoutes, host: Arc<HostContext>) -> Router {
     let public: Router = RateLimiter::public_layer(routes.public);
@@ -54,37 +53,17 @@ pub fn mount_app_routes(router: Router, routes: AppRoutes, host: Arc<HostContext
         .layer(RateLimiter::protected_route_layer())
         .route_layer(from_fn_with_state(
             Arc::clone(&host.auth),
-            infra_auth::middleware::require_authenticated,
+            infra_auth::keycloak::middleware::require_authenticated,
         ));
     let admin: Router = routes
         .admin
         .layer(RateLimiter::protected_route_layer())
-        .route_layer(from_fn(infra_auth::middleware::require_tenant_owner))
         .route_layer(from_fn_with_state(
             Arc::clone(&host.auth),
-            infra_auth::middleware::require_authenticated,
+            infra_auth::keycloak::middleware::require_authenticated,
         ));
 
     router.merge(public).merge(protected).merge(admin)
-}
-
-#[cfg(feature = "auth")]
-fn auth_routes(auth: &Arc<infra_auth::AuthService>) -> Router {
-    let public: Router = infra_auth::route::public_routes(auth).layer(RateLimiter::public_route_layer());
-    let protected: Router = infra_auth::route::protected_routes(auth)
-        .layer(RateLimiter::protected_route_layer())
-        .route_layer(from_fn_with_state(
-            Arc::clone(auth),
-            infra_auth::middleware::require_authenticated,
-        ));
-    let admin: Router = infra_auth::route::admin_routes(auth)
-        .layer(RateLimiter::protected_route_layer())
-        .route_layer(from_fn_with_state(
-            Arc::clone(auth),
-            infra_auth::middleware::require_authenticated,
-        ));
-
-    Router::new().merge(public).merge(protected).merge(admin)
 }
 
 pub fn apply_layers(router: Router, host_ctx: Arc<HostContext>) -> Router {

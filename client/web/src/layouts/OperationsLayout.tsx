@@ -31,10 +31,10 @@ interface NavigationItem {
 }
 
 const navigation: NavigationItem[] = [
-  { label: "Tổng quan", to: "/tong-quan", icon: LayoutDashboard },
+  { label: "Tổng quan", to: "/dashboard", icon: LayoutDashboard },
   {
     label: "Ca làm của tôi",
-    to: "/van-hanh/ca-lam-cua-toi",
+    to: "/operations/my-shifts",
     icon: CalendarClock,
     permission: "business.staffing_work.self.read",
   },
@@ -59,7 +59,7 @@ const navigation: NavigationItem[] = [
 ];
 
 function pageTitle(pathname: string): { title: string; description: string } {
-  if (pathname === "/van-hanh/ca-lam-cua-toi") {
+  if (pathname === "/operations/my-shifts") {
     return {
       title: "Ca làm của tôi",
       description: "Theo dõi và ghi nhận thời gian làm việc tại khách hàng.",
@@ -173,7 +173,7 @@ export function OperationsLayout() {
           </div>
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold text-white">{profile.username}</p>
-            <p className="truncate text-xs text-slate-500">{roleLabel(profile.role)}</p>
+            <p className="truncate text-xs text-slate-500">{roleLabel(profile.primary_role)}</p>
           </div>
         </div>
         <button
@@ -235,7 +235,7 @@ export function OperationsLayout() {
               <div className="hidden h-8 w-px bg-slate-200 sm:block" />
               <div className="hidden text-right md:block">
                 <p className="text-sm font-semibold text-slate-800">{profile.username}</p>
-                <p className="text-xs text-slate-500">{roleLabel(profile.role)}</p>
+                <p className="text-xs text-slate-500">{roleLabel(profile.primary_role)}</p>
               </div>
               <CircleUserRound className="size-9 text-slate-400" />
             </div>

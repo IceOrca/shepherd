@@ -20,7 +20,7 @@ use tokio::sync::{Mutex, MutexGuard, OwnedMutexGuard, RwLock, RwLockReadGuard, R
 use tokio::time::Interval;
 use validator::Validate;
 
-pub use crate::{AuthService, dto::AuthRequest};
+pub use crate::{LegacyAuthService, dto::AuthRequest};
 use infra_kernel::request::OriginatorIp;
 use infra_redis::RedisAdapter;
 use infra_kernel::debug::*;
@@ -674,7 +674,11 @@ mod redis_ {
     }
 }
 
-pub async fn brute_force_guard_layer(State(auth_ctx): State<Arc<AuthService>>, req: Request, next: Next) -> Response {
+pub async fn brute_force_guard_layer(
+    State(auth_ctx): State<Arc<LegacyAuthService>>,
+    req: Request,
+    next: Next,
+) -> Response {
     use axum::body::Bytes;
 
     let ip: Option<String> = req

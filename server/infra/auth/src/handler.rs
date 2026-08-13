@@ -22,7 +22,7 @@ use uuid::Uuid;
 use validator::Validate;
 
 use super::{
-    AuthService, AuthenticatedUser,
+    LegacyAuthService, AuthenticatedUser,
     access_revocation::AccessRevocationCache,
     bruteforce::{BruteForceReason, BruteForceStatus, LoginAttemptContext, tenant_login_key},
     dto::{
@@ -38,7 +38,7 @@ use super::{
 };
 
 pub async fn login(
-    State(ctx): State<Arc<AuthService>>,
+    State(ctx): State<Arc<LegacyAuthService>>,
     Extension(payload): Extension<AuthRequest>,
     Extension(login_attempt): Extension<LoginAttemptContext>,
 ) -> Result<Response, StatusCode> {
@@ -106,7 +106,7 @@ pub async fn login(
 }
 
 async fn issue_login_response(
-    ctx: &Arc<AuthService>,
+    ctx: &Arc<LegacyAuthService>,
     tenant_id: Uuid,
     account: UserAccount,
 ) -> Result<Response, StatusCode> {
@@ -188,7 +188,7 @@ async fn issue_login_response(
 }
 
 pub async fn logout(
-    State(ctx): State<Arc<AuthService>>,
+    State(ctx): State<Arc<LegacyAuthService>>,
     Extension(user): Extension<AuthenticatedUser>,
 ) -> Result<Response, StatusCode> {
     log_info!(
@@ -220,7 +220,7 @@ pub async fn logout(
 }
 
 pub async fn logout_all(
-    State(ctx): State<Arc<AuthService>>,
+    State(ctx): State<Arc<LegacyAuthService>>,
     Extension(user): Extension<AuthenticatedUser>,
 ) -> Result<Response, StatusCode> {
     log_info!(
@@ -247,7 +247,7 @@ pub async fn logout_all(
     message_with_cleared_cookie("Logged out all sessions successfully")
 }
 
-pub async fn refresh_session(State(ctx): State<Arc<AuthService>>, headers: HeaderMap) -> Response {
+pub async fn refresh_session(State(ctx): State<Arc<LegacyAuthService>>, headers: HeaderMap) -> Response {
     let cookie: RefreshSessionCookie = match extract_refresh_session_cookie(&headers) {
         Some(cookie) => cookie,
         None => {
@@ -280,7 +280,10 @@ pub async fn refresh_session(State(ctx): State<Arc<AuthService>>, headers: Heade
     }
 }
 
-async fn refresh_session_inner(ctx: &Arc<AuthService>, cookie: &RefreshSessionCookie) -> Result<Response, StatusCode> {
+async fn refresh_session_inner(
+    ctx: &Arc<LegacyAuthService>,
+    cookie: &RefreshSessionCookie,
+) -> Result<Response, StatusCode> {
     let validated: ValidatedSessionInfo = match ctx
         .sessions
         .validate_session(cookie.tenant_id, &cookie.sid, &cookie.refresh_token)
@@ -441,7 +444,7 @@ pub async fn get_profile(Extension(user): Extension<AuthenticatedUser>) -> impl 
 }
 
 pub async fn list_accounts(
-    State(ctx): State<Arc<AuthService>>,
+    State(ctx): State<Arc<LegacyAuthService>>,
     Extension(user): Extension<AuthenticatedUser>,
 ) -> Result<impl IntoResponse, StatusCode> {
     require_permission(&user, "auth.accounts.read")?;
@@ -457,7 +460,7 @@ pub async fn list_accounts(
 }
 
 pub async fn get_authorization_catalog(
-    State(ctx): State<Arc<AuthService>>,
+    State(ctx): State<Arc<LegacyAuthService>>,
     Extension(user): Extension<AuthenticatedUser>,
 ) -> Result<impl IntoResponse, StatusCode> {
     require_permission(&user, "auth.roles.read")?;
@@ -477,7 +480,7 @@ pub async fn get_authorization_catalog(
 }
 
 pub async fn change_own_password(
-    State(ctx): State<Arc<AuthService>>,
+    State(ctx): State<Arc<LegacyAuthService>>,
     Extension(user): Extension<AuthenticatedUser>,
     Json(payload): Json<ChangePasswordRequest>,
 ) -> Result<Response, StatusCode> {
@@ -504,7 +507,7 @@ pub async fn change_own_password(
 }
 
 pub async fn reset_account_password(
-    State(ctx): State<Arc<AuthService>>,
+    State(ctx): State<Arc<LegacyAuthService>>,
     Extension(user): Extension<AuthenticatedUser>,
     Path(account_id): Path<Uuid>,
     Json(payload): Json<ResetPasswordRequest>,
@@ -525,7 +528,7 @@ pub async fn reset_account_password(
 }
 
 pub async fn update_account_status(
-    State(ctx): State<Arc<AuthService>>,
+    State(ctx): State<Arc<LegacyAuthService>>,
     Extension(user): Extension<AuthenticatedUser>,
     Path(account_id): Path<Uuid>,
     Json(payload): Json<UpdateAccountStatusRequest>,
@@ -548,7 +551,7 @@ pub async fn update_account_status(
 }
 
 pub async fn update_account_roles(
-    State(ctx): State<Arc<AuthService>>,
+    State(ctx): State<Arc<LegacyAuthService>>,
     Extension(user): Extension<AuthenticatedUser>,
     Path(account_id): Path<Uuid>,
     Json(payload): Json<UpdateAccountRolesRequest>,
@@ -574,7 +577,7 @@ pub async fn update_account_roles(
 }
 
 pub async fn update_account_permissions(
-    State(ctx): State<Arc<AuthService>>,
+    State(ctx): State<Arc<LegacyAuthService>>,
     Extension(user): Extension<AuthenticatedUser>,
     Path(account_id): Path<Uuid>,
     Json(payload): Json<UpdateAccountPermissionsRequest>,
@@ -594,7 +597,7 @@ pub async fn update_account_permissions(
 }
 
 pub async fn register_new_user(
-    State(ctx): State<Arc<AuthService>>,
+    State(ctx): State<Arc<LegacyAuthService>>,
     Extension(user): Extension<AuthenticatedUser>,
     Json(payload): Json<RegisterUserRequest>,
 ) -> Result<impl IntoResponse, StatusCode> {
@@ -652,7 +655,7 @@ fn access_claims(
     }
 }
 
-fn encode_access_token(ctx: &AuthService, claims: &AccessClaims) -> Result<String, StatusCode> {
+fn encode_access_token(ctx: &LegacyAuthService, claims: &AccessClaims) -> Result<String, StatusCode> {
     let mut header: Header = Header::new(Algorithm::EdDSA);
     header.kid = Some(KID_MAIN!().to_owned());
     encode(&header, claims, ctx.jwt.encoding()).map_err(|error| {
@@ -702,7 +705,7 @@ async fn handle_refresh_error(access_revocation: &AccessRevocationCache, error: 
     }
 }
 
-async fn revoke_validated_session(ctx: &AuthService, validated: &ValidatedSessionInfo) -> Result<(), StatusCode> {
+async fn revoke_validated_session(ctx: &LegacyAuthService, validated: &ValidatedSessionInfo) -> Result<(), StatusCode> {
     let revoked: RevokedSessionInfo = ctx
         .sessions
         .revoke_session(validated.tenant_id, validated.account_id, &validated.sid)
@@ -714,7 +717,7 @@ async fn revoke_validated_session(ctx: &AuthService, validated: &ValidatedSessio
     Ok(())
 }
 
-async fn revoke_rotated_session(ctx: &AuthService, rotated: &RotatedSessionInfo) -> Result<(), StatusCode> {
+async fn revoke_rotated_session(ctx: &LegacyAuthService, rotated: &RotatedSessionInfo) -> Result<(), StatusCode> {
     let revoked: RevokedSessionInfo = ctx
         .sessions
         .revoke_session(rotated.tenant_id, rotated.account_id, &rotated.sid)
@@ -750,11 +753,15 @@ fn session_backend_status(error: AuthSessionError) -> StatusCode {
     StatusCode::SERVICE_UNAVAILABLE
 }
 
-async fn revoke_access_token(ctx: &AuthService, token: &RevokedAccessTokenInfo) {
+async fn revoke_access_token(ctx: &LegacyAuthService, token: &RevokedAccessTokenInfo) {
     ctx.access_revocation.revoke_jti(&token.jti, token.expires_at).await;
 }
 
-async fn revoke_all_account_sessions(ctx: &AuthService, tenant_id: Uuid, account_id: Uuid) -> Result<(), StatusCode> {
+async fn revoke_all_account_sessions(
+    ctx: &LegacyAuthService,
+    tenant_id: Uuid,
+    account_id: Uuid,
+) -> Result<(), StatusCode> {
     let revoked = ctx
         .sessions
         .revoke_all_sessions(tenant_id, account_id)

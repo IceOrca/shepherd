@@ -2,8 +2,10 @@
 
 Development Compose imports the Shepherd realm automatically. Open:
 
-- application through oauth2-proxy: <http://localhost:4180>
-- Keycloak administration: <http://keycloak.localhost:8081/admin>
+- application through Caddy and oauth2-proxy: `https://${REMOTE_DEV_DNS_NAME}`
+- Keycloak administration: `https://${REMOTE_DEV_DNS_NAME}:${KEYCLOAK_CADDY_HTTPS_PORT}/admin/`
+
+Run host Caddy with `deploy/Caddy/dev/Caddyfile`; see `deploy/Caddy/README.md`.
 
 The default development administrator is admin / shepherd-keycloak-dev-admin-password.
 The test account is shepherd-dev / shepherd-dev-password. Override these disposable
@@ -19,9 +21,9 @@ The development user belongs to `/shepherd-users`. A newly authenticated Google 
 other brokered user does not inherit this group and is denied by oauth2-proxy until an
 administrator adds the user to it.
 
-The direct Vite port remains available during the authentication migration. The existing
-Shepherd login still creates the application's account/tenant session; Keycloak currently
-protects the edge but does not replace that application session yet.
+The direct Vite port remains available for local diagnostics. Browser authentication now
+uses oauth2-proxy and Keycloak; Shepherd stores only the external identity-to-tenant
+account mapping and application permissions.
 
 Shepherd and Keycloak use separate logical databases and roles in the same PostgreSQL
 container. Fresh PostgreSQL volumes create the Keycloak database automatically. For an
@@ -54,7 +56,7 @@ Create these files below SVR_SECRETS_DIR:
 For an existing production PostgreSQL volume, run the same initialization script once
 using the production Compose files and VPS environment file before starting Keycloak.
 
-Keycloak and oauth2-proxy are internal-only in compose.prod.yaml. The production edge
-proxy should route the authentication hostname to keycloak:8081 and the application
-hostname to oauth2-proxy:4180. Remove direct client/server exposure after the application
-has fully migrated to OIDC.
+Production publishes Keycloak and oauth2-proxy on loopback only. The production edge
+Caddy proxy routes the authentication hostname to Keycloak and the application
+hostname to oauth2-proxy. The Keycloak Admin Console stays on the Tailscale endpoint;
+see `deploy/Caddy/prod/Caddyfile`.

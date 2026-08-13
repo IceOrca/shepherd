@@ -6,20 +6,20 @@ use axum::{
     routing::{get, post, put},
 };
 
-use crate::{AuthService, bruteforce, handler, jwks, middleware as auth_middleware};
+use crate::{LegacyAuthService, bruteforce, handler, jwks, middleware as auth_middleware};
 
 /// Complete standalone authentication router.
 ///
 /// A host may instead consume the individual route groups to apply its own
 /// rate-limit policy while keeping the auth crate independent from the host.
-pub fn routes(state: &Arc<AuthService>) -> Router {
+pub fn routes(state: &Arc<LegacyAuthService>) -> Router {
     Router::new()
         .merge(public_routes(state))
         .merge(authenticated_routes(protected_routes(state), state))
         .merge(authenticated_routes(admin_routes(state), state))
 }
 
-pub fn public_routes(state: &Arc<AuthService>) -> Router {
+pub fn public_routes(state: &Arc<LegacyAuthService>) -> Router {
     let login: Router = Router::new()
         .route("/login", post(handler::login))
         .route_layer(from_fn_with_state(
@@ -41,7 +41,7 @@ pub fn public_routes(state: &Arc<AuthService>) -> Router {
 
 /// Routes that require a valid account but no host-level administrator role.
 /// Authentication middleware is applied by `routes` or by the composing host.
-pub fn protected_routes(state: &Arc<AuthService>) -> Router {
+pub fn protected_routes(state: &Arc<LegacyAuthService>) -> Router {
     Router::new()
         .route("/profile", get(handler::get_profile))
         .route("/logout", post(handler::logout))
@@ -55,7 +55,7 @@ pub fn protected_routes(state: &Arc<AuthService>) -> Router {
 ///
 /// Handlers retain their fine-grained permission checks. Authentication is
 /// applied by `routes` or by the composing host.
-pub fn admin_routes(state: &Arc<AuthService>) -> Router {
+pub fn admin_routes(state: &Arc<LegacyAuthService>) -> Router {
     let registration: Router = Router::new()
         .route("/register", post(handler::register_new_user))
         .with_state(Arc::clone(state))
@@ -76,7 +76,7 @@ pub fn admin_routes(state: &Arc<AuthService>) -> Router {
     Router::new().merge(registration).merge(account_management)
 }
 
-fn authenticated_routes(router: Router, state: &Arc<AuthService>) -> Router {
+fn authenticated_routes(router: Router, state: &Arc<LegacyAuthService>) -> Router {
     router.route_layer(from_fn_with_state(
         Arc::clone(state),
         auth_middleware::require_authenticated,

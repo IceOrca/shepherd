@@ -25,7 +25,7 @@ function SessionGate() {
   }
 
   if (auth.status === "anonymous") {
-    return <Navigate to="/dang-nhap" replace state={{ from: location }} />;
+    return <Navigate to="/login" replace state={{ from: location }} />;
   }
 
   return <Outlet />;
@@ -44,13 +44,13 @@ function NotFoundPage() {
 export function AppRouter() {
   return (
     <Routes>
-      <Route path="/dang-nhap" element={<LoginPage />} />
+      <Route path="/login" element={<LoginPage />} />
       <Route element={<SessionGate />}>
         <Route element={<OperationsLayout />}>
-          <Route index element={<Navigate to="/tong-quan" replace />} />
-          <Route path="/tong-quan" element={<OperationsOverviewPage />} />
-          <Route path="/van-hanh/ca-lam-cua-toi" element={<MyAssignmentsPage />} />
-          <Route path="/admin/*" element={<Navigate to="/tong-quan" replace />} />
+          <Route index element={<Navigate to="/dashboard" replace />} />
+          <Route path="/dashboard" element={<OperationsOverviewPage />} />
+          <Route path="/operations/my-shifts" element={<MyAssignmentsPage />} />
+          <Route path="/admin/*" element={<Navigate to="/dashboard" replace />} />
           <Route path="*" element={<NotFoundPage />} />
         </Route>
       </Route>

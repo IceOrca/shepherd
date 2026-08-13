@@ -1,6 +1,7 @@
 use ts_rs::{Config, TS};
 
 use crate::{
+    auth::CurrentUserProfile,
     business::staffing::{
         core::{
             BusinessRecordStatus, Customer, CustomerFacility, RateSource, ShiftAssignment, ShiftAssignmentStatus,
@@ -51,6 +52,8 @@ use crate::{
 pub fn contract() -> String {
     let config = Config::new().with_large_int("number");
     let mut output = String::new();
+
+    push::<CurrentUserProfile>(&mut output, &config);
 
     push::<BranchSummary>(&mut output, &config);
     push::<FacilitySummary>(&mut output, &config);

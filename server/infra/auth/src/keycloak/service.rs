@@ -31,11 +31,11 @@ impl KeycloakAuth {
     }
 
     pub async fn from_config(config: KeycloakConfig) -> Result<Arc<Self>, KeycloakAuthError> {
-        let client = reqwest::Client::builder()
+        let client: reqwest::Client = reqwest::Client::builder()
             .timeout(config.http_timeout)
             .build()
             .map_err(KeycloakAuthError::JwksUnavailable)?;
-        let service = Arc::new(Self {
+        let service: Arc<KeycloakAuth> = Arc::new(Self {
             config,
             client,
             jwks: RwLock::new(CachedJwks::default()),
@@ -50,14 +50,15 @@ impl KeycloakAuth {
     }
 
     pub async fn validate_access_token(&self, token: &str) -> Result<KeycloakPrincipal, KeycloakAuthError> {
-        let header = decode_header(token).map_err(KeycloakAuthError::InvalidToken)?;
+        let header: jsonwebtoken::Header =
+            jsonwebtoken::decode_header(token).map_err(KeycloakAuthError::InvalidToken)?;
         if !self.config.allowed_algorithms.contains(&header.alg) {
             return Err(KeycloakAuthError::DisallowedAlgorithm);
         }
-        let kid = header.kid.as_deref().ok_or(KeycloakAuthError::MissingKeyId)?;
-        let key = self.decoding_key(kid, header.alg).await?;
+        let kid: &str = header.kid.as_deref().ok_or(KeycloakAuthError::MissingKeyId)?;
+        let key: DecodingKey = self.decoding_key(kid, header.alg).await?;
 
-        let mut validation = Validation::new(header.alg);
+        let mut validation: Validation = Validation::new(header.alg);
         validation.set_issuer(&[&self.config.issuer]);
         validation.set_audience(&[&self.config.audience]);
         validation.set_required_spec_claims(&["exp", "iss", "aud", "sub"]);
@@ -66,8 +67,9 @@ impl KeycloakAuth {
         validation.validate_aud = true;
         validation.leeway = self.config.clock_skew.as_secs();
 
-        let token = decode::<KeycloakClaims>(token, &key, &validation).map_err(KeycloakAuthError::InvalidToken)?;
-        let principal = KeycloakPrincipal::try_from(token.claims)?;
+        let token: jsonwebtoken::TokenData<KeycloakClaims> =
+            decode::<KeycloakClaims>(token, &key, &validation).map_err(KeycloakAuthError::InvalidToken)?;
+        let principal: KeycloakPrincipal = KeycloakPrincipal::try_from(token.claims)?;
         if principal
             .issued_at
             .is_some_and(|issued_at| issued_at > jsonwebtoken::get_current_timestamp() + validation.leeway)
@@ -80,9 +82,9 @@ impl KeycloakAuth {
     }
 
     async fn decoding_key(&self, kid: &str, algorithm: Algorithm) -> Result<DecodingKey, KeycloakAuthError> {
-        let (cached_key, cache_is_fresh) = {
+        let (cached_key, cache_is_fresh): (Option<Jwk>, bool) = {
             let cache = self.jwks.read().await;
-            let is_fresh = cache
+            let is_fresh: bool = cache
                 .fetched_at
                 .is_some_and(|fetched_at| fetched_at.elapsed() < self.config.jwks_refresh_interval);
             (cache.set.find(kid).cloned(), is_fresh)

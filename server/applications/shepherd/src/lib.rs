@@ -1,5 +1,6 @@
 #![cfg_attr(debug_assertions, allow(unused))]
 
+pub mod auth;
 pub mod authz;
 pub mod business;
 pub mod features;
@@ -25,7 +26,6 @@ use features::{
     working_schedule::{core::WorkingScheduleService, model::WorkingScheduleProvider},
 };
 
-pub use infra_auth as auth;
 pub use infra_host::ratelimiting;
 
 #[derive(Clone)]
@@ -61,17 +61,19 @@ impl ApplicationCore {
 
 #[derive(Clone)]
 pub struct AppContext {
-    pub auth: Arc<auth::AuthService>,
+    pub auth: Arc<infra_auth::AuthService>,
+    pub database: Arc<DatabaseAdapter>,
     pub core: Arc<ApplicationCore>,
     pub notifications: Arc<notifications::NotificationDispatcher>,
 }
 
 impl AppContext {
-    pub fn new_arc(auth: Arc<auth::AuthService>, database: Arc<DatabaseAdapter>) -> Arc<Self> {
+    pub fn new_arc(auth: Arc<infra_auth::AuthService>, database: Arc<DatabaseAdapter>) -> Arc<Self> {
         let notifications = notifications::NotificationDispatcher::new_arc(Arc::clone(&database));
-        let core = ApplicationCore::new_arc(database);
+        let core = ApplicationCore::new_arc(Arc::clone(&database));
         Arc::new(Self {
             auth,
+            database,
             core,
             notifications,
         })
@@ -92,15 +94,26 @@ impl FoundationApp for ShepherdApp {
 }
 
 pub fn routes(context: Arc<AppContext>) -> Router {
+    let api_routes = protected_routes(Arc::clone(&context), auth::routes());
     let hr_routes = protected_routes(Arc::clone(&context), hr::routes());
     let business_routes = protected_routes(Arc::clone(&context), business::routes());
-    Router::new().nest("/hr", hr_routes).nest("/business", business_routes)
+    Router::new()
+        .nest("/api", api_routes)
+        .nest("/hr", hr_routes)
+        .nest("/business", business_routes)
 }
 
 fn protected_routes(context: Arc<AppContext>, routes: Router<Arc<AppContext>>) -> Router {
     let auth: Arc<infra_auth::AuthService> = Arc::clone(&context.auth);
     routes
         .layer(ratelimiting::RateLimiter::protected_route_layer())
-        .route_layer(from_fn_with_state(auth, auth::middleware::require_authenticated))
+        .route_layer(from_fn_with_state(
+            Arc::clone(&context),
+            auth::resolve_application_account,
+        ))
+        .route_layer(from_fn_with_state(
+            auth,
+            infra_auth::keycloak::middleware::require_authenticated,
+        ))
         .with_state(context)
 }

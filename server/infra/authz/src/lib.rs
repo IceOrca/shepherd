@@ -2,14 +2,7 @@
 
 use std::sync::Arc;
 
-use axum::{
-    extract::{Request, State},
-    http::StatusCode,
-    middleware::Next,
-    response::Response,
-};
 use casbin::{CoreApi, DefaultModel, Enforcer, MemoryAdapter, MgmtApi, StringAdapter};
-use infra_auth::AuthenticatedUser;
 use thiserror::Error;
 use tokio::sync::RwLock;
 
@@ -109,53 +102,6 @@ impl AuthzService {
         let mut enforcer = self.enforcer.write().await;
         enforcer.load_policy().await?;
         Ok(())
-    }
-}
-
-/// Application-selected route requirement evaluated after authentication.
-#[derive(Clone)]
-pub struct RouteAuthorization {
-    pub authz: Arc<AuthzService>,
-    pub resource: String,
-    pub action: String,
-}
-
-impl RouteAuthorization {
-    pub fn new(authz: Arc<AuthzService>, resource: impl Into<String>, action: impl Into<String>) -> Arc<Self> {
-        Arc::new(Self {
-            authz,
-            resource: resource.into(),
-            action: action.into(),
-        })
-    }
-}
-
-/// Generic Axum middleware for an application-declared Casbin requirement.
-/// Authentication middleware must run first and inject AuthenticatedUser.
-pub async fn require_authorized(
-    State(required): State<Arc<RouteAuthorization>>,
-    request: Request,
-    next: Next,
-) -> Result<Response, StatusCode> {
-    let user: AuthenticatedUser = request
-        .extensions()
-        .get::<AuthenticatedUser>()
-        .cloned()
-        .ok_or(StatusCode::UNAUTHORIZED)?;
-    let authorization: AuthorizationRequest = AuthorizationRequest::new(
-        user.account_id.to_string(),
-        user.tenant_id.to_string(),
-        required.resource.as_str(),
-        required.action.as_str(),
-    );
-
-    match required.authz.is_allowed(&authorization).await {
-        Ok(true) => Ok(next.run(request).await),
-        Ok(false) => Err(StatusCode::FORBIDDEN),
-        Err(error) => {
-            tracing::error!(error = %error, "Casbin authorization evaluation failed");
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
     }
 }
 

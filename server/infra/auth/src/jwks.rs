@@ -9,7 +9,7 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Serialize;
 
 use crate::jwt;
-use crate::AuthService;
+use crate::LegacyAuthService;
 
 use infra_kernel::debug::*;
 
@@ -28,7 +28,7 @@ pub struct JwkKey {
     x: String,   // base64url encoded public key bytes
 }
 
-pub async fn jwks_handler(State(auth_ctx): State<Arc<AuthService>>) -> impl IntoResponse {
+pub async fn jwks_handler(State(auth_ctx): State<Arc<LegacyAuthService>>) -> impl IntoResponse {
     let public_key: &[u8] = auth_ctx.jwt.key_public();
 
     let jwk: JwkKey = JwkKey {

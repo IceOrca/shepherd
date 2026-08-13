@@ -22,7 +22,7 @@
         "cargo": {
           "extraEnv": {
             "SQLX_OFFLINE": "false",
-            "DATABASE_URL": "postgres://shepherdapp:01234567@postgresql-db:5432/shepherd_dev",
+            "DATABASE_URL": "postgres://shepherdapp:01234567@postgres-db:5432/shepherd_dev",
           },
         },
       },

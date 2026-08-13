@@ -1,31 +1,15 @@
-import type {
-  AuthProfileResponse,
-  AuthRequest,
-  MessageResponse,
-} from "../../api/generated/contracts";
-import {
-  apiRequest,
-  clearAccessToken,
-  loginAccessToken,
-  restoreAccessToken,
-} from "../../shared/api/client";
+import type { CurrentUserProfile } from "../../api/generated/contracts";
+import { apiRequest } from "../../shared/api/client";
 
-export async function restoreSession(): Promise<AuthProfileResponse> {
-  await restoreAccessToken();
-  return apiRequest<AuthProfileResponse>("/auth/profile");
+export function restoreSession(): Promise<CurrentUserProfile> {
+  return apiRequest<CurrentUserProfile>("/api/me");
 }
 
-export async function loginSession(input: AuthRequest): Promise<AuthProfileResponse> {
-  await loginAccessToken(input);
-  try {
-    return await apiRequest<AuthProfileResponse>("/auth/profile");
-  } catch (error) {
-    clearAccessToken();
-    throw error;
-  }
+export function beginLogin(returnTo: string): void {
+  const target = returnTo.startsWith("/") ? returnTo : "/dashboard";
+  window.location.assign(`/oauth2/start?rd=${encodeURIComponent(target)}`);
 }
 
-export async function logoutSession(): Promise<void> {
-  await apiRequest<MessageResponse>("/auth/logout", { method: "POST" });
-  clearAccessToken();
+export function logoutSession(): void {
+  window.location.assign(`/oauth2/sign_out?rd=${encodeURIComponent("/login")}`);
 }

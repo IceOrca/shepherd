@@ -10,9 +10,8 @@ keycloak = [
     "dep:thiserror",
     "dep:tokio",
 ]
-jwt-decode = ["dep:uuid"]
-jwt-encode = ["jwt-decode"]
-jwks = ["jwt-encode", "dep:base64"]
+jwt = ["dep:uuid"]
+jwks = ["jwt", "dep:base64"]
 password-auth = [
     "dep:async-trait",
     "dep:chrono",

@@ -99,16 +99,16 @@ impl TryFrom<KeycloakClaims> for KeycloakPrincipal {
                 "issued-at must be earlier than expiry".to_owned(),
             ));
         }
-        let audience = claims.aud.into_vec();
+        let audience: Vec<String> = claims.aud.into_vec();
         if audience.is_empty() || audience.iter().any(|value| value.trim().is_empty()) {
             return Err(KeycloakAuthError::InvalidClaims(
                 "audience must not be empty".to_owned(),
             ));
         }
 
-        let scopes = deduplicate_words(claims.scope.as_deref().unwrap_or_default().split_whitespace());
-        let realm_roles = deduplicate_words(claims.realm_access.roles.iter().map(String::as_str));
-        let resource_roles = claims
+        let scopes: Vec<String> = deduplicate_words(claims.scope.as_deref().unwrap_or_default().split_whitespace());
+        let realm_roles: Vec<String> = deduplicate_words(claims.realm_access.roles.iter().map(String::as_str));
+        let resource_roles: BTreeMap<String, Vec<String>> = claims
             .resource_access
             .into_iter()
             .filter_map(|(resource, access)| {

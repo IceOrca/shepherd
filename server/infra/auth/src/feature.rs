@@ -86,7 +86,7 @@ impl AuthenticatedUser {
     }
 }
 
-pub struct AuthService {
+pub struct LegacyAuthService {
     pub jwt: JwtHandle,
     #[cfg(feature = "password-auth")]
     pub core_entity: Arc<AuthMngtEntity>,
@@ -98,9 +98,9 @@ pub struct AuthService {
     pub brute_force: Arc<BruteForceGuard>,
 }
 
-impl AuthService {
+impl LegacyAuthService {
     #[cfg(all(
-        not(feature = "jwt-encode"),
+        not(feature = "jwt"),
         not(feature = "password-auth"),
         not(feature = "session"),
         not(feature = "session-revocation"),
@@ -149,13 +149,13 @@ impl AuthService {
 #[derive(Clone)]
 #[cfg(feature = "legacy-api")]
 pub struct AuthFeature {
-    pub service: Arc<AuthService>,
+    pub service: Arc<LegacyAuthService>,
 }
 
 #[cfg(feature = "legacy-api")]
 impl AuthFeature {
     pub async fn new_arc(database: Arc<DatabaseAdapter>, redis: Arc<RedisAdapter>) -> Arc<Self> {
-        let service: Arc<AuthService> = AuthService::from_adapters(database, redis).await;
+        let service: Arc<LegacyAuthService> = LegacyAuthService::from_adapters(database, redis).await;
         Arc::new(Self { service })
     }
 }

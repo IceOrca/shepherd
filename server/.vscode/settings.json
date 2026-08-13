@@ -1,19 +1,19 @@
 {
   "rust-analyzer.cargo.extraEnv": {
     "SQLX_OFFLINE": "false",
-    "DATABASE_URL": "postgres://shepherdapp:01234567@postgresql-db:5432/shepherd_dev",
+    "DATABASE_URL": "postgres://shepherdapp:01234567@postgres-db:5432/shepherd_dev",
   },
   "rust-analyzer.check.extraEnv": {
     "SQLX_OFFLINE": "false",
-    "DATABASE_URL": "postgres://shepherdapp:01234567@postgresql-db:5432/shepherd_dev",
+    "DATABASE_URL": "postgres://shepherdapp:01234567@postgres-db:5432/shepherd_dev",
   },
   "rust-analyzer.runnables.extraEnv": {
     "SQLX_OFFLINE": "false",
-    "DATABASE_URL": "postgres://shepherdapp:01234567@postgresql-db:5432/shepherd_dev",
+    "DATABASE_URL": "postgres://shepherdapp:01234567@postgres-db:5432/shepherd_dev",
   },
   "rust-analyzer.server.extraEnv": {
     "SQLX_OFFLINE": "false",
-    "DATABASE_URL": "postgres://shepherdapp:01234567@postgresql-db:5432/shepherd_dev",
+    "DATABASE_URL": "postgres://shepherdapp:01234567@postgres-db:5432/shepherd_dev",
   },
   "editor.codeActionsOnSave": {
     "source.sortImports": "never",

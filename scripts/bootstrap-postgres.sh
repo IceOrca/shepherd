@@ -8,8 +8,17 @@
 
 set -eu
 
+set -a
+if [ -e ./.env ]; then
+    source ./.env
+fi
+if [ -e /etc/shepherd/secrets/.env ]; then
+    source /etc/shepherd/secrets/.env
+fi
+set +a
+
 if [ "${SHEPHERD_POSTGRES_BOOTSTRAP_IN_CONTAINER:-}" != "1" ]; then
-    exec docker compose exec -T postgresql-db \
+    exec docker compose exec -T postgres-db \
         sh /docker-entrypoint-initdb.d/10-bootstrap-postgres.sh
 fi
 
@@ -33,7 +42,7 @@ admin_user="${POSTGRES_USER:?POSTGRES_USER_must_be_set}"
 shepherd_db="${POSTGRES_DB:?POSTGRES_DB_must_be_set}"
 shepherd_user="${PG_APP_USER:?PG_APP_USER_must_be_set}"
 shepherd_password="$(read_password "${PG_APP_PASSWORD:-}" "${PG_APP_PASSWORD_FILE:-}" PG_APP_PASSWORD)"
-keycloak_db="${KEYCLOAK_DB_NAME:-keycloak}"
+keycloak_db="${KEYCLOAK_DB:-keycloak}"
 keycloak_user="${KEYCLOAK_DB_USER:-keycloak}"
 keycloak_password="$(read_password "${KEYCLOAK_DB_PASSWORD:-}" "${KEYCLOAK_DB_PASSWORD_FILE:-}" KEYCLOAK_DB_PASSWORD)"
 

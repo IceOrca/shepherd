@@ -35,12 +35,8 @@
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": false,
-      "redirectUris": [
-        "${OAUTH2_PROXY_REDIRECT_URL_PROD}"
-      ],
-      "webOrigins": [
-        "${SHEPHERD_WEB_ORIGIN_PROD}"
-      ],
+      "redirectUris": ["${OAUTH2_PROXY_REDIRECT_URL_PROD}"],
+      "webOrigins": ["${SHEPHERD_WEB_ORIGIN_PROD}"],
       "protocolMappers": [
         {
           "name": "shepherd-api-audience",
@@ -62,9 +58,7 @@
       "name": "shepherd-users",
       "path": "/shepherd-users",
       "clientRoles": {
-        "shepherd-web": [
-          "web-access"
-        ]
+        "shepherd-web": ["web-access"]
       }
     }
   ]

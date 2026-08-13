@@ -18,7 +18,7 @@ Use `-it` for an interactive shell and `-T` for non-interactive automation.
 
 ## Container and Database Rules
 
-Keep images minimal. The server uses Rust Bookworm: do not add `build-essential`, `libpq-dev`, or `postgresql-client`; access and migrations use SQLx, not Diesel. Add OS packages only for demonstrated needs. Run manual `psql` only in `postgresql-db` (PostgreSQL Alpine), never the server image.
+Keep images minimal. The server uses Rust Bookworm: do not add `build-essential`, `libpq-dev`, or `postgresql-client`; access and migrations use SQLx, not Diesel. Add OS packages only for demonstrated needs. Run manual `psql` only in `postgres-db` (PostgreSQL Alpine), never the server image.
 
 ## Coding Style & Naming Conventions
 

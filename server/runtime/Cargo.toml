@@ -17,7 +17,6 @@ dotenvy.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 infra-kernel = { workspace = true, features = ["debugging"] }
-infra-auth = { path = "../infra/auth", default-features = false, features = ["full"] }
 infra-host.workspace = true
 infra-worker.workspace = true
 shepherd.workspace = true

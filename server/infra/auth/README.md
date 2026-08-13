@@ -7,12 +7,12 @@ JWKS refresh so normal Keycloak key rotation does not require a server restart.
 
 Optional legacy capabilities are independent Cargo features:
 
-- `jwt-decode` — validation for Shepherd's legacy locally issued EdDSA tokens
+- `jwt` — validation for Shepherd's legacy locally issued EdDSA tokens
 - `password-auth` — local password authentication, account management, and SQLx provider
 - `session` — Redis refresh sessions
 - `brute-force` — password-login attempt protection
 - `session-revocation` — local JTI revocation cache and Redis blacklist events
-- `jwt-encode` — private-key signing and legacy token lifetime policy
+- `jwt` — private-key signing and legacy token lifetime policy
 - `jwks` — publication of the local public signing key
 - `legacy-api` / `full` — all legacy HTTP authentication capabilities
 
