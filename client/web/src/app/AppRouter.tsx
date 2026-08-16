@@ -5,6 +5,8 @@ import { LoginPage } from "../features/auth/LoginPage";
 import { useAuth } from "../features/auth/AuthProvider";
 import { MyAssignmentsPage } from "../features/operations/MyAssignmentsPage";
 import { OperationsOverviewPage } from "../features/operations/OperationsOverviewPage";
+import { ReconciliationPage } from "../features/operations/ReconciliationPage";
+import { ShiftCoordinationPage } from "../features/operations/ShiftCoordinationPage";
 import { OperationsLayout } from "../layouts/OperationsLayout";
 
 function SessionGate() {
@@ -51,6 +53,8 @@ export function AppRouter() {
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<OperationsOverviewPage />} />
           <Route path="/operations/my-shifts" element={<MyAssignmentsPage />} />
+          <Route path="/operations/shifts" element={<ShiftCoordinationPage />} />
+          <Route path="/operations/reconciliation" element={<ReconciliationPage />} />
           <Route path="/admin/auth-users" element={<AuthUsersPage />} />
           <Route path="/admin/*" element={<Navigate to="/admin/auth-users" replace />} />
           <Route path="*" element={<NotFoundPage />} />

@@ -168,6 +168,60 @@ pub struct ShiftAssignment {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Clone, Debug, Serialize, TS)]
+pub struct StaffingCandidate {
+    pub employee_id: Uuid,
+    pub employee_code: String,
+    pub display_name: String,
+    pub suitable: bool,
+    pub available: bool,
+    pub already_assigned: bool,
+    pub conflict_shift_id: Option<Uuid>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ReconciliationStatus {
+    PendingStaff,
+    PendingCustomer,
+    Matched,
+    Discrepancy,
+    Reconciled,
+}
+
+#[derive(Clone, Debug, Serialize, TS)]
+pub struct CustomerWorkRecord {
+    pub id: Uuid,
+    pub assignment_id: Uuid,
+    pub confirmed_started_at: DateTime<Utc>,
+    pub confirmed_ended_at: DateTime<Utc>,
+    pub confirmed_worked_seconds: i64,
+    pub customer_reference: Option<String>,
+    pub notes: Option<String>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, TS)]
+pub struct StaffingReconciliation {
+    pub assignment_id: Uuid,
+    pub shift_id: Uuid,
+    pub employee_id: Uuid,
+    pub employee_code: String,
+    pub employee_name: String,
+    pub customer_name: String,
+    pub customer_facility_name: String,
+    pub scheduled_starts_at: DateTime<Utc>,
+    pub scheduled_ends_at: DateTime<Utc>,
+    pub assignment_status: ShiftAssignmentStatus,
+    pub staff_started_at: Option<DateTime<Utc>>,
+    pub staff_ended_at: Option<DateTime<Utc>>,
+    pub staff_worked_seconds: i64,
+    pub customer_record: Option<CustomerWorkRecord>,
+    pub final_worked_seconds: Option<i64>,
+    pub adjustment_reason: Option<String>,
+    pub reconciliation_status: ReconciliationStatus,
+}
+
 #[derive(Clone, Debug)]
 pub struct CustomerInput {
     pub code: String,
@@ -226,6 +280,14 @@ pub struct ShiftAssignmentInput {
     pub manual_rate: Option<ManualRateOverride>,
 }
 
+#[derive(Clone, Debug)]
+pub struct CustomerWorkRecordInput {
+    pub confirmed_started_at: DateTime<Utc>,
+    pub confirmed_ended_at: DateTime<Utc>,
+    pub customer_reference: Option<String>,
+    pub notes: Option<String>,
+}
+
 #[derive(Debug)]
 pub enum StaffingError {
     NotFound,
@@ -279,6 +341,11 @@ pub trait StaffingRepo {
         tenant_id: Uuid,
         shift_id: Uuid,
     ) -> Result<Vec<ShiftAssignment>, StaffingError>;
+    async fn list_shift_candidates(
+        &self,
+        tenant_id: Uuid,
+        shift_id: Uuid,
+    ) -> Result<Vec<StaffingCandidate>, StaffingError>;
     async fn create_shift_assignment(
         &self,
         tenant_id: Uuid,
@@ -295,6 +362,15 @@ pub trait StaffingRepo {
         adjustment_reason: Option<String>,
         audit_account_id: Uuid,
     ) -> Result<ShiftAssignment, StaffingError>;
+    async fn list_reconciliations(&self, tenant_id: Uuid) -> Result<Vec<StaffingReconciliation>, StaffingError>;
+    async fn upsert_customer_work_record(
+        &self,
+        tenant_id: Uuid,
+        record_id: Uuid,
+        assignment_id: Uuid,
+        input: &CustomerWorkRecordInput,
+        audit_account_id: Uuid,
+    ) -> Result<CustomerWorkRecord, StaffingError>;
 }
 
 pub type DynStaffingRepo = Arc<dyn StaffingRepo + Send + Sync>;
@@ -396,6 +472,14 @@ impl StaffingService {
         self.repo.list_shift_assignments(tenant_id, shift_id).await
     }
 
+    pub async fn list_shift_candidates(
+        &self,
+        tenant_id: Uuid,
+        shift_id: Uuid,
+    ) -> Result<Vec<StaffingCandidate>, StaffingError> {
+        self.repo.list_shift_candidates(tenant_id, shift_id).await
+    }
+
     pub async fn create_shift_assignment(
         &self,
         tenant_id: Uuid,
@@ -430,6 +514,33 @@ impl StaffingService {
                 adjustment_reason,
                 audit_account_id,
             )
+            .await
+    }
+
+    pub async fn list_reconciliations(&self, tenant_id: Uuid) -> Result<Vec<StaffingReconciliation>, StaffingError> {
+        self.repo.list_reconciliations(tenant_id).await
+    }
+
+    pub async fn upsert_customer_work_record(
+        &self,
+        tenant_id: Uuid,
+        assignment_id: Uuid,
+        input: CustomerWorkRecordInput,
+        audit_account_id: Uuid,
+    ) -> Result<CustomerWorkRecord, StaffingError> {
+        if input.confirmed_ended_at <= input.confirmed_started_at {
+            return Err(StaffingError::InvalidInput("customer work record schedule is invalid"));
+        }
+        if input
+            .customer_reference
+            .as_deref()
+            .is_some_and(|value| value.len() > 200)
+            || input.notes.as_deref().is_some_and(|value| value.len() > 1000)
+        {
+            return Err(StaffingError::InvalidInput("customer work record text is invalid"));
+        }
+        self.repo
+            .upsert_customer_work_record(tenant_id, Uuid::new_v4(), assignment_id, &input, audit_account_id)
             .await
     }
 }

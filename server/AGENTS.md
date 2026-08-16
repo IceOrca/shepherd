@@ -4,7 +4,7 @@
 
 - `server/crates/infra/`: reusable server capabilities. `kernel` contains neutral primitives; `infra/postgres` and `infra/redis` are thin adapters; `auth` is an independent vertical feature; and `host` owns shared Axum policies and composition types.
 - `server/crates/applications/hrm/`: HRM domain, persistence adapters, and Axum routes.
-- `server/runtime/`: composition root and the `shepherd-server`/`shepherd-typescript` binaries.
+- `server/runtime/`: composition root and the `shepherd-srv`/`shepherd-typescript` binaries.
 - `server/migrations/`: SQL database migrations.
 - `server/security/`: local key material used by auth/client-token flows. Treat these files as sensitive.
 - `client/web/`: React/Vite client application.

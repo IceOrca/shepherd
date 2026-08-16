@@ -4,13 +4,14 @@ use crate::{
     auth::{AuthUserSummary, CreateAuthUserRequest, CurrentUserProfile, SetAuthUserStatusRequest},
     business::staffing::{
         core::{
-            BusinessRecordStatus, Customer, CustomerFacility, RateSource, ShiftAssignment, ShiftAssignmentStatus,
-            StaffingRateAgreement, StaffingShift, StaffingShiftStatus,
+            BusinessRecordStatus, Customer, CustomerFacility, CustomerWorkRecord, RateSource, ReconciliationStatus,
+            ShiftAssignment, ShiftAssignmentStatus, StaffingCandidate, StaffingRateAgreement, StaffingReconciliation,
+            StaffingShift, StaffingShiftStatus,
         },
         host::{
-            CustomerCreateRequest, CustomerFacilityCreateRequest, ManualRateOverrideRequest,
-            ShiftAssignmentApproveRequest, ShiftAssignmentCreateRequest, StaffingRateAgreementCreateRequest,
-            StaffingShiftCreateRequest,
+            CustomerCreateRequest, CustomerFacilityCreateRequest, CustomerWorkRecordUpsertRequest,
+            ManualRateOverrideRequest, ShiftAssignmentApproveRequest, ShiftAssignmentCreateRequest,
+            StaffingRateAgreementCreateRequest, StaffingShiftCreateRequest,
         },
         work_session::{
             core::{OwnStaffingAssignment, ShiftWorkSession},
@@ -69,6 +70,11 @@ pub fn contract() -> String {
     push::<StaffingRateAgreement>(&mut output, &config);
     push::<StaffingShift>(&mut output, &config);
     push::<ShiftAssignment>(&mut output, &config);
+    push::<StaffingCandidate>(&mut output, &config);
+    push::<ReconciliationStatus>(&mut output, &config);
+    push::<CustomerWorkRecord>(&mut output, &config);
+    push::<StaffingReconciliation>(&mut output, &config);
+    push::<CustomerWorkRecordUpsertRequest>(&mut output, &config);
     push::<CustomerCreateRequest>(&mut output, &config);
     push::<CustomerFacilityCreateRequest>(&mut output, &config);
     push::<StaffingRateAgreementCreateRequest>(&mut output, &config);

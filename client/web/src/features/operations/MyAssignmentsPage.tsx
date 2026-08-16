@@ -19,6 +19,8 @@ import { useOnlineStatus } from "../../shared/lib/useOnlineStatus";
 import { useAuth } from "../auth/AuthProvider";
 import { executeWorkAction, listOwnAssignments, operationsQueryKeys, type WorkActionInput } from "./api";
 
+const GPS_ENABLED = import.meta.env.VITE_STAFFING_GPS_ENABLED === "true";
+
 interface ActionVariables extends WorkActionInput {
   locationWarning: string | null;
 }
@@ -75,7 +77,7 @@ export function MyAssignmentsPage() {
   const permissions = auth.profile?.permissions ?? [];
   const canRead = permissions.includes("business.staffing_work.self.read");
   const canManage = permissions.includes("business.staffing_work.self.manage");
-  const [shareLocation, setShareLocation] = useState(true);
+  const [shareLocation, setShareLocation] = useState(false);
   const [preparingAssignmentId, setPreparingAssignmentId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
 
@@ -126,7 +128,7 @@ export function MyAssignmentsPage() {
 
     setFeedback(null);
     setPreparingAssignmentId(assignment.assignment_id);
-    const location = await getLocation(shareLocation);
+    const location = await getLocation(GPS_ENABLED && shareLocation);
     actionMutation.mutate({
       action,
       assignmentId: assignment.assignment_id,
@@ -148,7 +150,7 @@ export function MyAssignmentsPage() {
 
   return (
     <div className="space-y-5">
-      <section className="panel flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+      {GPS_ENABLED ? <section className="panel flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-start gap-3">
           <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-blue-50 text-blue-700">
             <LocateFixed className="size-5" />
@@ -170,7 +172,7 @@ export function MyAssignmentsPage() {
           />
           <span className="relative h-6 w-11 rounded-full bg-slate-300 transition peer-checked:bg-blue-600 after:absolute after:left-1 after:top-1 after:size-4 after:rounded-full after:bg-white after:transition peer-checked:after:translate-x-5" />
         </label>
-      </section>
+      </section> : null}
 
       {feedback ? (
         <div
@@ -260,6 +262,12 @@ export function MyAssignmentsPage() {
                       Đã ghi nhận <strong className="text-slate-800">{formatDuration(assignment.observed_worked_seconds)}</strong>
                     </div>
                   </div>
+                  {assignment.staff_started_at ? (
+                    <div className="mt-3 grid gap-2 text-xs text-slate-500 sm:grid-cols-2">
+                      <p>Bắt đầu thực tế: <strong className="text-slate-700">{formatDateTime(assignment.staff_started_at)}</strong></p>
+                      <p>Kết thúc thực tế: <strong className="text-slate-700">{assignment.staff_ended_at ? formatDateTime(assignment.staff_ended_at) : "Đang làm việc"}</strong></p>
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="border-t border-slate-100 bg-slate-50/70 p-4 sm:px-6">

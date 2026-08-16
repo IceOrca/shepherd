@@ -272,6 +272,34 @@ impl Fixture {
         Ok(consistent)
     }
 
+    async fn record_matching_customer_evidence(&self) -> Result<(), Box<dyn Error>> {
+        let mut transaction = self.database.begin_tenant(self.tenant_id).await?;
+        sqlx::query!(
+            r#"
+            INSERT INTO business_customer_work_records (
+                id, tenant_id, assignment_id, confirmed_started_at, confirmed_ended_at,
+                customer_reference, recorded_by_account_id
+            )
+            SELECT $1, $2, $3, CURRENT_TIMESTAMP - make_interval(secs => observed.total),
+                   CURRENT_TIMESTAMP, 'test-customer-record', $4
+            FROM (
+                SELECT COALESCE(SUM(worked_seconds), 0)::BIGINT AS total
+                FROM business_shift_work_sessions
+                WHERE tenant_id = $2 AND assignment_id = $3 AND ended_at IS NOT NULL
+            ) AS observed
+            WHERE observed.total > 0
+            "#,
+            Uuid::new_v4(),
+            self.tenant_id,
+            self.assignment_id,
+            self.account_id,
+        )
+        .execute(transaction.connection())
+        .await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+
     async fn cleanup(self) -> Result<(), Box<dyn Error>> {
         let mut transaction = self.database.begin_tenant(self.tenant_id).await?;
         sqlx::query!("DELETE FROM notification_outbox WHERE tenant_id = $1", self.tenant_id)
@@ -285,6 +313,12 @@ impl Fixture {
         .await?;
         sqlx::query!(
             "DELETE FROM business_shift_work_sessions WHERE tenant_id = $1",
+            self.tenant_id,
+        )
+        .execute(transaction.connection())
+        .await?;
+        sqlx::query!(
+            "DELETE FROM business_customer_work_records WHERE tenant_id = $1",
             self.tenant_id,
         )
         .execute(transaction.connection())
@@ -458,6 +492,8 @@ async fn regular_flow_supports_multiple_sessions_and_durable_outbox_events() -> 
     assert_eq!(fixture.outbox_count().await?, 4);
     assert_eq!(fixture.pending_outbox_count().await?, 4);
 
+    fixture.record_matching_customer_evidence().await?;
+
     let approved = staffing
         .approve_shift_assignment(fixture.tenant_id, fixture.assignment_id, None, None, fixture.account_id)
         .await
@@ -564,6 +600,8 @@ async fn invalid_state_ownership_and_approval_transitions_are_rejected() -> Test
         )
         .await;
     assert!(matches!(repeated_end_with_new_key, Err(StaffingError::Conflict)));
+
+    fixture.record_matching_customer_evidence().await?;
 
     let override_without_reason = staffing
         .approve_shift_assignment(

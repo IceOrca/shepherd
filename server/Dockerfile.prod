@@ -7,20 +7,18 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 
-
 FROM base AS builder
 
 COPY . .
 ENV SQLX_OFFLINE=true
-RUN cargo build --release -p shepherd-runtime --bin shepherd-server
-
+RUN cargo build --release -p shepherd-runtime --bin shepherd-srv
 
 
 FROM debian:bookworm-slim AS runner
 WORKDIR /app
 
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-COPY --from=builder /app/shepherd_server/target/linux-amd64/release/shepherd-server /app/shepherd-server
+COPY --from=builder /app/shepherd_server/target/linux-amd64/release/shepherd-srv /app/shepherd-srv
 
 EXPOSE 8000
-CMD ["/app/shepherd-server"]
+CMD ["/app/shepherd-srv"]

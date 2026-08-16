@@ -83,7 +83,7 @@ impl ExtProvider {
 
     async fn decoding_key(&self, kid: &str, algorithm: Algorithm) -> Result<DecodingKey, AccessTokenError> {
         let (cached_key, cache_is_fresh): (Option<Jwk>, bool) = {
-            let cache = self.jwks.read().await;
+            let cache: tokio::sync::RwLockReadGuard<'_, CachedJwks> = self.jwks.read().await;
             let is_fresh: bool = cache
                 .fetched_at
                 .is_some_and(|fetched_at| fetched_at.elapsed() < self.config.jwks_refresh_interval);
@@ -155,7 +155,7 @@ impl ExtProvider {
 #[cfg(test)]
 impl ExtProvider {
     fn with_jwks(config: ExtProviderConfig, set: JwkSet) -> Self {
-        let client = reqwest::Client::builder()
+        let client: reqwest::Client = reqwest::Client::builder()
             .timeout(config.http_timeout)
             .build()
             .expect("test HTTP client");

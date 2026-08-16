@@ -37,5 +37,8 @@ infra-host.workspace = true
 infra-postgres.workspace = true
 infra-notifier.workspace = true
 
+[dev-dependencies]
+tower = { workspace = true, features = ["util"] }
+
 [lints]
 workspace = true

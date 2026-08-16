@@ -82,6 +82,8 @@ struct OwnAssignmentRow {
     status: String,
     observed_worked_seconds: i64,
     is_working: bool,
+    staff_started_at: Option<DateTime<Utc>>,
+    staff_ended_at: Option<DateTime<Utc>>,
 }
 
 impl TryFrom<OwnAssignmentRow> for OwnStaffingAssignment {
@@ -98,6 +100,8 @@ impl TryFrom<OwnAssignmentRow> for OwnStaffingAssignment {
             status: ShiftAssignmentStatus::from_code(&row.status).ok_or(StaffingError::BackendUnavailable)?,
             observed_worked_seconds: row.observed_worked_seconds,
             is_working: row.is_working,
+            staff_started_at: row.staff_started_at,
+            staff_ended_at: row.staff_ended_at,
         })
     }
 }
@@ -140,6 +144,18 @@ impl StaffingWorkRepo for StaffingWorkProvider {
                          AND session.assignment_id = assignment.id
                          AND session.ended_at IS NULL
                    ) AS "is_working!"
+                   ,(
+                       SELECT MIN(session.started_at)
+                       FROM business_shift_work_sessions AS session
+                       WHERE session.tenant_id = assignment.tenant_id
+                         AND session.assignment_id = assignment.id
+                   ) AS staff_started_at
+                   ,(
+                       SELECT MAX(session.ended_at)
+                       FROM business_shift_work_sessions AS session
+                       WHERE session.tenant_id = assignment.tenant_id
+                         AND session.assignment_id = assignment.id
+                   ) AS staff_ended_at
             FROM business_shift_assignments AS assignment
             INNER JOIN hr_employees AS employee
                 ON employee.tenant_id = assignment.tenant_id
@@ -714,6 +730,31 @@ mod database_tests {
         assert_eq!(ended.id, repeated_end.id);
         assert!(ended.worked_seconds.is_some_and(|seconds| seconds >= 3600));
 
+        let mut customer_evidence = database.begin_tenant(tenant_id).await?;
+        sqlx::query!(
+            r#"
+            INSERT INTO business_customer_work_records (
+                id, tenant_id, assignment_id, confirmed_started_at, confirmed_ended_at,
+                customer_reference, recorded_by_account_id
+            )
+            SELECT $1, $2, $3, CURRENT_TIMESTAMP - make_interval(secs => observed.total),
+                   CURRENT_TIMESTAMP, 'test-customer-record', $4
+            FROM (
+                SELECT COALESCE(SUM(worked_seconds), 0)::BIGINT AS total
+                FROM business_shift_work_sessions
+                WHERE tenant_id = $2 AND assignment_id = $3 AND ended_at IS NOT NULL
+            ) AS observed
+            WHERE observed.total > 0
+            "#,
+            Uuid::new_v4(),
+            tenant_id,
+            assignment_id,
+            account_id,
+        )
+        .execute(customer_evidence.connection())
+        .await?;
+        customer_evidence.commit().await?;
+
         let staffing = StaffingProvider::new_arc(Arc::clone(&database));
         let approved = staffing
             .approve_shift_assignment(tenant_id, assignment_id, None, None, account_id)
@@ -739,6 +780,12 @@ mod database_tests {
             .await?;
         sqlx::query!(
             "DELETE FROM business_shift_work_sessions WHERE tenant_id = $1",
+            tenant_id
+        )
+        .execute(verify.connection())
+        .await?;
+        sqlx::query!(
+            "DELETE FROM business_customer_work_records WHERE tenant_id = $1",
             tenant_id
         )
         .execute(verify.connection())

@@ -7,9 +7,11 @@ use infra_postgres::{DatabaseAdapter, TenantTransaction};
 use uuid::Uuid;
 
 use super::core::{
-    BusinessRecordStatus, Customer, CustomerFacility, CustomerFacilityInput, CustomerInput, ManualRateOverride,
-    RateSource, ShiftAssignment, ShiftAssignmentInput, ShiftAssignmentStatus, StaffingError, StaffingRateAgreement,
-    StaffingRateAgreementInput, StaffingRepo, StaffingShift, StaffingShiftInput, StaffingShiftStatus,
+    BusinessRecordStatus, Customer, CustomerFacility, CustomerFacilityInput, CustomerInput, CustomerWorkRecord,
+    CustomerWorkRecordInput, ManualRateOverride, RateSource, ReconciliationStatus, ShiftAssignment,
+    ShiftAssignmentInput, ShiftAssignmentStatus, StaffingCandidate, StaffingError, StaffingRateAgreement,
+    StaffingRateAgreementInput, StaffingReconciliation, StaffingRepo, StaffingShift, StaffingShiftInput,
+    StaffingShiftStatus,
 };
 
 pub struct StaffingProvider {
@@ -220,7 +222,87 @@ struct ShiftRateContext {
     customer_facility_id: Uuid,
     job_id: Uuid,
     work_date: NaiveDate,
+    starts_at: DateTime<Utc>,
+    ends_at: DateTime<Utc>,
     status: String,
+}
+
+#[derive(Debug)]
+struct CandidateRow {
+    employee_id: Uuid,
+    employee_code: String,
+    display_name: String,
+    suitable: bool,
+    available: bool,
+    already_assigned: bool,
+    conflict_shift_id: Option<Uuid>,
+}
+
+impl From<CandidateRow> for StaffingCandidate {
+    fn from(row: CandidateRow) -> Self {
+        Self {
+            employee_id: row.employee_id,
+            employee_code: row.employee_code,
+            display_name: row.display_name,
+            suitable: row.suitable,
+            available: row.available,
+            already_assigned: row.already_assigned,
+            conflict_shift_id: row.conflict_shift_id,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct CustomerWorkRecordRow {
+    id: Uuid,
+    assignment_id: Uuid,
+    confirmed_started_at: DateTime<Utc>,
+    confirmed_ended_at: DateTime<Utc>,
+    confirmed_worked_seconds: i64,
+    customer_reference: Option<String>,
+    notes: Option<String>,
+    updated_at: DateTime<Utc>,
+}
+
+impl From<CustomerWorkRecordRow> for CustomerWorkRecord {
+    fn from(row: CustomerWorkRecordRow) -> Self {
+        Self {
+            id: row.id,
+            assignment_id: row.assignment_id,
+            confirmed_started_at: row.confirmed_started_at,
+            confirmed_ended_at: row.confirmed_ended_at,
+            confirmed_worked_seconds: row.confirmed_worked_seconds,
+            customer_reference: row.customer_reference,
+            notes: row.notes,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ReconciliationRow {
+    assignment_id: Uuid,
+    shift_id: Uuid,
+    employee_id: Uuid,
+    employee_code: String,
+    employee_name: String,
+    customer_name: String,
+    customer_facility_name: String,
+    scheduled_starts_at: DateTime<Utc>,
+    scheduled_ends_at: DateTime<Utc>,
+    assignment_status: String,
+    staff_started_at: Option<DateTime<Utc>>,
+    staff_ended_at: Option<DateTime<Utc>>,
+    staff_worked_seconds: i64,
+    customer_record_id: Option<Uuid>,
+    customer_started_at: Option<DateTime<Utc>>,
+    customer_ended_at: Option<DateTime<Utc>>,
+    customer_worked_seconds: Option<i64>,
+    customer_reference: Option<String>,
+    customer_notes: Option<String>,
+    customer_updated_at: Option<DateTime<Utc>>,
+    final_worked_seconds: Option<i64>,
+    adjustment_reason: Option<String>,
 }
 
 #[derive(Debug)]
@@ -517,6 +599,102 @@ impl StaffingRepo for StaffingProvider {
         rows.into_iter().map(ShiftAssignment::try_from).collect()
     }
 
+    async fn list_shift_candidates(
+        &self,
+        tenant_id: Uuid,
+        shift_id: Uuid,
+    ) -> Result<Vec<StaffingCandidate>, StaffingError> {
+        let mut transaction = self.begin_tenant(tenant_id).await?;
+        let shift_exists = sqlx::query_scalar!(
+            r#"SELECT EXISTS (
+                SELECT 1 FROM business_staffing_shifts WHERE tenant_id = $1 AND id = $2
+            ) AS "exists!""#,
+            tenant_id,
+            shift_id,
+        )
+        .fetch_one(transaction.connection())
+        .await
+        .map_err(|error| database_failure("find staffing shift candidates", tenant_id, error))?;
+        if !shift_exists {
+            return Err(StaffingError::NotFound);
+        }
+
+        let rows = sqlx::query_as!(
+            CandidateRow,
+            r#"
+            WITH target AS (
+                SELECT shift.id, shift.job_id, shift.starts_at, shift.ends_at,
+                       (shift.starts_at AT TIME ZONE facility.time_zone)::DATE AS work_date
+                FROM business_staffing_shifts AS shift
+                INNER JOIN business_customer_facilities AS facility
+                    ON facility.tenant_id = shift.tenant_id
+                   AND facility.id = shift.customer_facility_id
+                WHERE shift.tenant_id = $1 AND shift.id = $2
+            )
+            SELECT employee.id AS employee_id, employee.employee_code, employee.display_name,
+                   EXISTS (
+                       SELECT 1 FROM hr_employee_assignments AS employee_assignment
+                       WHERE employee_assignment.tenant_id = employee.tenant_id
+                         AND employee_assignment.employee_id = employee.id
+                         AND employee_assignment.job_id = target.job_id
+                         AND employee_assignment.is_primary
+                         AND employee_assignment.date_start <= target.work_date
+                         AND (employee_assignment.date_end IS NULL
+                              OR employee_assignment.date_end >= target.work_date)
+                   ) AS "suitable!",
+                   NOT EXISTS (
+                       SELECT 1
+                       FROM business_shift_assignments AS existing_assignment
+                       INNER JOIN business_staffing_shifts AS existing_shift
+                           ON existing_shift.tenant_id = existing_assignment.tenant_id
+                          AND existing_shift.id = existing_assignment.shift_id
+                       WHERE existing_assignment.tenant_id = employee.tenant_id
+                         AND existing_assignment.employee_id = employee.id
+                         AND existing_assignment.status <> 'cancelled'
+                         AND existing_shift.id <> target.id
+                         AND existing_shift.starts_at < target.ends_at
+                         AND existing_shift.ends_at > target.starts_at
+                   ) AS "available!",
+                   EXISTS (
+                       SELECT 1 FROM business_shift_assignments AS current_assignment
+                       WHERE current_assignment.tenant_id = employee.tenant_id
+                         AND current_assignment.shift_id = target.id
+                         AND current_assignment.employee_id = employee.id
+                         AND current_assignment.status <> 'cancelled'
+                   ) AS "already_assigned!",
+                   (
+                       SELECT existing_shift.id
+                       FROM business_shift_assignments AS existing_assignment
+                       INNER JOIN business_staffing_shifts AS existing_shift
+                           ON existing_shift.tenant_id = existing_assignment.tenant_id
+                          AND existing_shift.id = existing_assignment.shift_id
+                       WHERE existing_assignment.tenant_id = employee.tenant_id
+                         AND existing_assignment.employee_id = employee.id
+                         AND existing_assignment.status <> 'cancelled'
+                         AND existing_shift.id <> target.id
+                         AND existing_shift.starts_at < target.ends_at
+                         AND existing_shift.ends_at > target.starts_at
+                       ORDER BY existing_shift.starts_at, existing_shift.id
+                       LIMIT 1
+                   ) AS conflict_shift_id
+            FROM hr_employees AS employee
+            CROSS JOIN target
+            WHERE employee.tenant_id = $1 AND employee.status = 'active'
+            ORDER BY "suitable!" DESC, "available!" DESC, lower(employee.display_name), employee.employee_code
+            "#,
+            tenant_id,
+            shift_id,
+        )
+        .fetch_all(transaction.connection())
+        .await
+        .map_err(|error| database_failure("list staffing shift candidates", tenant_id, error))?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| database_failure("commit staffing shift candidates", tenant_id, error))?;
+        Ok(rows.into_iter().map(StaffingCandidate::from).collect())
+    }
+
     async fn create_shift_assignment(
         &self,
         tenant_id: Uuid,
@@ -531,7 +709,7 @@ impl StaffingRepo for StaffingProvider {
             r#"
             SELECT shift.customer_id, shift.customer_facility_id, shift.job_id,
                    (shift.starts_at AT TIME ZONE facility.time_zone)::DATE AS "work_date!",
-                   shift.status
+                   shift.starts_at, shift.ends_at, shift.status
             FROM business_staffing_shifts AS shift
             INNER JOIN business_customer_facilities AS facility
                 ON facility.tenant_id = shift.tenant_id
@@ -547,6 +725,9 @@ impl StaffingRepo for StaffingProvider {
         .map_err(|error| database_failure("lock staffing shift", tenant_id, error))?;
         let shift = shift.ok_or(StaffingError::NotFound)?;
         if !matches!(shift.status.as_str(), "open" | "filled") {
+            return Err(StaffingError::Conflict);
+        }
+        if shift.status == "filled" {
             return Err(StaffingError::Conflict);
         }
 
@@ -565,6 +746,61 @@ impl StaffingRepo for StaffingProvider {
         .map_err(|error| database_failure("validate staffing employee", tenant_id, error))?;
         if !employee_is_active {
             return Err(StaffingError::NotFound);
+        }
+
+        let employee_is_suitable = sqlx::query_scalar!(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM hr_employee_assignments
+                WHERE tenant_id = $1
+                  AND employee_id = $2
+                  AND job_id = $3
+                  AND is_primary
+                  AND date_start <= $4
+                  AND (date_end IS NULL OR date_end >= $4)
+            ) AS "exists!"
+            "#,
+            tenant_id,
+            input.employee_id,
+            shift.job_id,
+            shift.work_date,
+        )
+        .fetch_one(transaction.connection())
+        .await
+        .map_err(|error| database_failure("validate staffing job suitability", tenant_id, error))?;
+        if !employee_is_suitable {
+            return Err(StaffingError::InvalidInput(
+                "employee is not suitable for the staffing job",
+            ));
+        }
+
+        let employee_is_available = sqlx::query_scalar!(
+            r#"
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM business_shift_assignments AS existing_assignment
+                INNER JOIN business_staffing_shifts AS existing_shift
+                    ON existing_shift.tenant_id = existing_assignment.tenant_id
+                   AND existing_shift.id = existing_assignment.shift_id
+                WHERE existing_assignment.tenant_id = $1
+                  AND existing_assignment.employee_id = $2
+                  AND existing_assignment.status <> 'cancelled'
+                  AND existing_shift.id <> $3
+                  AND existing_shift.starts_at < $4
+                  AND existing_shift.ends_at > $5
+            ) AS "available!"
+            "#,
+            tenant_id,
+            input.employee_id,
+            shift_id,
+            shift.ends_at,
+            shift.starts_at,
+        )
+        .fetch_one(transaction.connection())
+        .await
+        .map_err(|error| database_failure("validate staffing employee availability", tenant_id, error))?;
+        if !employee_is_available {
+            return Err(StaffingError::Conflict);
         }
 
         let (rate_agreement_id, rate_source, currency, bill_rate, worker_rate) = match &input.manual_rate {
@@ -706,6 +942,10 @@ impl StaffingRepo for StaffingProvider {
                 SELECT COALESCE(SUM(worked_seconds), 0)::BIGINT AS total
                 FROM business_shift_work_sessions
                 WHERE tenant_id = $1 AND assignment_id = $2 AND ended_at IS NOT NULL
+            ), customer AS (
+                SELECT confirmed_worked_seconds AS total
+                FROM business_customer_work_records
+                WHERE tenant_id = $1 AND assignment_id = $2
             )
             UPDATE business_shift_assignments AS assignment
             SET status = 'approved',
@@ -729,7 +969,7 @@ impl StaffingRepo for StaffingProvider {
                 ),
                 approved_at = CURRENT_TIMESTAMP,
                 approved_by_account_id = $5
-            FROM observed
+            FROM observed, customer
             WHERE assignment.tenant_id = $1
               AND assignment.id = $2
               AND assignment.status = 'assigned'
@@ -740,7 +980,11 @@ impl StaffingRepo for StaffingProvider {
                     AND open_session.assignment_id = $2
                     AND open_session.ended_at IS NULL
               )
-              AND ($3::BIGINT IS NULL OR $3::BIGINT = observed.total OR $4::TEXT IS NOT NULL)
+              AND (
+                  (COALESCE($3::BIGINT, observed.total) = observed.total
+                      AND observed.total = customer.total)
+                  OR $4::TEXT IS NOT NULL
+              )
             RETURNING assignment.id, assignment.shift_id, assignment.employee_id,
                       assignment.rate_agreement_id, assignment.rate_source, assignment.currency,
                       assignment.bill_hourly_rate_snapshot::TEXT AS "bill_hourly_rate_snapshot!",
@@ -783,11 +1027,198 @@ impl StaffingRepo for StaffingProvider {
                 });
             }
         };
+        sqlx::query!(
+            r#"
+            UPDATE business_staffing_shifts AS shift
+            SET status = 'completed', updated_at = CURRENT_TIMESTAMP, updated_by_account_id = $3
+            WHERE shift.tenant_id = $1
+              AND shift.id = $2
+              AND NOT EXISTS (
+                  SELECT 1 FROM business_shift_assignments AS pending
+                  WHERE pending.tenant_id = shift.tenant_id
+                    AND pending.shift_id = shift.id
+                    AND pending.status = 'assigned'
+              )
+            "#,
+            tenant_id,
+            row.shift_id,
+            audit_account_id,
+        )
+        .execute(transaction.connection())
+        .await
+        .map_err(|error| database_failure("complete reconciled staffing shift", tenant_id, error))?;
         transaction
             .commit()
             .await
             .map_err(|error| database_failure("commit staffing assignment approval", tenant_id, error))?;
         ShiftAssignment::try_from(row)
+    }
+
+    async fn list_reconciliations(&self, tenant_id: Uuid) -> Result<Vec<StaffingReconciliation>, StaffingError> {
+        let mut transaction = self.begin_tenant(tenant_id).await?;
+        let rows = sqlx::query_as!(
+            ReconciliationRow,
+            r#"
+            SELECT assignment.id AS assignment_id, assignment.shift_id, assignment.employee_id,
+                   employee.employee_code, employee.display_name AS employee_name,
+                   customer.name AS customer_name, facility.name AS customer_facility_name,
+                   shift.starts_at AS scheduled_starts_at, shift.ends_at AS scheduled_ends_at,
+                   assignment.status AS assignment_status,
+                   work.staff_started_at, work.staff_ended_at,
+                   work.staff_worked_seconds AS "staff_worked_seconds!",
+                   customer_record.id AS customer_record_id,
+                   customer_record.confirmed_started_at AS customer_started_at,
+                   customer_record.confirmed_ended_at AS customer_ended_at,
+                   customer_record.confirmed_worked_seconds AS customer_worked_seconds,
+                   customer_record.customer_reference, customer_record.notes AS customer_notes,
+                   customer_record.updated_at AS customer_updated_at,
+                   assignment.worked_seconds AS final_worked_seconds,
+                   assignment.approval_adjustment_reason AS adjustment_reason
+            FROM business_shift_assignments AS assignment
+            INNER JOIN business_staffing_shifts AS shift
+                ON shift.tenant_id = assignment.tenant_id AND shift.id = assignment.shift_id
+            INNER JOIN business_customers AS customer
+                ON customer.tenant_id = shift.tenant_id AND customer.id = shift.customer_id
+            INNER JOIN business_customer_facilities AS facility
+                ON facility.tenant_id = shift.tenant_id AND facility.id = shift.customer_facility_id
+            INNER JOIN hr_employees AS employee
+                ON employee.tenant_id = assignment.tenant_id AND employee.id = assignment.employee_id
+            LEFT JOIN LATERAL (
+                SELECT MIN(session.started_at) FILTER (WHERE session.ended_at IS NOT NULL) AS staff_started_at,
+                       MAX(session.ended_at) AS staff_ended_at,
+                       COALESCE(SUM(session.worked_seconds)
+                           FILTER (WHERE session.ended_at IS NOT NULL), 0)::BIGINT AS staff_worked_seconds
+                FROM business_shift_work_sessions AS session
+                WHERE session.tenant_id = assignment.tenant_id
+                  AND session.assignment_id = assignment.id
+            ) AS work ON TRUE
+            LEFT JOIN business_customer_work_records AS customer_record
+                ON customer_record.tenant_id = assignment.tenant_id
+               AND customer_record.assignment_id = assignment.id
+            WHERE assignment.tenant_id = $1 AND assignment.status <> 'cancelled'
+            ORDER BY shift.starts_at DESC, employee.display_name, assignment.id
+            "#,
+            tenant_id,
+        )
+        .fetch_all(transaction.connection())
+        .await
+        .map_err(|error| database_failure("list staffing reconciliations", tenant_id, error))?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| database_failure("commit staffing reconciliation list", tenant_id, error))?;
+
+        rows.into_iter()
+            .map(|row| {
+                let assignment_status = ShiftAssignmentStatus::from_code(&row.assignment_status)
+                    .ok_or(StaffingError::BackendUnavailable)?;
+                let customer_record = match (
+                    row.customer_record_id,
+                    row.customer_started_at,
+                    row.customer_ended_at,
+                    row.customer_worked_seconds,
+                    row.customer_updated_at,
+                ) {
+                    (Some(id), Some(started_at), Some(ended_at), Some(worked_seconds), Some(updated_at)) => {
+                        Some(CustomerWorkRecord {
+                            id,
+                            assignment_id: row.assignment_id,
+                            confirmed_started_at: started_at,
+                            confirmed_ended_at: ended_at,
+                            confirmed_worked_seconds: worked_seconds,
+                            customer_reference: row.customer_reference,
+                            notes: row.customer_notes,
+                            updated_at,
+                        })
+                    }
+                    (None, None, None, None, None) => None,
+                    _ => return Err(StaffingError::BackendUnavailable),
+                };
+                let reconciliation_status = if assignment_status == ShiftAssignmentStatus::Approved {
+                    ReconciliationStatus::Reconciled
+                } else if row.staff_worked_seconds == 0 {
+                    ReconciliationStatus::PendingStaff
+                } else if customer_record.is_none() {
+                    ReconciliationStatus::PendingCustomer
+                } else if customer_record
+                    .as_ref()
+                    .is_some_and(|record| record.confirmed_worked_seconds == row.staff_worked_seconds)
+                {
+                    ReconciliationStatus::Matched
+                } else {
+                    ReconciliationStatus::Discrepancy
+                };
+                Ok(StaffingReconciliation {
+                    assignment_id: row.assignment_id,
+                    shift_id: row.shift_id,
+                    employee_id: row.employee_id,
+                    employee_code: row.employee_code,
+                    employee_name: row.employee_name,
+                    customer_name: row.customer_name,
+                    customer_facility_name: row.customer_facility_name,
+                    scheduled_starts_at: row.scheduled_starts_at,
+                    scheduled_ends_at: row.scheduled_ends_at,
+                    assignment_status,
+                    staff_started_at: row.staff_started_at,
+                    staff_ended_at: row.staff_ended_at,
+                    staff_worked_seconds: row.staff_worked_seconds,
+                    customer_record,
+                    final_worked_seconds: row.final_worked_seconds,
+                    adjustment_reason: row.adjustment_reason,
+                    reconciliation_status,
+                })
+            })
+            .collect()
+    }
+
+    async fn upsert_customer_work_record(
+        &self,
+        tenant_id: Uuid,
+        record_id: Uuid,
+        assignment_id: Uuid,
+        input: &CustomerWorkRecordInput,
+        audit_account_id: Uuid,
+    ) -> Result<CustomerWorkRecord, StaffingError> {
+        let mut transaction = self.begin_tenant(tenant_id).await?;
+        let row = sqlx::query_as!(
+            CustomerWorkRecordRow,
+            r#"
+            INSERT INTO business_customer_work_records (
+                id, tenant_id, assignment_id, confirmed_started_at, confirmed_ended_at,
+                customer_reference, notes, recorded_by_account_id
+            )
+            SELECT $1, $2, assignment.id, $4, $5, $6, $7, $8
+            FROM business_shift_assignments AS assignment
+            WHERE assignment.tenant_id = $2 AND assignment.id = $3 AND assignment.status = 'assigned'
+            ON CONFLICT (tenant_id, assignment_id) DO UPDATE
+            SET confirmed_started_at = EXCLUDED.confirmed_started_at,
+                confirmed_ended_at = EXCLUDED.confirmed_ended_at,
+                customer_reference = EXCLUDED.customer_reference,
+                notes = EXCLUDED.notes,
+                recorded_by_account_id = EXCLUDED.recorded_by_account_id,
+                updated_at = CURRENT_TIMESTAMP
+            RETURNING id, assignment_id, confirmed_started_at, confirmed_ended_at,
+                      confirmed_worked_seconds AS "confirmed_worked_seconds!",
+                      customer_reference, notes, updated_at
+            "#,
+            record_id,
+            tenant_id,
+            assignment_id,
+            input.confirmed_started_at,
+            input.confirmed_ended_at,
+            input.customer_reference,
+            input.notes,
+            audit_account_id,
+        )
+        .fetch_optional(transaction.connection())
+        .await
+        .map_err(|error| mutation_failure("upsert customer staffing work record", tenant_id, error))?
+        .ok_or(StaffingError::Conflict)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| database_failure("commit customer staffing work record", tenant_id, error))?;
+        Ok(row.into())
     }
 }
 

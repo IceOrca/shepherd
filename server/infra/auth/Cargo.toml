@@ -49,7 +49,7 @@ session-revocation = [
     "dep:futures-util",
     "dep:moka",
 ]
-legacy-api = [
+internal-api = [
     "brute-force",
     "jwks",
     "password-auth",
@@ -57,7 +57,7 @@ legacy-api = [
     "session-revocation",
     "dep:rand",
 ]
-full = ["legacy-api"]
+full = ["internal-api"]
 
 [dependencies]
 async-trait = { workspace = true, optional = true }

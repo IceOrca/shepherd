@@ -33,6 +33,7 @@ axum = { version = "*", features = ["multipart"] }
 tower = { version = "*" }
 tower-http = { version = "*", features = ["cors", "timeout", "trace"] }
 jsonwebtoken = { version = "*", features = ["rust_crypto"] }
+reqwest = { version = "*", default-features = false, features = ["json", "rustls"] }
 casbin = { version = "*", default-features = false, features = ["incremental", "cached", "runtime-tokio"] }
 sqlx-adapter = { version = "*", default-features = false, features = ["postgres", "runtime-tokio-rustls"] }
 ed25519-dalek = { version = "*", features = ["rand_core"] }
@@ -58,10 +59,9 @@ redis = { version = "*", features = ["tokio-comp", "connection-manager"] }
 arc-swap = { version = "*" }
 chrono = { version = "*", features = ["serde"] }
 time = { version = "*", features = ["parsing", "macros"] }
-ts-rs = { version = "12.0", features = ["chrono-impl", "uuid-impl"] }
+ts-rs = { version = "*", features = ["chrono-impl", "uuid-impl"] }
 calamine = { version = "*" }
 rust_xlsxwriter = { version = "*" }
-reqwest = { version = "*", default-features = false, features = ["json", "rustls-tls"] }
 # reusable infra crates
 infra-kernel = { path = "infra/kernel" }
 infra-ntree = { path = "infra/ntree" }

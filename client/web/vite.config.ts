@@ -10,10 +10,6 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     proxy: {
-      "/business": {
-        target: proxyTarget,
-        changeOrigin: true,
-      },
       "/api": {
         target: proxyTarget,
         changeOrigin: true,

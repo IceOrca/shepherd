@@ -11,4 +11,7 @@ RUN apt-get update \
 
 RUN rustup component add rustfmt
 RUN rustup component add clippy
+RUN cargo install cargo-sweep
+RUN cargo install cargo-cache
+RUN cargo install cargo-edit
 RUN cargo install sqlx-cli --no-default-features --features postgres,rustls

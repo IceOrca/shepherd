@@ -1,0 +1,61 @@
+-- Customer-provided time is independent evidence. The staff work-session total
+-- remains immutable source evidence; approval stores the reconciled final result.
+CREATE TABLE business_customer_work_records (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
+    assignment_id UUID NOT NULL,
+    confirmed_started_at TIMESTAMPTZ NOT NULL,
+    confirmed_ended_at TIMESTAMPTZ NOT NULL,
+    confirmed_worked_seconds BIGINT GENERATED ALWAYS AS (
+        EXTRACT(EPOCH FROM (confirmed_ended_at - confirmed_started_at))::BIGINT
+    ) STORED,
+    customer_reference TEXT,
+    notes TEXT,
+    recorded_by_account_id UUID NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT business_customer_work_records_tenant_id_id_uq UNIQUE (tenant_id, id),
+    CONSTRAINT business_customer_work_records_assignment_tenant_fk
+        FOREIGN KEY (tenant_id, assignment_id)
+        REFERENCES business_shift_assignments (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_customer_work_records_recorded_by_tenant_fk
+        FOREIGN KEY (tenant_id, recorded_by_account_id)
+        REFERENCES accounts (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_customer_work_records_time_valid CHECK (
+        confirmed_ended_at > confirmed_started_at
+    ),
+    CONSTRAINT business_customer_work_records_reference_valid CHECK (
+        customer_reference IS NULL
+        OR (customer_reference = btrim(customer_reference)
+            AND char_length(customer_reference) BETWEEN 1 AND 200)
+    ),
+    CONSTRAINT business_customer_work_records_notes_valid CHECK (
+        notes IS NULL OR (notes = btrim(notes) AND char_length(notes) BETWEEN 1 AND 1000)
+    ),
+    CONSTRAINT business_customer_work_records_updated_after_created CHECK (updated_at >= created_at),
+    UNIQUE (tenant_id, assignment_id)
+);
+
+CREATE INDEX business_customer_work_records_tenant_updated_idx
+    ON business_customer_work_records (tenant_id, updated_at DESC);
+
+ALTER TABLE business_customer_work_records ENABLE ROW LEVEL SECURITY;
+ALTER TABLE business_customer_work_records FORCE ROW LEVEL SECURITY;
+CREATE POLICY business_customer_work_records_tenant_isolation ON business_customer_work_records
+    USING (tenant_id = shepherd_current_tenant_id())
+    WITH CHECK (tenant_id = shepherd_current_tenant_id());
+
+INSERT INTO permissions (code, description)
+VALUES
+    ('business.reconciliation.read', 'View staff and customer staffing evidence'),
+    ('business.reconciliation.manage', 'Record customer evidence and reconcile staffing work');
+
+INSERT INTO role_permissions (role_code, permission_code)
+SELECT 'tenant_owner', code
+FROM permissions
+WHERE code LIKE 'business.reconciliation.%';
+
+INSERT INTO role_permissions (role_code, permission_code)
+VALUES
+    ('supervisor', 'business.reconciliation.read'),
+    ('supervisor', 'business.reconciliation.manage');

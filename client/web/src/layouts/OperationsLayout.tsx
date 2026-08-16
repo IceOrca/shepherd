@@ -9,6 +9,7 @@ import {
   Menu,
   PanelLeftClose,
   RefreshCw,
+  GitCompareArrows,
   UsersRound,
   UserRoundCog,
   Wifi,
@@ -41,9 +42,15 @@ const navigation: NavigationItem[] = [
   },
   {
     label: "Điều phối ca",
+    to: "/operations/shifts",
     icon: BriefcaseBusiness,
     permission: "business.shifts.read",
-    soon: true,
+  },
+  {
+    label: "Đối soát",
+    to: "/operations/reconciliation",
+    icon: GitCompareArrows,
+    permission: "business.reconciliation.read",
   },
   {
     label: "Khách hàng",
@@ -77,6 +84,20 @@ function pageTitle(pathname: string): { title: string; description: string } {
     return {
       title: "Ca làm của tôi",
       description: "Theo dõi và ghi nhận thời gian làm việc tại khách hàng.",
+    };
+  }
+
+  if (pathname === "/operations/shifts") {
+    return {
+      title: "Điều phối ca",
+      description: "Tạo yêu cầu khách hàng và phân công nhân viên phù hợp, không trùng lịch.",
+    };
+  }
+
+  if (pathname === "/operations/reconciliation") {
+    return {
+      title: "Đối soát ca làm",
+      description: "So sánh thời gian nhân viên ghi với xác nhận hoặc bill của khách hàng.",
     };
   }
 

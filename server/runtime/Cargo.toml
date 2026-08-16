@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [[bin]]
-name = "shepherd-server"
+name = "shepherd-srv"
 path = "src/bin/main.rs"
 
 [[bin]]

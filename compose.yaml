@@ -62,6 +62,7 @@ services:
       AUTH_AUDIENCE: ${AUTH_AUDIENCE:-authenticated}
       AUTH_JWT_ALGORITHMS: ${AUTH_JWT_ALGORITHMS:-EdDSA}
       AUTH_ADMIN_URL: http://supabase-auth:9999
+      STAFFING_GPS_ENABLED: "false"
     volumes:
       - ./server:/app/shepherd_server
       - cargo_registry:/usr/local/cargo/registry
@@ -91,6 +92,7 @@ services:
     environment:
       VITE_SHEPHERD_DEV_PROXY_TARGET: http://server:${BACKEND_PORT:-8000}
       VITE_SHEPHERD_AUTH_DEV_PROXY_TARGET: http://supabase-auth:9999
+      VITE_STAFFING_GPS_ENABLED: "false"
     volumes:
       - ./client/web:/app/shepherd_client
       - client_node_modules:/app/shepherd_client/node_modules

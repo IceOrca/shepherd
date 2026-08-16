@@ -17,7 +17,7 @@ https://{$REMOTE_DEV_DNS_NAME} {
 		reverse_proxy {$AUTH_DEV_UPSTREAM:supabase-auth:9999}
 	}
 
-	@api path /api/* /hr/* /business/*
+	@api path /api/*
 	handle @api {
 		reverse_proxy {$SHEPHERD_API_DEV_UPSTREAM:server:8000}
 	}

@@ -39,13 +39,25 @@ feature service. `runtime` supplies infrastructure dependencies and mounts the c
 
 Authenticated employees use:
 
-- `GET /business/staffing/assignments/me`
-- `POST /business/staffing/assignments/{assignment_id}/start`
-- `POST /business/staffing/assignments/{assignment_id}/end`
+- `GET /api/business/staffing/assignments/me`
+- `POST /api/business/staffing/assignments/{assignment_id}/start`
+- `POST /api/business/staffing/assignments/{assignment_id}/end`
 
-Start and end require an `Idempotency-Key` UUID header and accept optional latitude, longitude, and accuracy. The server
-owns timestamps, derives employee/customer/location from the assignment, and queues notifications in the same transaction. Approval uses
-the sum of completed work sessions unless a supervisor supplies both an override and an adjustment reason.
+Start and end require an `Idempotency-Key` UUID header. The server owns timestamps, derives the employee, customer, and
+facility from the assignment, and queues notifications in the same transaction. GPS fields remain in the contract and schema but are
+discarded while `STAFFING_GPS_ENABLED=false` (the development default).
+
+Supervisors create customer shifts and can assign only active employees whose effective primary job matches and whose other
+staffing assignments do not overlap. Customer confirmation or bill time is stored separately from staff work sessions. An assignment
+can be finalized only after both sources exist; mismatched time or any final override requires an adjustment reason. The finalized
+snapshot remains the payroll source.
+
+Supervisor endpoints include:
+
+- `GET /api/business/staffing/shifts/{shift_id}/candidates`
+- `GET /api/business/staffing/reconciliations`
+- `PUT /api/business/staffing/assignments/{assignment_id}/customer-record`
+- `POST /api/business/staffing/assignments/{assignment_id}/reconcile`
 
 Configure provider credentials with `TELEGRAM_BOT_TOKEN` and `ZALO_OA_ACCESS_TOKEN`. Configure tenant recipients in
 `notification_destinations` using channel `telegram` or `zalo`; tokens never belong in the database. Telegram

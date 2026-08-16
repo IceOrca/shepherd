@@ -18,6 +18,12 @@ use super::{
     core::{OwnStaffingAssignment, ShiftWorkActionInput, ShiftWorkSession},
 };
 
+fn staffing_gps_enabled() -> bool {
+    std::env::var("STAFFING_GPS_ENABLED")
+        .ok()
+        .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+}
+
 #[derive(Debug, Deserialize, TS)]
 #[ts(optional_fields = nullable)]
 pub struct ShiftWorkActionRequest {
@@ -28,11 +34,16 @@ pub struct ShiftWorkActionRequest {
 
 impl ShiftWorkActionRequest {
     fn into_input(self, idempotency_key: Uuid) -> ShiftWorkActionInput {
+        let (latitude, longitude, accuracy_meters) = if staffing_gps_enabled() {
+            (self.latitude, self.longitude, self.accuracy_meters)
+        } else {
+            (None, None, None)
+        };
         ShiftWorkActionInput {
             idempotency_key,
-            latitude: self.latitude,
-            longitude: self.longitude,
-            accuracy_meters: self.accuracy_meters,
+            latitude,
+            longitude,
+            accuracy_meters,
         }
     }
 }

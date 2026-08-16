@@ -30,6 +30,16 @@ export type StaffingShift = { id: string, customer_id: string, customer_facility
 
 export type ShiftAssignment = { id: string, shift_id: string, employee_id: string, rate_agreement_id: string | null, rate_source: RateSource, currency: string, bill_hourly_rate_snapshot: string, worker_hourly_rate_snapshot: string, status: ShiftAssignmentStatus, worked_seconds: number | null, observed_worked_seconds: number | null, approval_adjustment_reason: string | null, customer_amount: string | null, worker_amount: string | null, margin_amount: string | null, approved_at: string | null, created_at: string, };
 
+export type StaffingCandidate = { employee_id: string, employee_code: string, display_name: string, suitable: boolean, available: boolean, already_assigned: boolean, conflict_shift_id: string | null, };
+
+export type ReconciliationStatus = "pending_staff" | "pending_customer" | "matched" | "discrepancy" | "reconciled";
+
+export type CustomerWorkRecord = { id: string, assignment_id: string, confirmed_started_at: string, confirmed_ended_at: string, confirmed_worked_seconds: number, customer_reference: string | null, notes: string | null, updated_at: string, };
+
+export type StaffingReconciliation = { assignment_id: string, shift_id: string, employee_id: string, employee_code: string, employee_name: string, customer_name: string, customer_facility_name: string, scheduled_starts_at: string, scheduled_ends_at: string, assignment_status: ShiftAssignmentStatus, staff_started_at: string | null, staff_ended_at: string | null, staff_worked_seconds: number, customer_record: CustomerWorkRecord | null, final_worked_seconds: number | null, adjustment_reason: string | null, reconciliation_status: ReconciliationStatus, };
+
+export type CustomerWorkRecordUpsertRequest = { confirmed_started_at: string, confirmed_ended_at: string, customer_reference?: string | null, notes?: string | null, };
+
 export type CustomerCreateRequest = { code: string, name: string, billing_email?: string | null, status: BusinessRecordStatus, };
 
 export type CustomerFacilityCreateRequest = { code: string, name: string, address?: string | null, time_zone: string, status: BusinessRecordStatus, };
@@ -46,7 +56,7 @@ export type ShiftAssignmentApproveRequest = { worked_seconds?: number | null, ad
 
 export type ShiftWorkSession = { id: string, assignment_id: string, employee_id: string, started_at: string, ended_at: string | null, worked_seconds: number | null, started_latitude: number | null, started_longitude: number | null, started_accuracy_meters: number | null, ended_latitude: number | null, ended_longitude: number | null, ended_accuracy_meters: number | null, created_at: string, updated_at: string, };
 
-export type OwnStaffingAssignment = { assignment_id: string, shift_id: string, customer_name: string, customer_facility_name: string, starts_at: string, ends_at: string, status: ShiftAssignmentStatus, observed_worked_seconds: number, is_working: boolean, };
+export type OwnStaffingAssignment = { assignment_id: string, shift_id: string, customer_name: string, customer_facility_name: string, starts_at: string, ends_at: string, status: ShiftAssignmentStatus, observed_worked_seconds: number, is_working: boolean, staff_started_at: string | null, staff_ended_at: string | null, };
 
 export type ShiftWorkActionRequest = { latitude?: number | null, longitude?: number | null, accuracy_meters?: number | null, };
 

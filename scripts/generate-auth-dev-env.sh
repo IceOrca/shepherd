@@ -57,7 +57,7 @@ auth_temporary_path="$(mktemp)"
 admin_temporary_path="$(mktemp)"
 trap 'rm -f "${combined_temporary_path}" "${auth_temporary_path}" "${admin_temporary_path}"' EXIT
 
-docker run --rm node:22-alpine node -e '
+docker run --rm node:24-alpine node -e '
 const crypto = require("crypto");
 const jwtSecret = crypto.randomBytes(48).toString("base64url");
 const { privateKey } = crypto.generateKeyPairSync("ed25519");

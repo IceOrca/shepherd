@@ -35,6 +35,18 @@ An authenticated identity still receives `403` until its
 stable JWT `sub` is mapped to an active Shepherd account in
 `account_identities`.
 
+To rebuild and seed all application development data, provide temporary login
+credentials in your shell and run the seed helper:
+
+```sh
+DEV_AUTH_EMAIL=owner@example.test DEV_AUTH_PASSWORD='your-local-password' \
+  sh scripts/dev-data-seeding.sh
+```
+
+The helper finds or creates that user through GoTrue's admin API, resets only
+the Shepherd development database with SQLx, and links the user's stable `sub`
+to the seeded `acme` owner. It never writes directly to GoTrue tables.
+
 ## Production
 
 Set `AUTH_DATABASE_URL_PROD`, `AUTH_JWT_SECRET_PROD`, and

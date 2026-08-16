@@ -23,7 +23,7 @@ mod service;
 #[cfg(feature = "brute-force")]
 #[path = "internal_api/brute_force.rs"]
 pub mod brute_force;
-#[cfg(feature = "legacy-api")]
+#[cfg(feature = "internal-api")]
 #[path = "internal_api/handler.rs"]
 pub mod handler;
 #[cfg(feature = "jwks")]
@@ -32,7 +32,7 @@ pub mod jwks;
 #[cfg(feature = "password-auth")]
 #[path = "internal_api/password_auth.rs"]
 pub mod password_auth;
-#[cfg(feature = "legacy-api")]
+#[cfg(feature = "internal-api")]
 #[path = "internal_api/route.rs"]
 pub mod route;
 #[cfg(feature = "session")]
@@ -41,7 +41,7 @@ pub mod session;
 #[cfg(feature = "session-revocation")]
 #[path = "internal_api/session_revoke.rs"]
 pub mod session_revoke;
-#[cfg(feature = "legacy-api")]
+#[cfg(feature = "internal-api")]
 #[path = "internal_api/typescript.rs"]
 pub mod typescript;
 
@@ -50,7 +50,7 @@ pub use feature::{AuthenticatedUser, LegacyAuthService, TenantContext};
 #[cfg(feature = "ext-foundation")]
 pub use service::{AuthService, AuthServiceError};
 
-#[cfg(feature = "legacy-api")]
+#[cfg(feature = "internal-api")]
 pub use feature::AuthFeature;
 #[cfg(feature = "password-auth")]
 pub use password_auth::{

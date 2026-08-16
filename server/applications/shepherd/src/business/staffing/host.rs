@@ -4,7 +4,7 @@ use axum::{
     Extension, Json, Router,
     extract::{Path, State},
     http::StatusCode,
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use chrono::{DateTime, NaiveDate, Utc};
 use infra_kernel::debug::*;
@@ -15,9 +15,10 @@ use uuid::Uuid;
 use crate::{AppContext, auth::AuthenticatedUser};
 
 use super::core::{
-    BusinessRecordStatus, Customer, CustomerFacility, CustomerFacilityInput, CustomerInput, ManualRateOverride,
-    ShiftAssignment, ShiftAssignmentInput, StaffingError, StaffingRateAgreement, StaffingRateAgreementInput,
-    StaffingShift, StaffingShiftInput,
+    BusinessRecordStatus, Customer, CustomerFacility, CustomerFacilityInput, CustomerInput, CustomerWorkRecord,
+    CustomerWorkRecordInput, ManualRateOverride, ShiftAssignment, ShiftAssignmentInput, StaffingCandidate,
+    StaffingError, StaffingRateAgreement, StaffingRateAgreementInput, StaffingReconciliation, StaffingShift,
+    StaffingShiftInput,
 };
 
 #[derive(Debug, Deserialize, TS)]
@@ -166,6 +167,26 @@ pub struct ShiftAssignmentApproveRequest {
     pub adjustment_reason: Option<String>,
 }
 
+#[derive(Debug, Deserialize, TS)]
+#[ts(optional_fields = nullable)]
+pub struct CustomerWorkRecordUpsertRequest {
+    pub confirmed_started_at: DateTime<Utc>,
+    pub confirmed_ended_at: DateTime<Utc>,
+    pub customer_reference: Option<String>,
+    pub notes: Option<String>,
+}
+
+impl From<CustomerWorkRecordUpsertRequest> for CustomerWorkRecordInput {
+    fn from(value: CustomerWorkRecordUpsertRequest) -> Self {
+        Self {
+            confirmed_started_at: value.confirmed_started_at,
+            confirmed_ended_at: value.confirmed_ended_at,
+            customer_reference: normalize_optional(value.customer_reference),
+            notes: normalize_optional(value.notes),
+        }
+    }
+}
+
 pub fn routes() -> Router<Arc<AppContext>> {
     Router::new()
         .route("/customers", get(list_customers).post(create_customer))
@@ -182,9 +203,19 @@ pub fn routes() -> Router<Arc<AppContext>> {
             "/staffing/shifts/{shift_id}/assignments",
             get(list_shift_assignments).post(create_shift_assignment),
         )
+        .route("/staffing/shifts/{shift_id}/candidates", get(list_shift_candidates))
+        .route("/staffing/reconciliations", get(list_reconciliations))
+        .route(
+            "/staffing/assignments/{assignment_id}/customer-record",
+            put(upsert_customer_work_record),
+        )
         .route(
             "/staffing/assignments/{assignment_id}/approve",
             post(approve_shift_assignment),
+        )
+        .route(
+            "/staffing/assignments/{assignment_id}/reconcile",
+            post(reconcile_shift_assignment),
         )
 }
 
@@ -321,6 +352,21 @@ pub async fn list_shift_assignments(
         .map_err(|error| staffing_status("list shift assignments", &user, error))
 }
 
+pub async fn list_shift_candidates(
+    State(context): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(shift_id): Path<Uuid>,
+) -> Result<Json<Vec<StaffingCandidate>>, StatusCode> {
+    require_permission(&user, "business.shifts.read")?;
+    context
+        .core
+        .staffing
+        .list_shift_candidates(user.tenant_id, shift_id)
+        .await
+        .map(Json)
+        .map_err(|error| staffing_status("list shift candidates", &user, error))
+}
+
 pub async fn create_shift_assignment(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -337,6 +383,46 @@ pub async fn create_shift_assignment(
     Ok((StatusCode::CREATED, Json(assignment)))
 }
 
+pub async fn list_reconciliations(
+    State(context): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> Result<Json<Vec<StaffingReconciliation>>, StatusCode> {
+    require_permission(&user, "business.reconciliation.read")?;
+    context
+        .core
+        .staffing
+        .list_reconciliations(user.tenant_id)
+        .await
+        .map(Json)
+        .map_err(|error| staffing_status("list staffing reconciliations", &user, error))
+}
+
+pub async fn upsert_customer_work_record(
+    State(context): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(assignment_id): Path<Uuid>,
+    Json(payload): Json<CustomerWorkRecordUpsertRequest>,
+) -> Result<Json<CustomerWorkRecord>, StatusCode> {
+    require_permission(&user, "business.reconciliation.manage")?;
+    context
+        .core
+        .staffing
+        .upsert_customer_work_record(user.tenant_id, assignment_id, payload.into(), user.account_id)
+        .await
+        .map(Json)
+        .map_err(|error| staffing_status("record customer staffing evidence", &user, error))
+}
+
+pub async fn reconcile_shift_assignment(
+    State(context): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(assignment_id): Path<Uuid>,
+    Json(payload): Json<ShiftAssignmentApproveRequest>,
+) -> Result<Json<ShiftAssignment>, StatusCode> {
+    require_permission(&user, "business.reconciliation.manage")?;
+    reconcile(context, user, assignment_id, payload).await
+}
+
 pub async fn approve_shift_assignment(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -344,6 +430,16 @@ pub async fn approve_shift_assignment(
     Json(payload): Json<ShiftAssignmentApproveRequest>,
 ) -> Result<Json<ShiftAssignment>, StatusCode> {
     require_permission(&user, "business.shifts.approve")?;
+    require_permission(&user, "business.reconciliation.manage")?;
+    reconcile(context, user, assignment_id, payload).await
+}
+
+async fn reconcile(
+    context: Arc<AppContext>,
+    user: AuthenticatedUser,
+    assignment_id: Uuid,
+    payload: ShiftAssignmentApproveRequest,
+) -> Result<Json<ShiftAssignment>, StatusCode> {
     context
         .core
         .staffing

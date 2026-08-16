@@ -5,7 +5,7 @@ origin:
 
 - Shepherd UI: `https://${REMOTE_DEV_DNS_NAME}`
 - Auth API: `https://${REMOTE_DEV_DNS_NAME}/auth/v1/*`
-- Shepherd APIs: `/api/*`, `/hr/*`, and `/business/*`
+- Shepherd APIs: `/api/*`, including the sibling `/api/hr/*` and `/api/business/*` domains
 
 The internal CA state is stored in the `caddy_data` volume. Trust its root
 certificate on development browsers and devices. Caddy strips the public

@@ -37,6 +37,8 @@ pub struct OwnStaffingAssignment {
     pub status: ShiftAssignmentStatus,
     pub observed_worked_seconds: i64,
     pub is_working: bool,
+    pub staff_started_at: Option<DateTime<Utc>>,
+    pub staff_ended_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug)]

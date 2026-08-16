@@ -97,13 +97,18 @@ impl InfraAppManifest for ShepherdApp {
 }
 
 pub fn routes(ctx: Arc<AppContext>) -> Router {
-    let api_routes = protected_routes(Arc::clone(&ctx), auth::routes(Arc::clone(&ctx.auth)));
+    let auth_routes = protected_routes(Arc::clone(&ctx), auth::routes(Arc::clone(&ctx.auth)));
     let hr_routes = protected_routes(Arc::clone(&ctx), hr::routes().with_state(Arc::clone(&ctx)));
     let business_routes = protected_routes(Arc::clone(&ctx), business::routes().with_state(Arc::clone(&ctx)));
+
+    Router::new().nest("/api", merge_api_domains(auth_routes, hr_routes, business_routes))
+}
+
+fn merge_api_domains(auth_routes: Router, hr_routes: Router, business_routes: Router) -> Router {
     Router::new()
-        .nest("/api", api_routes)
-        .nest("/hr", hr_routes)
-        .nest("/business", business_routes)
+        .merge(auth_routes)
+        .merge(Router::new().nest("/hr", hr_routes))
+        .merge(Router::new().nest("/business", business_routes))
 }
 
 fn protected_routes(context: Arc<AppContext>, routes: Router) -> Router {
@@ -117,4 +122,47 @@ fn protected_routes(context: Arc<AppContext>, routes: Router) -> Router {
             Arc::clone(&context.auth),
             auth::require_authenticated,
         ))
+}
+
+#[cfg(test)]
+mod route_tests {
+    use axum::{
+        Router,
+        body::Body,
+        http::{Request, StatusCode},
+        routing::get,
+    };
+    use tower::ServiceExt;
+
+    use super::merge_api_domains;
+
+    async fn endpoint() -> StatusCode {
+        StatusCode::NO_CONTENT
+    }
+
+    #[tokio::test]
+    async fn mounts_hr_and_business_as_sibling_api_domains() -> Result<(), Box<dyn std::error::Error>> {
+        let auth_routes = Router::new().route("/me", get(endpoint));
+        let hr_routes = Router::new().route("/employees", get(endpoint));
+        let business_routes = Router::new().route("/customers", get(endpoint));
+        let app = Router::new().nest("/api", merge_api_domains(auth_routes, hr_routes, business_routes));
+
+        for path in ["/api/me", "/api/hr/employees", "/api/business/customers"] {
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty())?)
+                .await?;
+            assert_eq!(response.status(), StatusCode::NO_CONTENT, "path: {path}");
+        }
+
+        for path in ["/hr/employees", "/business/customers", "/api/hr/business/customers"] {
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty())?)
+                .await?;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "path: {path}");
+        }
+
+        Ok(())
+    }
 }
