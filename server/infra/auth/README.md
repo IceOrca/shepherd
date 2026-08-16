@@ -1,40 +1,35 @@
-# Authentication features
+# Authentication foundation
 
-The default `infra-auth` build enables `keycloak`: access-token extraction,
-Keycloak JWKS retrieval and caching, signature/issuer/audience validation, and
-an Axum `KeycloakPrincipal` extension. Unknown signing keys trigger a throttled
-JWKS refresh so normal Keycloak key rotation does not require a server restart.
+The default `infra-auth` build enables `ext-foundation`, the reusable authentication and tenant-account boundary used by Shepherd. It provides:
 
-Optional legacy capabilities are independent Cargo features:
+- bearer-token extraction and provider-neutral JWT/JWKS validation;
+- external identity mapping through `account_identities`;
+- tenant-scoped `accounts`, `account_roles`, and `account_permissions` resolution;
+- `AuthenticatedUser` and the `/me` profile route;
+- account administration routes backed by the Supabase Auth/GoTrue admin API.
 
-- `jwt` — validation for Shepherd's legacy locally issued EdDSA tokens
-- `password-auth` — local password authentication, account management, and SQLx provider
-- `session` — Redis refresh sessions
-- `brute-force` — password-login attempt protection
-- `session-revocation` — local JTI revocation cache and Redis blacklist events
-- `jwt` — private-key signing and legacy token lifetime policy
-- `jwks` — publication of the local public signing key
-- `legacy-api` / `full` — all legacy HTTP authentication capabilities
+The identity provider owns credentials and sessions. The application database owns tenants, accounts, roles, permissions, and all authorization decisions. A valid social or password identity cannot enter an application unless its issuer and subject already exist in `account_identities`.
 
-Use the default for Keycloak-backed deployments:
+## Application policy
 
-```toml
-infra-auth.workspace = true
+Role and permission codes are data, not Rust enums in the reusable layer. Applications seed their authorization catalog in migrations and supply the permission codes needed by auth administration routes:
+
+```rust
+pub const ADMIN_POLICY: AuthAdminPolicy = AuthAdminPolicy {
+    read_permission: "auth.accounts.read",
+    create_permission: "auth.accounts.create",
+    disable_permission: "auth.accounts.disable",
+};
 ```
 
-Required settings are `KEYCLOAK_ISSUER_URL` and `KEYCLOAK_AUDIENCE`.
-`KEYCLOAK_JWKS_URL` defaults to the issuer certificate endpoint, and
-`KEYCLOAK_JWT_ALGORITHMS` defaults to `RS256`. Enable
-`KEYCLOAK_ACCEPT_FORWARDED_ACCESS_TOKEN=true` only when oauth2-proxy is the
-trusted ingress; standard `Authorization: Bearer ...` remains supported for
-mobile/API clients.
+Creating an account accepts any active role found in the `roles` table. Database foreign keys ensure the primary role is assigned to that account.
 
-During migration, consumers that still require Shepherd's complete local authentication
-API must opt in explicitly:
+## Configuration
 
-```toml
-infra-auth = { workspace = true, default-features = false, features = ["full"] }
-```
+Access-token validation requires `AUTH_ISSUER_URL`, `AUTH_AUDIENCE`, and `AUTH_JWKS_URL`. `AUTH_JWT_ALGORITHMS` defaults to `EdDSA`. `AUTH_JWKS_REFRESH_SECS`, `AUTH_HTTP_TIMEOUT_SECS`, and `AUTH_CLOCK_SKEW_SECS` tune validation.
 
-Feature modules own their infrastructure code. In particular, local account SQLx queries
-live in `password_auth/postgres.rs`, rather than a crate-wide PostgreSQL module.
+Account administration requires `AUTH_ADMIN_URL` and `AUTH_ADMIN_TOKEN`; `AUTH_ADMIN_HTTP_TIMEOUT_SECS` defaults to five seconds. Browser, mobile, and other API clients send `Authorization: Bearer ...`.
+
+## Legacy internal API
+
+The old local password/session implementation is isolated under `src/internal_api/` and is disabled by default. Its optional Cargo features remain compatibility-only and target the archived legacy account schema; new applications should use `ext-foundation`.

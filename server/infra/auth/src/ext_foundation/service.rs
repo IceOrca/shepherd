@@ -1,12 +1,12 @@
 use std::{sync::Arc, time::Instant};
-
+use std::time::Duration;
 use jsonwebtoken::{
     Algorithm, DecodingKey, Validation, decode, decode_header,
     jwk::{Jwk, JwkSet, KeyOperations, PublicKeyUse},
 };
 use tokio::sync::{Mutex, RwLock};
 
-use super::{KeycloakAuthError, KeycloakClaims, KeycloakConfig, KeycloakPrincipal};
+use super::{AccessTokenClaims, ExtProviderConfig, AccessTokenError, AuthenticatedPrincipal};
 
 const UNKNOWN_KID_REFRESH_COOLDOWN_SECS: u64 = 10;
 
@@ -16,26 +16,26 @@ struct CachedJwks {
     fetched_at: Option<Instant>,
 }
 
-/// Validates Keycloak access tokens locally and refreshes signing keys on a
-/// bounded interval or immediately when Keycloak rotates to an unknown KID.
-pub struct KeycloakAuth {
-    config: KeycloakConfig,
+/// Validates access tokens locally and refreshes provider signing keys on a
+/// bounded interval or immediately when the provider rotates to an unknown KID.
+pub struct ExtProvider {
+    config: ExtProviderConfig,
     client: reqwest::Client,
     jwks: RwLock<CachedJwks>,
     refresh_guard: Mutex<()>,
 }
 
-impl KeycloakAuth {
-    pub async fn from_env() -> Result<Arc<Self>, KeycloakAuthError> {
-        Self::from_config(KeycloakConfig::from_env()?).await
+impl ExtProvider {
+    pub async fn from_env() -> Result<Arc<Self>, AccessTokenError> {
+        Self::from_config(ExtProviderConfig::from_env()?).await
     }
 
-    pub async fn from_config(config: KeycloakConfig) -> Result<Arc<Self>, KeycloakAuthError> {
+    pub async fn from_config(config: ExtProviderConfig) -> Result<Arc<Self>, AccessTokenError> {
         let client: reqwest::Client = reqwest::Client::builder()
             .timeout(config.http_timeout)
             .build()
-            .map_err(KeycloakAuthError::JwksUnavailable)?;
-        let service: Arc<KeycloakAuth> = Arc::new(Self {
+            .map_err(AccessTokenError::JwksUnavailable)?;
+        let service: Arc<ExtProvider> = Arc::new(Self {
             config,
             client,
             jwks: RwLock::new(CachedJwks::default()),
@@ -45,17 +45,17 @@ impl KeycloakAuth {
         Ok(service)
     }
 
-    pub fn config(&self) -> &KeycloakConfig {
+    pub fn config(&self) -> &ExtProviderConfig {
         &self.config
     }
 
-    pub async fn validate_access_token(&self, token: &str) -> Result<KeycloakPrincipal, KeycloakAuthError> {
+    pub async fn validate_access_token(&self, token: &str) -> Result<AuthenticatedPrincipal, AccessTokenError> {
         let header: jsonwebtoken::Header =
-            jsonwebtoken::decode_header(token).map_err(KeycloakAuthError::InvalidToken)?;
+            jsonwebtoken::decode_header(token).map_err(AccessTokenError::InvalidToken)?;
         if !self.config.allowed_algorithms.contains(&header.alg) {
-            return Err(KeycloakAuthError::DisallowedAlgorithm);
+            return Err(AccessTokenError::DisallowedAlgorithm);
         }
-        let kid: &str = header.kid.as_deref().ok_or(KeycloakAuthError::MissingKeyId)?;
+        let kid: &str = header.kid.as_deref().ok_or(AccessTokenError::MissingKeyId)?;
         let key: DecodingKey = self.decoding_key(kid, header.alg).await?;
 
         let mut validation: Validation = Validation::new(header.alg);
@@ -67,21 +67,21 @@ impl KeycloakAuth {
         validation.validate_aud = true;
         validation.leeway = self.config.clock_skew.as_secs();
 
-        let token: jsonwebtoken::TokenData<KeycloakClaims> =
-            decode::<KeycloakClaims>(token, &key, &validation).map_err(KeycloakAuthError::InvalidToken)?;
-        let principal: KeycloakPrincipal = KeycloakPrincipal::try_from(token.claims)?;
+        let token: jsonwebtoken::TokenData<AccessTokenClaims> =
+            decode::<AccessTokenClaims>(token, &key, &validation).map_err(AccessTokenError::InvalidToken)?;
+        let principal: AuthenticatedPrincipal = AuthenticatedPrincipal::try_from(token.claims)?;
         if principal
             .issued_at
             .is_some_and(|issued_at| issued_at > jsonwebtoken::get_current_timestamp() + validation.leeway)
         {
-            return Err(KeycloakAuthError::InvalidClaims(
+            return Err(AccessTokenError::InvalidClaims(
                 "issued-at is unreasonably far in the future".to_owned(),
             ));
         }
         Ok(principal)
     }
 
-    async fn decoding_key(&self, kid: &str, algorithm: Algorithm) -> Result<DecodingKey, KeycloakAuthError> {
+    async fn decoding_key(&self, kid: &str, algorithm: Algorithm) -> Result<DecodingKey, AccessTokenError> {
         let (cached_key, cache_is_fresh): (Option<Jwk>, bool) = {
             let cache = self.jwks.read().await;
             let is_fresh: bool = cache
@@ -101,11 +101,11 @@ impl KeycloakAuth {
                 .set
                 .find(kid)
                 .cloned()
-                .ok_or(KeycloakAuthError::UnknownKey)
+                .ok_or(AccessTokenError::UnknownKey)
                 .and_then(|jwk| decoding_key_from_jwk(&jwk, algorithm)),
             Err(error) => {
                 if let Some(jwk) = cached_key {
-                    tracing::warn!(error = %error, kid, "using stale Keycloak signing key after JWKS refresh failed");
+                    tracing::warn!(error = %error, kid, "using stale provider signing key after JWKS refresh failed");
                     decoding_key_from_jwk(&jwk, algorithm)
                 } else {
                     Err(error)
@@ -114,28 +114,34 @@ impl KeycloakAuth {
         }
     }
 
-    async fn refresh_jwks(&self, force: bool) -> Result<(), KeycloakAuthError> {
-        let _refresh_guard = self.refresh_guard.lock().await;
-        let cache_age = self.jwks.read().await.fetched_at.map(|fetched_at| fetched_at.elapsed());
-        let cache_is_fresh = cache_age.is_some_and(|age| age < self.config.jwks_refresh_interval);
-        let unknown_kid_refresh_is_throttled =
-            force && cache_age.is_some_and(|age| age.as_secs() < UNKNOWN_KID_REFRESH_COOLDOWN_SECS);
+    async fn refresh_jwks(&self, force: bool) -> Result<(), AccessTokenError> {
+        let _refresh_guard: tokio::sync::MutexGuard<'_, ()> = self.refresh_guard.lock().await;
+        let cache_age: Option<std::time::Duration> = self
+            .jwks
+            .read()
+            .await
+            .fetched_at
+            .map(|fetched_at: Instant| fetched_at.elapsed());
+        let cache_is_fresh: bool =
+            cache_age.is_some_and(|age: std::time::Duration| age < self.config.jwks_refresh_interval);
+        let unknown_kid_refresh_is_throttled: bool = force
+            && cache_age.is_some_and(|age: std::time::Duration| age.as_secs() < UNKNOWN_KID_REFRESH_COOLDOWN_SECS);
         if (cache_is_fresh && !force) || unknown_kid_refresh_is_throttled {
             return Ok(());
         }
 
-        let set = self
+        let set: jsonwebtoken::jwk::JwkSet = self
             .client
             .get(&self.config.jwks_url)
             .send()
             .await
             .and_then(reqwest::Response::error_for_status)
-            .map_err(KeycloakAuthError::JwksUnavailable)?
-            .json::<JwkSet>()
+            .map_err(AccessTokenError::JwksUnavailable)?
+            .json::<jsonwebtoken::jwk::JwkSet>()
             .await
-            .map_err(KeycloakAuthError::JwksUnavailable)?;
+            .map_err(AccessTokenError::JwksUnavailable)?;
         if set.keys.is_empty() {
-            return Err(KeycloakAuthError::EmptyJwks);
+            return Err(AccessTokenError::EmptyJwks);
         }
 
         *self.jwks.write().await = CachedJwks {
@@ -147,8 +153,8 @@ impl KeycloakAuth {
 }
 
 #[cfg(test)]
-impl KeycloakAuth {
-    fn with_jwks(config: KeycloakConfig, set: JwkSet) -> Self {
+impl ExtProvider {
+    fn with_jwks(config: ExtProviderConfig, set: JwkSet) -> Self {
         let client = reqwest::Client::builder()
             .timeout(config.http_timeout)
             .build()
@@ -165,7 +171,7 @@ impl KeycloakAuth {
     }
 }
 
-fn decoding_key_from_jwk(jwk: &Jwk, algorithm: Algorithm) -> Result<DecodingKey, KeycloakAuthError> {
+fn decoding_key_from_jwk(jwk: &Jwk, algorithm: Algorithm) -> Result<DecodingKey, AccessTokenError> {
     if jwk
         .common
         .public_key_use
@@ -177,15 +183,15 @@ fn decoding_key_from_jwk(jwk: &Jwk, algorithm: Algorithm) -> Result<DecodingKey,
                 .any(|operation| matches!(operation, KeyOperations::Verify))
         })
     {
-        return Err(KeycloakAuthError::DisallowedAlgorithm);
+        return Err(AccessTokenError::DisallowedAlgorithm);
     }
     if let Some(key_algorithm) = jwk.common.key_algorithm {
-        let key_algorithm = Algorithm::try_from(key_algorithm).map_err(KeycloakAuthError::InvalidSigningKey)?;
+        let key_algorithm = Algorithm::try_from(key_algorithm).map_err(AccessTokenError::InvalidSigningKey)?;
         if key_algorithm != algorithm {
-            return Err(KeycloakAuthError::DisallowedAlgorithm);
+            return Err(AccessTokenError::DisallowedAlgorithm);
         }
     }
-    DecodingKey::from_jwk(jwk).map_err(KeycloakAuthError::InvalidSigningKey)
+    DecodingKey::from_jwk(jwk).map_err(AccessTokenError::InvalidSigningKey)
 }
 
 #[cfg(test)]
@@ -195,12 +201,12 @@ mod tests {
     use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, encode, jwk::JwkSet};
     use serde::Serialize;
 
-    use super::KeycloakAuth;
-    use crate::keycloak::KeycloakConfig;
+    use super::ExtProvider;
+    use crate::ext_foundation::ExtProviderConfig;
 
-    const ISSUER: &str = "https://identity.example/realms/shepherd";
-    const AUDIENCE: &str = "shepherd-api";
-    const KID: &str = "keycloak-test-key";
+    const ISSUER: &str = "https://identity.example/auth/v1";
+    const AUDIENCE: &str = "authenticated";
+    const KID: &str = "provider-test-key";
 
     #[derive(Serialize)]
     struct TestClaims<'a> {
@@ -212,27 +218,26 @@ mod tests {
         preferred_username: &'a str,
     }
 
-    fn config() -> KeycloakConfig {
-        KeycloakConfig::new(
+    fn config() -> ExtProviderConfig {
+        ExtProviderConfig::new(
             ISSUER.to_owned(),
             AUDIENCE.to_owned(),
-            "https://identity.example/realms/shepherd/protocol/openid-connect/certs".to_owned(),
+            "https://identity.example/auth/v1/.well-known/jwks.json".to_owned(),
             vec![Algorithm::EdDSA],
             Duration::from_secs(300),
             Duration::from_secs(5),
             Duration::from_secs(0),
-            false,
         )
         .expect("test configuration")
     }
 
-    fn service() -> KeycloakAuth {
+    fn service() -> ExtProvider {
         let decoding_key = DecodingKey::from_ed_pem(include_bytes!("../../../../security/jwtkey_dev/jwt_public.pem"))
             .expect("test public key");
         let mut jwk =
             jsonwebtoken::jwk::Jwk::from_decoding_key(&decoding_key, Some(Algorithm::EdDSA)).expect("test JWK");
         jwk.common.key_id = Some(KID.to_owned());
-        KeycloakAuth::with_jwks(config(), JwkSet { keys: vec![jwk] })
+        ExtProvider::with_jwks(config(), JwkSet { keys: vec![jwk] })
     }
 
     fn token(audience: &str) -> String {
@@ -243,7 +248,7 @@ mod tests {
             &header,
             &TestClaims {
                 iss: ISSUER,
-                sub: "keycloak-subject",
+                sub: "provider-subject",
                 aud: audience,
                 exp: now + 300,
                 iat: now,
@@ -263,7 +268,7 @@ mod tests {
             .expect("valid access token");
 
         assert_eq!(principal.issuer, ISSUER);
-        assert_eq!(principal.subject, "keycloak-subject");
+        assert_eq!(principal.subject, "provider-subject");
         assert_eq!(principal.username.as_deref(), Some("alice"));
     }
 
@@ -273,9 +278,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires a reachable Keycloak realm configured through environment variables"]
-    async fn loads_configured_keycloak_jwks() {
-        let auth = KeycloakAuth::from_env().await.expect("reachable Keycloak JWKS");
+    #[ignore = "requires a reachable identity provider configured through environment variables"]
+    async fn loads_configured_provider_jwks() {
+        let auth = ExtProvider::from_env().await.expect("reachable provider JWKS");
 
         assert!(!auth.config().issuer.is_empty());
         assert!(!auth.config().audience.is_empty());

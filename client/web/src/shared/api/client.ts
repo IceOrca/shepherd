@@ -11,9 +11,21 @@ export class ApiError extends Error {
 }
 
 let authenticationLostHandler: (() => void) | null = null;
+let authenticationRefreshHandler: (() => Promise<string | null>) | null = null;
+let accessToken: string | null = null;
 
 export function setAuthenticationLostHandler(handler: (() => void) | null): void {
   authenticationLostHandler = handler;
+}
+
+export function setAuthenticationRefreshHandler(
+  handler: (() => Promise<string | null>) | null,
+): void {
+  authenticationRefreshHandler = handler;
+}
+
+export function setApiAccessToken(token: string | null): void {
+  accessToken = token;
 }
 
 async function readPayload(response: Response): Promise<unknown> {
@@ -28,18 +40,31 @@ async function readPayload(response: Response): Promise<unknown> {
   }
 }
 
-export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function sendRequest(path: string, init: RequestInit): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
   if (typeof init.body === "string" && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
+  if (accessToken) {
+    headers.set("Authorization", `Bearer ${accessToken}`);
+  }
 
-  const response = await fetchWithTimeout(path, {
+  return fetchWithTimeout(path, {
     ...init,
-    credentials: "include",
     headers,
   });
+}
+
+export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  let response = await sendRequest(path, init);
+  if (response.status === 401 && authenticationRefreshHandler) {
+    const refreshedToken = await authenticationRefreshHandler();
+    if (refreshedToken) {
+      response = await sendRequest(path, init);
+    }
+  }
+
   const payload = await readPayload(response);
   if (!response.ok) {
     if (response.status === 401) {
@@ -50,6 +75,14 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
   return payload as T;
 }
 
+function apiErrorMessage(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const message = (payload as { message?: unknown }).message;
+  return typeof message === "string" && message.length <= 300 ? message : null;
+}
+
 export function friendlyApiError(error: unknown, fallback: string): string {
   if (!navigator.onLine) {
     return "Thiết bị đang ngoại tuyến. Vui lòng kiểm tra kết nối mạng.";
@@ -58,9 +91,10 @@ export function friendlyApiError(error: unknown, fallback: string): string {
     return "Máy chủ phản hồi quá lâu. Vui lòng thử lại.";
   }
   if (error instanceof ApiError) {
+    const serverMessage = apiErrorMessage(error.payload);
     switch (error.status) {
       case 400:
-        return "Dữ liệu gửi lên chưa hợp lệ.";
+        return serverMessage ?? "Dữ liệu gửi lên chưa hợp lệ.";
       case 401:
         return "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.";
       case 403:
@@ -68,9 +102,9 @@ export function friendlyApiError(error: unknown, fallback: string): string {
       case 404:
         return "Không tìm thấy dữ liệu cần xử lý.";
       case 409:
-        return "Dữ liệu vừa thay đổi ở nơi khác. Hệ thống đã giữ nguyên trạng thái an toàn.";
+        return serverMessage ?? "Dữ liệu vừa thay đổi ở nơi khác. Hệ thống đã giữ nguyên trạng thái an toàn.";
       case 422:
-        return "Dữ liệu chưa đáp ứng điều kiện nghiệp vụ.";
+        return serverMessage ?? "Dữ liệu chưa đáp ứng điều kiện nghiệp vụ.";
       case 429:
         return "Bạn thao tác quá nhanh. Vui lòng chờ một chút.";
       case 503:

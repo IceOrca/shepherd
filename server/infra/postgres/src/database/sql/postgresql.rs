@@ -26,11 +26,11 @@ pub enum TenantDbErr {
 /// Tenant-owned queries are exposed through `TenantTransaction`, which sets
 /// `app.tenant_id` transaction-locally before RLS-protected tables are used.
 #[derive(Clone)]
-pub struct PostgresClient {
+pub struct PostgresCli {
     pool: PgPool,
 }
 
-impl PostgresClient {
+impl PostgresCli {
     pub async fn connect(database_url: &str) -> Result<Self, TenantDbErr> {
         let max_connections: u32 = env_u32("DB_MAX_CONNECTIONS", 15);
         let acquire_timeout: Duration = Duration::from_secs(env_u64("DB_ACQUIRE_TIMEOUT_SECS", 10));
@@ -254,7 +254,7 @@ mod tests {
     #[tokio::test]
     async fn rls_hides_and_rejects_cross_tenant_accounts() -> Result<(), Box<dyn std::error::Error>> {
         let database_url: String = std::env::var("DATABASE_URL")?;
-        let client: PostgresClient = PostgresClient::connect(&database_url).await?;
+        let client: PostgresCli = PostgresCli::connect(&database_url).await?;
         let bypasses_rls: bool = sqlx::query_scalar!(
             r#"
             SELECT (rolsuper OR rolbypassrls) AS "bypasses_rls!"
@@ -336,7 +336,7 @@ mod tests {
     async fn attendance_allows_multiple_completed_sessions_but_one_open_session()
     -> Result<(), Box<dyn std::error::Error>> {
         let database_url: String = std::env::var("DATABASE_URL")?;
-        let client: PostgresClient = PostgresClient::connect(&database_url).await?;
+        let client: PostgresCli = PostgresCli::connect(&database_url).await?;
         let tenant_id: Uuid = Uuid::new_v4();
         let account_id: Uuid = Uuid::new_v4();
         let employee_id: Uuid = Uuid::new_v4();

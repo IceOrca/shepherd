@@ -1,2 +1,4 @@
 deploy/secrets
+/deploy/supabase/dev/auth.env
+/deploy/supabase/dev/auth-admin.env
 server/applications/shepherd/bindings/

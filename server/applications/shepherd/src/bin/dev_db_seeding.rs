@@ -8,7 +8,6 @@ use uuid::Uuid;
 const ACME_TENANT_ID: &str = "00000000-0000-4000-8000-000000000001";
 const ACME1_TENANT_ID: &str = "00000000-0000-4000-8000-000000000002";
 const ACME2_TENANT_ID: &str = "00000000-0000-4000-8000-000000000003";
-const DEV_KEYCLOAK_SUBJECT: &str = "16f7594f-a100-414f-b0d0-3c02a611889a";
 const DEV_ATTENDANCE_ID_NAMESPACE: u128 = 0xd3a7_7e00_0000_4000_8000_0000_0000_0000;
 const DEV_STAFFING_SHIFT_ID_NAMESPACE: u128 = 0x51f7_0000_0000_4000_8000_0000_0000_0000;
 const DEV_STAFFING_ASSIGNMENT_ID_NAMESPACE: u128 = 0xa551_0000_0000_4000_8000_0000_0000_0000;
@@ -185,14 +184,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Debugging::init();
     log_notice!("Development seed started: configured_tenants={}", DEV_TENANTS.len());
     require_development_environment()?;
-    let keycloak_issuer = std::env::var("KEYCLOAK_ISSUER_URL")
-        .map_err(|_| io::Error::other("KEYCLOAK_ISSUER_URL is required for development seeding"))?;
+    let auth_issuer = std::env::var("AUTH_ISSUER_URL")
+        .map_err(|_| io::Error::other("AUTH_ISSUER_URL is required for development seeding"))?;
+    let auth_subject = std::env::var("AUTH_DEV_SUBJECT")
+        .map_err(|_| io::Error::other("AUTH_DEV_SUBJECT is required for development seeding"))?;
     log_debug!("Development environment guard accepted APP_ENV=development");
 
     log_info!("Connecting to PostgreSQL; migrations must already be applied with the SQLx CLI");
     let database: Arc<DatabaseAdapter> = DatabaseAdapter::new_arc().await;
     for tenant in DEV_TENANTS {
-        if let Err(error) = seed_tenant(&database, tenant, &keycloak_issuer).await {
+        if let Err(error) = seed_tenant(&database, tenant, &auth_issuer, &auth_subject).await {
             log_error!(
                 "Development tenant seed failed: tenant_slug={} tenant_id={} error={}",
                 tenant.slug,
@@ -212,15 +213,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("Development data seeded successfully");
     println!("tenant_slugs=acme,acme1,acme2");
     println!("accounts_created_or_verified={account_count}");
-    println!("keycloak_identity_issuer={keycloak_issuer}");
-    println!("keycloak_identity_subject={DEV_KEYCLOAK_SUBJECT}");
+    println!("auth_identity_issuer={auth_issuer}");
+    println!("auth_identity_subject={auth_subject}");
     Ok(())
 }
 
 async fn seed_tenant(
     database: &Arc<DatabaseAdapter>,
     tenant: &DevTenant,
-    keycloak_issuer: &str,
+    auth_issuer: &str,
+    auth_subject: &str,
 ) -> Result<(), io::Error> {
     let tenant_id: Uuid = Uuid::parse_str(tenant.id).map_err(io::Error::other)?;
     log_notice!(
@@ -254,7 +256,7 @@ async fn seed_tenant(
     )
     .await?;
     if tenant.id == ACME_TENANT_ID {
-        ensure_identity(database, keycloak_issuer, tenant_id, owner.id).await?;
+        ensure_identity(database, auth_issuer, auth_subject, tenant_id, owner.id).await?;
     }
 
     let mut seeded_accounts: Vec<SeedAccount> = vec![owner.clone()];
@@ -1711,6 +1713,7 @@ async fn ensure_account(
 async fn ensure_identity(
     database: &DatabaseAdapter,
     issuer: &str,
+    subject: &str,
     tenant_id: Uuid,
     account_id: Uuid,
 ) -> Result<(), io::Error> {
@@ -1722,7 +1725,7 @@ async fn ensure_identity(
         SET issuer = EXCLUDED.issuer, subject = EXCLUDED.subject
         "#,
         issuer,
-        DEV_KEYCLOAK_SUBJECT,
+        subject,
         tenant_id,
         account_id,
     )

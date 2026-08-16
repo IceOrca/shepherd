@@ -3,10 +3,14 @@ use jsonwebtoken::DecodingKey;
 use crate::account::Role;
 use jsonwebtoken::EncodingKey;
 
+#[path = "jwt/claims.rs"]
 pub mod claims;
+#[path = "jwt/decode.rs"]
 mod decode;
+#[path = "jwt/encode.rs"]
 mod encode;
 #[cfg(feature = "jwks")]
+#[path = "jwt/public_key.rs"]
 mod public_key;
 
 #[macro_export]

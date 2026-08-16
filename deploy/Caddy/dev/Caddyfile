@@ -13,22 +13,16 @@ https://{$REMOTE_DEV_DNS_NAME} {
 	import common
 	tls internal
 
-	reverse_proxy {$SHEPHERD_DEV_UPSTREAM:oauth2-proxy:4180} {
-		# Caddy writes fresh X-Forwarded-* headers for oauth2-proxy.
-		header_up -Forwarded
+	handle_path /auth/v1/* {
+		reverse_proxy {$AUTH_DEV_UPSTREAM:supabase-auth:9999}
 	}
-}
 
-# Tailscale does not issue certificates for arbitrary subdomains. Reuse the
-# node hostname on a dedicated HTTPS port for Keycloak and its Admin Console.
-https://{$REMOTE_DEV_DNS_NAME}:{$KEYCLOAK_CADDY_HTTPS_PORT:8443} {
-	import common
-	tls internal
+	@api path /api/* /hr/* /business/*
+	handle @api {
+		reverse_proxy {$SHEPHERD_API_DEV_UPSTREAM:server:8000}
+	}
 
-	@management path /health /health/* /metrics /metrics/*
-	respond @management 404
-
-	reverse_proxy {$KEYCLOAK_DEV_UPSTREAM:keycloak:8081} {
-		header_up -Forwarded
+	handle {
+		reverse_proxy {$SHEPHERD_WEB_DEV_UPSTREAM:client:5173}
 	}
 }

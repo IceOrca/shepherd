@@ -7,16 +7,24 @@ import {
   type ReactNode,
 } from "react";
 import type { CurrentUserProfile } from "../../api/generated/contracts";
-import { setAuthenticationLostHandler } from "../../shared/api/client";
-import { beginLogin, logoutSession, restoreSession } from "./api";
+import {
+  setAuthenticationLostHandler,
+  setAuthenticationRefreshHandler,
+} from "../../shared/api/client";
+import {
+  logoutSession,
+  refreshAccessToken,
+  restoreSession,
+  signInWithPassword,
+} from "./api";
 
 type AuthStatus = "loading" | "authenticated" | "anonymous";
 
 interface AuthContextValue {
   status: AuthStatus;
   profile: CurrentUserProfile | null;
-  login(returnTo?: string): void;
-  logout(): void;
+  login(email: string, password: string): Promise<void>;
+  logout(): Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -48,20 +56,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    setAuthenticationRefreshHandler(() => refreshAccessToken(true));
     setAuthenticationLostHandler(() => {
       setProfile(null);
       setStatus("anonymous");
     });
 
-    return () => setAuthenticationLostHandler(null);
+    return () => {
+      setAuthenticationLostHandler(null);
+      setAuthenticationRefreshHandler(null);
+    };
   }, []);
 
   const value = useMemo<AuthContextValue>(
     () => ({
       status,
       profile,
-      login: beginLogin,
-      logout: logoutSession,
+      async login(email: string, password: string) {
+        const restoredProfile = await signInWithPassword(email, password);
+        setProfile(restoredProfile);
+        setStatus("authenticated");
+      },
+      async logout() {
+        try {
+          await logoutSession();
+        } finally {
+          setProfile(null);
+          setStatus("anonymous");
+        }
+      },
     }),
     [profile, status],
   );

@@ -21,7 +21,7 @@ CREATE TABLE tenants (
 
 CREATE INDEX tenants_status_idx ON tenants (status);
 
--- Roles and permissions are application authorization data. Keycloak owns
+-- Roles and permissions are application authorization data. The identity provider owns
 -- authentication and only decides whether an identity may enter Shepherd.
 CREATE TABLE roles (
     code TEXT PRIMARY KEY,
@@ -59,7 +59,7 @@ CREATE TABLE role_permissions (
 CREATE INDEX role_permissions_permission_code_idx ON role_permissions (permission_code);
 
 -- A Shepherd account is a tenant-owned business actor, not a credential.
--- Passwords and login sessions are owned by Keycloak.
+-- Passwords and login sessions are owned by the external identity provider.
 CREATE TABLE accounts (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
@@ -184,4 +184,3 @@ VALUES
 INSERT INTO role_permissions (role_code, permission_code)
 SELECT 'tenant_owner', code
 FROM permissions;
-

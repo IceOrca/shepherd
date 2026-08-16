@@ -3,21 +3,21 @@
 use std::sync::Arc;
 
 use axum::Router;
-use infra_host::HostContext as FoundationHostState;
+use infra_host::HostContext as HostInfa;
 use infra_worker::Worker;
 
 pub struct RuntimeParts {
-    pub context: Arc<FoundationHostState>,
+    pub context: Arc<HostInfa>,
     pub router: Router,
     pub worker: Worker,
 }
 
 pub async fn build() -> RuntimeParts {
-    let infra: Arc<FoundationHostState> = FoundationHostState::new_arc().await;
-    let shepherd: Arc<shepherd::AppContext> =
+    let infra: Arc<HostInfa> = HostInfa::new_arc().await;
+    let app: Arc<shepherd::AppContext> =
         shepherd::AppContext::new_arc(Arc::clone(&infra.auth), Arc::clone(&infra.database));
-    let dispatcher = Arc::clone(&shepherd.notifications);
-    let worker = Worker::new();
+    let dispatcher: Arc<shepherd::notifications::NotificationDispatcher> = Arc::clone(&app.notifications);
+    let worker: Worker = Worker::new();
     worker
         .asynchronous()
         .spawn("notification-outbox", move |cancellation| async move {
@@ -25,7 +25,7 @@ pub async fn build() -> RuntimeParts {
         })
         .unwrap_or_else(|error| panic!("failed to start notification dispatcher: {error}"));
 
-    let router: Router = infra_host::route::routes(Arc::clone(&infra)).merge(shepherd::routes(shepherd));
+    let router: Router = infra_host::route::routes(Arc::clone(&infra)).merge(shepherd::routes(app));
     let router: Router = infra_host::route::apply_layers(router, Arc::clone(&infra));
     RuntimeParts {
         context: infra,

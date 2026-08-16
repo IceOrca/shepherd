@@ -1,20 +1,34 @@
 use std::sync::Arc;
 
-use crate::keycloak::{KeycloakAuth, KeycloakAuthError};
+use crate::ext_foundation::{
+    AccessTokenError, ExtProvider,
+    auth_admin::{AuthAdminConfigError, AuthAdminService},
+};
+
+#[derive(Debug, thiserror::Error)]
+pub enum AuthServiceError {
+    #[error("failed to configure access-token validation: {0}")]
+    AccessToken(#[from] AccessTokenError),
+    #[error("failed to configure identity administration: {0}")]
+    Administration(#[from] AuthAdminConfigError),
+}
 
 /// Authentication capability exposed by the HTTP host.
 ///
-/// Keycloak owns credentials and browser sessions. The service intentionally
-/// stays small: it gives host/application middleware access to verified OIDC
-/// identities without exposing the optional legacy authentication stack.
+/// The external provider owns credentials and sessions. This service only
+/// exposes verified bearer-token identities to the host and applications.
 pub struct AuthService {
-    pub keycloak: Arc<KeycloakAuth>,
+    pub db: Arc<infra_postgres::DatabaseAdapter>,
+    pub provider: Arc<ExtProvider>,
+    pub admin: Arc<AuthAdminService>,
 }
 
 impl AuthService {
-    pub async fn from_env() -> Result<Arc<Self>, KeycloakAuthError> {
+    pub async fn new(db: Arc<infra_postgres::DatabaseAdapter>) -> Result<Arc<Self>, AuthServiceError> {
         Ok(Arc::new(Self {
-            keycloak: KeycloakAuth::from_env().await?,
+            db,
+            provider: ExtProvider::from_env().await?,
+            admin: AuthAdminService::from_env()?,
         }))
     }
 }

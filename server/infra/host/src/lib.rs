@@ -41,9 +41,9 @@ impl HostContext {
         let database: Arc<DatabaseAdapter> = DatabaseAdapter::new_arc().await;
         let redis: Arc<RedisAdapter> = RedisAdapter::new_arc();
         #[cfg(feature = "auth")]
-        let auth: Arc<AuthService> = AuthService::from_env()
+        let auth: Arc<AuthService> = AuthService::new(database.clone())
             .await
-            .unwrap_or_else(|error| panic!("failed to initialize Keycloak authentication: {error}"));
+            .unwrap_or_else(|error| panic!("failed to initialize access-token authentication: {error}"));
 
         Arc::new(Self {
             database,

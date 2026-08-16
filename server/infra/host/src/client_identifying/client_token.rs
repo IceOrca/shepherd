@@ -173,7 +173,7 @@ impl ClientTokenHandle {
                 log_error!("System time error: {}", err);
                 format!("System time error: {}", err)
             })?
-            .as_secs() as u64;
+            .as_secs();
 
         let payload: CitPayload = CitPayload {
             cid: Uuid::new_v4().to_string(),
@@ -247,7 +247,7 @@ impl ClientTokenHandle {
                 log_error!("System time error: {}", err);
                 ClientTokenError::InvalidFormat
             })?
-            .as_secs() as u64;
+            .as_secs();
         if now < payload.iat || now > payload.exp {
             log_notice!("iat {} or exp {} is invalid, now {}", payload.iat, payload.exp, now);
             return Err(ClientTokenError::InvalidExpiration);
@@ -278,7 +278,7 @@ fn extract_ed25519_private_pem(pem: &str) -> SigningKey {
 
     // PKCS#8 Ed25519 private key
     // DER structure last 32 bytes = raw private key
-    let raw: &[u8] = &der.get(der.len() - 32..).expect("Ed25519 private der length invalid");
+    let raw: &[u8] = der.get(der.len() - 32..).expect("Ed25519 private der length invalid");
 
     SigningKey::from_bytes(raw.try_into().expect("Invalid Ed25519 private key length"))
 }
@@ -290,7 +290,7 @@ fn extract_ed25519_public_pem(pem: &str) -> VerifyingKey {
     let der: Vec<u8> = STANDARD.decode(b64).expect("Invalid base64 in public key PEM");
 
     // SubjectPublicKeyInfo last 32 bytes = raw public key
-    let raw: &[u8] = &der.get(der.len() - 32..).expect("Ed25519 public der length invalid");
+    let raw: &[u8] = der.get(der.len() - 32..).expect("Ed25519 public der length invalid");
 
     VerifyingKey::from_bytes(raw.try_into().expect("Invalid Ed25519 public key length"))
         .expect("Invalid Ed25519 public key")

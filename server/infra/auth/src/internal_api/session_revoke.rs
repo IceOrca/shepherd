@@ -6,6 +6,7 @@ use moka::future::Cache;
 
 use infra_kernel::debug::*;
 
+#[path = "session_revoke/token_blacklist.rs"]
 pub mod token_blacklist;
 
 struct RevokedJtiExpiry;

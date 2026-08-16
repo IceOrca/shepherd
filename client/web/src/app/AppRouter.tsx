@@ -1,5 +1,6 @@
 import { LoaderCircle } from "lucide-react";
 import { Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
+import { AuthUsersPage } from "../features/admin/AuthUsersPage";
 import { LoginPage } from "../features/auth/LoginPage";
 import { useAuth } from "../features/auth/AuthProvider";
 import { MyAssignmentsPage } from "../features/operations/MyAssignmentsPage";
@@ -50,7 +51,8 @@ export function AppRouter() {
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<OperationsOverviewPage />} />
           <Route path="/operations/my-shifts" element={<MyAssignmentsPage />} />
-          <Route path="/admin/*" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/admin/auth-users" element={<AuthUsersPage />} />
+          <Route path="/admin/*" element={<Navigate to="/admin/auth-users" replace />} />
           <Route path="*" element={<NotFoundPage />} />
         </Route>
       </Route>

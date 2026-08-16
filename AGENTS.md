@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-Reusable server capabilities live in `server/crates/foundation/`. `kernel` owns neutral primitives and debugging; `infra/postgres` and `infra/redis` are thin adapters; `auth` owns authentication; and `host` owns `HostContext`, `AppRoutes`, Axum policies, logging, audit, and rate limiting. Host enables its Cargo `auth` feature by default; use `default-features = false` only intentionally. HRM code lives in `server/crates/applications/hrm/`, `server/runtime/` is the composition root, and migrations remain in `server/migrations`.
+Reusable server capabilities live in `server/crates/infra/`. `kernel` owns neutral primitives and debugging; `infra/postgres` and `infra/redis` are thin adapters; `auth` owns authentication; and `host` owns `HostContext`, `AppRoutes`, Axum policies, logging, audit, and rate limiting. Host enables its Cargo `auth` feature by default; use `default-features = false` only intentionally. HRM code lives in `server/crates/applications/hrm/`, `server/runtime/` is the composition root, and migrations remain in `server/migrations`.
 
 The Vite/React application is under `client/web/src`; API helpers and generated `ts-rs` contracts belong in `src/api`. Deployment configuration is in `deploy/` and the root Compose files. Treat `server/target`, `client/web/dist`, and generated API files as build outputs.
 
@@ -22,7 +22,7 @@ Keep images minimal. The server uses Rust Bookworm: do not add `build-essential`
 
 ## Coding Style & Naming Conventions
 
-Format Rust inside the server container with `cargo fmt --all`; it uses 120-column formatting and forbids unsafe code, `unwrap`, and unchecked indexing. Use Rust `snake_case` modules/functions and `PascalCase` types. Foundation crates must not depend on application crates. TypeScript is strict: two-space indentation, `PascalCase` components, and `camelCase` functions/variables.
+Format Rust inside the server container with `cargo fmt --all`; it uses 120-column formatting and forbids unsafe code, `unwrap`, and unchecked indexing. Use Rust `snake_case` modules/functions and `PascalCase` types. Infra crates must not depend on application crates. TypeScript is strict: two-space indentation, `PascalCase` components, and `camelCase` functions/variables.
 
 ## Testing Guidelines
 

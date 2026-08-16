@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Bootstrap the Shepherd and Keycloak PostgreSQL roles and databases.
+# Bootstrap the Shepherd application and authentication roles and databases.
 #
 # Run this file from the repository root to update an existing Compose volume.
 # The PostgreSQL container also executes this same file automatically when it
@@ -10,10 +10,10 @@ set -eu
 
 set -a
 if [ -e ./.env ]; then
-    source ./.env
+    . ./.env
 fi
 if [ -e /etc/shepherd/secrets/.env ]; then
-    source /etc/shepherd/secrets/.env
+    . /etc/shepherd/secrets/.env
 fi
 set +a
 
@@ -42,24 +42,28 @@ admin_user="${POSTGRES_USER:?POSTGRES_USER_must_be_set}"
 shepherd_db="${POSTGRES_DB:?POSTGRES_DB_must_be_set}"
 shepherd_user="${PG_APP_USER:?PG_APP_USER_must_be_set}"
 shepherd_password="$(read_password "${PG_APP_PASSWORD:-}" "${PG_APP_PASSWORD_FILE:-}" PG_APP_PASSWORD)"
-keycloak_db="${KEYCLOAK_DB:-keycloak}"
-keycloak_user="${KEYCLOAK_DB_USER:-keycloak}"
-keycloak_password="$(read_password "${KEYCLOAK_DB_PASSWORD:-}" "${KEYCLOAK_DB_PASSWORD_FILE:-}" KEYCLOAK_DB_PASSWORD)"
+auth_db="${AUTH_DB:-shepherd_auth}"
+auth_user="${AUTH_DB_USER:-shepherd_auth}"
+auth_password="$(read_password "${AUTH_DB_PASSWORD:-}" "${AUTH_DB_PASSWORD_FILE:-}" AUTH_DB_PASSWORD)"
 
-if [ "${shepherd_user}" = "${admin_user}" ] || [ "${keycloak_user}" = "${admin_user}" ]; then
+if [ "${shepherd_user}" = "${admin_user}" ] || [ "${auth_user}" = "${admin_user}" ]; then
     echo >&2 "application roles must differ from the bootstrap PostgreSQL administrator"
     exit 2
 fi
-if [ "${shepherd_user}" = "${keycloak_user}" ]; then
-    echo >&2 "Shepherd and Keycloak must use separate PostgreSQL roles"
+if [ "${shepherd_user}" = "${auth_user}" ]; then
+    echo >&2 "Shepherd and Auth must use separate PostgreSQL roles"
     exit 2
 fi
 
 psql --username "${admin_user}" --dbname postgres --set ON_ERROR_STOP=1 \
     --set shepherd_user="${shepherd_user}" \
     --set shepherd_password="${shepherd_password}" \
-    --set keycloak_user="${keycloak_user}" \
-    --set keycloak_password="${keycloak_password}" <<-'EOSQL'
+    --set auth_user="${auth_user}" \
+    --set auth_password="${auth_password}" <<-'EOSQL'
+SELECT 'CREATE ROLE postgres NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS'
+WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'postgres')
+\gexec
+
 SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'shepherd_user', :'shepherd_password')
 WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'shepherd_user')
 \gexec
@@ -72,14 +76,14 @@ SELECT format(
 )
 \gexec
 
-SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'keycloak_user', :'keycloak_password')
-WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'keycloak_user')
+SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'auth_user', :'auth_password')
+WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'auth_user')
 \gexec
 
 SELECT format(
     'ALTER ROLE %I WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1 PASSWORD %L VALID UNTIL %L',
-    :'keycloak_user',
-    :'keycloak_password',
+    :'auth_user',
+    :'auth_password',
     'infinity'
 )
 \gexec
@@ -88,8 +92,8 @@ EOSQL
 psql --username "${admin_user}" --dbname postgres --set ON_ERROR_STOP=1 \
     --set shepherd_db="${shepherd_db}" \
     --set shepherd_user="${shepherd_user}" \
-    --set keycloak_db="${keycloak_db}" \
-    --set keycloak_user="${keycloak_user}" <<-'EOSQL'
+    --set auth_db="${auth_db}" \
+    --set auth_user="${auth_user}" <<-'EOSQL'
 SELECT format('CREATE DATABASE %I OWNER %I', :'shepherd_db', :'shepherd_user')
 WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = :'shepherd_db')
 \gexec
@@ -97,12 +101,21 @@ WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = :'shepherd_db')
 SELECT format('ALTER DATABASE %I OWNER TO %I', :'shepherd_db', :'shepherd_user')
 \gexec
 
-SELECT format('CREATE DATABASE %I OWNER %I', :'keycloak_db', :'keycloak_user')
-WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = :'keycloak_db')
+SELECT format('CREATE DATABASE %I OWNER %I', :'auth_db', :'auth_user')
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = :'auth_db')
 \gexec
 
-SELECT format('ALTER DATABASE %I OWNER TO %I', :'keycloak_db', :'keycloak_user')
+SELECT format('ALTER DATABASE %I OWNER TO %I', :'auth_db', :'auth_user')
 \gexec
 EOSQL
 
-unset shepherd_password keycloak_password password
+psql --username "${admin_user}" --dbname "${auth_db}" --set ON_ERROR_STOP=1 \
+    --set auth_user="${auth_user}" <<-'EOSQL'
+SELECT format('CREATE SCHEMA IF NOT EXISTS auth AUTHORIZATION %I', :'auth_user')
+\gexec
+
+SELECT format('ALTER SCHEMA auth OWNER TO %I', :'auth_user')
+\gexec
+EOSQL
+
+unset shepherd_password auth_password password

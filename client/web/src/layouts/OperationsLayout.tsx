@@ -10,6 +10,7 @@ import {
   PanelLeftClose,
   RefreshCw,
   UsersRound,
+  UserRoundCog,
   Wifi,
   WifiOff,
   X,
@@ -56,9 +57,22 @@ const navigation: NavigationItem[] = [
     permission: "hr.employees.read",
     soon: true,
   },
+  {
+    label: "Tài khoản",
+    to: "/admin/auth-users",
+    icon: UserRoundCog,
+    permission: "auth.accounts.read",
+  },
 ];
 
 function pageTitle(pathname: string): { title: string; description: string } {
+  if (pathname === "/admin/auth-users") {
+    return {
+      title: "Quản trị tài khoản",
+      description: "Cấp tài khoản và kiểm soát quyền đăng nhập cho doanh nghiệp.",
+    };
+  }
+
   if (pathname === "/operations/my-shifts") {
     return {
       title: "Ca làm của tôi",

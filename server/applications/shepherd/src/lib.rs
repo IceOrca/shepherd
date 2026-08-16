@@ -11,7 +11,7 @@ pub mod typescript;
 use std::sync::Arc;
 
 use axum::{Router, middleware::from_fn_with_state};
-use infra_app_sdk::{AppManifest, FoundationApp};
+use infra_app_sdk::{AppManifest, InfraAppManifest};
 use infra_postgres::DatabaseAdapter;
 
 use business::staffing::{
@@ -40,13 +40,15 @@ pub struct ApplicationCore {
 
 impl ApplicationCore {
     pub fn new_arc(database: Arc<DatabaseAdapter>) -> Arc<Self> {
-        let organization = OrganizationService::new_arc(OrganizationProvider::new_arc(Arc::clone(&database)));
-        let people = PeopleService::new_arc(PeopleProvider::new_arc(Arc::clone(&database)));
-        let working_schedules =
+        let organization: Arc<OrganizationService> =
+            OrganizationService::new_arc(OrganizationProvider::new_arc(Arc::clone(&database)));
+        let people: Arc<PeopleService> = PeopleService::new_arc(PeopleProvider::new_arc(Arc::clone(&database)));
+        let working_schedules: Arc<WorkingScheduleService> =
             WorkingScheduleService::new_arc(WorkingScheduleProvider::new_arc(Arc::clone(&database)));
-        let payroll = PayrollService::new_arc(PayrollProvider::new_arc(Arc::clone(&database)));
-        let staffing = StaffingService::new_arc(StaffingProvider::new_arc(Arc::clone(&database)));
-        let staffing_work = StaffingWorkService::new_arc(StaffingWorkProvider::new_arc(database));
+        let payroll: Arc<PayrollService> = PayrollService::new_arc(PayrollProvider::new_arc(Arc::clone(&database)));
+        let staffing: Arc<StaffingService> = StaffingService::new_arc(StaffingProvider::new_arc(Arc::clone(&database)));
+        let staffing_work: Arc<StaffingWorkService> =
+            StaffingWorkService::new_arc(StaffingWorkProvider::new_arc(database));
 
         Arc::new(Self {
             organization,
@@ -69,8 +71,9 @@ pub struct AppContext {
 
 impl AppContext {
     pub fn new_arc(auth: Arc<infra_auth::AuthService>, database: Arc<DatabaseAdapter>) -> Arc<Self> {
-        let notifications = notifications::NotificationDispatcher::new_arc(Arc::clone(&database));
-        let core = ApplicationCore::new_arc(Arc::clone(&database));
+        let notifications: Arc<notifications::NotificationDispatcher> =
+            notifications::NotificationDispatcher::new_arc(Arc::clone(&database));
+        let core: Arc<ApplicationCore> = ApplicationCore::new_arc(Arc::clone(&database));
         Arc::new(Self {
             auth,
             database,
@@ -82,7 +85,7 @@ impl AppContext {
 
 pub struct ShepherdApp;
 
-impl FoundationApp for ShepherdApp {
+impl InfraAppManifest for ShepherdApp {
     fn manifest(&self) -> AppManifest {
         AppManifest {
             code: "shepherd",
@@ -93,27 +96,25 @@ impl FoundationApp for ShepherdApp {
     }
 }
 
-pub fn routes(context: Arc<AppContext>) -> Router {
-    let api_routes = protected_routes(Arc::clone(&context), auth::routes());
-    let hr_routes = protected_routes(Arc::clone(&context), hr::routes());
-    let business_routes = protected_routes(Arc::clone(&context), business::routes());
+pub fn routes(ctx: Arc<AppContext>) -> Router {
+    let api_routes = protected_routes(Arc::clone(&ctx), auth::routes(Arc::clone(&ctx.auth)));
+    let hr_routes = protected_routes(Arc::clone(&ctx), hr::routes().with_state(Arc::clone(&ctx)));
+    let business_routes = protected_routes(Arc::clone(&ctx), business::routes().with_state(Arc::clone(&ctx)));
     Router::new()
         .nest("/api", api_routes)
         .nest("/hr", hr_routes)
         .nest("/business", business_routes)
 }
 
-fn protected_routes(context: Arc<AppContext>, routes: Router<Arc<AppContext>>) -> Router {
-    let auth: Arc<infra_auth::AuthService> = Arc::clone(&context.auth);
+fn protected_routes(context: Arc<AppContext>, routes: Router) -> Router {
     routes
         .layer(ratelimiting::RateLimiter::protected_route_layer())
         .route_layer(from_fn_with_state(
-            Arc::clone(&context),
+            Arc::clone(&context.auth),
             auth::resolve_application_account,
         ))
         .route_layer(from_fn_with_state(
-            auth,
-            infra_auth::keycloak::middleware::require_authenticated,
+            Arc::clone(&context.auth),
+            auth::require_authenticated,
         ))
-        .with_state(context)
 }

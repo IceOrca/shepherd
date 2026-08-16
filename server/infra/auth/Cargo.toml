@@ -4,11 +4,17 @@ version.workspace = true
 edition.workspace = true
 
 [features]
-default = ["keycloak"]
-keycloak = [
+default = ["ext-foundation"]
+ext-foundation = [
     "dep:reqwest",
+    "dep:chrono",
+    "dep:serde_json",
     "dep:thiserror",
     "dep:tokio",
+    "dep:sqlx",
+    "dep:ts-rs",
+    "dep:uuid",
+    "dep:infra-postgres",
 ]
 jwt = ["dep:uuid"]
 jwks = ["jwt", "dep:base64"]
@@ -74,6 +80,7 @@ tracing.workspace = true
 ts-rs = { workspace = true, optional = true }
 validator = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true }
+cfg-if.workspace = true
 infra-kernel = { workspace = true, features = ["debugging"] }
 infra-postgres = { workspace = true, optional = true }
 infra-redis = { workspace = true, optional = true }

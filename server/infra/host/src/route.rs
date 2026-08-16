@@ -44,7 +44,7 @@ pub fn routes(host_ctx: Arc<HostContext>) -> Router {
 /// This API is available when the host's default `auth` feature is enabled.
 /// Applications keep ownership of handlers and state; the host owns common
 /// authentication and rate-limit layers. Application authorization remains
-/// owned by the application because Keycloak only establishes identity here.
+/// owned by the application because the external provider only establishes identity here.
 #[cfg(feature = "auth")]
 pub fn mount_app_routes(router: Router, routes: AppRoutes, host: Arc<HostContext>) -> Router {
     let public: Router = RateLimiter::public_layer(routes.public);
@@ -53,14 +53,14 @@ pub fn mount_app_routes(router: Router, routes: AppRoutes, host: Arc<HostContext
         .layer(RateLimiter::protected_route_layer())
         .route_layer(from_fn_with_state(
             Arc::clone(&host.auth),
-            infra_auth::keycloak::middleware::require_authenticated,
+            infra_auth::ext_foundation::middleware::require_authenticated,
         ));
     let admin: Router = routes
         .admin
         .layer(RateLimiter::protected_route_layer())
         .route_layer(from_fn_with_state(
             Arc::clone(&host.auth),
-            infra_auth::keycloak::middleware::require_authenticated,
+            infra_auth::ext_foundation::middleware::require_authenticated,
         ));
 
     router.merge(public).merge(protected).merge(admin)

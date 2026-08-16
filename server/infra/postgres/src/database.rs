@@ -2,13 +2,17 @@ use std::sync::Arc;
 
 use infra_kernel::debug::*;
 use uuid::Uuid;
+use sqlx::{
+    PgConnection, PgPool, Postgres, Transaction,
+    postgres::{PgConnectOptions, PgPoolOptions},
+};
 
 pub mod sql;
 
-pub use sql::postgresql::{PostgresClient, TenantDbErr, TenantTransaction};
+pub use sql::postgresql::{PostgresCli, TenantDbErr, TenantTransaction};
 
 pub struct DatabaseAdapter {
-    client: PostgresClient,
+    client: PostgresCli,
 }
 
 impl DatabaseAdapter {
@@ -25,13 +29,17 @@ impl DatabaseAdapter {
     }
 
     pub async fn connect(database_url: &str) -> Result<Arc<Self>, TenantDbErr> {
-        let client: PostgresClient = PostgresClient::connect(database_url).await?;
+        let client: PostgresCli = PostgresCli::connect(database_url).await?;
         log_notice!("PostgreSQL shared-table connection pool initialized");
         Ok(Arc::new(Self { client }))
     }
 
-    pub fn client(&self) -> &PostgresClient {
+    pub fn client(&self) -> &PostgresCli {
         &self.client
+    }
+
+    pub fn pool(&self) -> &sqlx::PgPool {
+        self.client.pool()
     }
 
     pub async fn begin_tenant(&self, tenant_id: Uuid) -> Result<TenantTransaction, TenantDbErr> {

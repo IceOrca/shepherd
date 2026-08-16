@@ -9,7 +9,9 @@ use uuid::Uuid;
 
 use crate::account::{AccountPermission, AccountStatus, AccountSummary, AuthorizationCatalog, Role, UserAccount};
 
+#[path = "password_auth/dto.rs"]
 pub mod dto;
+#[path = "password_auth/postgres.rs"]
 pub mod postgres;
 
 pub use postgres::AuthProvider;

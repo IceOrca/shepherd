@@ -8,42 +8,35 @@
 	}
 }
 
-# Public Shepherd application. oauth2-proxy remains the only application
-# ingress, so Caddy must not proxy the browser directly to Axum or Nginx.
+# Public Shepherd application and authentication endpoints.
 {$SHEPHERD_WEB_ORIGIN_PROD:https://erp.example.com} {
 	import common
+	root * {$SHEPHERD_WEB_DIST_ROOT:/var/www/shepherd/dist}
 
-	reverse_proxy {$SHEPHERD_PROD_UPSTREAM:127.0.0.1:4180} {
-		header_up -Forwarded
+	handle_path /auth/v1/* {
+		reverse_proxy {$AUTH_PROD_UPSTREAM:127.0.0.1:9999}
 	}
-}
 
-# Public OIDC endpoints. The master realm, Admin Console, health, and metrics
-# are deliberately unavailable through the public authentication hostname.
-{$KEYCLOAK_HOSTNAME_PROD:https://auth.example.com} {
-	import common
+	@api path /api/* /hr/* /business/*
+	handle @api {
+		reverse_proxy {$SHEPHERD_API_PROD_UPSTREAM:127.0.0.1:8000}
+	}
 
-	@oidc path /realms/shepherd /realms/shepherd/* /resources/* /.well-known/*
-	handle @oidc {
-		reverse_proxy {$KEYCLOAK_PROD_UPSTREAM:127.0.0.1:8081} {
-			header_up -Forwarded
-		}
+	@immutable_assets {
+		path /assets/*
+		file
+	}
+	handle @immutable_assets {
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+
+	handle /assets/* {
+		respond 404
 	}
 
 	handle {
-		respond 404
-	}
-}
-
-# Keycloak administration stays tailnet-only. KC_HOSTNAME_ADMIN must match
-# this full URL so the Admin Console loads its resources from this endpoint.
-https://{$REMOTE_DEV_DNS_NAME}:{$KEYCLOAK_CADDY_HTTPS_PORT:8443} {
-	import common
-
-	@management path /health /health/* /metrics /metrics/*
-	respond @management 404
-
-	reverse_proxy {$KEYCLOAK_PROD_UPSTREAM:127.0.0.1:8081} {
-		header_up -Forwarded
+		try_files {path} /index.html
+		file_server
 	}
 }

@@ -101,7 +101,7 @@ impl NotificationDispatcher {
     }
 
     async fn claim(&self, tenant_id: Uuid) -> Result<Vec<OutboxDelivery>, String> {
-        let mut transaction = self
+        let mut transaction: TenantTransaction = self
             .database
             .begin_tenant(tenant_id)
             .await
@@ -183,7 +183,7 @@ impl NotificationDispatcher {
         outbox_id: Uuid,
         provider_message_id: Option<&str>,
     ) -> Result<(), String> {
-        let mut transaction = self.notification_transaction(tenant_id).await?;
+        let mut transaction: TenantTransaction = self.notification_transaction(tenant_id).await?;
         sqlx::query!(
             r#"
             UPDATE notification_outbox

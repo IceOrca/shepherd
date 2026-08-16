@@ -8,13 +8,13 @@ services:
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_DB: ${POSTGRES_DB_PROD:?required}
       POSTGRES_PORT: ${POSTGRES_PORT_PROD:?required}
-      KEYCLOAK_DB_PASSWORD: !reset null
-      KEYCLOAK_DB_PASSWORD_FILE: /run/secrets/keycloak_db_password
+      AUTH_DB_PASSWORD: !reset null
+      AUTH_DB_PASSWORD_FILE: /run/secrets/auth_db_password
     secrets:
       - source: postgres_password
         target: postgres_password
-      - source: keycloak_db_password
-        target: keycloak_db_password
+      - source: auth_db_password
+        target: auth_db_password
     mem_limit: ${POSTGRES_MEMORY_LIMIT:-1g}
     cpus: ${POSTGRES_CPU_LIMIT:-1.5}
     pids_limit: ${POSTGRES_PIDS_LIMIT:-128}
@@ -49,10 +49,10 @@ services:
       REDIS_QUEUE_URL: !reset null
       TRUSTED_PROXY_CIDRS: 127.0.0.1/32,::1/128,172.16.0.0/12
       RUST_LOG: ${RUST_LOG:-info}
-      KEYCLOAK_ISSUER_URL: ${KEYCLOAK_ISSUER_URL_PROD:?required}
-      KEYCLOAK_JWKS_URL: ${KEYCLOAK_JWKS_URL_PROD:-http://keycloak:8081/realms/shepherd/protocol/openid-connect/certs}
-      KEYCLOAK_AUDIENCE: ${KEYCLOAK_API_AUDIENCE_PROD:-shepherd-api}
-      KEYCLOAK_ACCEPT_FORWARDED_ACCESS_TOKEN: "true"
+      AUTH_ISSUER_URL: ${AUTH_PUBLIC_URL_PROD:?required}
+      AUTH_JWKS_URL: http://supabase-auth:9999/.well-known/jwks.json
+      AUTH_AUDIENCE: ${AUTH_AUDIENCE_PROD:-authenticated}
+      AUTH_JWT_ALGORITHMS: ${AUTH_JWT_ALGORITHMS_PROD:-EdDSA}
     secrets:
       - source: server_prod_env
         target: server_prod_env
@@ -64,91 +64,56 @@ services:
     stop_grace_period: 30s
 
   client:
+    # Production assets are exported from Dockerfile.prod and served by host Caddy.
+    profiles: ["build-only"]
     build:
       context: ./client/web
       dockerfile: Dockerfile.prod
-      target: runner
-    image: iceorca/shepherd-cli:0.1.0
-    restart: unless-stopped
+      target: builder
+    image: iceorca/shepherd-cli-builder:0.1.0
+    restart: "no"
     command: !reset null
     env_file: !reset []
     volumes: !reset []
-    ports: !override
-      - "127.0.0.1:${FRONTEND_HTTP_PORT:?required}:80"
-    mem_limit: ${FRONTEND_MEMORY_LIMIT:-128m}
-    cpus: ${FRONTEND_CPU_LIMIT:-0.25}
-    pids_limit: ${FRONTEND_PIDS_LIMIT:-64}
+    ports: !reset []
 
-  keycloak:
+  supabase-auth:
     restart: unless-stopped
-    entrypoint: ["/bin/bash", "-ec"]
-    command:
-      - |
-        export KC_DB_PASSWORD="$$(< /run/secrets/keycloak_db_password)"
-        export KC_BOOTSTRAP_ADMIN_PASSWORD="$$(< /run/secrets/keycloak_admin_password)"
-        export OAUTH2_PROXY_CLIENT_SECRET="$$(< /run/secrets/oauth2_proxy_client_secret)"
-        exec /opt/keycloak/bin/kc.sh start --import-realm
+    env_file: !reset []
     environment:
-      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME_PROD:?required}
-      KC_BOOTSTRAP_ADMIN_PASSWORD: !reset null
-      KC_DB_PASSWORD: !reset null
-      KC_HOSTNAME: ${KEYCLOAK_HOSTNAME_PROD:?required}
-      KC_HOSTNAME_ADMIN: ${KEYCLOAK_ADMIN_URL_PROD:?required}
-      KC_HOSTNAME_STRICT: "true"
-      KC_PROXY_HEADERS: xforwarded
-      OAUTH2_PROXY_CLIENT_SECRET: !reset null
-      OAUTH2_PROXY_REDIRECT_URL_PROD: ${OAUTH2_PROXY_REDIRECT_URL_PROD:?required}
-      SHEPHERD_WEB_ORIGIN_PROD: ${SHEPHERD_WEB_ORIGIN_PROD:?required}
-      KEYCLOAK_DEV_USER_PASSWORD: !reset null
+      API_EXTERNAL_URL: ${AUTH_PUBLIC_URL_PROD:?required}
+      GOTRUE_SITE_URL: ${SHEPHERD_WEB_ORIGIN_PROD:?required}
+      GOTRUE_URI_ALLOW_LIST: ${AUTH_REDIRECT_ALLOW_LIST_PROD:-${SHEPHERD_WEB_ORIGIN_PROD}/**}
+      GOTRUE_DB_DATABASE_URL: ${AUTH_DATABASE_URL_PROD:?required}
+      GOTRUE_JWT_SECRET: ${AUTH_JWT_SECRET_PROD:?required}
+      GOTRUE_JWT_KEYS: ${AUTH_JWT_KEYS_PROD:?required}
+      GOTRUE_JWT_ISSUER: ${AUTH_PUBLIC_URL_PROD:?required}
+      GOTRUE_JWT_AUD: ${AUTH_AUDIENCE_PROD:-authenticated}
+      GOTRUE_JWT_EXP: ${AUTH_JWT_EXPIRY_SECS_PROD:-900}
+      GOTRUE_DISABLE_SIGNUP: "true"
+      GOTRUE_MAILER_AUTOCONFIRM: "false"
+      GOTRUE_SMTP_ADMIN_EMAIL: ${AUTH_SMTP_ADMIN_EMAIL_PROD:?required}
+      GOTRUE_SMTP_HOST: ${AUTH_SMTP_HOST_PROD:?required}
+      GOTRUE_SMTP_PORT: ${AUTH_SMTP_PORT_PROD:?required}
+      GOTRUE_SMTP_USER: ${AUTH_SMTP_USER_PROD:?required}
+      GOTRUE_SMTP_PASS: ${AUTH_SMTP_PASSWORD_PROD:?required}
+      GOTRUE_SMTP_SENDER_NAME: ${AUTH_SMTP_SENDER_NAME_PROD:-Shepherd}
+      GOTRUE_EXTERNAL_GOOGLE_ENABLED: ${AUTH_GOOGLE_ENABLED_PROD:-false}
+      GOTRUE_EXTERNAL_GOOGLE_CLIENT_ID: ${AUTH_GOOGLE_CLIENT_ID_PROD:-}
+      GOTRUE_EXTERNAL_GOOGLE_SECRET: ${AUTH_GOOGLE_CLIENT_SECRET_PROD:-}
+      GOTRUE_EXTERNAL_GOOGLE_REDIRECT_URI: ${AUTH_PUBLIC_URL_PROD:?required}/callback
+      GOTRUE_EXTERNAL_FACEBOOK_ENABLED: ${AUTH_FACEBOOK_ENABLED_PROD:-false}
+      GOTRUE_EXTERNAL_FACEBOOK_CLIENT_ID: ${AUTH_FACEBOOK_CLIENT_ID_PROD:-}
+      GOTRUE_EXTERNAL_FACEBOOK_SECRET: ${AUTH_FACEBOOK_CLIENT_SECRET_PROD:-}
+      GOTRUE_EXTERNAL_FACEBOOK_REDIRECT_URI: ${AUTH_PUBLIC_URL_PROD:?required}/callback
     ports: !override
-      - "127.0.0.1:${KEYCLOAK_EDGE_PORT_PROD:-8081}:8081"
+      - "127.0.0.1:${AUTH_EDGE_PORT_PROD:-9999}:9999"
     expose:
-      - "8081"
-    volumes: !override
-      - ./deploy/keycloak/prod:/opt/keycloak/data/import:ro
-    secrets:
-      - source: keycloak_db_password
-        target: keycloak_db_password
-      - source: keycloak_admin_password
-        target: keycloak_admin_password
-      - source: oauth2_proxy_client_secret
-        target: oauth2_proxy_client_secret
-    mem_limit: ${KEYCLOAK_MEMORY_LIMIT:-2g}
-    cpus: ${KEYCLOAK_CPU_LIMIT:-2}
-    pids_limit: ${KEYCLOAK_PIDS_LIMIT:-256}
-    stop_grace_period: 30s
-
-  oauth2-proxy:
-    restart: unless-stopped
-    environment:
-      OAUTH2_PROXY_CLIENT_ID: ${OAUTH2_PROXY_CLIENT_ID_PROD:?required}
-      OAUTH2_PROXY_CLIENT_SECRET: !reset null
-      OAUTH2_PROXY_CLIENT_SECRET_FILE: /run/secrets/oauth2_proxy_client_secret
-      OAUTH2_PROXY_COOKIE_SECRET: !reset null
-      OAUTH2_PROXY_COOKIE_SECRET_FILE: /run/secrets/oauth2_proxy_cookie_secret
-      OAUTH2_PROXY_OIDC_ISSUER_URL: ${KEYCLOAK_ISSUER_URL_PROD:?required}
-      OAUTH2_PROXY_REDIRECT_URL: ${OAUTH2_PROXY_REDIRECT_URL_PROD:?required}
-      OAUTH2_PROXY_ALLOWED_ROLES: ${OAUTH2_PROXY_ALLOWED_ROLES_PROD:?required}
-      # Keep proxy sessions isolated from Shepherd's Redis DB 0.
-      OAUTH2_PROXY_REDIS_CONNECTION_URL: redis://redis-cache:6379/1
-      OAUTH2_PROXY_UPSTREAMS: http://server:${BACKEND_PORT_PROD:?required}/api/,http://server:${BACKEND_PORT_PROD:?required}/hr/,http://server:${BACKEND_PORT_PROD:?required}/business/,http://client:80/
-      OAUTH2_PROXY_COOKIE_NAME: __Host-shepherd_session
-      OAUTH2_PROXY_COOKIE_SECURE: "true"
-      OAUTH2_PROXY_REVERSE_PROXY: "true"
-      OAUTH2_PROXY_TRUSTED_PROXY_IPS: 127.0.0.1/32,::1/128,172.16.0.0/12
-      OAUTH2_PROXY_SKIP_AUTH_ROUTES: ^/login$,^/assets/.*$
-    ports: !override
-      - "127.0.0.1:${OAUTH2_PROXY_EDGE_PORT_PROD:-4180}:4180"
-    expose:
-      - "4180"
-    secrets:
-      - source: oauth2_proxy_client_secret
-        target: oauth2_proxy_client_secret
-      - source: oauth2_proxy_cookie_secret
-        target: oauth2_proxy_cookie_secret
-    mem_limit: ${OAUTH2_PROXY_MEMORY_LIMIT:-128m}
-    cpus: ${OAUTH2_PROXY_CPU_LIMIT:-0.25}
-    pids_limit: ${OAUTH2_PROXY_PIDS_LIMIT:-64}
+      - "9999"
+    mem_limit: ${AUTH_MEMORY_LIMIT:-256m}
+    cpus: ${AUTH_CPU_LIMIT:-0.5}
+    pids_limit: ${AUTH_PIDS_LIMIT:-128}
+    stop_grace_period: 15s
 
   # Development Caddy is replaced by the host edge in production.
   caddy:
@@ -166,11 +131,5 @@ secrets:
     file: ${SVR_SECRETS_DIR:?SVR_SECRETS_DIR_must_be_set}/postgres_pw
   server_prod_env:
     file: ${SVR_SECRETS_DIR:?SVR_SECRETS_DIR_must_be_set}/server.prod.env
-  keycloak_db_password:
-    file: ${SVR_SECRETS_DIR:?SVR_SECRETS_DIR_must_be_set}/keycloak_db_password
-  keycloak_admin_password:
-    file: ${SVR_SECRETS_DIR:?SVR_SECRETS_DIR_must_be_set}/keycloak_admin_password
-  oauth2_proxy_client_secret:
-    file: ${SVR_SECRETS_DIR:?SVR_SECRETS_DIR_must_be_set}/oauth2_proxy_client_secret
-  oauth2_proxy_cookie_secret:
-    file: ${SVR_SECRETS_DIR:?SVR_SECRETS_DIR_must_be_set}/oauth2_proxy_cookie_secret
+  auth_db_password:
+    file: ${SVR_SECRETS_DIR:?SVR_SECRETS_DIR_must_be_set}/auth_db_password

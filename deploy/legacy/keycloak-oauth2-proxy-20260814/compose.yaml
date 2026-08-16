@@ -1,0 +1,244 @@
+services:
+  postgres-db:
+    image: postgres:18-alpine
+    container_name: shepherd-postgresql
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      PG_APP_USER: ${PG_APP_USER}
+      PG_APP_PASSWORD: ${PG_APP_PASSWORD}
+      KEYCLOAK_DB: ${KEYCLOAK_DB}
+      KEYCLOAK_DB_USER: ${KEYCLOAK_DB_USER}
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
+      SHEPHERD_POSTGRES_BOOTSTRAP_IN_CONTAINER: "1"
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:${POSTGRES_PORT:-5432}"
+    volumes:
+      - pg_data:/var/lib/postgresql
+      - ./scripts/bootstrap-postgres.sh:/docker-entrypoint-initdb.d/10-bootstrap-postgres.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  redis-cache:
+    image: redis:8-alpine
+    container_name: shepherd-redis
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:${REDIS_PORT:-6379}"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+      target: builder
+    image: iceorca/shepherd-srv:0.1.0_dev
+    container_name: shepherd-server
+    working_dir: /app/shepherd_server
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8000}:${BACKEND_PORT:-8000}"
+    env_file:
+      - ./env_file_server
+    environment:
+      APP_ENV: development
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_CACHE_URL: ${REDIS_CACHE_URL}
+      REDIS_QUEUE_URL: ${REDIS_QUEUE_URL}
+      HOST_IP: 0.0.0.0
+      HOST_PORT: ${BACKEND_PORT:-8000}
+      TRUSTED_PROXY_CIDRS: 127.0.0.1/32,::1/128,172.16.0.0/12
+      RUST_LOG: ${RUST_LOG:-debug}
+      KEYCLOAK_ISSUER_URL: ${KEYCLOAK_ISSUER_URL:-}
+      KEYCLOAK_JWKS_URL: http://keycloak:8081/realms/shepherd/protocol/openid-connect/certs
+      KEYCLOAK_AUDIENCE: shepherd-api
+      KEYCLOAK_ACCEPT_FORWARDED_ACCESS_TOKEN: "true"
+    volumes:
+      - ./server:/app/shepherd_server
+      - cargo_registry:/usr/local/cargo/registry
+      - cargo_git:/usr/local/cargo/git
+      - server_target:/app/shepherd_server/target
+    command: sleep infinity
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+
+  client:
+    build:
+      context: ./client/web
+      dockerfile: Dockerfile
+      target: builder
+    image: iceorca/shepherd-cli:0.1.0_dev
+    container_name: shepherd-client
+    working_dir: /app/shepherd_client
+    ports:
+      - "127.0.0.1:${FRONTEND_DEV_PORT:-5173}:${FRONTEND_DEV_PORT:-5173}"
+    env_file:
+      - ./env_file_client
+    environment:
+      VITE_SHEPHERD_DEV_PROXY_TARGET: http://server:${BACKEND_PORT:-8000}
+    volumes:
+      - ./client/web:/app/shepherd_client
+      - client_node_modules:/app/shepherd_client/node_modules
+      - npm_cache:/root/.npm
+    command: sleep infinity
+    depends_on:
+      - server
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7
+    container_name: shepherd-keycloak
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KC_DB: postgres
+      KC_DB_URL_HOST: postgres-db
+      KC_DB_URL_PORT: ${KC_DB_URL_PORT:-5432}
+      KC_DB_URL_DATABASE: ${KC_DB_URL_DATABASE}
+      KC_DB_USERNAME: ${KC_DB_USERNAME}
+      KC_DB_PASSWORD: ${KC_DB_PASSWORD}
+      KC_HEALTH_ENABLED: "true"
+      KC_HTTP_ENABLED: "true"
+      KC_HTTP_PORT: "8081"
+      KC_HOSTNAME: ${KEYCLOAK_PUBLIC_URL:-}
+      KC_HOSTNAME_ADMIN: ${KEYCLOAK_PUBLIC_URL:-}
+      KC_PROXY_HEADERS: xforwarded
+      OAUTH2_PROXY_REDIRECT_URL: ${OAUTH2_PROXY_REDIRECT_URL:-}
+      SHEPHERD_PUBLIC_URL: ${SHEPHERD_PUBLIC_URL:-}
+      OAUTH2_PROXY_CLIENT_SECRET: ${OAUTH2_PROXY_CLIENT_SECRET}
+      KEYCLOAK_DEV_USER_PASSWORD: ${KEYCLOAK_DEV_USER_PASSWORD}
+    ports:
+      - "127.0.0.1:8081:8081"
+    volumes:
+      - ./deploy/keycloak/dev:/opt/keycloak/data/import:ro
+    networks:
+      default:
+        aliases:
+          - keycloak.localhost
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "{ printf 'HEAD /health/ready HTTP/1.0\\r\\n\\r\\n' >&0; grep 'HTTP/1.0 200'; } 0<>/dev/tcp/localhost/9000",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.3
+    container_name: shepherd-oauth2-proxy
+    environment:
+      OAUTH2_PROXY_PROVIDER: keycloak-oidc
+      OAUTH2_PROXY_CLIENT_ID: ${OAUTH2_PROXY_CLIENT_ID}
+      OAUTH2_PROXY_CLIENT_SECRET: ${OAUTH2_PROXY_CLIENT_SECRET}
+      OAUTH2_PROXY_OIDC_ISSUER_URL: ${KEYCLOAK_ISSUER_URL:-}
+      OAUTH2_PROXY_REDIRECT_URL: ${OAUTH2_PROXY_REDIRECT_URL:-}
+      # Use internal backchannel endpoints so Compose can start before Caddy.
+      OAUTH2_PROXY_SKIP_OIDC_DISCOVERY: "true"
+      OAUTH2_PROXY_LOGIN_URL: ${KEYCLOAK_PUBLIC_URL:-}/realms/shepherd/protocol/openid-connect/auth
+      OAUTH2_PROXY_REDEEM_URL: http://keycloak:8081/realms/shepherd/protocol/openid-connect/token
+      OAUTH2_PROXY_OIDC_JWKS_URL: http://keycloak:8081/realms/shepherd/protocol/openid-connect/certs
+      OAUTH2_PROXY_CODE_CHALLENGE_METHOD: S256
+      OAUTH2_PROXY_SCOPE: openid profile email
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      OAUTH2_PROXY_ALLOWED_ROLES: ${OAUTH2_PROXY_ALLOWED_ROLES}
+      OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
+      OAUTH2_PROXY_UPSTREAMS: http://server:${BACKEND_PORT:-8000}/api/,http://server:${BACKEND_PORT:-8000}/hr/,http://server:${BACKEND_PORT:-8000}/business/,http://client:${FRONTEND_DEV_PORT:-5173}/
+      OAUTH2_PROXY_SESSION_STORE_TYPE: redis
+      # Redis DB 1 is reserved for oauth2-proxy session tickets.
+      OAUTH2_PROXY_REDIS_CONNECTION_URL: redis://redis-cache:6379/1
+      OAUTH2_PROXY_COOKIE_NAME: __Host-shepherd_session
+      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET}
+      OAUTH2_PROXY_COOKIE_SECURE: "true"
+      OAUTH2_PROXY_COOKIE_HTTPONLY: "true"
+      OAUTH2_PROXY_COOKIE_SAMESITE: lax
+      OAUTH2_PROXY_COOKIE_EXPIRE: 8h
+      OAUTH2_PROXY_COOKIE_REFRESH: 4m
+      OAUTH2_PROXY_PASS_ACCESS_TOKEN: "true"
+      OAUTH2_PROXY_PASS_AUTHORIZATION_HEADER: "false"
+      OAUTH2_PROXY_PASS_BASIC_AUTH: "false"
+      OAUTH2_PROXY_PASS_USER_HEADERS: "false"
+      OAUTH2_PROXY_REVERSE_PROXY: "true"
+      OAUTH2_PROXY_TRUSTED_PROXY_IPS: 127.0.0.1/32,::1/128,172.16.0.0/12
+      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+      # Keep only the login shell and Vite/static assets public. Business APIs
+      # remain behind oauth2-proxy and backend JWT validation.
+      OAUTH2_PROXY_SKIP_AUTH_ROUTES: ^/login$,^/assets/.*$,^/src/.*$,^/@vite/.*$,^/@react-refresh$,^/node_modules/.*$
+    ports:
+      - "127.0.0.1:4180:4180"
+    depends_on:
+      keycloak:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+      server:
+        condition: service_started
+      client:
+        condition: service_started
+
+  caddy:
+    image: caddy:2.11-alpine
+    container_name: shepherd-caddy
+    restart: unless-stopped
+    environment:
+      REMOTE_DEV_DNS_NAME: ${REMOTE_DEV_DNS_NAME}
+      KEYCLOAK_CADDY_HTTPS_PORT: ${KEYCLOAK_CADDY_HTTPS_PORT:-8443}
+      SHEPHERD_DEV_UPSTREAM: oauth2-proxy:4180
+      KEYCLOAK_DEV_UPSTREAM: keycloak:8081
+    ports:
+      - "${REMOTE_DEV_BIND_IP:-127.0.0.1}:80:80"
+      - "${REMOTE_DEV_BIND_IP:-127.0.0.1}:443:443"
+      - "${REMOTE_DEV_BIND_IP:-127.0.0.1}:443:443/udp"
+      - "${REMOTE_DEV_BIND_IP:-127.0.0.1}:${KEYCLOAK_CADDY_HTTPS_PORT:-8443}:${KEYCLOAK_CADDY_HTTPS_PORT:-8443}"
+      - "${REMOTE_DEV_BIND_IP:-127.0.0.1}:${KEYCLOAK_CADDY_HTTPS_PORT:-8443}:${KEYCLOAK_CADDY_HTTPS_PORT:-8443}/udp"
+    volumes:
+      - ./deploy/Caddy/dev/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "caddy",
+          "validate",
+          "--config",
+          "/etc/caddy/Caddyfile",
+          "--adapter",
+          "caddyfile",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    depends_on:
+      keycloak:
+        condition: service_healthy
+      oauth2-proxy:
+        condition: service_started
+
+volumes:
+  pg_data:
+  cargo_registry:
+  cargo_git:
+  server_target:
+  client_node_modules:
+  npm_cache:
+  caddy_data:
+  caddy_config:

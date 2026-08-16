@@ -11,6 +11,6 @@ pub struct AppManifest {
 }
 
 /// Contract implemented by each application composition crate.
-pub trait FoundationApp: Send + Sync + 'static {
+pub trait InfraAppManifest: Send + Sync + 'static {
     fn manifest(&self) -> AppManifest;
 }

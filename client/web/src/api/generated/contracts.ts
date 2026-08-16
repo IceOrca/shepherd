@@ -1,6 +1,12 @@
 // This file is generated from Rust API DTOs. Do not edit it manually.
 
-export type CurrentUserProfile = { tenant_id: string, account_id: string, username: string, primary_role: string, roles: Array<string>, permissions: Array<string>, };
+export type CurrentUserProfile = { tenant_id: string, account_id: string, username: string, email: string | null, primary_role: string, roles: Array<string>, permissions: Array<string>, };
+
+export type AuthUserSummary = { auth_user_id: string, account_id: string, username: string, email: string | null, primary_role: string, account_status: string, provider_status: string, email_confirmed: boolean, created_at: string | null, last_sign_in_at: string | null, };
+
+export type CreateAuthUserRequest = { username: string, email: string, password: string | null, primary_role: string, };
+
+export type SetAuthUserStatusRequest = { disabled: boolean, };
 
 export type BranchSummary = { id: string, code: string, name: string, time_zone: string, };
 

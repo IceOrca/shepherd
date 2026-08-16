@@ -65,7 +65,7 @@ reqwest = { version = "*", default-features = false, features = ["json", "rustls
 # reusable infra crates
 infra-kernel = { path = "infra/kernel" }
 infra-ntree = { path = "infra/ntree" }
-infra-auth = { path = "infra/auth", default-features = true }
+infra-auth = { path = "infra/auth" }
 infra-authz = { path = "infra/authz" }
 infra-postgres = { path = "infra/postgres" }
 infra-redis = { path = "infra/redis" }

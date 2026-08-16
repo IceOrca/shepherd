@@ -1,0 +1,28 @@
+//! Provider-neutral access-token validation through a remote JWKS endpoint.
+//!
+//! This module authenticates an OIDC subject and maps it to the reusable
+//! tenant/account authorization model. Applications provide their permission
+//! codes when mounting administration routes.
+
+use std::sync::Arc;
+
+use axum::Router;
+
+use crate::AuthService;
+
+pub mod account;
+pub mod auth_admin;
+mod claims;
+mod config;
+mod error;
+pub mod middleware;
+mod service;
+
+pub use claims::{AccessTokenClaims, Audience, AuthenticatedPrincipal};
+pub use config::ExtProviderConfig;
+pub use error::AccessTokenError;
+pub use service::ExtProvider;
+
+pub fn routes(auth: Arc<AuthService>, policy: auth_admin::AuthAdminPolicy) -> Router {
+    account::routes(Arc::clone(&auth)).merge(auth_admin::routes(auth, policy))
+}

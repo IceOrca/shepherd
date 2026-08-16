@@ -313,7 +313,7 @@ mod internal_hierarchy {
             childlist.len()
         }
 
-        fn childlist_append(childlist: &mut ChildList<SharedPtr<Self>>, child: &SharedPtr<Self>) -> () {
+        fn childlist_append(childlist: &mut ChildList<SharedPtr<Self>>, child: &SharedPtr<Self>) {
             cfg_if::cfg_if! {
                 if #[cfg(feature = "use-VecDeque-as-childlist")] {
                     childlist.push_back(SharedPtr::clone(child));
@@ -323,7 +323,7 @@ mod internal_hierarchy {
             }
         }
 
-        fn childlist_append_front(childlist: &mut ChildList<SharedPtr<Self>>, child: &SharedPtr<Self>) -> () {
+        fn childlist_append_front(childlist: &mut ChildList<SharedPtr<Self>>, child: &SharedPtr<Self>) {
             cfg_if::cfg_if! {
                 if #[cfg(feature = "use-VecDeque-as-childlist")] {
                     childlist.push_front(SharedPtr::clone(child));
@@ -382,29 +382,28 @@ mod internal_hierarchy {
             let hier_info: RefGuard<Hierarchy<T>> = Self::acquire_guard(&pself.hier_info);
             let children: &ChildList<SharedPtr<Self>> = &hier_info.children;
 
-            if position < Self::childlist_len(&children) {
+            if position < Self::childlist_len(children) {
                 Some(SharedPtr::clone(&children[position]))
             } else {
                 None
             }
         }
 
-        fn reindex_childlist(childlist: &mut ChildList<SharedPtr<Self>>, start_from: usize) -> () {
-            for position in start_from..childlist.len() {
-                let child: &mut SharedPtr<Self> = &mut childlist[position];
+        fn reindex_childlist(childlist: &mut ChildList<SharedPtr<Self>>, start_from: usize) {
+            for (position, child) in childlist.iter().skip(start_from).enumerate() {
                 let mut hier_info: RefGuardMut<Hierarchy<T>> = Self::acquire_guard_mut(&child.hier_info);
-                let hier_info: &mut Hierarchy<T> = &mut *hier_info;
+                let hier_info: &mut Hierarchy<T> = &mut hier_info;
 
                 hier_info.position = position;
             }
         }
 
-        fn set_parent(pself: &SharedPtr<Self>, parent: WeakPtr<Self>) -> () {
+        fn set_parent(pself: &SharedPtr<Self>, parent: WeakPtr<Self>) {
             let mut parent_cell: RefGuardMut<WeakPtr<Self>> = Self::acquire_guard_mut(&pself.parent);
             *parent_cell = parent;
         }
 
-        fn detach_subtree_root(pself: &SharedPtr<Self>) -> () {
+        fn detach_subtree_root(pself: &SharedPtr<Self>) {
             Self::set_parent(pself, WeakPtr::new());
             {
                 let mut hier_info: RefGuardMut<Hierarchy<T>> = Self::acquire_guard_mut(&pself.hier_info);
@@ -419,7 +418,7 @@ mod internal_hierarchy {
         }
 
         #[cfg(feature = "depth-inlined")]
-        fn rebase_depths(pself: &SharedPtr<Self>, depth: u16) -> () {
+        fn rebase_depths(pself: &SharedPtr<Self>, depth: u16) {
             let children: Vec<SharedPtr<Self>> = {
                 let mut hier_info: RefGuardMut<Hierarchy<T>> = Self::acquire_guard_mut(&pself.hier_info);
                 hier_info.depth = depth;
@@ -606,13 +605,13 @@ mod internal_hierarchy {
             Fcn: Fn(&T) -> bool,
         {
             let hier_info: RefGuard<Hierarchy<T>> = Self::acquire_guard(&pself.hier_info);
-            let hier_info: &Hierarchy<T> = &*hier_info;
+            let hier_info: &Hierarchy<T> = &hier_info;
             let children: &ChildList<SharedPtr<Self>> = &hier_info.children;
 
             for pchild in children.iter() {
                 let child_data: RefGuard<T> = Self::acquire_guard(&pchild.data);
                 if predicate(&*child_data) {
-                    return Some(SharedPtr::clone(&pchild));
+                    return Some(SharedPtr::clone(pchild));
                 }
             }
 
@@ -624,10 +623,10 @@ mod internal_hierarchy {
             Fcn: Fn(&T) -> bool,
         {
             let hier_info: RefGuard<Hierarchy<T>> = Self::acquire_guard(&pself.hier_info);
-            let hier_info: &Hierarchy<T> = &*hier_info;
+            let hier_info: &Hierarchy<T> = &hier_info;
             let children: &ChildList<SharedPtr<Self>> = &hier_info.children;
 
-            let child_idx = children.iter().position(|pchild| {
+            let child_idx: Option<usize> = children.iter().position(|pchild: &SharedPtr<TreeNode<T>>| {
                 let child_data: RefGuard<T> = Self::acquire_guard(&pchild.data);
                 predicate(&*child_data)
             });
@@ -639,7 +638,7 @@ mod internal_hierarchy {
             Fcn: Fn(&T) -> V,
         {
             let data: RefGuard<T> = Self::acquire_guard(&pself.data);
-            let data: &T = &*data;
+            let data: &T = &data;
             get(data)
         }
 
@@ -648,7 +647,7 @@ mod internal_hierarchy {
             Fcn: Fn(&mut T, &V) -> bool,
         {
             let mut data: RefGuardMut<T> = Self::acquire_guard_mut(&pself.data);
-            let data: &mut T = &mut *data;
+            let data: &mut T = &mut data;
             set(data, value)
         }
     } /* impl<T> TreeNode<T> */
@@ -994,7 +993,7 @@ impl<T> IntoIterator for NTree<T> {
     }
 }
 
-impl<'a, T> IntoIterator for &'a NTree<T> {
+impl<T> IntoIterator for &NTree<T> {
     type Item = Entry<T>;
     type IntoIter = Iter<T>;
 
@@ -1012,7 +1011,7 @@ impl<'a, T> IntoIterator for &'a NTree<T> {
     }
 }
 
-impl<'a, T> IntoIterator for &'a mut NTree<T> {
+impl<T> IntoIterator for &mut NTree<T> {
     type Item = Entry<T>;
     type IntoIter = Iter<T>;
 

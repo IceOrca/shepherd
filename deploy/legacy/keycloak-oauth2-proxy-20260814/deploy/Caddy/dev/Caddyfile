@@ -1,0 +1,34 @@
+(common) {
+	encode zstd gzip
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		Referrer-Policy same-origin
+	}
+}
+
+# Caddy creates and renews certificates with its persisted internal CA.
+# Trust the exported CA root on each development browser/device.
+https://{$REMOTE_DEV_DNS_NAME} {
+	import common
+	tls internal
+
+	reverse_proxy {$SHEPHERD_DEV_UPSTREAM:oauth2-proxy:4180} {
+		# Caddy writes fresh X-Forwarded-* headers for oauth2-proxy.
+		header_up -Forwarded
+	}
+}
+
+# Tailscale does not issue certificates for arbitrary subdomains. Reuse the
+# node hostname on a dedicated HTTPS port for Keycloak and its Admin Console.
+https://{$REMOTE_DEV_DNS_NAME}:{$KEYCLOAK_CADDY_HTTPS_PORT:8443} {
+	import common
+	tls internal
+
+	@management path /health /health/* /metrics /metrics/*
+	respond @management 404
+
+	reverse_proxy {$KEYCLOAK_DEV_UPSTREAM:keycloak:8081} {
+		header_up -Forwarded
+	}
+}
