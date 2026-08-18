@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tracing::{error, warn, info, debug, trace};
 use crate::features::organization::core::{BranchSummary, FacilitySummary, OrganizationError, OrganizationRepo};
+use infra_postgres::{DatabaseAdapter, TenantDbErr};
+use sqlx::PgConnection;
+use tracing::{error, info};
 use uuid::Uuid;
-
-use infra_postgres::DatabaseAdapter;
 
 pub struct OrganizationProvider {
     db: Arc<DatabaseAdapter>,
@@ -20,37 +20,33 @@ impl OrganizationProvider {
 #[async_trait]
 impl OrganizationRepo for OrganizationProvider {
     async fn list_active_branches(&self, tenant_id: Uuid) -> Result<Vec<BranchSummary>, OrganizationError> {
-        let mut transaction = self.db.begin_tenant(tenant_id).await.map_err(|error| {
-            error!(
-                "Branch list tenant transaction failed: tenant_id={} error={}",
-                tenant_id, error
-            );
-            OrganizationError::BackendUnavailable
-        })?;
-        let branches: Vec<BranchSummary> = sqlx::query_as!(
-            BranchSummary,
-            r#"
-            SELECT id, code, name, time_zone
-            FROM branches
-            WHERE tenant_id = $1
-              AND status = 'active'
-            ORDER BY lower(name), code
-            "#,
-            tenant_id,
-        )
-        .fetch_all(transaction.connection())
-        .await
-        .map_err(|error| {
-            error!("Branch list failed: tenant_id={} error={}", tenant_id, error);
-            OrganizationError::BackendUnavailable
-        })?;
-        transaction.commit().await.map_err(|error| {
-            error!(
-                "Branch list transaction commit failed: tenant_id={} error={}",
-                tenant_id, error
-            );
-            OrganizationError::BackendUnavailable
-        })?;
+        let branches: Vec<BranchSummary> = self
+            .db
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                sqlx::query_as!(
+                    BranchSummary,
+                    r#"
+                    SELECT id, code, name, time_zone
+                    FROM branches
+                    WHERE tenant_id = $1
+                      AND status = 'active'
+                    ORDER BY lower(name), code
+                    "#,
+                    tenant_id,
+                )
+                .fetch_all(connection)
+                .await
+            })
+            .await
+            .map_err(|database_error: TenantDbErr| {
+                error!(
+                    operation = "organization.list_active_branches",
+                    tenant_id = %tenant_id,
+                    reason = %database_error,
+                    "Active branch list tenant operation failed"
+                );
+                OrganizationError::BackendUnavailable
+            })?;
         info!(
             "Active tenant branches loaded: tenant_id={} branches={}",
             tenant_id,
@@ -60,41 +56,37 @@ impl OrganizationRepo for OrganizationProvider {
     }
 
     async fn list_active_facilities(&self, tenant_id: Uuid) -> Result<Vec<FacilitySummary>, OrganizationError> {
-        let mut transaction = self.db.begin_tenant(tenant_id).await.map_err(|error| {
-            error!(
-                "Facility list tenant transaction failed: tenant_id={} error={}",
-                tenant_id, error
-            );
-            OrganizationError::BackendUnavailable
-        })?;
-        let facilities: Vec<FacilitySummary> = sqlx::query_as!(
-            FacilitySummary,
-            r#"
-            SELECT facility.id, facility.branch_id, facility.code, facility.name
-            FROM facilities AS facility
-            INNER JOIN branches AS branch
-                ON branch.tenant_id = facility.tenant_id
-               AND branch.id = facility.branch_id
-               AND branch.status = 'active'
-            WHERE facility.tenant_id = $1
-              AND facility.status = 'active'
-            ORDER BY lower(branch.name), lower(facility.name), facility.code
-            "#,
-            tenant_id,
-        )
-        .fetch_all(transaction.connection())
-        .await
-        .map_err(|error| {
-            error!("Facility list failed: tenant_id={} error={}", tenant_id, error);
-            OrganizationError::BackendUnavailable
-        })?;
-        transaction.commit().await.map_err(|error| {
-            error!(
-                "Facility list transaction commit failed: tenant_id={} error={}",
-                tenant_id, error
-            );
-            OrganizationError::BackendUnavailable
-        })?;
+        let facilities: Vec<FacilitySummary> = self
+            .db
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                sqlx::query_as!(
+                    FacilitySummary,
+                    r#"
+                    SELECT facility.id, facility.branch_id, facility.code, facility.name
+                    FROM facilities AS facility
+                    INNER JOIN branches AS branch
+                        ON branch.tenant_id = facility.tenant_id
+                       AND branch.id = facility.branch_id
+                       AND branch.status = 'active'
+                    WHERE facility.tenant_id = $1
+                      AND facility.status = 'active'
+                    ORDER BY lower(branch.name), lower(facility.name), facility.code
+                    "#,
+                    tenant_id,
+                )
+                .fetch_all(connection)
+                .await
+            })
+            .await
+            .map_err(|database_error: TenantDbErr| {
+                error!(
+                    operation = "organization.list_active_facilities",
+                    tenant_id = %tenant_id,
+                    reason = %database_error,
+                    "Active facility list tenant operation failed"
+                );
+                OrganizationError::BackendUnavailable
+            })?;
         info!(
             "Active tenant facilities loaded: tenant_id={} facilities={}",
             tenant_id,

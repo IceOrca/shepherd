@@ -56,6 +56,12 @@ CREATE TABLE role_permissions (
     PRIMARY KEY (role_code, permission_code)
 );
 
+CREATE TABLE auth_role_assignment_grants (
+    grantor_role_code TEXT NOT NULL REFERENCES roles (code) ON DELETE CASCADE,
+    target_role_code TEXT NOT NULL REFERENCES roles (code) ON DELETE CASCADE,
+    PRIMARY KEY (grantor_role_code, target_role_code)
+);
+
 CREATE INDEX role_permissions_permission_code_idx ON role_permissions (permission_code);
 
 -- A Shepherd account is a tenant-owned business actor, not a credential.
@@ -160,6 +166,50 @@ CREATE TABLE account_permissions (
     CONSTRAINT account_permissions_expiry_valid CHECK (expires_at IS NULL OR expires_at > granted_at)
 );
 
+CREATE TABLE auth_account_provisioning_requests (
+    tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
+    idempotency_key UUID NOT NULL,
+    request_fingerprint TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'processing',
+    auth_user_id UUID,
+    account_id UUID,
+    requested_by_account_id UUID NOT NULL,
+    locked_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMPTZ,
+    last_error_code TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (tenant_id, idempotency_key),
+    CONSTRAINT auth_account_provisioning_account_tenant_fk
+        FOREIGN KEY (tenant_id, account_id)
+        REFERENCES accounts (tenant_id, id)
+        ON DELETE CASCADE,
+    CONSTRAINT auth_account_provisioning_requested_by_tenant_fk
+        FOREIGN KEY (tenant_id, requested_by_account_id)
+        REFERENCES accounts (tenant_id, id)
+        ON DELETE RESTRICT,
+    CONSTRAINT auth_account_provisioning_fingerprint_valid CHECK (
+        request_fingerprint ~ '^[0-9a-f]{64}$'
+    ),
+    CONSTRAINT auth_account_provisioning_status_valid CHECK (
+        status IN ('processing', 'completed', 'failed')
+    ),
+    CONSTRAINT auth_account_provisioning_completed_state_valid CHECK (
+        (status = 'completed' AND auth_user_id IS NOT NULL AND account_id IS NOT NULL AND completed_at IS NOT NULL)
+        OR (status <> 'completed' AND completed_at IS NULL)
+    ),
+    CONSTRAINT auth_account_provisioning_error_valid CHECK (
+        last_error_code IS NULL OR (
+            last_error_code = btrim(last_error_code)
+            AND char_length(last_error_code) BETWEEN 1 AND 100
+        )
+    ),
+    CONSTRAINT auth_account_provisioning_updated_after_created CHECK (updated_at >= created_at)
+);
+
+CREATE INDEX auth_account_provisioning_tenant_status_idx
+    ON auth_account_provisioning_requests (tenant_id, status, locked_at);
+
 CREATE INDEX account_permissions_tenant_permission_idx
     ON account_permissions (tenant_id, permission_code);
 CREATE INDEX account_permissions_tenant_active_expiry_idx
@@ -184,3 +234,16 @@ VALUES
 INSERT INTO role_permissions (role_code, permission_code)
 SELECT 'tenant_owner', code
 FROM permissions;
+
+INSERT INTO role_permissions (role_code, permission_code)
+VALUES
+    ('supervisor', 'auth.accounts.read'),
+    ('supervisor', 'auth.accounts.create'),
+    ('supervisor', 'auth.roles.read');
+
+INSERT INTO auth_role_assignment_grants (grantor_role_code, target_role_code)
+SELECT 'tenant_owner', code
+FROM roles;
+
+INSERT INTO auth_role_assignment_grants (grantor_role_code, target_role_code)
+VALUES ('supervisor', 'employee');

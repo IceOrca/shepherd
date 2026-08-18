@@ -41,12 +41,14 @@ To rebuild and seed all application development data, run the seed helper:
 sh scripts/dev-data-seeding.sh
 ```
 
-The helper finds or creates that user through GoTrue's admin API, resets only
-the Shepherd development database with SQLx, and links the user's stable `sub`
-to the seeded `acme` owner. The default development login is
-`iceorca@shepherd.local` / `01234567aA`; `DEV_AUTH_EMAIL` and
-`DEV_AUTH_PASSWORD` may override it. The helper never writes directly to
-GoTrue tables.
+The helper creates or updates every user in
+[`scripts/dev-auth-accounts.tsv`](../../scripts/dev-auth-accounts.tsv) through
+GoTrue's admin API, resets only the Shepherd development database with SQLx,
+and links every stable `sub` to its seeded tenant account. The catalog contains
+one owner/director, two managers, and four staff for each development tenant;
+managers map to Shepherd's `supervisor` role and staff map to `employee`. The
+helper never writes directly to GoTrue tables and never prints passwords or
+tokens to its logs.
 
 ## Production
 

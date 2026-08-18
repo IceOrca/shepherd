@@ -12,7 +12,8 @@ use crate::features::{
 };
 use uuid::Uuid;
 
-use infra_postgres::{DatabaseAdapter, TenantTransaction};
+use infra_postgres::{DatabaseAdapter, TenantDbErr, TenantTransaction};
+use sqlx::PgConnection;
 
 pub struct WorkingScheduleProvider {
     database: Arc<DatabaseAdapter>,
@@ -101,37 +102,39 @@ impl From<ScheduleAssignmentRow> for EmployeeScheduleAssignment {
 #[async_trait]
 impl WorkingScheduleRepo for WorkingScheduleProvider {
     async fn list_schedules(&self, tenant_id: Uuid) -> Result<Vec<WorkingSchedule>, HrError> {
-        let mut transaction = self.begin_active_tenant(tenant_id).await?;
-        let schedule_rows: Vec<ScheduleRow> = sqlx::query_as!(
-            ScheduleRow,
-            r#"
-            SELECT id, code, name, time_zone, status, created_at, updated_at
-            FROM hr_working_schedules
-            WHERE tenant_id = $1
-            ORDER BY lower(name), code
-            "#,
-            tenant_id,
-        )
-        .fetch_all(transaction.connection())
-        .await
-        .map_err(|error| database_failure("list working schedules", tenant_id, error))?;
-        let period_rows: Vec<PeriodRow> = sqlx::query_as!(
-            PeriodRow,
-            r#"
-            SELECT id, schedule_id, weekday, start_time, end_time, spans_next_day, unpaid_break_minutes
-            FROM hr_working_schedule_periods
-            WHERE tenant_id = $1
-            ORDER BY schedule_id, weekday, start_time
-            "#,
-            tenant_id,
-        )
-        .fetch_all(transaction.connection())
-        .await
-        .map_err(|error| database_failure("list working schedule periods", tenant_id, error))?;
-        transaction
-            .commit()
+        let (schedule_rows, period_rows): (Vec<ScheduleRow>, Vec<PeriodRow>) = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                let schedule_rows: Vec<ScheduleRow> = sqlx::query_as!(
+                    ScheduleRow,
+                    r#"
+                    SELECT id, code, name, time_zone, status, created_at, updated_at
+                    FROM hr_working_schedules
+                    WHERE tenant_id = $1
+                    ORDER BY lower(name), code
+                    "#,
+                    tenant_id,
+                )
+                .fetch_all(&mut *connection)
+                .await?;
+                let period_rows: Vec<PeriodRow> = sqlx::query_as!(
+                    PeriodRow,
+                    r#"
+                    SELECT id, schedule_id, weekday, start_time, end_time, spans_next_day, unpaid_break_minutes
+                    FROM hr_working_schedule_periods
+                    WHERE tenant_id = $1
+                    ORDER BY schedule_id, weekday, start_time
+                    "#,
+                    tenant_id,
+                )
+                .fetch_all(connection)
+                .await?;
+                Ok((schedule_rows, period_rows))
+            })
             .await
-            .map_err(|error| database_failure("commit working schedule list", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| {
+                tenant_database_failure("list working schedules and periods", tenant_id, error)
+            })?;
 
         let schedules: Vec<WorkingSchedule> = assemble_schedules(schedule_rows, period_rows)?;
         info!(
@@ -143,41 +146,44 @@ impl WorkingScheduleRepo for WorkingScheduleProvider {
     }
 
     async fn find_schedule(&self, tenant_id: Uuid, schedule_id: Uuid) -> Result<Option<WorkingSchedule>, HrError> {
-        let mut transaction = self.begin_active_tenant(tenant_id).await?;
-        let schedule_row: Option<ScheduleRow> = sqlx::query_as!(
-            ScheduleRow,
-            r#"
-            SELECT id, code, name, time_zone, status, created_at, updated_at
-            FROM hr_working_schedules
-            WHERE tenant_id = $1 AND id = $2
-            "#,
-            tenant_id,
-            schedule_id,
-        )
-        .fetch_optional(transaction.connection())
-        .await
-        .map_err(|error| database_failure("find working schedule", tenant_id, error))?;
-        let Some(schedule_row) = schedule_row else {
+        let result: Option<(ScheduleRow, Vec<PeriodRow>)> = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                let schedule_row: Option<ScheduleRow> = sqlx::query_as!(
+                    ScheduleRow,
+                    r#"
+                    SELECT id, code, name, time_zone, status, created_at, updated_at
+                    FROM hr_working_schedules
+                    WHERE tenant_id = $1 AND id = $2
+                    "#,
+                    tenant_id,
+                    schedule_id,
+                )
+                .fetch_optional(&mut *connection)
+                .await?;
+                let Some(schedule_row) = schedule_row else {
+                    return Ok(None);
+                };
+                let period_rows: Vec<PeriodRow> = sqlx::query_as!(
+                    PeriodRow,
+                    r#"
+                    SELECT id, schedule_id, weekday, start_time, end_time, spans_next_day, unpaid_break_minutes
+                    FROM hr_working_schedule_periods
+                    WHERE tenant_id = $1 AND schedule_id = $2
+                    ORDER BY weekday, start_time
+                    "#,
+                    tenant_id,
+                    schedule_id,
+                )
+                .fetch_all(connection)
+                .await?;
+                Ok(Some((schedule_row, period_rows)))
+            })
+            .await
+            .map_err(|error: TenantDbErr| tenant_database_failure("find working schedule", tenant_id, error))?;
+        let Some((schedule_row, period_rows)) = result else {
             return Ok(None);
         };
-        let period_rows: Vec<PeriodRow> = sqlx::query_as!(
-            PeriodRow,
-            r#"
-            SELECT id, schedule_id, weekday, start_time, end_time, spans_next_day, unpaid_break_minutes
-            FROM hr_working_schedule_periods
-            WHERE tenant_id = $1 AND schedule_id = $2
-            ORDER BY weekday, start_time
-            "#,
-            tenant_id,
-            schedule_id,
-        )
-        .fetch_all(transaction.connection())
-        .await
-        .map_err(|error| database_failure("find working schedule periods", tenant_id, error))?;
-        transaction
-            .commit()
-            .await
-            .map_err(|error| database_failure("commit working schedule lookup", tenant_id, error))?;
         Ok(Some(assemble_schedule(schedule_row, period_rows)?))
     }
 
@@ -642,6 +648,16 @@ fn database_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> HrE
     error!(
         "Working schedule database operation failed: operation={} tenant_id={} error={}",
         operation, tenant_id, error
+    );
+    HrError::BackendUnavailable
+}
+
+fn tenant_database_failure(operation: &str, tenant_id: Uuid, error: TenantDbErr) -> HrError {
+    error!(
+        operation,
+        tenant_id = %tenant_id,
+        reason = %error,
+        "Working schedule automatic tenant operation failed"
     );
     HrError::BackendUnavailable
 }

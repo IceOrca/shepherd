@@ -161,7 +161,8 @@ async fn load_account(
         principal.issuer,
         principal.subject,
     )
-    .fetch_optional(db.pool())
+    // The tenant is not known until this global identity mapping is resolved.
+    .fetch_optional(db.global_pool())
     .await
     .map_err(|database_error: sqlx::Error| {
         error!(

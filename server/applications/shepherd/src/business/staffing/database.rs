@@ -333,24 +333,24 @@ struct ResolvedRateRow {
 #[async_trait]
 impl StaffingRepo for StaffingProvider {
     async fn list_customers(&self, tenant_id: Uuid) -> Result<Vec<Customer>, StaffingError> {
-        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
-        let rows: Vec<CustomerRow> = sqlx::query_as!(
-            CustomerRow,
-            r#"
-            SELECT id, code, name, billing_email, status, created_at, updated_at
-            FROM business_customers
-            WHERE tenant_id = $1
-            ORDER BY lower(name), code
-            "#,
-            tenant_id,
-        )
-        .fetch_all(transaction.connection())
-        .await
-        .map_err(|error| database_failure("list customers", tenant_id, error))?;
-        transaction
-            .commit()
+        let rows: Vec<CustomerRow> = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
+                sqlx::query_as!(
+                    CustomerRow,
+                    r#"
+                    SELECT id, code, name, billing_email, status, created_at, updated_at
+                    FROM business_customers
+                    WHERE tenant_id = $1
+                    ORDER BY lower(name), code
+                    "#,
+                    tenant_id,
+                )
+                .fetch_all(connection)
+                .await
+            })
             .await
-            .map_err(|error| database_failure("commit customer list", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_database_failure("list customers", tenant_id, error))?;
         rows.into_iter().map(Customer::try_from).collect()
     }
 
@@ -361,32 +361,32 @@ impl StaffingRepo for StaffingProvider {
         input: &CustomerInput,
         audit_account_id: Uuid,
     ) -> Result<Customer, StaffingError> {
-        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
-        let row: CustomerRow = sqlx::query_as!(
-            CustomerRow,
-            r#"
-            INSERT INTO business_customers (
-                id, tenant_id, code, name, billing_email, status,
-                created_by_account_id, updated_by_account_id
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
-            RETURNING id, code, name, billing_email, status, created_at, updated_at
-            "#,
-            customer_id,
-            tenant_id,
-            input.code,
-            input.name,
-            input.billing_email,
-            input.status.as_code(),
-            audit_account_id,
-        )
-        .fetch_one(transaction.connection())
-        .await
-        .map_err(|error| mutation_failure("create customer", tenant_id, error))?;
-        transaction
-            .commit()
+        let row: CustomerRow = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
+                sqlx::query_as!(
+                    CustomerRow,
+                    r#"
+                    INSERT INTO business_customers (
+                        id, tenant_id, code, name, billing_email, status,
+                        created_by_account_id, updated_by_account_id
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+                    RETURNING id, code, name, billing_email, status, created_at, updated_at
+                    "#,
+                    customer_id,
+                    tenant_id,
+                    input.code,
+                    input.name,
+                    input.billing_email,
+                    input.status.as_code(),
+                    audit_account_id,
+                )
+                .fetch_one(connection)
+                .await
+            })
             .await
-            .map_err(|error| database_failure("commit customer creation", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_mutation_failure("create customer", tenant_id, error))?;
         info!(
             "Staffing customer created: tenant_id={} customer_id={} audit_account_id={}",
             tenant_id, customer_id, audit_account_id
@@ -399,25 +399,25 @@ impl StaffingRepo for StaffingProvider {
         tenant_id: Uuid,
         customer_id: Uuid,
     ) -> Result<Vec<CustomerFacility>, StaffingError> {
-        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
-        let rows: Vec<CustomerFacilityRow> = sqlx::query_as!(
-            CustomerFacilityRow,
-            r#"
-            SELECT id, customer_id, code, name, address, time_zone, status, created_at, updated_at
-            FROM business_customer_facilities
-            WHERE tenant_id = $1 AND customer_id = $2
-            ORDER BY lower(name), code
-            "#,
-            tenant_id,
-            customer_id,
-        )
-        .fetch_all(transaction.connection())
-        .await
-        .map_err(|error| database_failure("list customer facilities", tenant_id, error))?;
-        transaction
-            .commit()
+        let rows: Vec<CustomerFacilityRow> = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
+                sqlx::query_as!(
+                    CustomerFacilityRow,
+                    r#"
+                    SELECT id, customer_id, code, name, address, time_zone, status, created_at, updated_at
+                    FROM business_customer_facilities
+                    WHERE tenant_id = $1 AND customer_id = $2
+                    ORDER BY lower(name), code
+                    "#,
+                    tenant_id,
+                    customer_id,
+                )
+                .fetch_all(connection)
+                .await
+            })
             .await
-            .map_err(|error| database_failure("commit customer facility list", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_database_failure("list customer facilities", tenant_id, error))?;
         rows.into_iter().map(CustomerFacility::try_from).collect()
     }
 
@@ -429,59 +429,59 @@ impl StaffingRepo for StaffingProvider {
         input: &CustomerFacilityInput,
         audit_account_id: Uuid,
     ) -> Result<CustomerFacility, StaffingError> {
-        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
-        let row: CustomerFacilityRow = sqlx::query_as!(
-            CustomerFacilityRow,
-            r#"
-            INSERT INTO business_customer_facilities (
-                id, tenant_id, customer_id, code, name, address, time_zone, status,
-                created_by_account_id, updated_by_account_id
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
-            RETURNING id, customer_id, code, name, address, time_zone, status, created_at, updated_at
-            "#,
-            facility_id,
-            tenant_id,
-            customer_id,
-            input.code,
-            input.name,
-            input.address,
-            input.time_zone,
-            input.status.as_code(),
-            audit_account_id,
-        )
-        .fetch_one(transaction.connection())
-        .await
-        .map_err(|error| mutation_failure("create customer facility", tenant_id, error))?;
-        transaction
-            .commit()
+        let row: CustomerFacilityRow = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
+                sqlx::query_as!(
+                    CustomerFacilityRow,
+                    r#"
+                    INSERT INTO business_customer_facilities (
+                        id, tenant_id, customer_id, code, name, address, time_zone, status,
+                        created_by_account_id, updated_by_account_id
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+                    RETURNING id, customer_id, code, name, address, time_zone, status, created_at, updated_at
+                    "#,
+                    facility_id,
+                    tenant_id,
+                    customer_id,
+                    input.code,
+                    input.name,
+                    input.address,
+                    input.time_zone,
+                    input.status.as_code(),
+                    audit_account_id,
+                )
+                .fetch_one(connection)
+                .await
+            })
             .await
-            .map_err(|error| database_failure("commit customer facility creation", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_mutation_failure("create customer facility", tenant_id, error))?;
         CustomerFacility::try_from(row)
     }
 
     async fn list_rate_agreements(&self, tenant_id: Uuid) -> Result<Vec<StaffingRateAgreement>, StaffingError> {
-        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
-        let rows: Vec<RateAgreementRow> = sqlx::query_as!(
-            RateAgreementRow,
-            r#"
-            SELECT id, code, name, customer_id, customer_facility_id, employee_id, job_id, currency,
-                   bill_hourly_rate::TEXT AS "bill_hourly_rate!",
-                   worker_hourly_rate::TEXT AS "worker_hourly_rate!",
-                   priority, effective_from, effective_to, is_active, created_at
-            FROM business_staffing_rate_agreements
-            WHERE tenant_id = $1
-            ORDER BY lower(name), effective_from DESC, priority DESC
-            "#,
-            tenant_id,
-        )
-        .fetch_all(transaction.connection())
-        .await
-        .map_err(|error| database_failure("list staffing rate agreements", tenant_id, error))?;
-        transaction
-            .commit()
+        let rows: Vec<RateAgreementRow> = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
+                sqlx::query_as!(
+                    RateAgreementRow,
+                    r#"
+                    SELECT id, code, name, customer_id, customer_facility_id, employee_id, job_id, currency,
+                           bill_hourly_rate::TEXT AS "bill_hourly_rate!",
+                           worker_hourly_rate::TEXT AS "worker_hourly_rate!",
+                           priority, effective_from, effective_to, is_active, created_at
+                    FROM business_staffing_rate_agreements
+                    WHERE tenant_id = $1
+                    ORDER BY lower(name), effective_from DESC, priority DESC
+                    "#,
+                    tenant_id,
+                )
+                .fetch_all(connection)
+                .await
+            })
             .await
-            .map_err(|error| database_failure("commit staffing rate list", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_database_failure("list staffing rate agreements", tenant_id, error))?;
         Ok(rows.into_iter().map(StaffingRateAgreement::from).collect())
     }
 
@@ -492,71 +492,73 @@ impl StaffingRepo for StaffingProvider {
         input: &StaffingRateAgreementInput,
         audit_account_id: Uuid,
     ) -> Result<StaffingRateAgreement, StaffingError> {
-        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
-        let row: RateAgreementRow = sqlx::query_as!(
-            RateAgreementRow,
-            r#"
-            INSERT INTO business_staffing_rate_agreements (
-                id, tenant_id, code, name, customer_id, customer_facility_id, employee_id, job_id,
-                currency, bill_hourly_rate, worker_hourly_rate, priority, effective_from, effective_to,
-                is_active, created_by_account_id
-            )
-            VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9,
-                $10::TEXT::NUMERIC, $11::TEXT::NUMERIC, $12, $13, $14, $15, $16
-            )
-            RETURNING id, code, name, customer_id, customer_facility_id, employee_id, job_id, currency,
-                      bill_hourly_rate::TEXT AS "bill_hourly_rate!",
-                      worker_hourly_rate::TEXT AS "worker_hourly_rate!",
-                      priority, effective_from, effective_to, is_active, created_at
-            "#,
-            agreement_id,
-            tenant_id,
-            input.code,
-            input.name,
-            input.customer_id,
-            input.customer_facility_id,
-            input.employee_id,
-            input.job_id,
-            input.currency,
-            input.bill_hourly_rate,
-            input.worker_hourly_rate,
-            input.priority,
-            input.effective_from,
-            input.effective_to,
-            input.is_active,
-            audit_account_id,
-        )
-        .fetch_one(transaction.connection())
-        .await
-        .map_err(|error| mutation_failure("create staffing rate agreement", tenant_id, error))?;
-        transaction
-            .commit()
+        let row: RateAgreementRow = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
+                sqlx::query_as!(
+                    RateAgreementRow,
+                    r#"
+                    INSERT INTO business_staffing_rate_agreements (
+                        id, tenant_id, code, name, customer_id, customer_facility_id, employee_id, job_id,
+                        currency, bill_hourly_rate, worker_hourly_rate, priority, effective_from, effective_to,
+                        is_active, created_by_account_id
+                    )
+                    VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9,
+                        $10::TEXT::NUMERIC, $11::TEXT::NUMERIC, $12, $13, $14, $15, $16
+                    )
+                    RETURNING id, code, name, customer_id, customer_facility_id, employee_id, job_id, currency,
+                              bill_hourly_rate::TEXT AS "bill_hourly_rate!",
+                              worker_hourly_rate::TEXT AS "worker_hourly_rate!",
+                              priority, effective_from, effective_to, is_active, created_at
+                    "#,
+                    agreement_id,
+                    tenant_id,
+                    input.code,
+                    input.name,
+                    input.customer_id,
+                    input.customer_facility_id,
+                    input.employee_id,
+                    input.job_id,
+                    input.currency,
+                    input.bill_hourly_rate,
+                    input.worker_hourly_rate,
+                    input.priority,
+                    input.effective_from,
+                    input.effective_to,
+                    input.is_active,
+                    audit_account_id,
+                )
+                .fetch_one(connection)
+                .await
+            })
             .await
-            .map_err(|error| database_failure("commit staffing rate creation", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| {
+                tenant_mutation_failure("create staffing rate agreement", tenant_id, error)
+            })?;
         Ok(row.into())
     }
 
     async fn list_shifts(&self, tenant_id: Uuid) -> Result<Vec<StaffingShift>, StaffingError> {
-        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
-        let rows: Vec<ShiftRow> = sqlx::query_as!(
-            ShiftRow,
-            r#"
-            SELECT id, customer_id, customer_facility_id, job_id, starts_at, ends_at,
-                   required_workers, status, notes, created_at, updated_at
-            FROM business_staffing_shifts
-            WHERE tenant_id = $1
-            ORDER BY starts_at DESC, id
-            "#,
-            tenant_id,
-        )
-        .fetch_all(transaction.connection())
-        .await
-        .map_err(|error| database_failure("list staffing shifts", tenant_id, error))?;
-        transaction
-            .commit()
+        let rows: Vec<ShiftRow> = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
+                sqlx::query_as!(
+                    ShiftRow,
+                    r#"
+                    SELECT id, customer_id, customer_facility_id, job_id, starts_at, ends_at,
+                           required_workers, status, notes, created_at, updated_at
+                    FROM business_staffing_shifts
+                    WHERE tenant_id = $1
+                    ORDER BY starts_at DESC, id
+                    "#,
+                    tenant_id,
+                )
+                .fetch_all(connection)
+                .await
+            })
             .await
-            .map_err(|error| database_failure("commit staffing shift list", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_database_failure("list staffing shifts", tenant_id, error))?;
         rows.into_iter().map(StaffingShift::try_from).collect()
     }
 
@@ -567,36 +569,36 @@ impl StaffingRepo for StaffingProvider {
         input: &StaffingShiftInput,
         audit_account_id: Uuid,
     ) -> Result<StaffingShift, StaffingError> {
-        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
-        let row: ShiftRow = sqlx::query_as!(
-            ShiftRow,
-            r#"
-            INSERT INTO business_staffing_shifts (
-                id, tenant_id, customer_id, customer_facility_id, job_id, starts_at, ends_at,
-                required_workers, status, notes, created_by_account_id, updated_by_account_id
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'open', $9, $10, $10)
-            RETURNING id, customer_id, customer_facility_id, job_id, starts_at, ends_at,
-                      required_workers, status, notes, created_at, updated_at
-            "#,
-            shift_id,
-            tenant_id,
-            input.customer_id,
-            input.customer_facility_id,
-            input.job_id,
-            input.starts_at,
-            input.ends_at,
-            input.required_workers,
-            input.notes,
-            audit_account_id,
-        )
-        .fetch_one(transaction.connection())
-        .await
-        .map_err(|error| mutation_failure("create staffing shift", tenant_id, error))?;
-        transaction
-            .commit()
+        let row: ShiftRow = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
+                sqlx::query_as!(
+                    ShiftRow,
+                    r#"
+                    INSERT INTO business_staffing_shifts (
+                        id, tenant_id, customer_id, customer_facility_id, job_id, starts_at, ends_at,
+                        required_workers, status, notes, created_by_account_id, updated_by_account_id
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'open', $9, $10, $10)
+                    RETURNING id, customer_id, customer_facility_id, job_id, starts_at, ends_at,
+                              required_workers, status, notes, created_at, updated_at
+                    "#,
+                    shift_id,
+                    tenant_id,
+                    input.customer_id,
+                    input.customer_facility_id,
+                    input.job_id,
+                    input.starts_at,
+                    input.ends_at,
+                    input.required_workers,
+                    input.notes,
+                    audit_account_id,
+                )
+                .fetch_one(connection)
+                .await
+            })
             .await
-            .map_err(|error| database_failure("commit staffing shift creation", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_mutation_failure("create staffing shift", tenant_id, error))?;
         StaffingShift::try_from(row)
     }
 
@@ -1275,6 +1277,23 @@ fn database_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> Sta
         operation, tenant_id, error
     );
     StaffingError::BackendUnavailable
+}
+
+fn tenant_database_failure(operation: &str, tenant_id: Uuid, error: TenantDbErr) -> StaffingError {
+    error!(
+        operation,
+        tenant_id = %tenant_id,
+        reason = %error,
+        "Staffing tenant SQL operation failed"
+    );
+    StaffingError::BackendUnavailable
+}
+
+fn tenant_mutation_failure(operation: &str, tenant_id: Uuid, error: TenantDbErr) -> StaffingError {
+    match error {
+        TenantDbErr::Sqlx(sqlx_error) => mutation_failure(operation, tenant_id, sqlx_error),
+        tenant_error => tenant_database_failure(operation, tenant_id, tenant_error),
+    }
 }
 
 fn mutation_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> StaffingError {

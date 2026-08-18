@@ -5,6 +5,7 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
 };
 use thiserror::Error;
+use tracing::{debug, error, trace};
 use uuid::Uuid;
 
 #[derive(Debug, Error)]
@@ -132,6 +133,60 @@ impl PostgresCli {
         Ok(TenantTransaction { tenant_id, transaction })
     }
 
+    /// Runs an SQLx-only operation with transaction-local RLS context and owns
+    /// the commit/rollback lifecycle. The callback must use the provided
+    /// connection so it cannot accidentally escape the tenant transaction.
+    pub async fn run_with_tenant<T, F>(&self, tenant_id: Uuid, operation: F) -> Result<T, TenantDbErr>
+    where
+        T: Send,
+        F: for<'connection> AsyncFnOnce(&'connection mut PgConnection) -> Result<T, sqlx::Error>,
+    {
+        trace!(
+            operation = "postgres.run_with_tenant",
+            tenant_id = %tenant_id,
+            "Starting tenant-scoped SQL operation"
+        );
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        let operation_result: Result<T, sqlx::Error> = operation(transaction.connection()).await;
+
+        match operation_result {
+            Ok(value) => {
+                transaction.commit().await.map_err(|commit_error: sqlx::Error| {
+                    error!(
+                        operation = "postgres.run_with_tenant",
+                        tenant_id = %tenant_id,
+                        error = %commit_error,
+                        "Tenant-scoped SQL operation commit failed"
+                    );
+                    TenantDbErr::Sqlx(commit_error)
+                })?;
+                debug!(
+                    operation = "postgres.run_with_tenant",
+                    tenant_id = %tenant_id,
+                    "Tenant-scoped SQL operation committed"
+                );
+                Ok(value)
+            }
+            Err(operation_error) => {
+                if let Err(rollback_error) = transaction.rollback().await {
+                    error!(
+                        operation = "postgres.run_with_tenant",
+                        tenant_id = %tenant_id,
+                        error = %rollback_error,
+                        "Tenant-scoped SQL operation rollback failed"
+                    );
+                }
+                error!(
+                    operation = "postgres.run_with_tenant",
+                    tenant_id = %tenant_id,
+                    error = %operation_error,
+                    "Tenant-scoped SQL operation failed and was rolled back"
+                );
+                Err(TenantDbErr::Sqlx(operation_error))
+            }
+        }
+    }
+
     pub(crate) async fn resolve_active_tenant_id(&self, tenant: &str) -> Result<Option<Uuid>, TenantDbErr> {
         let tenant_id: Option<Uuid> = sqlx::query_scalar!(
             r#"SELECT id FROM tenants WHERE slug = $1 AND status = 'active'"#,
@@ -196,8 +251,9 @@ impl PostgresCli {
         }
     }
 
-    /// Access the native SQLx pool for application-owned queries.
-    pub fn pool(&self) -> &PgPool {
+    /// Internal escape hatch used by `DatabaseAdapter::global_pool`; external
+    /// application crates cannot access the pool through `PostgresCli`.
+    pub(in crate::database) fn pool(&self) -> &PgPool {
         &self.pool
     }
 
@@ -250,6 +306,101 @@ fn env_u32(name: &str, default: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug)]
+    struct TestIdRow {
+        id: Uuid,
+    }
+
+    #[tokio::test]
+    async fn run_with_tenant_commits_success_and_rolls_back_failure() -> Result<(), Box<dyn std::error::Error>> {
+        let database_url: String = std::env::var("DATABASE_URL")?;
+        let client: PostgresCli = PostgresCli::connect(&database_url).await?;
+        let tenant_id: Uuid = Uuid::new_v4();
+        let committed_account_id: Uuid = Uuid::new_v4();
+        let rolled_back_account_id: Uuid = Uuid::new_v4();
+        let tenant_slug: String = format!("tenant-runner-{}", tenant_id.simple());
+        client
+            .ensure_tenant_registration(tenant_id, &tenant_slug, "Tenant runner test")
+            .await?;
+
+        let inserted_account_id: Uuid = client
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                let inserted: TestIdRow = sqlx::query_as!(
+                    TestIdRow,
+                    r#"
+                        INSERT INTO accounts (id, tenant_id, username, primary_role_code)
+                        VALUES ($1, $2, 'tenant-runner-committed', 'employee')
+                        RETURNING id
+                        "#,
+                    committed_account_id,
+                    tenant_id,
+                )
+                .fetch_one(&mut *connection)
+                .await?;
+                sqlx::query!(
+                    r#"
+                    INSERT INTO account_roles (tenant_id, account_id, role_code)
+                    VALUES ($1, $2, 'employee')
+                    "#,
+                    tenant_id,
+                    committed_account_id,
+                )
+                .execute(connection)
+                .await?;
+                Ok(inserted.id)
+            })
+            .await?;
+        assert_eq!(inserted_account_id, committed_account_id);
+
+        let failed_operation: Result<(), TenantDbErr> = client
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                sqlx::query!(
+                    r#"
+                        INSERT INTO accounts (id, tenant_id, username, primary_role_code)
+                        VALUES ($1, $2, 'tenant-runner-rolled-back', 'employee')
+                        "#,
+                    rolled_back_account_id,
+                    tenant_id,
+                )
+                .execute(&mut *connection)
+                .await?;
+                Err(sqlx::Error::Protocol("force tenant operation rollback".to_owned()))
+            })
+            .await;
+        assert!(failed_operation.is_err());
+
+        let visible_account_rows: Vec<TestIdRow> = client
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                let account_rows: Vec<TestIdRow> = sqlx::query_as!(
+                    TestIdRow,
+                    r#"SELECT id FROM accounts WHERE id = ANY($1) ORDER BY id"#,
+                    &[committed_account_id, rolled_back_account_id],
+                )
+                .fetch_all(connection)
+                .await?;
+                Ok(account_rows)
+            })
+            .await?;
+        let visible_account_ids: Vec<Uuid> = visible_account_rows
+            .into_iter()
+            .map(|row: TestIdRow| -> Uuid { row.id })
+            .collect();
+        assert_eq!(visible_account_ids, vec![committed_account_id]);
+
+        client
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                sqlx::query!("DELETE FROM accounts WHERE tenant_id = $1", tenant_id)
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+            .await?;
+        sqlx::query!("DELETE FROM tenants WHERE id = $1", tenant_id)
+            .execute(client.pool())
+            .await?;
+        Ok(())
+    }
 
     #[tokio::test]
     async fn rls_hides_and_rejects_cross_tenant_accounts() -> Result<(), Box<dyn std::error::Error>> {

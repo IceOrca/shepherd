@@ -15,9 +15,11 @@ export function listAuthUsers(): Promise<AuthUserSummary[]> {
 
 export function createAuthUser(
   request: CreateAuthUserRequest,
+  idempotencyKey: string,
 ): Promise<AuthUserSummary> {
   return apiRequest<AuthUserSummary>("/api/admin/auth-users", {
     method: "POST",
+    headers: { "Idempotency-Key": idempotencyKey },
     body: JSON.stringify(request),
   });
 }

@@ -113,6 +113,9 @@ Supabase Auth (GoTrue) is the external identity provider. It owns credentials, s
 - Role codes and permission codes are data-driven. Define them in migrations or application specifications; do not hardcode role-to-permission policy in Rust.
 - `AuthenticatedUser` remains the request identity boundary and includes tenant/account IDs, username, optional email, primary role, roles, and permissions.
 - Auth administration creates or manages GoTrue users through its admin API, never by modifying GoTrue tables directly.
+- Frontends create users only through Shepherd's authenticated auth-administration route and never call the GoTrue admin API directly. The backend must own provider creation, application-account linking, application-specific provisioning, compensation, and retry recovery.
+- Account creation requires a persistent UUID idempotency key. Replaying the same request returns the original result; reusing a key for different input is rejected. Never persist plaintext passwords in an idempotency ledger or logs.
+- Role delegation is data-driven through database grants. Supervisors may provision employee accounts but must not grant supervisor or tenant-owner access. Creating an employee account also creates its active HR employee profile in the same tenant transaction.
 
 ## Software Architecture and API Design
 
@@ -193,7 +196,7 @@ The user starts Compose before development. Run language toolchains inside conta
 - `docker compose exec -T server bash -c 'cargo clippy --workspace && cargo check --workspace'` validates Rust.
 - `docker compose exec -T client sh -c 'npm run lint'` checks TypeScript; replace `lint` with `build` or `dev` as needed. The Alpine client image does not contain Bash.
 - `bash scripts/generate-api-types.sh` regenerates TypeScript DTO contracts using Cargo inside `server`.
-- `DEV_AUTH_EMAIL=... DEV_AUTH_PASSWORD=... sh scripts/dev-data-seeding.sh` creates/reuses a development GoTrue user through the admin API, resets the application dev database, and seeds linked application data.
+- `sh scripts/dev-data-seeding.sh` creates or updates every development GoTrue user listed in `scripts/dev-auth-accounts.tsv` through the admin API, resets the application dev database, and seeds linked tenant accounts and employees. Keep the catalog development-only and update the Rust seed account definitions with it.
 
 Use `-it` for an interactive shell and `-T` for non-interactive automation.
 
@@ -202,6 +205,8 @@ Use `-it` for an interactive shell and `-T` for non-interactive automation.
 Keep images minimal. The server uses Rust Bookworm: do not add `build-essential`, `libpq-dev`, or `postgresql-client`; access and migrations use SQLx, not Diesel. Add OS packages only for demonstrated needs. Run manual `psql` only in `postgres-db` (PostgreSQL Alpine), never the server image.
 
 The current phase is development. Schema changes may use `cargo sqlx database reset -y` inside the server container when a clean database is useful. Reset only the application development database, never the separate Supabase Auth database, and reseed through `scripts/dev-data-seeding.sh`. Apply all durable schema and permission changes through ordered migrations even when the dev database was manually inspected.
+
+All application queries against tenant-owned tables must receive a tenant-scoped SQLx connection. Use `DatabaseAdapter::run_with_tenant(tenant_id, async |connection| { ... })` for ordinary SQL-only operations; it owns begin, transaction-local RLS context, commit, and rollback. Use an explicit `TenantTransaction` only when a domain workflow must coordinate row locks, multiple repository helpers, business-error branches, or an externally visible atomic transition. Every query in either form must execute through the supplied tenant connection, never the raw pool. Raw pool access is reserved for explicitly global infrastructure tables, health checks, tenant resolution/provisioning, and controlled test cleanup.
 
 ## Coding Style and Naming Conventions
 

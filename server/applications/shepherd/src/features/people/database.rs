@@ -9,7 +9,8 @@ use crate::features::people::core::{
 };
 use uuid::Uuid;
 
-use infra_postgres::{DatabaseAdapter, TenantTransaction};
+use infra_postgres::{DatabaseAdapter, TenantDbErr, TenantTransaction};
+use sqlx::PgConnection;
 
 pub struct PeopleProvider {
     database: Arc<DatabaseAdapter>,
@@ -184,25 +185,25 @@ impl From<AssignmentRow> for EmployeeAssignment {
 #[async_trait]
 impl PeopleRepo for PeopleProvider {
     async fn list_employees(&self, tenant_id: Uuid) -> Result<Vec<Employee>, HrError> {
-        let mut transaction = self.begin_active_tenant(tenant_id).await?;
-        let rows: Vec<EmployeeRow> = sqlx::query_as!(
-            EmployeeRow,
-            r#"
-            SELECT id, account_id, employee_code, display_name, work_email, work_phone, badge_id,
-                   status, hire_date, termination_date, created_at, updated_at
-            FROM hr_employees
-            WHERE tenant_id = $1
-            ORDER BY lower(display_name), employee_code
-            "#,
-            tenant_id,
-        )
-        .fetch_all(transaction.connection())
-        .await
-        .map_err(|error| database_failure("list employees", tenant_id, error))?;
-        transaction
-            .commit()
+        let rows: Vec<EmployeeRow> = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                sqlx::query_as!(
+                    EmployeeRow,
+                    r#"
+                    SELECT id, account_id, employee_code, display_name, work_email, work_phone, badge_id,
+                           status, hire_date, termination_date, created_at, updated_at
+                    FROM hr_employees
+                    WHERE tenant_id = $1
+                    ORDER BY lower(display_name), employee_code
+                    "#,
+                    tenant_id,
+                )
+                .fetch_all(connection)
+                .await
+            })
             .await
-            .map_err(|error| database_failure("commit employee list", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_database_failure("list employees", tenant_id, error))?;
         info!(
             "Tenant employee directory loaded: tenant_id={} employees={}",
             tenant_id,
@@ -212,48 +213,48 @@ impl PeopleRepo for PeopleProvider {
     }
 
     async fn find_employee(&self, tenant_id: Uuid, employee_id: Uuid) -> Result<Option<Employee>, HrError> {
-        let mut transaction = self.begin_active_tenant(tenant_id).await?;
-        let row: Option<EmployeeRow> = sqlx::query_as!(
-            EmployeeRow,
-            r#"
-            SELECT id, account_id, employee_code, display_name, work_email, work_phone, badge_id,
-                   status, hire_date, termination_date, created_at, updated_at
-            FROM hr_employees
-            WHERE tenant_id = $1 AND id = $2
-            "#,
-            tenant_id,
-            employee_id,
-        )
-        .fetch_optional(transaction.connection())
-        .await
-        .map_err(|error| database_failure("find employee", tenant_id, error))?;
-        transaction
-            .commit()
+        let row: Option<EmployeeRow> = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                sqlx::query_as!(
+                    EmployeeRow,
+                    r#"
+                    SELECT id, account_id, employee_code, display_name, work_email, work_phone, badge_id,
+                           status, hire_date, termination_date, created_at, updated_at
+                    FROM hr_employees
+                    WHERE tenant_id = $1 AND id = $2
+                    "#,
+                    tenant_id,
+                    employee_id,
+                )
+                .fetch_optional(connection)
+                .await
+            })
             .await
-            .map_err(|error| database_failure("commit employee lookup", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_database_failure("find employee", tenant_id, error))?;
         row.map(Employee::try_from).transpose()
     }
 
     async fn find_employee_by_account(&self, tenant_id: Uuid, account_id: Uuid) -> Result<Option<Employee>, HrError> {
-        let mut transaction = self.begin_active_tenant(tenant_id).await?;
-        let row: Option<EmployeeRow> = sqlx::query_as!(
-            EmployeeRow,
-            r#"
-            SELECT id, account_id, employee_code, display_name, work_email, work_phone, badge_id,
-                   status, hire_date, termination_date, created_at, updated_at
-            FROM hr_employees
-            WHERE tenant_id = $1 AND account_id = $2
-            "#,
-            tenant_id,
-            account_id,
-        )
-        .fetch_optional(transaction.connection())
-        .await
-        .map_err(|error| database_failure("find employee by account", tenant_id, error))?;
-        transaction
-            .commit()
+        let row: Option<EmployeeRow> = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                sqlx::query_as!(
+                    EmployeeRow,
+                    r#"
+                    SELECT id, account_id, employee_code, display_name, work_email, work_phone, badge_id,
+                           status, hire_date, termination_date, created_at, updated_at
+                    FROM hr_employees
+                    WHERE tenant_id = $1 AND account_id = $2
+                    "#,
+                    tenant_id,
+                    account_id,
+                )
+                .fetch_optional(connection)
+                .await
+            })
             .await
-            .map_err(|error| database_failure("commit employee account lookup", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_database_failure("find employee by account", tenant_id, error))?;
         row.map(Employee::try_from).transpose()
     }
 
@@ -431,24 +432,24 @@ impl PeopleRepo for PeopleProvider {
     }
 
     async fn list_departments(&self, tenant_id: Uuid) -> Result<Vec<Department>, HrError> {
-        let mut transaction = self.begin_active_tenant(tenant_id).await?;
-        let rows: Vec<DepartmentRow> = sqlx::query_as!(
-            DepartmentRow,
-            r#"
-            SELECT id, code, name, parent_department_id, manager_employee_id, status, created_at, updated_at
-            FROM hr_departments
-            WHERE tenant_id = $1
-            ORDER BY lower(name), code
-            "#,
-            tenant_id,
-        )
-        .fetch_all(transaction.connection())
-        .await
-        .map_err(|error| database_failure("list departments", tenant_id, error))?;
-        transaction
-            .commit()
+        let rows: Vec<DepartmentRow> = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                sqlx::query_as!(
+                    DepartmentRow,
+                    r#"
+                    SELECT id, code, name, parent_department_id, manager_employee_id, status, created_at, updated_at
+                    FROM hr_departments
+                    WHERE tenant_id = $1
+                    ORDER BY lower(name), code
+                    "#,
+                    tenant_id,
+                )
+                .fetch_all(connection)
+                .await
+            })
             .await
-            .map_err(|error| database_failure("commit department list", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_database_failure("list departments", tenant_id, error))?;
         rows.into_iter().map(Department::try_from).collect()
     }
 
@@ -569,24 +570,24 @@ impl PeopleRepo for PeopleProvider {
     }
 
     async fn list_jobs(&self, tenant_id: Uuid) -> Result<Vec<JobPosition>, HrError> {
-        let mut transaction = self.begin_active_tenant(tenant_id).await?;
-        let rows: Vec<JobRow> = sqlx::query_as!(
-            JobRow,
-            r#"
-            SELECT id, code, name, department_id, status, created_at, updated_at
-            FROM hr_jobs
-            WHERE tenant_id = $1
-            ORDER BY lower(name), code
-            "#,
-            tenant_id,
-        )
-        .fetch_all(transaction.connection())
-        .await
-        .map_err(|error| database_failure("list jobs", tenant_id, error))?;
-        transaction
-            .commit()
+        let rows: Vec<JobRow> = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                sqlx::query_as!(
+                    JobRow,
+                    r#"
+                    SELECT id, code, name, department_id, status, created_at, updated_at
+                    FROM hr_jobs
+                    WHERE tenant_id = $1
+                    ORDER BY lower(name), code
+                    "#,
+                    tenant_id,
+                )
+                .fetch_all(connection)
+                .await
+            })
             .await
-            .map_err(|error| database_failure("commit job list", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_database_failure("list jobs", tenant_id, error))?;
         rows.into_iter().map(JobPosition::try_from).collect()
     }
 
@@ -962,6 +963,16 @@ fn database_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> HrE
     error!(
         "HR database operation failed: operation={} tenant_id={} error={}",
         operation, tenant_id, error
+    );
+    HrError::BackendUnavailable
+}
+
+fn tenant_database_failure(operation: &str, tenant_id: Uuid, error: TenantDbErr) -> HrError {
+    error!(
+        operation,
+        tenant_id = %tenant_id,
+        reason = %error,
+        "HR automatic tenant operation failed"
     );
     HrError::BackendUnavailable
 }

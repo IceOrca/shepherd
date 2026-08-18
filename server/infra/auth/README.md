@@ -22,13 +22,31 @@ pub const ADMIN_POLICY: AuthAdminPolicy = AuthAdminPolicy {
 };
 ```
 
-Creating an account accepts any active role found in the `roles` table. Database foreign keys ensure the primary role is assigned to that account.
+Creating an account accepts only a role granted to one of the actor's roles by
+`auth_role_assignment_grants`. Database foreign keys ensure the primary role is assigned to that
+account. Applications can supply an `AuthAccountProvisioner` to create application-owned records,
+such as an HR employee profile, in the same tenant transaction as the account, role, and identity
+mapping.
+
+Clients create users only through the application's `POST /api/admin/auth-users` endpoint and must
+send a UUID in `Idempotency-Key`. The server owns the complete workflow: it reserves the request,
+creates or recovers the GoTrue identity, links the Shepherd account, runs the application provisioner,
+and marks the operation complete. Repeating the same request with the same key returns the completed
+account. Reusing a key with different input is rejected.
+
+The provisioning ledger stores only a SHA-256 request fingerprint and safe identifiers; passwords are
+never persisted there. A failed application transaction triggers a checked GoTrue deletion attempt.
+If that compensation cannot be confirmed, the retained provider identifier allows a later retry to
+recover and finish the same operation instead of creating another identity.
 
 ## Configuration
 
 Access-token validation requires `AUTH_ISSUER_URL`, `AUTH_AUDIENCE`, and `AUTH_JWKS_URL`. `AUTH_JWT_ALGORITHMS` defaults to `EdDSA`. `AUTH_JWKS_REFRESH_SECS`, `AUTH_HTTP_TIMEOUT_SECS`, and `AUTH_CLOCK_SKEW_SECS` tune validation.
 
 Account administration requires `AUTH_ADMIN_URL` and `AUTH_ADMIN_TOKEN`; `AUTH_ADMIN_HTTP_TIMEOUT_SECS` defaults to five seconds. Browser, mobile, and other API clients send `Authorization: Bearer ...`.
+
+`AUTH_ADMIN_TOKEN` is server-only. Frontend code must never call the GoTrue admin API or receive its
+service-role token.
 
 ## Legacy internal API
 

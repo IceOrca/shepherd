@@ -16,5 +16,7 @@ pub const ADMIN_POLICY: AuthAdminPolicy = AuthAdminPolicy {
 };
 
 pub fn routes(auth: Arc<AuthService>) -> Router {
-    infra_auth::ext_foundation::routes(auth, ADMIN_POLICY)
+    let provisioner: Arc<dyn infra_auth::ext_foundation::auth_admin::AuthAccountProvisioner> =
+        Arc::new(crate::auth_provisioning::ShepherdAuthAccountProvisioner);
+    infra_auth::ext_foundation::routes_with_provisioner(auth, ADMIN_POLICY, provisioner)
 }

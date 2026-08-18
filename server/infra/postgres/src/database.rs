@@ -1,11 +1,8 @@
 use std::sync::Arc;
 
-use tracing::{error, warn, info, debug, trace};
+use sqlx::PgConnection;
+use tracing::{debug, error, info};
 use uuid::Uuid;
-use sqlx::{
-    PgConnection, PgPool, Postgres, Transaction,
-    postgres::{PgConnectOptions, PgPoolOptions},
-};
 
 pub mod sql;
 
@@ -38,13 +35,28 @@ impl DatabaseAdapter {
         &self.client
     }
 
-    pub fn pool(&self) -> &sqlx::PgPool {
+    /// Exposes the unscoped connection pool only for tables that intentionally
+    /// exist outside tenant RLS, such as tenant discovery and identity lookup.
+    /// Tenant-owned application data must use `run_with_tenant` or
+    /// `begin_tenant`.
+    pub fn global_pool(&self) -> &sqlx::PgPool {
         self.client.pool()
     }
 
     pub async fn begin_tenant(&self, tenant_id: Uuid) -> Result<TenantTransaction, TenantDbErr> {
         debug!("Opening RLS-scoped tenant transaction: tenant_id={}", tenant_id);
         self.client.begin_tenant(tenant_id).await
+    }
+
+    /// Runs one SQLx operation inside an automatically committed tenant-scoped
+    /// transaction. Multi-step domain workflows that coordinate locks or map
+    /// business errors should continue to use `begin_tenant` explicitly.
+    pub async fn run_with_tenant<T, F>(&self, tenant_id: Uuid, operation: F) -> Result<T, TenantDbErr>
+    where
+        T: Send,
+        F: for<'connection> AsyncFnOnce(&'connection mut PgConnection) -> Result<T, sqlx::Error>,
+    {
+        self.client.run_with_tenant(tenant_id, operation).await
     }
 
     pub async fn resolve_active_tenant_id(&self, tenant: &str) -> Result<Option<Uuid>, TenantDbErr> {

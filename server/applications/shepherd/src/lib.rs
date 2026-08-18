@@ -1,6 +1,7 @@
 #![cfg_attr(debug_assertions, allow(unused))]
 
 pub mod auth;
+mod auth_provisioning;
 pub mod authz;
 pub mod business;
 pub mod features;

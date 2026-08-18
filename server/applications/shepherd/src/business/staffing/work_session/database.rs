@@ -829,7 +829,7 @@ mod database_tests {
             .await?;
         verify.commit().await?;
         sqlx::query!("DELETE FROM tenants WHERE id = $1", tenant_id)
-            .execute(database.client().pool())
+            .execute(database.global_pool())
             .await?;
         Ok(())
     }

@@ -355,7 +355,7 @@ impl Fixture {
             .await?;
         transaction.commit().await?;
         sqlx::query!("DELETE FROM tenants WHERE id = $1", self.tenant_id)
-            .execute(self.database.client().pool())
+            .execute(self.database.global_pool())
             .await?;
         Ok(())
     }

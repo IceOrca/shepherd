@@ -87,7 +87,9 @@ impl NotificationDispatcher {
 
     async fn dispatch_once(&self) -> Result<(), String> {
         let tenant_ids = sqlx::query_scalar!("SELECT id FROM tenants WHERE status = 'active' ORDER BY id")
-            .fetch_all(self.database.client().pool())
+            // Tenant enumeration is intentionally global; every outbox access
+            // after this point runs in that tenant's RLS-scoped transaction.
+            .fetch_all(self.database.global_pool())
             .await
             .map_err(|error| format!("list active tenants: {error}"))?;
 

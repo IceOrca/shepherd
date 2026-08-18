@@ -258,28 +258,28 @@ struct ResolvedRateRow {
 #[async_trait]
 impl UrgentWorkRepo for UrgentWorkProvider {
     async fn list_facilities(&self, tenant_id: Uuid) -> Result<Vec<UrgentWorkFacility>, UrgentWorkError> {
-        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
-        let rows: Vec<FacilityRow> = sqlx::query_as!(
-            FacilityRow,
-            r#"
-            SELECT facility.id AS facility_id, customer.id AS customer_id,
-                   customer.name AS customer_name, facility.name AS facility_name,
-                   facility.address, facility.time_zone
-            FROM business_customer_facilities AS facility
-            INNER JOIN business_customers AS customer
-                ON customer.tenant_id = facility.tenant_id AND customer.id = facility.customer_id
-            WHERE facility.tenant_id = $1 AND facility.status = 'active' AND customer.status = 'active'
-            ORDER BY lower(customer.name), lower(facility.name), facility.id
-            "#,
-            tenant_id,
-        )
-        .fetch_all(transaction.connection())
-        .await
-        .map_err(|error: sqlx::Error| database_failure("list urgent facilities", tenant_id, error))?;
-        transaction
-            .commit()
+        let rows: Vec<FacilityRow> = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
+                sqlx::query_as!(
+                    FacilityRow,
+                    r#"
+                    SELECT facility.id AS facility_id, customer.id AS customer_id,
+                           customer.name AS customer_name, facility.name AS facility_name,
+                           facility.address, facility.time_zone
+                    FROM business_customer_facilities AS facility
+                    INNER JOIN business_customers AS customer
+                        ON customer.tenant_id = facility.tenant_id AND customer.id = facility.customer_id
+                    WHERE facility.tenant_id = $1 AND facility.status = 'active' AND customer.status = 'active'
+                    ORDER BY lower(customer.name), lower(facility.name), facility.id
+                    "#,
+                    tenant_id,
+                )
+                .fetch_all(connection)
+                .await
+            })
             .await
-            .map_err(|error: sqlx::Error| tenant_failure("commit urgent facility list", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_runner_failure("list urgent facilities", tenant_id, error))?;
         debug!(tenant_id = %tenant_id, facility_count = rows.len(), "Urgent-work facilities loaded");
         Ok(rows.into_iter().map(UrgentWorkFacility::from).collect())
     }
@@ -289,37 +289,37 @@ impl UrgentWorkRepo for UrgentWorkProvider {
         tenant_id: Uuid,
         actor_account_id: Uuid,
     ) -> Result<Vec<UrgentWorkEmployee>, UrgentWorkError> {
-        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
-        let rows: Vec<EmployeeRow> = sqlx::query_as!(
-            EmployeeRow,
-            r#"
-            SELECT employee.id AS employee_id, employee.employee_code,
-                   employee.display_name, employee.account_id = $2 AS "is_self!",
-                   EXISTS (
-                       SELECT 1 FROM business_urgent_work_sessions AS urgent_session
-                       WHERE urgent_session.tenant_id = employee.tenant_id
-                         AND urgent_session.employee_id = employee.id
-                         AND urgent_session.ended_at IS NULL
-                       UNION ALL
-                       SELECT 1 FROM business_shift_work_sessions AS planned_session
-                       WHERE planned_session.tenant_id = employee.tenant_id
-                         AND planned_session.employee_id = employee.id
-                         AND planned_session.ended_at IS NULL
-                   ) AS "has_open_work!"
-            FROM hr_employees AS employee
-            WHERE employee.tenant_id = $1 AND employee.status = 'active'
-            ORDER BY (employee.account_id = $2) DESC, lower(employee.display_name), employee.id
-            "#,
-            tenant_id,
-            actor_account_id,
-        )
-        .fetch_all(transaction.connection())
-        .await
-        .map_err(|error: sqlx::Error| database_failure("list urgent employees", tenant_id, error))?;
-        transaction
-            .commit()
+        let rows: Vec<EmployeeRow> = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
+                sqlx::query_as!(
+                    EmployeeRow,
+                    r#"
+                    SELECT employee.id AS employee_id, employee.employee_code,
+                           employee.display_name, employee.account_id = $2 AS "is_self!",
+                           EXISTS (
+                               SELECT 1 FROM business_urgent_work_sessions AS urgent_session
+                               WHERE urgent_session.tenant_id = employee.tenant_id
+                                 AND urgent_session.employee_id = employee.id
+                                 AND urgent_session.ended_at IS NULL
+                               UNION ALL
+                               SELECT 1 FROM business_shift_work_sessions AS planned_session
+                               WHERE planned_session.tenant_id = employee.tenant_id
+                                 AND planned_session.employee_id = employee.id
+                                 AND planned_session.ended_at IS NULL
+                           ) AS "has_open_work!"
+                    FROM hr_employees AS employee
+                    WHERE employee.tenant_id = $1 AND employee.status = 'active'
+                    ORDER BY (employee.account_id = $2) DESC, lower(employee.display_name), employee.id
+                    "#,
+                    tenant_id,
+                    actor_account_id,
+                )
+                .fetch_all(connection)
+                .await
+            })
             .await
-            .map_err(|error: sqlx::Error| tenant_failure("commit urgent employee list", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_runner_failure("list urgent employees", tenant_id, error))?;
         Ok(rows.into_iter().map(UrgentWorkEmployee::from).collect())
     }
 
@@ -1440,6 +1440,11 @@ async fn enqueue_notification(
 
 fn tenant_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> UrgentWorkError {
     error!(operation, tenant_id = %tenant_id, reason = %error, "Urgent-work tenant database operation failed");
+    UrgentWorkError::BackendUnavailable
+}
+
+fn tenant_runner_failure(operation: &str, tenant_id: Uuid, error: TenantDbErr) -> UrgentWorkError {
+    error!(operation, tenant_id = %tenant_id, reason = %error, "Urgent-work automatic tenant operation failed");
     UrgentWorkError::BackendUnavailable
 }
 

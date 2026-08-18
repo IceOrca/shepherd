@@ -20,5 +20,6 @@ export default defineConfig({
         rewrite: (path) => path.replace(/^\/auth\/v1/, ""),
       },
     },
+    allowedHosts: true,
   },
 });

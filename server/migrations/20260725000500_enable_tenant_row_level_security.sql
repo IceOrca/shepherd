@@ -27,6 +27,12 @@ CREATE POLICY account_permissions_tenant_isolation ON account_permissions
     USING (tenant_id = shepherd_current_tenant_id())
     WITH CHECK (tenant_id = shepherd_current_tenant_id());
 
+ALTER TABLE auth_account_provisioning_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE auth_account_provisioning_requests FORCE ROW LEVEL SECURITY;
+CREATE POLICY auth_account_provisioning_requests_tenant_isolation ON auth_account_provisioning_requests
+    USING (tenant_id = shepherd_current_tenant_id())
+    WITH CHECK (tenant_id = shepherd_current_tenant_id());
+
 ALTER TABLE branches ENABLE ROW LEVEL SECURITY;
 ALTER TABLE branches FORCE ROW LEVEL SECURITY;
 CREATE POLICY branches_tenant_isolation ON branches

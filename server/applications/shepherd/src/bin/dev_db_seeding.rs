@@ -114,57 +114,89 @@ const ACME_ACCOUNTS: &[DevAccount] = &[
         role: DevRole::TenantOwner,
     },
     DevAccount {
-        username: "supervisor",
+        username: "acme_manager_1",
         role: DevRole::Supervisor,
     },
     DevAccount {
-        username: "employee",
+        username: "acme_manager_2",
+        role: DevRole::Supervisor,
+    },
+    DevAccount {
+        username: "acme_staff_1",
+        role: DevRole::Employee,
+    },
+    DevAccount {
+        username: "acme_staff_2",
+        role: DevRole::Employee,
+    },
+    DevAccount {
+        username: "acme_staff_3",
+        role: DevRole::Employee,
+    },
+    DevAccount {
+        username: "acme_staff_4",
         role: DevRole::Employee,
     },
 ];
 
 const ACME1_ACCOUNTS: &[DevAccount] = &[
     DevAccount {
-        username: "acme1Owner",
+        username: "acme1_owner",
         role: DevRole::TenantOwner,
     },
     DevAccount {
-        username: "acme1Supervisor1",
+        username: "acme1_manager_1",
         role: DevRole::Supervisor,
     },
     DevAccount {
-        username: "acme1Supervisor2",
+        username: "acme1_manager_2",
         role: DevRole::Supervisor,
     },
     DevAccount {
-        username: "acme1Employee1",
+        username: "acme1_staff_1",
         role: DevRole::Employee,
     },
     DevAccount {
-        username: "acme1Employee2",
+        username: "acme1_staff_2",
+        role: DevRole::Employee,
+    },
+    DevAccount {
+        username: "acme1_staff_3",
+        role: DevRole::Employee,
+    },
+    DevAccount {
+        username: "acme1_staff_4",
         role: DevRole::Employee,
     },
 ];
 
 const ACME2_ACCOUNTS: &[DevAccount] = &[
     DevAccount {
-        username: "acme2Owner",
+        username: "acme2_owner",
         role: DevRole::TenantOwner,
     },
     DevAccount {
-        username: "acme2Supervisor1",
+        username: "acme2_manager_1",
         role: DevRole::Supervisor,
     },
     DevAccount {
-        username: "acme2Supervisor2",
+        username: "acme2_manager_2",
         role: DevRole::Supervisor,
     },
     DevAccount {
-        username: "acme2Employee1",
+        username: "acme2_staff_1",
         role: DevRole::Employee,
     },
     DevAccount {
-        username: "acme2Employee2",
+        username: "acme2_staff_2",
+        role: DevRole::Employee,
+    },
+    DevAccount {
+        username: "acme2_staff_3",
+        role: DevRole::Employee,
+    },
+    DevAccount {
+        username: "acme2_staff_4",
         role: DevRole::Employee,
     },
 ];
@@ -195,16 +227,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Debugging::init();
     info!("Development seed started: configured_tenants={}", DEV_TENANTS.len());
     require_development_environment()?;
-    let auth_issuer = std::env::var("AUTH_ISSUER_URL")
+    let auth_issuer: String = std::env::var("AUTH_ISSUER_URL")
         .map_err(|_| io::Error::other("AUTH_ISSUER_URL is required for development seeding"))?;
-    let auth_subject = std::env::var("AUTH_DEV_SUBJECT")
-        .map_err(|_| io::Error::other("AUTH_DEV_SUBJECT is required for development seeding"))?;
+    let auth_identities_json: String = std::env::var("AUTH_DEV_IDENTITIES_JSON")
+        .map_err(|_| io::Error::other("AUTH_DEV_IDENTITIES_JSON is required for development seeding"))?;
+    let auth_identities: HashMap<String, Uuid> = serde_json::from_str(&auth_identities_json)
+        .map_err(|error: serde_json::Error| io::Error::other(format!("parse Auth identity map: {error}")))?;
+    let expected_account_count: usize = DEV_TENANTS
+        .iter()
+        .map(|tenant: &DevTenant| -> usize { tenant.accounts.len() })
+        .sum();
+    if auth_identities.len() != expected_account_count {
+        return Err(io::Error::other(format!(
+            "expected {expected_account_count} Auth identity mappings, received {}",
+            auth_identities.len()
+        ))
+        .into());
+    }
     debug!("Development environment guard accepted APP_ENV=development");
 
     info!("Connecting to PostgreSQL; migrations must already be applied with the SQLx CLI");
     let database: Arc<DatabaseAdapter> = DatabaseAdapter::new_arc().await;
     for tenant in DEV_TENANTS {
-        if let Err(error) = seed_tenant(&database, tenant, &auth_issuer, &auth_subject).await {
+        if let Err(error) = seed_tenant(&database, tenant, &auth_issuer, &auth_identities).await {
             error!(
                 "Development tenant seed failed: tenant_slug={} tenant_id={} error={}",
                 tenant.slug, tenant.id, error
@@ -213,7 +258,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    let account_count: usize = DEV_TENANTS.iter().map(|tenant: &DevTenant| tenant.accounts.len()).sum();
+    let account_count: usize = expected_account_count;
     info!(
         "Development seed completed successfully: tenants={} accounts={}",
         DEV_TENANTS.len(),
@@ -231,7 +276,7 @@ async fn seed_tenant(
     database: &Arc<DatabaseAdapter>,
     tenant: &DevTenant,
     auth_issuer: &str,
-    auth_subject: &str,
+    auth_identities: &HashMap<String, Uuid>,
 ) -> Result<(), io::Error> {
     let tenant_id: Uuid = Uuid::parse_str(tenant.id).map_err(io::Error::other)?;
     info!(
@@ -263,9 +308,16 @@ async fn seed_tenant(
         None,
     )
     .await?;
-    if tenant.id == ACME_TENANT_ID {
-        ensure_identity(database, auth_issuer, auth_subject, tenant_id, owner.id).await?;
-    }
+    ensure_seed_identity(
+        database,
+        tenant,
+        owner_definition,
+        &owner,
+        auth_issuer,
+        auth_identities,
+        tenant_id,
+    )
+    .await?;
 
     let mut seeded_accounts: Vec<SeedAccount> = vec![owner.clone()];
     for account_definition in tenant
@@ -279,6 +331,16 @@ async fn seed_tenant(
             account_definition.username,
             account_definition.role,
             Some(owner.id),
+        )
+        .await?;
+        ensure_seed_identity(
+            database,
+            tenant,
+            account_definition,
+            &account,
+            auth_issuer,
+            auth_identities,
+            tenant_id,
         )
         .await?;
         seeded_accounts.push(account);
@@ -299,6 +361,34 @@ async fn seed_tenant(
             .map(|branch: &DevBranch| branch.facilities.len())
             .sum::<usize>(),
         seeded_accounts.len()
+    );
+    Ok(())
+}
+
+async fn ensure_seed_identity(
+    database: &DatabaseAdapter,
+    tenant: &DevTenant,
+    account_definition: &DevAccount,
+    account: &SeedAccount,
+    auth_issuer: &str,
+    auth_identities: &HashMap<String, Uuid>,
+    tenant_id: Uuid,
+) -> Result<(), io::Error> {
+    let identity_key: String = format!("{}:{}", tenant.slug, account_definition.username);
+    let auth_subject: Uuid = auth_identities.get(&identity_key).copied().ok_or_else(|| {
+        io::Error::other(format!(
+            "missing Auth identity mapping for development account '{identity_key}'"
+        ))
+    })?;
+    let auth_subject_string: String = auth_subject.to_string();
+    ensure_identity(database, auth_issuer, &auth_subject_string, tenant_id, account.id).await?;
+    debug!(
+        tenant_slug = tenant.slug,
+        tenant_id = %tenant_id,
+        account_id = %account.id,
+        username = account.username,
+        role = account.role.as_code(),
+        "Development Auth identity linked to application account"
     );
     Ok(())
 }
@@ -1821,7 +1911,7 @@ async fn ensure_identity(
         tenant_id,
         account_id,
     )
-    .execute(database.client().pool())
+    .execute(database.global_pool())
     .await
     .map_err(io::Error::other)?;
     Ok(())

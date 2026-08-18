@@ -1,19 +1,21 @@
 use std::{ops::Deref, sync::Arc, time::Duration};
 
+use async_trait::async_trait;
 use axum::{
     Extension, Json, Router,
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, put},
 };
 use chrono::{DateTime, Utc};
 use infra_postgres::TenantTransaction;
-use sqlx::postgres::PgQueryResult;
-use tracing::{error, warn, info, debug, trace};
 use reqwest::Url;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::json;
+use sha2::{Digest, Sha256};
+use sqlx::{PgConnection, postgres::PgQueryResult};
+use tracing::{debug, error, info, trace, warn};
 use ts_rs::TS;
 use uuid::Uuid;
 
@@ -21,6 +23,7 @@ use crate::{AuthService, ext_foundation::account::AuthenticatedUser};
 
 const DEFAULT_HTTP_TIMEOUT_SECS: u64 = 5;
 const DISABLED_DURATION: &str = "876000h";
+const IDEMPOTENCY_HEADER: &str = "idempotency-key";
 
 /// Application-owned permission codes required by the reusable account routes.
 #[derive(Clone, Copy, Debug)]
@@ -33,6 +36,7 @@ pub struct AuthAdminPolicy {
 struct AuthAdminContext {
     auth: Arc<AuthService>,
     policy: AuthAdminPolicy,
+    provisioner: Arc<dyn AuthAccountProvisioner>,
 }
 
 impl Deref for AuthAdminContext {
@@ -130,6 +134,23 @@ struct ExtProviderUser {
     created_at: String,
     #[serde(default)]
     banned_until: Option<String>,
+    #[serde(default)]
+    app_metadata: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ExtProviderUserList {
+    Envelope { users: Vec<ExtProviderUser> },
+    Direct(Vec<ExtProviderUser>),
+}
+
+impl ExtProviderUserList {
+    fn into_users(self) -> Vec<ExtProviderUser> {
+        match self {
+            Self::Envelope { users } | Self::Direct(users) => users,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -143,6 +164,70 @@ struct MappedAccount {
 
 struct ExistsRow {
     exists: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct AuthAccountProvisioningContext {
+    pub tenant_id: Uuid,
+    pub actor_account_id: Uuid,
+    pub account_id: Uuid,
+    pub username: String,
+    pub email: String,
+    pub primary_role: String,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("application account provisioning failed: {code}")]
+pub struct AuthAccountProvisioningError {
+    code: &'static str,
+}
+
+impl AuthAccountProvisioningError {
+    pub const fn new(code: &'static str) -> Self {
+        Self { code }
+    }
+
+    const fn code(&self) -> &'static str {
+        self.code
+    }
+}
+
+#[async_trait]
+pub trait AuthAccountProvisioner: Send + Sync {
+    async fn provision(
+        &self,
+        connection: &mut PgConnection,
+        context: &AuthAccountProvisioningContext,
+    ) -> Result<(), AuthAccountProvisioningError>;
+}
+
+#[derive(Debug)]
+struct NoopAuthAccountProvisioner;
+
+#[async_trait]
+impl AuthAccountProvisioner for NoopAuthAccountProvisioner {
+    async fn provision(
+        &self,
+        _connection: &mut PgConnection,
+        _context: &AuthAccountProvisioningContext,
+    ) -> Result<(), AuthAccountProvisioningError> {
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct ProvisioningStateRow {
+    request_fingerprint: String,
+    status: String,
+    auth_user_id: Option<Uuid>,
+    account_id: Option<Uuid>,
+    retry_allowed: bool,
+}
+
+#[derive(Debug)]
+enum ProvisioningClaim {
+    Proceed { auth_user_id: Option<Uuid> },
+    Replay { auth_user_id: Uuid, account_id: Uuid },
 }
 
 #[derive(Clone, Debug, Serialize, TS)]
@@ -225,7 +310,12 @@ impl AuthAdminService {
         Ok(Some(user))
     }
 
-    async fn create_user(&self, request: &CreateAuthUserRequest) -> Result<ExtProviderUser, ProviderError> {
+    async fn create_user(
+        &self,
+        request: &CreateAuthUserRequest,
+        tenant_id: Uuid,
+        idempotency_key: Uuid,
+    ) -> Result<ExtProviderUser, ProviderError> {
         trace!(
             primary_role = %request.primary_role,
             password_supplied = request.password.is_some(),
@@ -236,7 +326,14 @@ impl AuthAdminService {
         attributes.insert("email_confirm".to_owned(), json!(true));
         attributes.insert("role".to_owned(), json!("authenticated"));
         attributes.insert("user_metadata".to_owned(), json!({ "username": request.username }));
-        attributes.insert("app_metadata".to_owned(), json!({ "managed_by": "infra-auth" }));
+        attributes.insert(
+            "app_metadata".to_owned(),
+            json!({
+                "managed_by": "infra-auth",
+                "tenant_id": tenant_id,
+                "provisioning_key": idempotency_key,
+            }),
+        );
         if let Some(password) = request.password.as_ref() {
             attributes.insert("password".to_owned(), json!(password));
         }
@@ -250,6 +347,47 @@ impl AuthAdminService {
             .map_err(ProviderError::Transport)?;
         let user: ExtProviderUser = read_provider_response(response).await?;
         info!(auth_user_id = %user.id, "Auth provider user created");
+        Ok(user)
+    }
+
+    async fn find_provisioned_user(
+        &self,
+        email: &str,
+        tenant_id: Uuid,
+        idempotency_key: Uuid,
+    ) -> Result<Option<ExtProviderUser>, ProviderError> {
+        trace!(tenant_id = %tenant_id, idempotency_key = %idempotency_key, "Searching for recoverable Auth user");
+        let response: reqwest::Response = self
+            .client
+            .get(format!("{}/admin/users?page=1&per_page=1000", self.base_url))
+            .bearer_auth(&self.admin_token)
+            .send()
+            .await
+            .map_err(ProviderError::Transport)?;
+        let users: Vec<ExtProviderUser> = read_provider_response::<ExtProviderUserList>(response)
+            .await?
+            .into_users();
+        let tenant_id_text: String = tenant_id.to_string();
+        let idempotency_key_text: String = idempotency_key.to_string();
+        let user: Option<ExtProviderUser> = users.into_iter().find(|user: &ExtProviderUser| {
+            user.email
+                .as_deref()
+                .is_some_and(|candidate: &str| candidate.eq_ignore_ascii_case(email))
+                && user.app_metadata.get("managed_by").and_then(serde_json::Value::as_str) == Some("infra-auth")
+                && user.app_metadata.get("tenant_id").and_then(serde_json::Value::as_str)
+                    == Some(tenant_id_text.as_str())
+                && user
+                    .app_metadata
+                    .get("provisioning_key")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(idempotency_key_text.as_str())
+        });
+        debug!(
+            tenant_id = %tenant_id,
+            idempotency_key = %idempotency_key,
+            recovered = user.is_some(),
+            "Recoverable Auth user search completed"
+        );
         Ok(user)
     }
 
@@ -270,30 +408,54 @@ impl AuthAdminService {
         Ok(user)
     }
 
-    async fn delete_user_after_failed_link(&self, user_id: Uuid) {
-        let result: Result<reqwest::Response, reqwest::Error> = self
+    async fn delete_user_after_failed_link(&self, user_id: Uuid) -> Result<(), ProviderError> {
+        let response: reqwest::Response = self
             .client
             .delete(format!("{}/admin/users/{user_id}", self.base_url))
             .bearer_auth(&self.admin_token)
             .send()
-            .await;
-        if let Err(error) = result {
-            error!(
-                "Failed to compensate unlinked Auth user: auth_user_id={} error={}",
-                user_id, error
-            );
+            .await
+            .map_err(ProviderError::Transport)?;
+        let status: reqwest::StatusCode = response.status();
+        if status.is_success() || status == reqwest::StatusCode::NOT_FOUND {
+            info!(auth_user_id = %user_id, status = status.as_u16(), "Compensated unlinked Auth user");
+            Ok(())
+        } else {
+            let message: String = response
+                .text()
+                .await
+                .map(|body: String| -> String { provider_message(&body) })
+                .unwrap_or_else(|_error: reqwest::Error| -> String {
+                    "Auth provider rejected compensation deletion".to_owned()
+                });
+            Err(ProviderError::Response {
+                status: status.as_u16(),
+                message,
+            })
         }
     }
 }
 
 pub fn routes(auth: Arc<AuthService>, policy: AuthAdminPolicy) -> Router {
+    routes_with_provisioner(auth, policy, Arc::new(NoopAuthAccountProvisioner))
+}
+
+pub fn routes_with_provisioner(
+    auth: Arc<AuthService>,
+    policy: AuthAdminPolicy,
+    provisioner: Arc<dyn AuthAccountProvisioner>,
+) -> Router {
     debug!(
         read_permission = policy.read_permission,
         create_permission = policy.create_permission,
         disable_permission = policy.disable_permission,
         "Registering Auth administration routes"
     );
-    let state: Arc<AuthAdminContext> = Arc::new(AuthAdminContext { auth, policy });
+    let state: Arc<AuthAdminContext> = Arc::new(AuthAdminContext {
+        auth,
+        policy,
+        provisioner,
+    });
     Router::new()
         .route("/admin/auth-users", get(list_users).post(create_user))
         .route("/admin/auth-users/{auth_user_id}/status", put(set_user_status))
@@ -337,28 +499,104 @@ async fn list_users(
 async fn create_user(
     State(context): State<Arc<AuthAdminContext>>,
     Extension(actor): Extension<AuthenticatedUser>,
+    headers: HeaderMap,
     Json(mut request): Json<CreateAuthUserRequest>,
 ) -> Result<(StatusCode, Json<AuthUserSummary>), AdminApiError> {
+    let idempotency_key: Uuid = parse_idempotency_key(&headers)?;
     info!(
         tenant_id = %actor.tenant_id,
         actor_id = %actor.account_id,
+        idempotency_key = %idempotency_key,
         primary_role = %request.primary_role,
         "Auth user creation request accepted"
     );
     require_permission(&actor, context.policy.create_permission)?;
     normalize_create_request(&mut request)?;
-    ensure_username_available(&context, &actor, &request.username).await?;
-    ensure_role_available(&context, &actor, &request.primary_role).await?;
+    ensure_role_grantable(&context, &actor, &request.primary_role).await?;
+    let request_fingerprint: String = provisioning_fingerprint(&request);
+    let claim: ProvisioningClaim =
+        claim_provisioning_request(&context, &actor, idempotency_key, &request_fingerprint).await?;
+    if let ProvisioningClaim::Replay {
+        auth_user_id,
+        account_id,
+    } = claim
+    {
+        let account: MappedAccount = load_mapped_account_by_id(&context, &actor, account_id).await?;
+        let provider_user: ExtProviderUser = context
+            .admin
+            .get_user(auth_user_id)
+            .await
+            .map_err(|error: ProviderError| provider_failure("replay Auth user creation", &actor, error))?
+            .ok_or_else(|| {
+                error!(
+                    tenant_id = %actor.tenant_id,
+                    account_id = %account_id,
+                    auth_user_id = %auth_user_id,
+                    idempotency_key = %idempotency_key,
+                    "Completed Auth provisioning references a missing provider user"
+                );
+                AdminApiError::Internal
+            })?;
+        info!(
+            tenant_id = %actor.tenant_id,
+            actor_id = %actor.account_id,
+            account_id = %account_id,
+            auth_user_id = %auth_user_id,
+            idempotency_key = %idempotency_key,
+            "Auth user creation replay returned the original result"
+        );
+        return Ok((StatusCode::OK, Json(summary(account, Some(provider_user)))));
+    }
 
-    let provider_user: ExtProviderUser = context
-        .admin
-        .create_user(&request)
-        .await
-        .map_err(|error| provider_failure("create Auth user", &actor, error))?;
-    let account: MappedAccount = match link_created_user(&context, &actor, &request, provider_user.id).await {
+    let ProvisioningClaim::Proceed { auth_user_id } = claim else {
+        return Err(AdminApiError::Internal);
+    };
+    if let Err(error) = ensure_username_available(&context, &actor, &request.username).await {
+        mark_provisioning_failed(&context, &actor, idempotency_key, "username_unavailable", None).await;
+        return Err(error);
+    }
+
+    let provider_result: Result<ExtProviderUser, ProviderError> =
+        resolve_or_create_provider_user(&context, &request, actor.tenant_id, idempotency_key, auth_user_id).await;
+    let provider_user: ExtProviderUser = match provider_result {
+        Ok(provider_user) => provider_user,
+        Err(error) => {
+            mark_provisioning_failed(&context, &actor, idempotency_key, "provider_create_failed", None).await;
+            return Err(provider_failure("create Auth user", &actor, error));
+        }
+    };
+    if let Err(error) = record_provisioned_auth_user(&context, &actor, idempotency_key, provider_user.id).await {
+        compensate_created_provider_user(
+            &context,
+            &actor,
+            idempotency_key,
+            provider_user.id,
+            "provider_record_failed",
+        )
+        .await;
+        return Err(error);
+    }
+
+    let account: MappedAccount = match link_created_user(
+        &context,
+        &actor,
+        &request,
+        provider_user.id,
+        idempotency_key,
+        &request_fingerprint,
+    )
+    .await
+    {
         Ok(account) => account,
         Err(error) => {
-            context.admin.delete_user_after_failed_link(provider_user.id).await;
+            compensate_created_provider_user(
+                &context,
+                &actor,
+                idempotency_key,
+                provider_user.id,
+                "account_link_failed",
+            )
+            .await;
             record_audit(
                 "auth.user.create",
                 "failed",
@@ -380,6 +618,7 @@ async fn create_user(
         actor_id = %actor.account_id,
         account_id = %account.account_id,
         auth_user_id = %provider_user.id,
+        idempotency_key = %idempotency_key,
         "Auth user creation request completed"
     );
     Ok((StatusCode::CREATED, Json(summary(account, Some(provider_user)))))
@@ -500,6 +739,345 @@ async fn load_mapped_account(
         .ok_or_else(|| AdminApiError::NotFound("The user was not found in this tenant.".to_owned()))
 }
 
+async fn load_mapped_account_by_id(
+    context: &AuthService,
+    actor: &AuthenticatedUser,
+    account_id: Uuid,
+) -> Result<MappedAccount, AdminApiError> {
+    let accounts: Vec<MappedAccount> = load_mapped_accounts(context, actor.tenant_id).await?;
+    accounts
+        .into_iter()
+        .find(|account: &MappedAccount| account.account_id == account_id)
+        .ok_or_else(|| AdminApiError::NotFound("The provisioned account was not found in this tenant.".to_owned()))
+}
+
+fn parse_idempotency_key(headers: &HeaderMap) -> Result<Uuid, AdminApiError> {
+    let raw_value: &str = headers
+        .get(IDEMPOTENCY_HEADER)
+        .and_then(|value: &axum::http::HeaderValue| value.to_str().ok())
+        .ok_or_else(|| {
+            AdminApiError::Validation("A valid Idempotency-Key header is required for user creation.".to_owned())
+        })?;
+    Uuid::parse_str(raw_value.trim()).map_err(|_error: uuid::Error| {
+        AdminApiError::Validation("A valid Idempotency-Key header is required for user creation.".to_owned())
+    })
+}
+
+fn provisioning_fingerprint(request: &CreateAuthUserRequest) -> String {
+    let mut hasher: Sha256 = Sha256::new();
+    update_fingerprint_field(&mut hasher, &request.username);
+    update_fingerprint_field(&mut hasher, &request.email);
+    update_fingerprint_field(&mut hasher, &request.primary_role);
+    match request.password.as_deref() {
+        Some(password) => {
+            hasher.update([1_u8]);
+            update_fingerprint_field(&mut hasher, password);
+        }
+        None => hasher.update([0_u8]),
+    }
+    let digest: sha2::digest::Output<Sha256> = hasher.finalize();
+    let mut fingerprint: String = String::with_capacity(64);
+    for byte in digest {
+        let encoded_byte: String = format!("{byte:02x}");
+        fingerprint.push_str(&encoded_byte);
+    }
+    fingerprint
+}
+
+fn update_fingerprint_field(hasher: &mut Sha256, value: &str) {
+    let length: u64 = u64::try_from(value.len()).unwrap_or(u64::MAX);
+    hasher.update(length.to_be_bytes());
+    hasher.update(value.as_bytes());
+}
+
+async fn claim_provisioning_request(
+    context: &AuthService,
+    actor: &AuthenticatedUser,
+    idempotency_key: Uuid,
+    request_fingerprint: &str,
+) -> Result<ProvisioningClaim, AdminApiError> {
+    debug!(
+        tenant_id = %actor.tenant_id,
+        actor_id = %actor.account_id,
+        idempotency_key = %idempotency_key,
+        "Claiming Auth account provisioning request"
+    );
+    let mut transaction: TenantTransaction = context.db.begin_tenant(actor.tenant_id).await.map_err(|error| {
+        error!(
+            tenant_id = %actor.tenant_id,
+            actor_id = %actor.account_id,
+            idempotency_key = %idempotency_key,
+            error = %error,
+            "Auth provisioning claim transaction failed"
+        );
+        AdminApiError::Internal
+    })?;
+    let insert_result: PgQueryResult = sqlx::query!(
+        r#"
+        INSERT INTO auth_account_provisioning_requests (
+            tenant_id, idempotency_key, request_fingerprint, requested_by_account_id
+        ) VALUES ($1, $2, $3, $4)
+        ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
+        "#,
+        actor.tenant_id,
+        idempotency_key,
+        request_fingerprint,
+        actor.account_id,
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(|error: sqlx::Error| {
+        error!(
+            tenant_id = %actor.tenant_id,
+            idempotency_key = %idempotency_key,
+            error = %error,
+            "Auth provisioning claim insert failed"
+        );
+        AdminApiError::Internal
+    })?;
+    if insert_result.rows_affected() == 1 {
+        transaction.commit().await.map_err(|error: sqlx::Error| {
+            error!(
+                tenant_id = %actor.tenant_id,
+                idempotency_key = %idempotency_key,
+                error = %error,
+                "Auth provisioning claim commit failed"
+            );
+            AdminApiError::Internal
+        })?;
+        return Ok(ProvisioningClaim::Proceed { auth_user_id: None });
+    }
+
+    let state: ProvisioningStateRow = sqlx::query_as!(
+        ProvisioningStateRow,
+        r#"
+        SELECT request_fingerprint, status, auth_user_id, account_id,
+               (status = 'failed' OR locked_at <= CURRENT_TIMESTAMP - INTERVAL '5 minutes') AS "retry_allowed!"
+        FROM auth_account_provisioning_requests
+        WHERE tenant_id = $1 AND idempotency_key = $2
+        FOR UPDATE
+        "#,
+        actor.tenant_id,
+        idempotency_key,
+    )
+    .fetch_one(transaction.connection())
+    .await
+    .map_err(|error: sqlx::Error| {
+        error!(
+            tenant_id = %actor.tenant_id,
+            idempotency_key = %idempotency_key,
+            error = %error,
+            "Auth provisioning claim load failed"
+        );
+        AdminApiError::Internal
+    })?;
+    if state.request_fingerprint != request_fingerprint {
+        warn!(
+            tenant_id = %actor.tenant_id,
+            actor_id = %actor.account_id,
+            idempotency_key = %idempotency_key,
+            "Auth provisioning idempotency key was reused with different input"
+        );
+        return Err(AdminApiError::Conflict(
+            "This idempotency key was already used for a different user request.".to_owned(),
+        ));
+    }
+
+    let claim: ProvisioningClaim = if state.status == "completed" {
+        let auth_user_id: Uuid = state.auth_user_id.ok_or(AdminApiError::Internal)?;
+        let account_id: Uuid = state.account_id.ok_or(AdminApiError::Internal)?;
+        ProvisioningClaim::Replay {
+            auth_user_id,
+            account_id,
+        }
+    } else if state.retry_allowed {
+        let retry_result: PgQueryResult = sqlx::query!(
+            r#"
+            UPDATE auth_account_provisioning_requests
+            SET status = 'processing', locked_at = CURRENT_TIMESTAMP,
+                completed_at = NULL, last_error_code = NULL, updated_at = CURRENT_TIMESTAMP
+            WHERE tenant_id = $1 AND idempotency_key = $2
+            "#,
+            actor.tenant_id,
+            idempotency_key,
+        )
+        .execute(transaction.connection())
+        .await
+        .map_err(|error: sqlx::Error| {
+            error!(
+                tenant_id = %actor.tenant_id,
+                idempotency_key = %idempotency_key,
+                error = %error,
+                "Auth provisioning retry claim failed"
+            );
+            AdminApiError::Internal
+        })?;
+        trace!(
+            tenant_id = %actor.tenant_id,
+            idempotency_key = %idempotency_key,
+            rows_affected = retry_result.rows_affected(),
+            "Auth provisioning retry claimed"
+        );
+        ProvisioningClaim::Proceed {
+            auth_user_id: state.auth_user_id,
+        }
+    } else {
+        warn!(
+            tenant_id = %actor.tenant_id,
+            actor_id = %actor.account_id,
+            idempotency_key = %idempotency_key,
+            "Auth provisioning request is already processing"
+        );
+        return Err(AdminApiError::Conflict(
+            "This user provisioning request is already being processed.".to_owned(),
+        ));
+    };
+    transaction.commit().await.map_err(|error: sqlx::Error| {
+        error!(
+            tenant_id = %actor.tenant_id,
+            idempotency_key = %idempotency_key,
+            error = %error,
+            "Auth provisioning claim completion failed"
+        );
+        AdminApiError::Internal
+    })?;
+    Ok(claim)
+}
+
+async fn resolve_or_create_provider_user(
+    context: &AuthService,
+    request: &CreateAuthUserRequest,
+    tenant_id: Uuid,
+    idempotency_key: Uuid,
+    known_auth_user_id: Option<Uuid>,
+) -> Result<ExtProviderUser, ProviderError> {
+    if let Some(auth_user_id) = known_auth_user_id
+        && let Some(user) = context.admin.get_user(auth_user_id).await?
+    {
+        debug!(tenant_id = %tenant_id, auth_user_id = %auth_user_id, idempotency_key = %idempotency_key, "Recovered Auth user by persisted ID");
+        return Ok(user);
+    }
+    if let Some(user) = context
+        .admin
+        .find_provisioned_user(&request.email, tenant_id, idempotency_key)
+        .await?
+    {
+        return Ok(user);
+    }
+    context.admin.create_user(request, tenant_id, idempotency_key).await
+}
+
+async fn record_provisioned_auth_user(
+    context: &AuthService,
+    actor: &AuthenticatedUser,
+    idempotency_key: Uuid,
+    auth_user_id: Uuid,
+) -> Result<(), AdminApiError> {
+    let result: PgQueryResult = context
+        .db
+        .run_with_tenant(actor.tenant_id, async move |connection: &mut PgConnection| {
+            sqlx::query!(
+                r#"
+                UPDATE auth_account_provisioning_requests
+                SET auth_user_id = $3, updated_at = CURRENT_TIMESTAMP
+                WHERE tenant_id = $1 AND idempotency_key = $2 AND status = 'processing'
+                "#,
+                actor.tenant_id,
+                idempotency_key,
+                auth_user_id,
+            )
+            .execute(connection)
+            .await
+        })
+        .await
+        .map_err(|error| {
+            error!(
+                tenant_id = %actor.tenant_id,
+                idempotency_key = %idempotency_key,
+                auth_user_id = %auth_user_id,
+                error = %error,
+                "Auth provisioning provider ID persistence failed"
+            );
+            AdminApiError::Internal
+        })?;
+    if result.rows_affected() != 1 {
+        error!(tenant_id = %actor.tenant_id, idempotency_key = %idempotency_key, "Auth provisioning provider ID target was not processing");
+        return Err(AdminApiError::Internal);
+    }
+    debug!(tenant_id = %actor.tenant_id, idempotency_key = %idempotency_key, auth_user_id = %auth_user_id, "Auth provisioning provider ID persisted");
+    Ok(())
+}
+
+async fn mark_provisioning_failed(
+    context: &AuthService,
+    actor: &AuthenticatedUser,
+    idempotency_key: Uuid,
+    error_code: &'static str,
+    retained_auth_user_id: Option<Uuid>,
+) {
+    let result: Result<PgQueryResult, infra_postgres::TenantDbErr> = context
+        .db
+        .run_with_tenant(actor.tenant_id, async move |connection: &mut PgConnection| {
+            sqlx::query!(
+                r#"
+                UPDATE auth_account_provisioning_requests
+                SET status = 'failed', auth_user_id = $3, account_id = NULL,
+                    completed_at = NULL, last_error_code = $4, updated_at = CURRENT_TIMESTAMP
+                WHERE tenant_id = $1 AND idempotency_key = $2
+                "#,
+                actor.tenant_id,
+                idempotency_key,
+                retained_auth_user_id,
+                error_code,
+            )
+            .execute(connection)
+            .await
+        })
+        .await;
+    match result {
+        Ok(update_result) => debug!(
+            tenant_id = %actor.tenant_id,
+            idempotency_key = %idempotency_key,
+            rows_affected = update_result.rows_affected(),
+            error_code,
+            "Auth provisioning failure persisted"
+        ),
+        Err(error) => error!(
+            tenant_id = %actor.tenant_id,
+            idempotency_key = %idempotency_key,
+            error_code,
+            error = %error,
+            "Auth provisioning failure persistence failed"
+        ),
+    }
+}
+
+async fn compensate_created_provider_user(
+    context: &AuthService,
+    actor: &AuthenticatedUser,
+    idempotency_key: Uuid,
+    auth_user_id: Uuid,
+    error_code: &'static str,
+) {
+    let compensation_result: Result<(), ProviderError> =
+        context.admin.delete_user_after_failed_link(auth_user_id).await;
+    let retained_auth_user_id: Option<Uuid> = match compensation_result {
+        Ok(()) => None,
+        Err(error) => {
+            error!(
+                tenant_id = %actor.tenant_id,
+                actor_id = %actor.account_id,
+                idempotency_key = %idempotency_key,
+                auth_user_id = %auth_user_id,
+                error = %error,
+                "Failed to compensate unlinked Auth user"
+            );
+            Some(auth_user_id)
+        }
+    };
+    mark_provisioning_failed(context, actor, idempotency_key, error_code, retained_auth_user_id).await;
+}
+
 async fn ensure_username_available(
     context: &AuthService,
     actor: &AuthenticatedUser,
@@ -546,57 +1124,70 @@ async fn ensure_username_available(
     }
 }
 
-async fn ensure_role_available(
+async fn ensure_role_grantable(
     context: &AuthService,
     actor: &AuthenticatedUser,
     role: &str,
 ) -> Result<(), AdminApiError> {
-    trace!(tenant_id = %actor.tenant_id, role, "Checking Auth role availability");
+    trace!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, role, "Checking Auth role assignment grant");
     let mut transaction: TenantTransaction = context.db.begin_tenant(actor.tenant_id).await.map_err(|error| {
         error!(
-            "Auth role check transaction failed: tenant_id={} error={}",
-            actor.tenant_id, error
+            "Auth role assignment check transaction failed: tenant_id={} actor_id={} error={}",
+            actor.tenant_id, actor.account_id, error
         );
         AdminApiError::Internal
     })?;
     let row: ExistsRow = sqlx::query_as!(
         ExistsRow,
         r#"SELECT EXISTS (
-            SELECT 1 FROM roles WHERE code = $1 AND is_active
+            SELECT 1
+            FROM account_roles AS actor_role
+            INNER JOIN auth_role_assignment_grants AS role_grant
+                ON role_grant.grantor_role_code = actor_role.role_code
+            INNER JOIN roles AS target_role
+                ON target_role.code = role_grant.target_role_code
+               AND target_role.is_active
+            WHERE actor_role.tenant_id = $1
+              AND actor_role.account_id = $2
+              AND role_grant.target_role_code = $3
         ) AS "exists!""#,
+        actor.tenant_id,
+        actor.account_id,
         role,
     )
     .fetch_one(transaction.connection())
     .await
     .map_err(|error| {
         error!(
-            "Auth role check failed: tenant_id={} role={} error={}",
-            actor.tenant_id, role, error
+            "Auth role assignment check failed: tenant_id={} actor_id={} role={} error={}",
+            actor.tenant_id, actor.account_id, role, error
         );
         AdminApiError::Internal
     })?;
     transaction.commit().await.map_err(|error| {
         error!(
-            "Auth role check commit failed: tenant_id={} role={} error={}",
-            actor.tenant_id, role, error
+            "Auth role assignment check commit failed: tenant_id={} actor_id={} role={} error={}",
+            actor.tenant_id, actor.account_id, role, error
         );
         AdminApiError::Internal
     })?;
 
     if row.exists {
-        debug!(tenant_id = %actor.tenant_id, role, "Auth role is available");
+        debug!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, role, "Auth role assignment grant accepted");
         Ok(())
     } else {
-        warn!(tenant_id = %actor.tenant_id, role, "Auth role availability check rejected an unavailable role");
-        Err(AdminApiError::Validation("Role is not available.".to_owned()))
+        warn!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, role, "Auth role assignment grant rejected");
+        Err(AdminApiError::Forbidden)
     }
 }
 
 async fn link_created_user(
-    context: &AuthService,
+    context: &AuthAdminContext,
     actor: &AuthenticatedUser,
     request: &CreateAuthUserRequest,
     auth_user_id: Uuid,
+    idempotency_key: Uuid,
+    request_fingerprint: &str,
 ) -> Result<MappedAccount, AdminApiError> {
     let account_id: Uuid = Uuid::new_v4();
     debug!(
@@ -659,6 +1250,63 @@ async fn link_created_user(
     .await
     .map_err(|error| account_create_error("link Auth identity", actor, error))?;
     trace!(rows_affected = identity_insert.rows_affected(), account_id = %account_id, "External Auth identity linked");
+    let provisioning_context: AuthAccountProvisioningContext = AuthAccountProvisioningContext {
+        tenant_id: actor.tenant_id,
+        actor_account_id: actor.account_id,
+        account_id,
+        username: request.username.clone(),
+        email: request.email.clone(),
+        primary_role: request.primary_role.clone(),
+    };
+    context
+        .provisioner
+        .provision(transaction.connection(), &provisioning_context)
+        .await
+        .map_err(|error: AuthAccountProvisioningError| {
+            error!(
+                tenant_id = %actor.tenant_id,
+                actor_id = %actor.account_id,
+                account_id = %account_id,
+                primary_role = %request.primary_role,
+                provisioning_error_code = error.code(),
+                "Application-specific account provisioning failed"
+            );
+            AdminApiError::Internal
+        })?;
+    let completion_result: PgQueryResult = sqlx::query!(
+        r#"
+        UPDATE auth_account_provisioning_requests
+        SET status = 'completed', auth_user_id = $3, account_id = $4,
+            completed_at = CURRENT_TIMESTAMP, last_error_code = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE tenant_id = $1 AND idempotency_key = $2
+          AND request_fingerprint = $5 AND status = 'processing'
+        "#,
+        actor.tenant_id,
+        idempotency_key,
+        auth_user_id,
+        account_id,
+        request_fingerprint,
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(|error: sqlx::Error| account_create_error("complete provisioning request", actor, error))?;
+    if completion_result.rows_affected() != 1 {
+        error!(
+            tenant_id = %actor.tenant_id,
+            actor_id = %actor.account_id,
+            account_id = %account_id,
+            idempotency_key = %idempotency_key,
+            "Auth provisioning completion target was not processing"
+        );
+        return Err(AdminApiError::Internal);
+    }
+    trace!(
+        tenant_id = %actor.tenant_id,
+        account_id = %account_id,
+        idempotency_key = %idempotency_key,
+        "Auth provisioning ledger completed"
+    );
     transaction.commit().await.map_err(|error| {
         error!(
             "Auth account create commit failed: tenant_id={} actor_id={} error={}",
@@ -917,12 +1565,15 @@ fn required_env(name: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CreateAuthUserRequest, ExtProviderUser, normalize_create_request, provider_message, user_is_banned};
+    use super::{
+        CreateAuthUserRequest, ExtProviderUser, normalize_create_request, provider_message, provisioning_fingerprint,
+        user_is_banned,
+    };
     use uuid::Uuid;
 
     #[test]
     fn normalizes_valid_create_request() {
-        let mut request = CreateAuthUserRequest {
+        let mut request: CreateAuthUserRequest = CreateAuthUserRequest {
             username: "  Linh Nguyen  ".to_owned(),
             email: " LINH@EXAMPLE.COM ".to_owned(),
             password: Some("correct-horse".to_owned()),
@@ -935,7 +1586,7 @@ mod tests {
 
     #[test]
     fn accepts_social_only_user_without_password() {
-        let mut request = CreateAuthUserRequest {
+        let mut request: CreateAuthUserRequest = CreateAuthUserRequest {
             username: "linh".to_owned(),
             email: "linh@example.com".to_owned(),
             password: Some(String::new()),
@@ -947,18 +1598,36 @@ mod tests {
 
     #[test]
     fn detects_future_ban_and_sanitizes_provider_message() {
-        let user = ExtProviderUser {
+        let user: ExtProviderUser = ExtProviderUser {
             id: Uuid::nil(),
             email: None,
             email_confirmed_at: None,
             last_sign_in_at: None,
             created_at: "2026-01-01T00:00:00Z".to_owned(),
             banned_until: Some("2099-01-01T00:00:00Z".to_owned()),
+            app_metadata: serde_json::Value::Null,
         };
         assert!(user_is_banned(&user));
         assert_eq!(
             provider_message(r#"{"msg":"Email already exists"}"#),
             "Email already exists"
         );
+    }
+
+    #[test]
+    fn provisioning_fingerprint_is_stable_and_covers_password() {
+        let request: CreateAuthUserRequest = CreateAuthUserRequest {
+            username: "linh".to_owned(),
+            email: "linh@example.com".to_owned(),
+            password: Some("first-password".to_owned()),
+            primary_role: "employee".to_owned(),
+        };
+        let same_fingerprint: String = provisioning_fingerprint(&request);
+        let mut changed_request: CreateAuthUserRequest = request.clone();
+        changed_request.password = Some("second-password".to_owned());
+        let changed_fingerprint: String = provisioning_fingerprint(&changed_request);
+
+        assert_eq!(same_fingerprint, provisioning_fingerprint(&request));
+        assert_ne!(same_fingerprint, changed_fingerprint);
     }
 }

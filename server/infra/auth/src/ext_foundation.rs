@@ -26,3 +26,11 @@ pub use service::ExtProvider;
 pub fn routes(auth: Arc<AuthService>, policy: auth_admin::AuthAdminPolicy) -> Router {
     account::routes(Arc::clone(&auth)).merge(auth_admin::routes(auth, policy))
 }
+
+pub fn routes_with_provisioner(
+    auth: Arc<AuthService>,
+    policy: auth_admin::AuthAdminPolicy,
+    provisioner: Arc<dyn auth_admin::AuthAccountProvisioner>,
+) -> Router {
+    account::routes(Arc::clone(&auth)).merge(auth_admin::routes_with_provisioner(auth, policy, provisioner))
+}

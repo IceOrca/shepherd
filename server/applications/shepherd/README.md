@@ -28,6 +28,13 @@ Keep dependencies pointing `host -> core <- database`. Core code must not import
 Cross-feature construction belongs in `ApplicationCore` in `src/lib.rs`; a feature service must not construct a sibling
 feature service. `runtime` supplies infrastructure dependencies and mounts the completed Shepherd router.
 
+Ordinary tenant-owned SQL reads and single-step mutations use
+`DatabaseAdapter::run_with_tenant` with a native async closure. This centralizes
+transaction-local RLS setup, commit, rollback, and safe lifecycle logging without
+`BoxFuture` or `Box::pin`. Work-session transitions, assignment capacity checks,
+and reconciliation retain explicit `TenantTransaction` boundaries because their
+row locks and multi-step business decisions must remain one atomic unit.
+
 ## Adding a Feature
 
 1. Add `<area>/<feature>.rs` beside `<area>/<feature>/{core.rs,database.rs,host.rs}`. Never add `mod.rs`.

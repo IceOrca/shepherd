@@ -36,6 +36,16 @@ const emptyCreateRequest: CreateAuthUserRequest = {
   primary_role: "employee",
 };
 
+type CreateAuthUserVariables = {
+  request: CreateAuthUserRequest;
+  idempotencyKey: string;
+};
+
+type CreateAuthUserAttempt = {
+  requestSignature: string;
+  idempotencyKey: string;
+};
+
 function formatOptionalDate(value: string | null): string {
   if (!value) {
     return "Chưa có";
@@ -62,11 +72,14 @@ export function AuthUsersPage() {
   const canRead = permissions.includes("auth.accounts.read");
   const canCreate = permissions.includes("auth.accounts.create");
   const canDisable = permissions.includes("auth.accounts.disable");
+  const canGrantElevatedRoles: boolean = profile?.roles.includes("tenant_owner") ?? false;
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [createRequest, setCreateRequest] =
     useState<CreateAuthUserRequest>(emptyCreateRequest);
+  const [createAttempt, setCreateAttempt] =
+    useState<CreateAuthUserAttempt | null>(null);
   const [feedback, setFeedback] = useState<{
     kind: "success" | "error";
     message: string;
@@ -79,8 +92,9 @@ export function AuthUsersPage() {
   });
 
   const createMutation = useMutation({
-    mutationFn: createAuthUser,
-    onSuccess: (created) => {
+    mutationFn: (variables: CreateAuthUserVariables): Promise<AuthUserSummary> =>
+      createAuthUser(variables.request, variables.idempotencyKey),
+    onSuccess: (created: AuthUserSummary): void => {
       queryClient.setQueryData<AuthUserSummary[]>(
         authAdminQueryKeys.all,
         (current = []) => [...current, created],
@@ -90,10 +104,11 @@ export function AuthUsersPage() {
         message: `Đã tạo tài khoản ${created.username} và xác nhận email.`,
       });
       setCreateRequest(emptyCreateRequest);
+      setCreateAttempt(null);
       setShowPassword(false);
       setShowCreate(false);
     },
-    onError: (error) => {
+    onError: (error: Error): void => {
       setFeedback({
         kind: "error",
         message: friendlyApiError(
@@ -165,18 +180,25 @@ export function AuthUsersPage() {
     );
   }
 
-  const submitCreate = (event: FormEvent<HTMLFormElement>) => {
+  const submitCreate = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
     setFeedback(null);
-    createMutation.mutate({
+    const normalizedRequest: CreateAuthUserRequest = {
       ...createRequest,
       username: createRequest.username.trim(),
       email: createRequest.email.trim(),
-    });
+    };
+    const requestSignature: string = JSON.stringify(normalizedRequest);
+    const idempotencyKey: string =
+      createAttempt?.requestSignature === requestSignature
+        ? createAttempt.idempotencyKey
+        : crypto.randomUUID();
+    setCreateAttempt({ requestSignature, idempotencyKey });
+    createMutation.mutate({ request: normalizedRequest, idempotencyKey });
   };
 
-  const toggleStatus = (user: AuthUserSummary) => {
-    const disabled = userIsDisabled(user);
+  const toggleStatus = (user: AuthUserSummary): void => {
+    const disabled: boolean = userIsDisabled(user);
     if (
       !disabled &&
       !window.confirm(
@@ -545,8 +567,12 @@ export function AuthUsersPage() {
                   value={createRequest.primary_role}
                 >
                   <option value="employee">Nhân viên</option>
-                  <option value="supervisor">Điều phối viên</option>
-                  <option value="tenant_owner">Chủ doanh nghiệp</option>
+                  {canGrantElevatedRoles ? (
+                    <>
+                      <option value="supervisor">Điều phối viên</option>
+                      <option value="tenant_owner">Chủ doanh nghiệp</option>
+                    </>
+                  ) : null}
                 </select>
               </label>
 

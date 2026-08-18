@@ -14,7 +14,7 @@ mkdir -p "$(dirname "${auth_output_path}")"
 umask 077
 
 generate_admin_token() {
-    docker run --rm -e JWT_SECRET node:22-alpine node -e '
+    docker run --rm -e JWT_SECRET node:24-alpine node -e '
 const crypto = require("crypto");
 const now = Math.floor(Date.now() / 1000);
 const encode = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");

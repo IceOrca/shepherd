@@ -6,9 +6,11 @@ edition.workspace = true
 [features]
 default = ["ext-foundation"]
 ext-foundation = [
+    "dep:async-trait",
     "dep:reqwest",
     "dep:chrono",
     "dep:serde_json",
+    "dep:sha2",
     "dep:thiserror",
     "dep:tokio",
     "dep:sqlx",
