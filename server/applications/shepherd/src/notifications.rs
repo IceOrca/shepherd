@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use infra_kernel::debug::*;
+use tracing::{error, warn, info, debug, trace};
 use infra_notifier::{NotificationChannel, NotificationError, Notifier};
 use infra_postgres::{DatabaseAdapter, TenantTransaction};
 use tokio::{
@@ -47,14 +47,14 @@ impl NotificationDispatcher {
         match self.wake_sender.try_send(()) {
             Ok(()) | Err(mpsc::error::TrySendError::Full(())) => {}
             Err(mpsc::error::TrySendError::Closed(())) => {
-                log_warn!("Notification dispatcher wake channel is closed");
+                warn!("Notification dispatcher wake channel is closed");
             }
         }
     }
 
     pub async fn run(&self, cancellation: CancellationToken) {
         let Some(mut wake_receiver) = self.wake_receiver.lock().await.take() else {
-            log_error!("Notification dispatcher cannot be started more than once");
+            error!("Notification dispatcher cannot be started more than once");
             return;
         };
         let mut interval = tokio::time::interval(self.poll_interval);
@@ -62,7 +62,7 @@ impl NotificationDispatcher {
         loop {
             tokio::select! {
                 _ = cancellation.cancelled() => {
-                    log_notice!("Notification dispatcher stopped");
+                    info!("Notification dispatcher stopped");
                     return;
                 }
                 _ = interval.tick() => {
@@ -70,7 +70,7 @@ impl NotificationDispatcher {
                 }
                 signal = wake_receiver.recv() => {
                     if signal.is_none() {
-                        log_error!("Notification dispatcher wake channel closed unexpectedly");
+                        error!("Notification dispatcher wake channel closed unexpectedly");
                         return;
                     }
                     self.dispatch_available().await;
@@ -81,7 +81,7 @@ impl NotificationDispatcher {
 
     async fn dispatch_available(&self) {
         if let Err(error) = self.dispatch_once().await {
-            log_error!("Notification dispatcher pass failed: {}", error);
+            error!("Notification dispatcher pass failed: {}", error);
         }
     }
 
@@ -165,11 +165,9 @@ impl NotificationDispatcher {
                     .mark_sent(tenant_id, delivery.id, receipt.provider_message_id.as_deref())
                     .await
                 {
-                    log_error!(
+                    error!(
                         "Could not mark notification sent: tenant_id={} outbox_id={} error={}",
-                        tenant_id,
-                        delivery.id,
-                        error
+                        tenant_id, delivery.id, error
                     );
                 }
             }
@@ -217,19 +215,14 @@ impl NotificationDispatcher {
             )
             .await;
         if let Err(persist_error) = result {
-            log_error!(
+            error!(
                 "Could not persist notification failure: tenant_id={} outbox_id={} error={}",
-                tenant_id,
-                delivery.id,
-                persist_error
+                tenant_id, delivery.id, persist_error
             );
         } else {
-            log_warn!(
+            warn!(
                 "Notification delivery failed: tenant_id={} outbox_id={} attempt={} terminal={}",
-                tenant_id,
-                delivery.id,
-                delivery.attempt_count,
-                terminal
+                tenant_id, delivery.id, delivery.attempt_count, terminal
             );
         }
     }

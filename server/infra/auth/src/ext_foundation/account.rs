@@ -8,9 +8,10 @@ use axum::{
     response::Response,
     routing::get,
 };
-use infra_kernel::{debug::*, request::PrincipalRateLimitKey};
-use infra_postgres::{DatabaseAdapter, TenantTransaction, TenantDbErr};
+use infra_kernel::request::PrincipalRateLimitKey;
+use infra_postgres::{DatabaseAdapter, TenantDbErr, TenantTransaction};
 use serde::Serialize;
+use tracing::{debug, error, info, trace, warn};
 use ts_rs::TS;
 use uuid::Uuid;
 
@@ -60,11 +61,22 @@ pub struct CurrentUserProfile {
 }
 
 pub fn routes(auth: Arc<AuthService>) -> Router {
+    info!("Configured external authentication account routes");
     Router::new().route("/me", get(current_user)).with_state(auth)
 }
 
 async fn current_user(Extension(user): Extension<AuthenticatedUser>) -> Json<CurrentUserProfile> {
-    Json(user.profile())
+    let profile: CurrentUserProfile = user.profile();
+    debug!(
+        operation = "current_user_profile",
+        tenant_id = %profile.tenant_id,
+        account_id = %profile.account_id,
+        primary_role = %profile.primary_role,
+        role_count = profile.roles.len(),
+        permission_count = profile.permissions.len(),
+        "Returning authenticated current-user profile"
+    );
+    Json(profile)
 }
 
 struct AccountIdentity {
@@ -95,13 +107,44 @@ pub async fn resolve_application_account(
     mut request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
+    let method: String = request.method().as_str().to_owned();
+    let path: String = request.uri().path().to_owned();
+    let issuer: String = principal.issuer.clone();
+    let subject: String = principal.subject.clone();
+    trace!(
+        operation = "resolve_application_account",
+        method = %method,
+        path = %path,
+        issuer = %issuer,
+        subject = %subject,
+        "Resolving application account for authenticated external identity"
+    );
     let user: AuthenticatedUser = load_account(&ctx.db, &principal).await?;
-    request.extensions_mut().insert(PrincipalRateLimitKey::new(format!(
-        "{}:{}",
-        user.tenant_id, user.account_id
-    )));
+    let tenant_id: Uuid = user.tenant_id;
+    let account_id: Uuid = user.account_id;
+    debug!(
+        operation = "resolve_application_account",
+        tenant_id = %tenant_id,
+        account_id = %account_id,
+        role_count = user.roles.len(),
+        permission_count = user.permissions.len(),
+        "Resolved active application account for external identity"
+    );
+    request
+        .extensions_mut()
+        .insert(PrincipalRateLimitKey::new(format!("{tenant_id}:{account_id}")));
     request.extensions_mut().insert(user);
-    Ok(next.run(request).await)
+    let response: Response = next.run(request).await;
+    info!(
+        operation = "resolve_application_account",
+        method = %method,
+        path = %path,
+        tenant_id = %tenant_id,
+        account_id = %account_id,
+        status = response.status().as_u16(),
+        "Protected request completed after application account resolution"
+    );
+    Ok(response)
 }
 
 async fn load_account(
@@ -120,35 +163,48 @@ async fn load_account(
     )
     .fetch_optional(db.pool())
     .await
-    .map_err(|error: sqlx::Error| {
-        log_error!(
-            "Identity lookup failed: issuer={} subject={} error={}",
-            principal.issuer,
-            principal.subject,
-            error
+    .map_err(|database_error: sqlx::Error| {
+        error!(
+            issuer = %principal.issuer,
+            subject = %principal.subject,
+            reason = %database_error,
+            "Application account identity lookup failed"
         );
         StatusCode::SERVICE_UNAVAILABLE
     })?
     .ok_or_else(|| {
-        log_notice!(
-            "Authenticated external identity has no application account: issuer={} subject={}",
-            principal.issuer,
-            principal.subject
+        warn!(
+            issuer = %principal.issuer,
+            subject = %principal.subject,
+            "Authenticated external identity has no active application account mapping"
         );
         StatusCode::FORBIDDEN
     })?;
+    trace!(
+        operation = "load_application_account",
+        tenant_id = %identity.tenant_id,
+        account_id = %identity.account_id,
+        "External identity mapped to application account"
+    );
 
     let mut transaction: TenantTransaction =
         db.begin_tenant(identity.tenant_id)
             .await
-            .map_err(|error: TenantDbErr| {
-                log_error!(
-                    "Identity tenant transaction failed: tenant_id={} error={}",
-                    identity.tenant_id,
-                    error
+            .map_err(|database_error: TenantDbErr| {
+                error!(
+                    tenant_id = %identity.tenant_id,
+                    account_id = %identity.account_id,
+                    reason = %database_error,
+                    "Application account authorization transaction could not be opened"
                 );
                 StatusCode::SERVICE_UNAVAILABLE
             })?;
+    trace!(
+        operation = "load_application_account",
+        tenant_id = %identity.tenant_id,
+        account_id = %identity.account_id,
+        "Opened tenant-scoped transaction for application account resolution"
+    );
     let account: UserAccount = sqlx::query_as!(
         UserAccount,
         r#"
@@ -161,33 +217,40 @@ async fn load_account(
     )
     .fetch_optional(transaction.connection())
     .await
-    .map_err(|error: sqlx::Error| {
-        log_error!(
-            "Application account lookup failed: tenant_id={} account_id={} error={}",
-            identity.tenant_id,
-            identity.account_id,
-            error
+    .map_err(|database_error: sqlx::Error| {
+        error!(
+            tenant_id = %identity.tenant_id,
+            account_id = %identity.account_id,
+            reason = %database_error,
+            "Application account lookup failed"
         );
         StatusCode::SERVICE_UNAVAILABLE
     })?
     .ok_or_else(|| {
-        log_error!(
-            "OIDC identity references a missing account: tenant_id={} account_id={}",
-            identity.tenant_id,
-            identity.account_id
+        error!(
+            tenant_id = %identity.tenant_id,
+            account_id = %identity.account_id,
+            "External identity references a missing application account"
         );
         StatusCode::SERVICE_UNAVAILABLE
     })?;
 
     if account.status != "active" {
-        log_notice!(
-            "Inactive application identity rejected: tenant_id={} account_id={} account_status={}",
-            account.tenant_id,
-            account.id,
-            account.status
+        warn!(
+            tenant_id = %account.tenant_id,
+            account_id = %account.id,
+            account_status = %account.status,
+            "Inactive application identity rejected"
         );
         return Err(StatusCode::FORBIDDEN);
     }
+    debug!(
+        operation = "load_application_account",
+        tenant_id = %account.tenant_id,
+        account_id = %account.id,
+        primary_role = %account.primary_role_code,
+        "Application account is active"
+    );
 
     let role_rows: Vec<AccountRole> = sqlx::query_as!(
         AccountRole,
@@ -202,12 +265,12 @@ async fn load_account(
     )
     .fetch_all(transaction.connection())
     .await
-    .map_err(|error: sqlx::Error| {
-        log_error!(
-            "Account role lookup failed: tenant_id={} account_id={} error={}",
-            account.tenant_id,
-            account.id,
-            error
+    .map_err(|database_error: sqlx::Error| {
+        error!(
+            tenant_id = %account.tenant_id,
+            account_id = %account.id,
+            reason = %database_error,
+            "Application account role lookup failed"
         );
         StatusCode::SERVICE_UNAVAILABLE
     })?;
@@ -233,34 +296,57 @@ async fn load_account(
     )
     .fetch_all(transaction.connection())
     .await
-    .map_err(|error: sqlx::Error| {
-        log_error!(
-            "Account permission lookup failed: tenant_id={} account_id={} error={}",
-            account.tenant_id,
-            account.id,
-            error
+    .map_err(|database_error: sqlx::Error| {
+        error!(
+            tenant_id = %account.tenant_id,
+            account_id = %account.id,
+            reason = %database_error,
+            "Application account permission lookup failed"
         );
         StatusCode::SERVICE_UNAVAILABLE
     })?;
-    transaction.commit().await.map_err(|error: sqlx::Error| {
-        log_error!(
-            "Identity lookup commit failed: tenant_id={} account_id={} error={}",
-            account.tenant_id,
-            account.id,
-            error
+    debug!(
+        operation = "load_application_account",
+        tenant_id = %account.tenant_id,
+        account_id = %account.id,
+        role_row_count = role_rows.len(),
+        permission_grant_row_count = permission_rows.len(),
+        "Loaded application role and permission grants"
+    );
+    transaction.commit().await.map_err(|database_error: sqlx::Error| {
+        error!(
+            tenant_id = %account.tenant_id,
+            account_id = %account.id,
+            reason = %database_error,
+            "Application account authorization transaction commit failed"
         );
         StatusCode::SERVICE_UNAVAILABLE
     })?;
+    trace!(
+        operation = "load_application_account",
+        tenant_id = %account.tenant_id,
+        account_id = %account.id,
+        "Committed application account authorization lookup"
+    );
 
-    let roles: Vec<String> = role_rows.into_iter().map(|row| row.role_code).collect();
-    let mut permissions: BTreeSet<String> = BTreeSet::new();
+    let roles: Vec<String> = role_rows.into_iter().map(|row: AccountRole| row.role_code).collect();
+    let mut permission_set: BTreeSet<String> = BTreeSet::new();
     for row in permission_rows {
         if row.effect == "deny" {
-            permissions.remove(&row.permission_code);
+            permission_set.remove(&row.permission_code);
         } else {
-            permissions.insert(row.permission_code);
+            permission_set.insert(row.permission_code);
         }
     }
+    let permissions: Vec<String> = permission_set.into_iter().collect();
+    debug!(
+        operation = "load_application_account",
+        tenant_id = %account.tenant_id,
+        account_id = %account.id,
+        role_count = roles.len(),
+        permission_count = permissions.len(),
+        "Resolved effective application authorization"
+    );
 
     Ok(AuthenticatedUser {
         tenant_id: account.tenant_id,
@@ -269,6 +355,6 @@ async fn load_account(
         email: principal.email.clone(),
         primary_role: account.primary_role_code,
         roles,
-        permissions: permissions.into_iter().collect(),
+        permissions,
     })
 }

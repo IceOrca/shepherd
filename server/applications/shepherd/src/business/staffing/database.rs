@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
-use infra_kernel::debug::*;
-use infra_postgres::{DatabaseAdapter, TenantTransaction};
+use infra_postgres::{DatabaseAdapter, TenantDbErr, TenantTransaction};
+use tracing::{debug, error, info, trace, warn};
 use uuid::Uuid;
 
 use super::core::{
@@ -24,14 +24,31 @@ impl StaffingProvider {
     }
 
     async fn begin_tenant(&self, tenant_id: Uuid) -> Result<TenantTransaction, StaffingError> {
-        self.database.begin_tenant(tenant_id).await.map_err(|error| {
-            log_error!(
-                "Staffing tenant transaction failed: tenant_id={} error={}",
-                tenant_id,
-                error
-            );
-            StaffingError::BackendUnavailable
-        })
+        debug!(
+            operation = "begin_staffing_tenant_transaction",
+            tenant_id = %tenant_id,
+            "Opening staffing RLS-scoped tenant transaction"
+        );
+        let result: Result<TenantTransaction, TenantDbErr> = self.database.begin_tenant(tenant_id).await;
+        match result {
+            Ok(transaction) => {
+                trace!(
+                    operation = "begin_staffing_tenant_transaction",
+                    tenant_id = %tenant_id,
+                    "Opened staffing RLS-scoped tenant transaction"
+                );
+                Ok(transaction)
+            }
+            Err(database_error) => {
+                error!(
+                    operation = "begin_staffing_tenant_transaction",
+                    tenant_id = %tenant_id,
+                    reason = %database_error,
+                    "Staffing tenant transaction failed"
+                );
+                Err(StaffingError::BackendUnavailable)
+            }
+        }
     }
 }
 
@@ -316,7 +333,7 @@ struct ResolvedRateRow {
 #[async_trait]
 impl StaffingRepo for StaffingProvider {
     async fn list_customers(&self, tenant_id: Uuid) -> Result<Vec<Customer>, StaffingError> {
-        let mut transaction = self.begin_tenant(tenant_id).await?;
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
         let rows: Vec<CustomerRow> = sqlx::query_as!(
             CustomerRow,
             r#"
@@ -344,7 +361,7 @@ impl StaffingRepo for StaffingProvider {
         input: &CustomerInput,
         audit_account_id: Uuid,
     ) -> Result<Customer, StaffingError> {
-        let mut transaction = self.begin_tenant(tenant_id).await?;
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
         let row: CustomerRow = sqlx::query_as!(
             CustomerRow,
             r#"
@@ -370,11 +387,9 @@ impl StaffingRepo for StaffingProvider {
             .commit()
             .await
             .map_err(|error| database_failure("commit customer creation", tenant_id, error))?;
-        log_notice!(
+        info!(
             "Staffing customer created: tenant_id={} customer_id={} audit_account_id={}",
-            tenant_id,
-            customer_id,
-            audit_account_id
+            tenant_id, customer_id, audit_account_id
         );
         Customer::try_from(row)
     }
@@ -384,7 +399,7 @@ impl StaffingRepo for StaffingProvider {
         tenant_id: Uuid,
         customer_id: Uuid,
     ) -> Result<Vec<CustomerFacility>, StaffingError> {
-        let mut transaction = self.begin_tenant(tenant_id).await?;
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
         let rows: Vec<CustomerFacilityRow> = sqlx::query_as!(
             CustomerFacilityRow,
             r#"
@@ -414,7 +429,7 @@ impl StaffingRepo for StaffingProvider {
         input: &CustomerFacilityInput,
         audit_account_id: Uuid,
     ) -> Result<CustomerFacility, StaffingError> {
-        let mut transaction = self.begin_tenant(tenant_id).await?;
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
         let row: CustomerFacilityRow = sqlx::query_as!(
             CustomerFacilityRow,
             r#"
@@ -446,7 +461,7 @@ impl StaffingRepo for StaffingProvider {
     }
 
     async fn list_rate_agreements(&self, tenant_id: Uuid) -> Result<Vec<StaffingRateAgreement>, StaffingError> {
-        let mut transaction = self.begin_tenant(tenant_id).await?;
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
         let rows: Vec<RateAgreementRow> = sqlx::query_as!(
             RateAgreementRow,
             r#"
@@ -477,7 +492,7 @@ impl StaffingRepo for StaffingProvider {
         input: &StaffingRateAgreementInput,
         audit_account_id: Uuid,
     ) -> Result<StaffingRateAgreement, StaffingError> {
-        let mut transaction = self.begin_tenant(tenant_id).await?;
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
         let row: RateAgreementRow = sqlx::query_as!(
             RateAgreementRow,
             r#"
@@ -523,7 +538,7 @@ impl StaffingRepo for StaffingProvider {
     }
 
     async fn list_shifts(&self, tenant_id: Uuid) -> Result<Vec<StaffingShift>, StaffingError> {
-        let mut transaction = self.begin_tenant(tenant_id).await?;
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
         let rows: Vec<ShiftRow> = sqlx::query_as!(
             ShiftRow,
             r#"
@@ -552,7 +567,7 @@ impl StaffingRepo for StaffingProvider {
         input: &StaffingShiftInput,
         audit_account_id: Uuid,
     ) -> Result<StaffingShift, StaffingError> {
-        let mut transaction = self.begin_tenant(tenant_id).await?;
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
         let row: ShiftRow = sqlx::query_as!(
             ShiftRow,
             r#"
@@ -590,8 +605,8 @@ impl StaffingRepo for StaffingProvider {
         tenant_id: Uuid,
         shift_id: Uuid,
     ) -> Result<Vec<ShiftAssignment>, StaffingError> {
-        let mut transaction = self.begin_tenant(tenant_id).await?;
-        let rows = list_assignments(&mut transaction, tenant_id, shift_id).await?;
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        let rows: Vec<AssignmentRow> = list_assignments(&mut transaction, tenant_id, shift_id).await?;
         transaction
             .commit()
             .await
@@ -604,8 +619,8 @@ impl StaffingRepo for StaffingProvider {
         tenant_id: Uuid,
         shift_id: Uuid,
     ) -> Result<Vec<StaffingCandidate>, StaffingError> {
-        let mut transaction = self.begin_tenant(tenant_id).await?;
-        let shift_exists = sqlx::query_scalar!(
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        let shift_exists: bool = sqlx::query_scalar!(
             r#"SELECT EXISTS (
                 SELECT 1 FROM business_staffing_shifts WHERE tenant_id = $1 AND id = $2
             ) AS "exists!""#,
@@ -619,7 +634,7 @@ impl StaffingRepo for StaffingProvider {
             return Err(StaffingError::NotFound);
         }
 
-        let rows = sqlx::query_as!(
+        let rows: Vec<CandidateRow> = sqlx::query_as!(
             CandidateRow,
             r#"
             WITH target AS (
@@ -703,7 +718,7 @@ impl StaffingRepo for StaffingProvider {
         input: &ShiftAssignmentInput,
         audit_account_id: Uuid,
     ) -> Result<ShiftAssignment, StaffingError> {
-        let mut transaction = self.begin_tenant(tenant_id).await?;
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
         let shift: Option<ShiftRateContext> = sqlx::query_as!(
             ShiftRateContext,
             r#"
@@ -723,7 +738,7 @@ impl StaffingRepo for StaffingProvider {
         .fetch_optional(transaction.connection())
         .await
         .map_err(|error| database_failure("lock staffing shift", tenant_id, error))?;
-        let shift = shift.ok_or(StaffingError::NotFound)?;
+        let shift: ShiftRateContext = shift.ok_or(StaffingError::NotFound)?;
         if !matches!(shift.status.as_str(), "open" | "filled") {
             return Err(StaffingError::Conflict);
         }
@@ -748,7 +763,7 @@ impl StaffingRepo for StaffingProvider {
             return Err(StaffingError::NotFound);
         }
 
-        let employee_is_suitable = sqlx::query_scalar!(
+        let employee_is_suitable: bool = sqlx::query_scalar!(
             r#"
             SELECT EXISTS (
                 SELECT 1 FROM hr_employee_assignments
@@ -774,7 +789,7 @@ impl StaffingRepo for StaffingProvider {
             ));
         }
 
-        let employee_is_available = sqlx::query_scalar!(
+        let employee_is_available: bool = sqlx::query_scalar!(
             r#"
             SELECT NOT EXISTS (
                 SELECT 1
@@ -934,7 +949,7 @@ impl StaffingRepo for StaffingProvider {
         adjustment_reason: Option<String>,
         audit_account_id: Uuid,
     ) -> Result<ShiftAssignment, StaffingError> {
-        let mut transaction = self.begin_tenant(tenant_id).await?;
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
         let row: Option<AssignmentRow> = sqlx::query_as!(
             AssignmentRow,
             r#"
@@ -1005,7 +1020,7 @@ impl StaffingRepo for StaffingProvider {
         .fetch_optional(transaction.connection())
         .await
         .map_err(|error| mutation_failure("approve staffing assignment", tenant_id, error))?;
-        let row = match row {
+        let row: AssignmentRow = match row {
             Some(row) => row,
             None => {
                 let exists: bool = sqlx::query_scalar!(
@@ -1055,8 +1070,8 @@ impl StaffingRepo for StaffingProvider {
     }
 
     async fn list_reconciliations(&self, tenant_id: Uuid) -> Result<Vec<StaffingReconciliation>, StaffingError> {
-        let mut transaction = self.begin_tenant(tenant_id).await?;
-        let rows = sqlx::query_as!(
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        let rows: Vec<ReconciliationRow> = sqlx::query_as!(
             ReconciliationRow,
             r#"
             SELECT assignment.id AS assignment_id, assignment.shift_id, assignment.employee_id,
@@ -1066,12 +1081,12 @@ impl StaffingRepo for StaffingProvider {
                    assignment.status AS assignment_status,
                    work.staff_started_at, work.staff_ended_at,
                    work.staff_worked_seconds AS "staff_worked_seconds!",
-                   customer_record.id AS customer_record_id,
-                   customer_record.confirmed_started_at AS customer_started_at,
-                   customer_record.confirmed_ended_at AS customer_ended_at,
-                   customer_record.confirmed_worked_seconds AS customer_worked_seconds,
+                   customer_record.id AS "customer_record_id?",
+                   customer_record.confirmed_started_at AS "customer_started_at?",
+                   customer_record.confirmed_ended_at AS "customer_ended_at?",
+                   customer_record.confirmed_worked_seconds AS "customer_worked_seconds?",
                    customer_record.customer_reference, customer_record.notes AS customer_notes,
-                   customer_record.updated_at AS customer_updated_at,
+                   customer_record.updated_at AS "customer_updated_at?",
                    assignment.worked_seconds AS final_worked_seconds,
                    assignment.approval_adjustment_reason AS adjustment_reason
             FROM business_shift_assignments AS assignment
@@ -1095,7 +1110,9 @@ impl StaffingRepo for StaffingProvider {
             LEFT JOIN business_customer_work_records AS customer_record
                 ON customer_record.tenant_id = assignment.tenant_id
                AND customer_record.assignment_id = assignment.id
-            WHERE assignment.tenant_id = $1 AND assignment.status <> 'cancelled'
+            WHERE assignment.tenant_id = $1
+              AND assignment.status <> 'cancelled'
+              AND assignment.urgent_work_report_id IS NULL
             ORDER BY shift.starts_at DESC, employee.display_name, assignment.id
             "#,
             tenant_id,
@@ -1110,9 +1127,9 @@ impl StaffingRepo for StaffingProvider {
 
         rows.into_iter()
             .map(|row| {
-                let assignment_status = ShiftAssignmentStatus::from_code(&row.assignment_status)
+                let assignment_status: ShiftAssignmentStatus = ShiftAssignmentStatus::from_code(&row.assignment_status)
                     .ok_or(StaffingError::BackendUnavailable)?;
-                let customer_record = match (
+                let customer_record: Option<CustomerWorkRecord> = match (
                     row.customer_record_id,
                     row.customer_started_at,
                     row.customer_ended_at,
@@ -1134,20 +1151,21 @@ impl StaffingRepo for StaffingProvider {
                     (None, None, None, None, None) => None,
                     _ => return Err(StaffingError::BackendUnavailable),
                 };
-                let reconciliation_status = if assignment_status == ShiftAssignmentStatus::Approved {
-                    ReconciliationStatus::Reconciled
-                } else if row.staff_worked_seconds == 0 {
-                    ReconciliationStatus::PendingStaff
-                } else if customer_record.is_none() {
-                    ReconciliationStatus::PendingCustomer
-                } else if customer_record
-                    .as_ref()
-                    .is_some_and(|record| record.confirmed_worked_seconds == row.staff_worked_seconds)
-                {
-                    ReconciliationStatus::Matched
-                } else {
-                    ReconciliationStatus::Discrepancy
-                };
+                let reconciliation_status: ReconciliationStatus =
+                    if assignment_status == ShiftAssignmentStatus::Approved {
+                        ReconciliationStatus::Reconciled
+                    } else if row.staff_worked_seconds == 0 {
+                        ReconciliationStatus::PendingStaff
+                    } else if customer_record.is_none() {
+                        ReconciliationStatus::PendingCustomer
+                    } else if customer_record
+                        .as_ref()
+                        .is_some_and(|record| record.confirmed_worked_seconds == row.staff_worked_seconds)
+                    {
+                        ReconciliationStatus::Matched
+                    } else {
+                        ReconciliationStatus::Discrepancy
+                    };
                 Ok(StaffingReconciliation {
                     assignment_id: row.assignment_id,
                     shift_id: row.shift_id,
@@ -1179,8 +1197,8 @@ impl StaffingRepo for StaffingProvider {
         input: &CustomerWorkRecordInput,
         audit_account_id: Uuid,
     ) -> Result<CustomerWorkRecord, StaffingError> {
-        let mut transaction = self.begin_tenant(tenant_id).await?;
-        let row = sqlx::query_as!(
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        let row: CustomerWorkRecordRow = sqlx::query_as!(
             CustomerWorkRecordRow,
             r#"
             INSERT INTO business_customer_work_records (
@@ -1252,17 +1270,15 @@ async fn list_assignments(
 }
 
 fn database_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> StaffingError {
-    log_error!(
+    error!(
         "Staffing database operation failed: operation={} tenant_id={} error={}",
-        operation,
-        tenant_id,
-        error
+        operation, tenant_id, error
     );
     StaffingError::BackendUnavailable
 }
 
 fn mutation_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> StaffingError {
-    let mapped = match &error {
+    let mapped: StaffingError = match &error {
         sqlx::Error::Database(database_error) if database_error.is_unique_violation() => StaffingError::Conflict,
         sqlx::Error::Database(database_error)
             if database_error.is_check_violation() || database_error.is_foreign_key_violation() =>
@@ -1271,11 +1287,9 @@ fn mutation_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> Sta
         }
         _ => StaffingError::BackendUnavailable,
     };
-    log_error!(
+    error!(
         "Staffing database mutation failed: operation={} tenant_id={} error={}",
-        operation,
-        tenant_id,
-        error
+        operation, tenant_id, error
     );
     mapped
 }

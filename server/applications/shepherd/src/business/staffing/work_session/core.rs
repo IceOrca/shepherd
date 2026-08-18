@@ -6,6 +6,7 @@ use serde::Serialize;
 use ts_rs::TS;
 use uuid::Uuid;
 
+use tracing::{debug, error, info, trace, warn};
 use super::super::core::{ShiftAssignmentStatus, StaffingError};
 
 #[derive(Clone, Debug, Serialize, TS)]
@@ -98,7 +99,6 @@ pub type DynStaffingWorkRepo = Arc<dyn StaffingWorkRepo + Send + Sync>;
 pub struct StaffingWorkService {
     repo: DynStaffingWorkRepo,
 }
-
 impl StaffingWorkService {
     pub fn new_arc(repo: DynStaffingWorkRepo) -> Arc<Self> {
         Arc::new(Self { repo })
@@ -109,7 +109,16 @@ impl StaffingWorkService {
         tenant_id: Uuid,
         account_id: Uuid,
     ) -> Result<Vec<OwnStaffingAssignment>, StaffingError> {
-        self.repo.list_own_assignments(tenant_id, account_id).await
+        debug!(
+            operation = "list_own_staffing_assignments",
+            tenant_id = %tenant_id,
+            account_id = %account_id,
+            "Staffing-work service operation accepted"
+        );
+        let result: Result<Vec<OwnStaffingAssignment>, StaffingError> =
+            self.repo.list_own_assignments(tenant_id, account_id).await;
+        log_staffing_work_operation("list_own_staffing_assignments", tenant_id, account_id, None, &result);
+        result
     }
 
     pub async fn start(
@@ -119,10 +128,29 @@ impl StaffingWorkService {
         account_id: Uuid,
         input: ShiftWorkActionInput,
     ) -> Result<ShiftWorkSession, StaffingError> {
+        let session_id: Uuid = Uuid::new_v4();
+        trace!(
+            operation = "start_staffing_work",
+            tenant_id = %tenant_id,
+            account_id = %account_id,
+            assignment_id = %assignment_id,
+            session_id = %session_id,
+            has_location = input.latitude.is_some() || input.longitude.is_some() || input.accuracy_meters.is_some(),
+            "Validating staffing-work start input without logging coordinates"
+        );
         input.validate()?;
-        self.repo
-            .start(tenant_id, assignment_id, account_id, Uuid::new_v4(), &input)
-            .await
+        let result: Result<ShiftWorkSession, StaffingError> = self
+            .repo
+            .start(tenant_id, assignment_id, account_id, session_id, &input)
+            .await;
+        log_staffing_work_operation(
+            "start_staffing_work",
+            tenant_id,
+            account_id,
+            Some(assignment_id),
+            &result,
+        );
+        result
     }
 
     pub async fn end(
@@ -132,8 +160,52 @@ impl StaffingWorkService {
         account_id: Uuid,
         input: ShiftWorkActionInput,
     ) -> Result<ShiftWorkSession, StaffingError> {
+        trace!(
+            operation = "end_staffing_work",
+            tenant_id = %tenant_id,
+            account_id = %account_id,
+            assignment_id = %assignment_id,
+            has_location = input.latitude.is_some() || input.longitude.is_some() || input.accuracy_meters.is_some(),
+            "Validating staffing-work end input without logging coordinates"
+        );
         input.validate()?;
-        self.repo.end(tenant_id, assignment_id, account_id, &input).await
+        let result: Result<ShiftWorkSession, StaffingError> =
+            self.repo.end(tenant_id, assignment_id, account_id, &input).await;
+        log_staffing_work_operation("end_staffing_work", tenant_id, account_id, Some(assignment_id), &result);
+        result
+    }
+}
+
+fn log_staffing_work_operation<T>(
+    operation: &'static str,
+    tenant_id: Uuid,
+    account_id: Uuid,
+    assignment_id: Option<Uuid>,
+    result: &Result<T, StaffingError>,
+) -> () {
+    match result {
+        Ok(_) => info!(
+            operation,
+            tenant_id = %tenant_id,
+            account_id = %account_id,
+            assignment_id = ?assignment_id,
+            "Staffing-work service operation completed"
+        ),
+        Err(StaffingError::BackendUnavailable) => error!(
+            operation,
+            tenant_id = %tenant_id,
+            account_id = %account_id,
+            assignment_id = ?assignment_id,
+            "Staffing-work service operation failed because the backend is unavailable"
+        ),
+        Err(service_error) => warn!(
+            operation,
+            tenant_id = %tenant_id,
+            account_id = %account_id,
+            assignment_id = ?assignment_id,
+            reason = ?service_error,
+            "Staffing-work service operation was rejected"
+        ),
     }
 }
 

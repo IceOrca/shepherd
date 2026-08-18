@@ -4,7 +4,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use moka::Expiry;
 use moka::future::Cache;
 
-use infra_kernel::debug::*;
+use tracing::{error, warn, info, debug, trace};
 
 #[path = "session_revoke/token_blacklist.rs"]
 pub mod token_blacklist;
@@ -35,7 +35,7 @@ impl AccessRevocationCache {
     pub fn new_arc() -> Arc<Self> {
         // Revocation is an authorization decision: an unexpired JTI must not be
         // evicted due to cache pressure and become usable again.
-        log_info!("AccessRevocationCache initialized: eviction=expiration_only");
+        info!("AccessRevocationCache initialized: eviction=expiration_only");
         Arc::new(Self {
             revoked_jtis: Cache::builder().expire_after(RevokedJtiExpiry).build(),
         })
@@ -44,17 +44,15 @@ impl AccessRevocationCache {
     pub async fn revoke_jti(&self, jti: &str, expires_at: u64) {
         let now: u64 = unix_now();
         if jti.is_empty() || expires_at <= now {
-            log_debug!(
+            debug!(
                 "Ignored revoked access jti because it is empty or expired: jti={} expires_at={} now={}",
-                jti,
-                expires_at,
-                now
+                jti, expires_at, now
             );
             return;
         }
 
         self.revoked_jtis.insert(jti.to_string(), expires_at).await;
-        log_debug!(
+        debug!(
             "Access jti revoked locally: jti={} expires_at={} ttl={}s",
             jti,
             expires_at,
@@ -70,11 +68,9 @@ impl AccessRevocationCache {
         let now: u64 = unix_now();
         if expires_at <= now {
             self.revoked_jtis.invalidate(jti).await;
-            log_trace!(
+            trace!(
                 "Expired revoked access jti removed during lookup: jti={} expires_at={} now={}",
-                jti,
-                expires_at,
-                now
+                jti, expires_at, now
             );
             return false;
         }
@@ -87,7 +83,7 @@ fn unix_now() -> u64 {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(duration) => duration.as_secs(),
         Err(err) => {
-            log_error!("System time error while computing access revocation unix time: {}", err);
+            error!("System time error while computing access revocation unix time: {}", err);
             0
         }
     }

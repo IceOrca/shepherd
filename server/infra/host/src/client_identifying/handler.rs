@@ -27,14 +27,14 @@ use super::{
 
 use crate::ip_extract::OriginatorIp;
 
-use infra_kernel::debug::*;
+use tracing::{error, warn, info, debug, trace};
 
 pub async fn client_init(
     State(ctx): State<Arc<ClientTokenHandle>>,
     Extension(real_ip): Extension<OriginatorIp>,
 ) -> Result<impl IntoResponse, StatusCode> {
     if let Ok(token) = ctx.generate(&real_ip) {
-        log_notice!("Client token issued to ip={}", real_ip.ip());
+        info!("Client token issued to ip={}", real_ip.ip());
 
         Ok((
             StatusCode::OK,

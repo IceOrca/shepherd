@@ -16,14 +16,15 @@ use infra_postgres::DatabaseAdapter;
 
 use business::staffing::{
     core::StaffingService,
-    model::StaffingProvider,
-    work_session::{core::StaffingWorkService, model::StaffingWorkProvider},
+    database::StaffingProvider,
+    urgent_work::{core::UrgentWorkService, database::UrgentWorkProvider},
+    work_session::{core::StaffingWorkService, database::StaffingWorkProvider},
 };
 use features::{
-    organization::{core::OrganizationService, model::OrganizationProvider},
-    payroll::{core::PayrollService, model::PayrollProvider},
-    people::{core::PeopleService, model::PeopleProvider},
-    working_schedule::{core::WorkingScheduleService, model::WorkingScheduleProvider},
+    organization::{core::OrganizationService, database::OrganizationProvider},
+    payroll::{core::PayrollService, database::PayrollProvider},
+    people::{core::PeopleService, database::PeopleProvider},
+    working_schedule::{core::WorkingScheduleService, database::WorkingScheduleProvider},
 };
 
 pub use infra_host::ratelimiting;
@@ -35,6 +36,7 @@ pub struct ApplicationCore {
     pub working_schedules: Arc<WorkingScheduleService>,
     pub payroll: Arc<PayrollService>,
     pub staffing: Arc<StaffingService>,
+    pub urgent_work: Arc<UrgentWorkService>,
     pub staffing_work: Arc<StaffingWorkService>,
 }
 
@@ -47,6 +49,8 @@ impl ApplicationCore {
             WorkingScheduleService::new_arc(WorkingScheduleProvider::new_arc(Arc::clone(&database)));
         let payroll: Arc<PayrollService> = PayrollService::new_arc(PayrollProvider::new_arc(Arc::clone(&database)));
         let staffing: Arc<StaffingService> = StaffingService::new_arc(StaffingProvider::new_arc(Arc::clone(&database)));
+        let urgent_work: Arc<UrgentWorkService> =
+            UrgentWorkService::new_arc(UrgentWorkProvider::new_arc(Arc::clone(&database)));
         let staffing_work: Arc<StaffingWorkService> =
             StaffingWorkService::new_arc(StaffingWorkProvider::new_arc(database));
 
@@ -56,6 +60,7 @@ impl ApplicationCore {
             working_schedules,
             payroll,
             staffing,
+            urgent_work,
             staffing_work,
         })
     }

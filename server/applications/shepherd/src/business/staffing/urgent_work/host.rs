@@ -1,0 +1,347 @@
+use std::sync::Arc;
+
+use axum::{
+    Extension, Json, Router,
+    extract::{Path, State},
+    http::{HeaderMap, HeaderValue, StatusCode},
+    routing::{get, post, put},
+};
+use chrono::{DateTime, Utc};
+use serde::Deserialize;
+use tracing::{debug, error, info, trace, warn};
+use ts_rs::TS;
+use uuid::Uuid;
+
+use crate::{AppContext, auth::AuthenticatedUser};
+
+use super::super::{core::ManualRateOverride, host::ManualRateOverrideRequest};
+use super::core::{
+    UrgentCustomerWorkRecord, UrgentCustomerWorkRecordInput, UrgentWorkEmployee, UrgentWorkEndInput, UrgentWorkError,
+    UrgentWorkFacility, UrgentWorkItem, UrgentWorkLocationInput, UrgentWorkReconcileInput, UrgentWorkReconciliation,
+    UrgentWorkStartInput,
+};
+
+#[derive(Debug, Deserialize, TS)]
+pub struct UrgentWorkStartRequest {
+    pub customer_facility_id: Uuid,
+    pub employee_ids: Vec<Uuid>,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    pub accuracy_meters: Option<f32>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+pub struct UrgentWorkEndRequest {
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    pub accuracy_meters: Option<f32>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(optional_fields = nullable)]
+pub struct UrgentCustomerWorkRecordUpsertRequest {
+    pub confirmed_customer_facility_id: Uuid,
+    pub confirmed_started_at: DateTime<Utc>,
+    pub confirmed_ended_at: DateTime<Utc>,
+    pub customer_reference: Option<String>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(optional_fields = nullable)]
+pub struct UrgentWorkReconcileRequest {
+    pub final_customer_facility_id: Uuid,
+    pub job_id: Uuid,
+    pub worked_seconds: i64,
+    pub adjustment_reason: Option<String>,
+    pub manual_rate: Option<ManualRateOverrideRequest>,
+}
+
+pub fn routes() -> Router<Arc<AppContext>> {
+    info!("Configured urgent-first staffing routes");
+    Router::new()
+        .route("/staffing/urgent-work/facilities", get(list_facilities))
+        .route("/staffing/urgent-work/employees", get(list_employees))
+        .route("/staffing/urgent-work/me", get(list_own_work))
+        .route("/staffing/urgent-work/team", get(list_team_work))
+        .route("/staffing/urgent-work/start", post(start_work))
+        .route("/staffing/urgent-work/{report_id}/end", post(end_work))
+        .route("/staffing/urgent-work/reconciliations", get(list_reconciliations))
+        .route(
+            "/staffing/urgent-work/{report_id}/customer-record",
+            put(upsert_customer_record),
+        )
+        .route("/staffing/urgent-work/{report_id}/reconcile", post(reconcile))
+}
+
+async fn list_facilities(
+    State(context): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> Result<Json<Vec<UrgentWorkFacility>>, StatusCode> {
+    require_permission(&user, "business.urgent_work.read")?;
+    let facilities: Vec<UrgentWorkFacility> = context
+        .core
+        .urgent_work
+        .list_facilities(user.tenant_id)
+        .await
+        .map_err(|operation_error: UrgentWorkError| status("list urgent facilities", &user, operation_error))?;
+    debug!(tenant_id = %user.tenant_id, account_id = %user.account_id, facility_count = facilities.len(), "Urgent facility request completed");
+    Ok(Json(facilities))
+}
+
+async fn list_employees(
+    State(context): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> Result<Json<Vec<UrgentWorkEmployee>>, StatusCode> {
+    require_permission(&user, "business.urgent_work.read")?;
+    let employees: Vec<UrgentWorkEmployee> = context
+        .core
+        .urgent_work
+        .list_employees(user.tenant_id, user.account_id)
+        .await
+        .map_err(|operation_error: UrgentWorkError| status("list urgent employees", &user, operation_error))?;
+    debug!(tenant_id = %user.tenant_id, account_id = %user.account_id, employee_count = employees.len(), "Urgent employee request completed");
+    Ok(Json(employees))
+}
+
+async fn list_own_work(
+    State(context): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> Result<Json<Vec<UrgentWorkItem>>, StatusCode> {
+    require_permission(&user, "business.urgent_work.read")?;
+    let work: Vec<UrgentWorkItem> = context
+        .core
+        .urgent_work
+        .list_own_work(user.tenant_id, user.account_id)
+        .await
+        .map_err(|operation_error: UrgentWorkError| status("list own urgent work", &user, operation_error))?;
+    Ok(Json(work))
+}
+
+async fn list_team_work(
+    State(context): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> Result<Json<Vec<UrgentWorkItem>>, StatusCode> {
+    require_permission(&user, "business.urgent_work.peer_manage")?;
+    let work: Vec<UrgentWorkItem> = context
+        .core
+        .urgent_work
+        .list_team_work(user.tenant_id, user.account_id)
+        .await
+        .map_err(|operation_error: UrgentWorkError| status("list urgent team work", &user, operation_error))?;
+    Ok(Json(work))
+}
+
+async fn start_work(
+    State(context): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthenticatedUser>,
+    headers: HeaderMap,
+    Json(request): Json<UrgentWorkStartRequest>,
+) -> Result<(StatusCode, Json<Vec<UrgentWorkItem>>), StatusCode> {
+    require_permission(&user, "business.urgent_work.start")?;
+    let allow_peer: bool = user.has_permission("business.urgent_work.peer_manage");
+    let idempotency_key: Uuid = idempotency_key(&headers, &user)?;
+    let target_count: usize = request.employee_ids.len();
+    info!(tenant_id = %user.tenant_id, account_id = %user.account_id, facility_id = %request.customer_facility_id, target_count, allow_peer, "Urgent-work start request accepted");
+    let location: UrgentWorkLocationInput =
+        location_input(request.latitude, request.longitude, request.accuracy_meters);
+    let input: UrgentWorkStartInput = UrgentWorkStartInput {
+        customer_facility_id: request.customer_facility_id,
+        employee_ids: request.employee_ids,
+        idempotency_key,
+        location,
+    };
+    let work: Vec<UrgentWorkItem> = context
+        .core
+        .urgent_work
+        .start(user.tenant_id, user.account_id, allow_peer, input)
+        .await
+        .map_err(|operation_error: UrgentWorkError| status("start urgent work", &user, operation_error))?;
+    context.notifications.wake();
+    info!(tenant_id = %user.tenant_id, account_id = %user.account_id, report_count = work.len(), "Urgent-work start request completed");
+    Ok((StatusCode::CREATED, Json(work)))
+}
+
+async fn end_work(
+    State(context): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(report_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(request): Json<UrgentWorkEndRequest>,
+) -> Result<Json<UrgentWorkItem>, StatusCode> {
+    require_permission(&user, "business.urgent_work.start")?;
+    let allow_peer: bool = user.has_permission("business.urgent_work.peer_manage");
+    let idempotency_key: Uuid = idempotency_key(&headers, &user)?;
+    info!(tenant_id = %user.tenant_id, account_id = %user.account_id, report_id = %report_id, allow_peer, "Urgent-work end request accepted");
+    let input: UrgentWorkEndInput = UrgentWorkEndInput {
+        idempotency_key,
+        location: location_input(request.latitude, request.longitude, request.accuracy_meters),
+    };
+    let work: UrgentWorkItem = context
+        .core
+        .urgent_work
+        .end(user.tenant_id, user.account_id, allow_peer, report_id, input)
+        .await
+        .map_err(|operation_error: UrgentWorkError| status("end urgent work", &user, operation_error))?;
+    context.notifications.wake();
+    info!(tenant_id = %user.tenant_id, account_id = %user.account_id, report_id = %report_id, worked_seconds = ?work.worked_seconds, "Urgent-work end request completed");
+    Ok(Json(work))
+}
+
+async fn list_reconciliations(
+    State(context): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> Result<Json<Vec<UrgentWorkReconciliation>>, StatusCode> {
+    require_permission(&user, "business.reconciliation.read")?;
+    let reconciliations: Vec<UrgentWorkReconciliation> = context
+        .core
+        .urgent_work
+        .list_reconciliations(user.tenant_id)
+        .await
+        .map_err(|operation_error: UrgentWorkError| status("list urgent reconciliations", &user, operation_error))?;
+    Ok(Json(reconciliations))
+}
+
+async fn upsert_customer_record(
+    State(context): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(report_id): Path<Uuid>,
+    Json(request): Json<UrgentCustomerWorkRecordUpsertRequest>,
+) -> Result<Json<UrgentCustomerWorkRecord>, StatusCode> {
+    require_permission(&user, "business.urgent_work.reconcile")?;
+    let input: UrgentCustomerWorkRecordInput = UrgentCustomerWorkRecordInput {
+        confirmed_customer_facility_id: request.confirmed_customer_facility_id,
+        confirmed_started_at: request.confirmed_started_at,
+        confirmed_ended_at: request.confirmed_ended_at,
+        customer_reference: normalize_optional(request.customer_reference),
+        notes: normalize_optional(request.notes),
+    };
+    let record: UrgentCustomerWorkRecord = context
+        .core
+        .urgent_work
+        .upsert_customer_record(user.tenant_id, user.account_id, report_id, input)
+        .await
+        .map_err(|operation_error: UrgentWorkError| status("save urgent customer evidence", &user, operation_error))?;
+    Ok(Json(record))
+}
+
+async fn reconcile(
+    State(context): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(report_id): Path<Uuid>,
+    Json(request): Json<UrgentWorkReconcileRequest>,
+) -> Result<Json<UrgentWorkReconciliation>, StatusCode> {
+    require_permission(&user, "business.urgent_work.reconcile")?;
+    let manual_rate: Option<ManualRateOverride> = request.manual_rate.map(ManualRateOverride::from);
+    let input: UrgentWorkReconcileInput = UrgentWorkReconcileInput {
+        final_customer_facility_id: request.final_customer_facility_id,
+        job_id: request.job_id,
+        worked_seconds: request.worked_seconds,
+        adjustment_reason: normalize_optional(request.adjustment_reason),
+        manual_rate,
+    };
+    let result: UrgentWorkReconciliation = context
+        .core
+        .urgent_work
+        .reconcile(user.tenant_id, user.account_id, report_id, input)
+        .await
+        .map_err(|operation_error: UrgentWorkError| status("reconcile urgent work", &user, operation_error))?;
+    Ok(Json(result))
+}
+
+fn location_input(
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+    accuracy_meters: Option<f32>,
+) -> UrgentWorkLocationInput {
+    let gps_enabled: bool = std::env::var("STAFFING_GPS_ENABLED")
+        .ok()
+        .is_some_and(|value: String| value.eq_ignore_ascii_case("true"));
+    let supplied: bool = latitude.is_some() || longitude.is_some() || accuracy_meters.is_some();
+    trace!(
+        gps_enabled,
+        supplied,
+        retained = gps_enabled && supplied,
+        "Prepared urgent-work location without logging coordinates"
+    );
+    filter_location(gps_enabled, latitude, longitude, accuracy_meters)
+}
+
+fn filter_location(
+    gps_enabled: bool,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+    accuracy_meters: Option<f32>,
+) -> UrgentWorkLocationInput {
+    if gps_enabled {
+        UrgentWorkLocationInput {
+            latitude,
+            longitude,
+            accuracy_meters,
+        }
+    } else {
+        UrgentWorkLocationInput {
+            latitude: None,
+            longitude: None,
+            accuracy_meters: None,
+        }
+    }
+}
+
+fn idempotency_key(headers: &HeaderMap, user: &AuthenticatedUser) -> Result<Uuid, StatusCode> {
+    let raw_header: Option<&HeaderValue> = headers.get("idempotency-key");
+    let parsed: Option<Uuid> = raw_header
+        .and_then(|value: &HeaderValue| value.to_str().ok())
+        .and_then(|value: &str| Uuid::parse_str(value).ok());
+    parsed.ok_or_else(|| {
+        warn!(tenant_id = %user.tenant_id, account_id = %user.account_id, header_present = raw_header.is_some(), "Urgent-work request rejected without valid idempotency key");
+        StatusCode::BAD_REQUEST
+    })
+}
+
+fn require_permission(user: &AuthenticatedUser, permission: &str) -> Result<(), StatusCode> {
+    if user.has_permission(permission) {
+        trace!(tenant_id = %user.tenant_id, account_id = %user.account_id, permission, "Urgent-work permission accepted");
+        Ok(())
+    } else {
+        warn!(tenant_id = %user.tenant_id, account_id = %user.account_id, permission, "Urgent-work permission rejected");
+        Err(StatusCode::FORBIDDEN)
+    }
+}
+
+fn status(operation: &str, user: &AuthenticatedUser, operation_error: UrgentWorkError) -> StatusCode {
+    let response_status: StatusCode = match operation_error {
+        UrgentWorkError::NotFound => StatusCode::NOT_FOUND,
+        UrgentWorkError::Forbidden => StatusCode::FORBIDDEN,
+        UrgentWorkError::Conflict => StatusCode::CONFLICT,
+        UrgentWorkError::InvalidInput(_) => StatusCode::UNPROCESSABLE_ENTITY,
+        UrgentWorkError::MissingRateAgreement => StatusCode::UNPROCESSABLE_ENTITY,
+        UrgentWorkError::BackendUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+    };
+    if response_status.is_server_error() {
+        error!(operation, tenant_id = %user.tenant_id, account_id = %user.account_id, status = %response_status, reason = ?operation_error, "Urgent-work request failed unexpectedly");
+    } else {
+        warn!(operation, tenant_id = %user.tenant_id, account_id = %user.account_id, status = %response_status, reason = ?operation_error, "Urgent-work request rejected");
+    }
+    response_status
+}
+
+fn normalize_optional(value: Option<String>) -> Option<String> {
+    value
+        .map(|text: String| text.trim().to_owned())
+        .filter(|text: &String| !text.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::filter_location;
+    use crate::business::staffing::urgent_work::core::UrgentWorkLocationInput;
+
+    #[test]
+    fn gps_disabled_discards_supplied_coordinates() {
+        let location: UrgentWorkLocationInput = filter_location(false, Some(10.77), Some(106.69), Some(4.0));
+        assert!(location.latitude.is_none());
+        assert!(location.longitude.is_none());
+        assert!(location.accuracy_meters.is_none());
+    }
+}

@@ -5,11 +5,11 @@ use uuid::Uuid;
 
 use super::{
     core::{ShiftWorkActionInput, ShiftWorkSession, StaffingWorkRepo},
-    model::StaffingWorkProvider,
+    database::StaffingWorkProvider,
 };
 use crate::business::staffing::{
     core::{ShiftAssignmentStatus, StaffingError, StaffingRepo},
-    model::StaffingProvider,
+    database::StaffingProvider,
 };
 
 type TestResult = Result<(), Box<dyn Error>>;

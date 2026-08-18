@@ -8,7 +8,7 @@ Shepherd is one application crate organized first by business area, then by feat
 The top-level boundaries are:
 
 - `hr`: employees, schedules, attendance, compensation, and payroll.
-- `business`: internal organization data plus customers, customer facilities, staffing rates, shifts, and assignments.
+- `business`: internal organization data plus customers, customer facilities, urgent work evidence, staffing rates, shifts, and assignments.
 
 Existing HR capabilities remain under `src/features/`; new staffing behavior lives under `src/business/staffing/`.
 Rates store customer billing and worker pay independently. Assignments snapshot both values so later agreement changes
@@ -19,23 +19,44 @@ cannot rewrite approved work or payroll history.
 Each feature follows the same layer-second layout:
 
 - `core.rs` defines domain data, repository ports, validation, and services.
-- `model.rs` implements repository ports with PostgreSQL and tenant transactions.
+- `database.rs` implements repository ports with PostgreSQL and tenant transactions.
 - `host.rs` or `host/` owns Axum routes, handlers, and request/response DTOs.
 
 ## Dependency Direction
 
-Keep dependencies pointing `host -> core <- model`. Core code must not import Axum, SQLx, or infrastructure types.
+Keep dependencies pointing `host -> core <- database`. Core code must not import Axum, SQLx, or infrastructure types.
 Cross-feature construction belongs in `ApplicationCore` in `src/lib.rs`; a feature service must not construct a sibling
 feature service. `runtime` supplies infrastructure dependencies and mounts the completed Shepherd router.
 
 ## Adding a Feature
 
-1. Add `<area>/<feature>.rs` beside `<area>/<feature>/{core.rs,model.rs,host.rs}`. Never add `mod.rs`.
+1. Add `<area>/<feature>.rs` beside `<area>/<feature>/{core.rs,database.rs,host.rs}`. Never add `mod.rs`.
 2. Define repository traits in `core.rs`, then inject their implementations into the core service.
 3. For nested modules such as `host`, keep `host.rs` beside `host/`, which contains handler and DTO modules.
 4. Register the service in `ApplicationCore` and mount routes from the owning business area.
 
-## Staffing Work and Notifications
+## Urgent-First Staffing Work and Notifications
+
+Urgent/unplanned work is the default operational path. Supervisors may dispatch staff without creating a shift. An active employee selects a manager-maintained customer facility and starts work for themselves plus coworkers who are present but cannot use a phone. The same staff member can finish a coworker's report when they share facility work context. Every action stores the subject employee, acting account, and `self` or `peer` provenance; PostgreSQL supplies the timestamps.
+
+Authenticated employees use:
+
+- `GET /api/business/staffing/urgent-work/facilities`
+- `GET /api/business/staffing/urgent-work/employees`
+- `GET /api/business/staffing/urgent-work/me`
+- `GET /api/business/staffing/urgent-work/team`
+- `POST /api/business/staffing/urgent-work/start`
+- `POST /api/business/staffing/urgent-work/{report_id}/end`
+
+Supervisors record independent customer-confirmed facility and time, then reconcile through:
+
+- `GET /api/business/staffing/urgent-work/reconciliations`
+- `PUT /api/business/staffing/urgent-work/{report_id}/customer-record`
+- `POST /api/business/staffing/urgent-work/{report_id}/reconcile`
+
+Reconciliation compares exact timestamps, duration, and facility. It atomically creates a completed formal shift and an approved assignment linked to the urgent report, preserving the existing billing, worker-pay, margin, and payroll snapshot model.
+
+Planned staffing remains optional. Authenticated assigned employees use:
 
 Authenticated employees use:
 
@@ -43,11 +64,9 @@ Authenticated employees use:
 - `POST /api/business/staffing/assignments/{assignment_id}/start`
 - `POST /api/business/staffing/assignments/{assignment_id}/end`
 
-Start and end require an `Idempotency-Key` UUID header. The server owns timestamps, derives the employee, customer, and
-facility from the assignment, and queues notifications in the same transaction. GPS fields remain in the contract and schema but are
-discarded while `STAFFING_GPS_ENABLED=false` (the development default).
+All start and end operations require an `Idempotency-Key` UUID header. The server owns timestamps and queues notifications in the same transaction. Planned work derives employee/customer/facility from the assignment; urgent work fixes the selected active facility and selected employees in its accepted batch. GPS fields remain in the contract and schema but are discarded while `STAFFING_GPS_ENABLED=false` (the development default).
 
-Supervisors create customer shifts and can assign only active employees whose effective primary job matches and whose other
+For optional planned work, supervisors create customer shifts and can assign only active employees whose effective primary job matches and whose other
 staffing assignments do not overlap. Customer confirmation or bill time is stored separately from staff work sessions. An assignment
 can be finalized only after both sources exist; mismatched time or any final override requires an adjustment reason. The finalized
 snapshot remains the payroll source.

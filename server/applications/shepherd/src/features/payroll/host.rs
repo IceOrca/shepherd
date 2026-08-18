@@ -8,7 +8,7 @@ use axum::{
 };
 use chrono::{NaiveDate, NaiveTime};
 use serde::Deserialize;
-use infra_kernel::debug::*;
+use tracing::{error, warn, info, debug, trace};
 use crate::features::payroll::core::{
     EmployeeCompensation, EmployeeCompensationInput, FacilityRateRule, FacilityRateRuleInput, OvertimeRule,
     OvertimeRuleInput, PayBasis, PayrollError, PayrollRun, TimeBandRule, TimeBandRuleInput,
@@ -353,11 +353,9 @@ fn require_permission(user: &AuthenticatedUser, permission: &str) -> Result<(), 
     if user.has_permission(permission) {
         Ok(())
     } else {
-        log_notice!(
+        info!(
             "Payroll request denied: tenant_id={} account_id={} required_permission={}",
-            user.tenant_id,
-            user.account_id,
-            permission
+            user.tenant_id, user.account_id, permission
         );
         Err(StatusCode::FORBIDDEN)
     }
@@ -371,13 +369,9 @@ fn payroll_status(operation: &str, user: &AuthenticatedUser, error: PayrollError
         PayrollError::MissingCompensation => StatusCode::UNPROCESSABLE_ENTITY,
         PayrollError::BackendUnavailable => StatusCode::SERVICE_UNAVAILABLE,
     };
-    log_error!(
+    error!(
         "Payroll request failed: operation={} tenant_id={} account_id={} status={} error={:?}",
-        operation,
-        user.tenant_id,
-        user.account_id,
-        status,
-        error
+        operation, user.tenant_id, user.account_id, status, error
     );
     status
 }

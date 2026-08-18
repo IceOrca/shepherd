@@ -26,7 +26,7 @@ use async_trait::async_trait;
 use axum::http::header::{COOKIE, SET_COOKIE, HeaderValue, InvalidHeaderValue};
 
 use infra_redis::RedisAdapter;
-use infra_kernel::debug::*;
+use tracing::{error, warn, info, debug, trace};
 use crate::account::Role;
 
 pub const REFRESH_SESSION_COOKIE_NAME: &str = "refresh_session";
@@ -293,7 +293,7 @@ impl AuthSessionHandle {
         let key_prefix: String =
             std::env::var("AUTH_SESSION_REDIS_PREFIX").unwrap_or_else(|_| "infra:host:auth:".to_string());
 
-        log_info!(
+        info!(
             "AuthSession Redis refresh-session store initialized: key_prefix={} refresh_ttl={}s",
             key_prefix,
             expiration_secs.as_secs()
@@ -389,7 +389,7 @@ impl AuthSessionHandle {
         let mut connection: MultiplexedConnection = self.connection().await?;
 
         let script: &redis::Script = CREATE_SESSION_SCRIPT.get_or_init(|| {
-            log_notice!("Init with create_session.lua script");
+            info!("Init with create_session.lua script");
             redis::Script::new(include_str!("script/redis/create_session.lua"))
         });
         let mut invocation: redis::ScriptInvocation = script.key(&session_key);
@@ -410,54 +410,38 @@ impl AuthSessionHandle {
                 .invoke_async(&mut connection)
                 .await
                 .map_err(|err: redis::RedisError| {
-                    log_error!(
+                    error!(
                         "Failed to create Redis auth refresh session: tenant_id={} account_id={} sid={} error={}",
-                        tenant_id,
-                        account_id,
-                        sid,
-                        err
+                        tenant_id, account_id, sid, err
                     );
                     AuthSessionError::BackendUnavailable
                 })?;
 
         let Some(status) = kicked_result.first() else {
-            log_error!(
+            error!(
                 "Redis auth session create returned empty status: tenant_id={} account_id={} sid={}",
-                tenant_id,
-                account_id,
-                sid
+                tenant_id, account_id, sid
             );
             return Err(AuthSessionError::BackendUnavailable);
         };
         if status != "ok" {
-            log_error!(
+            error!(
                 "Redis auth session create returned unexpected status: tenant_id={} account_id={} sid={} status={}",
-                tenant_id,
-                account_id,
-                sid,
-                status
+                tenant_id, account_id, sid, status
             );
             return Err(AuthSessionError::BackendUnavailable);
         }
         let kicked_access_tokens: Vec<RevokedAccessTokenInfo> = parse_revoked_token_pairs(kicked_result.iter().skip(1));
         for kicked_access_token in &kicked_access_tokens {
-            log_notice!(
+            info!(
                 "AuthSession kicked oldest refresh session: tenant_id={} account_id={} kicked_jti={} kicked_jti_expires_at={}",
-                tenant_id,
-                account_id,
-                kicked_access_token.jti,
-                kicked_access_token.expires_at
+                tenant_id, account_id, kicked_access_token.jti, kicked_access_token.expires_at
             );
         }
 
-        log_notice!(
+        info!(
             "AuthSession created: server=redis tenant_id={} account_id={} sid={} jti={} ttl={}s max={}",
-            tenant_id,
-            account_id,
-            sid,
-            jti,
-            ttl_secs,
-            max
+            tenant_id, account_id, sid, jti, ttl_secs, max
         );
         Ok(CreatedSessionInfo {
             sid,
@@ -485,7 +469,7 @@ impl AuthSessionHandle {
         let fallback_idle_timeout_secs: u64 = idle_timeout_secs(&Role::Employee);
         let new_idle_timeout_secs: u64 = idle_timeout_secs(current_role);
         let current_role_json: String = serde_json::to_string(current_role).map_err(|err: serde_json::Error| {
-            log_error!(
+            error!(
                 "Failed to serialize current role for Redis auth session rotation: {}",
                 err
             );
@@ -496,7 +480,7 @@ impl AuthSessionHandle {
         let mut connection: MultiplexedConnection = self.connection().await?;
 
         let script: &redis::Script = ROTATE_SESSION_SCRIPT.get_or_init(|| {
-            log_notice!("Init with rotate_session.lua script");
+            info!("Init with rotate_session.lua script");
             redis::Script::new(include_str!("script/redis/rotate_session.lua"))
         });
         let mut invocation: redis::ScriptInvocation = script.key(&session_key);
@@ -520,76 +504,70 @@ impl AuthSessionHandle {
                 .invoke_async(&mut connection)
                 .await
                 .map_err(|err: redis::RedisError| {
-                    log_error!("Failed to rotate Redis auth refresh session: sid={} error={}", sid, err);
+                    error!("Failed to rotate Redis auth refresh session: sid={} error={}", sid, err);
                     AuthSessionError::BackendUnavailable
                 })?;
 
         let Some(status) = result.first() else {
-            log_error!("Redis auth session rotate returned empty status: sid={}", sid);
+            error!("Redis auth session rotate returned empty status: sid={}", sid);
             return Err(AuthSessionError::BackendUnavailable);
         };
 
         let revoked_access_token: Option<RevokedAccessTokenInfo> =
             parse_revoked_token_fields(result.get(1), result.get(2));
         if status == "not_found" {
-            log_notice!(
+            info!(
                 "AuthSession refresh rejected: server=redis sid={} reason=not_found",
                 sid
             );
             return Err(AuthSessionError::RefreshNotFound);
         }
         if status == "expired" {
-            log_notice!("AuthSession refresh rejected: server=redis sid={} reason=expired", sid);
+            info!("AuthSession refresh rejected: server=redis sid={} reason=expired", sid);
             return Err(AuthSessionError::SessionExpired(revoked_access_token));
         }
         if status == "idle_timeout" {
-            log_notice!(
+            info!(
                 "AuthSession refresh rejected: server=redis sid={} reason=idle_timeout",
                 sid
             );
             return Err(AuthSessionError::SessionExpired(revoked_access_token));
         }
         if status == "mismatch" {
-            log_warn!(
+            warn!(
                 "AuthSession refresh token mismatch; session revoked: server=redis sid={} revoked_access={:?}",
-                sid,
-                revoked_access_token
+                sid, revoked_access_token
             );
             return Err(AuthSessionError::RefreshTokenMismatch(revoked_access_token));
         }
 
         if status != "ok" {
-            log_error!(
+            error!(
                 "Redis auth session rotate returned unexpected status: sid={} status={}",
-                sid,
-                status
+                sid, status
             );
             return Err(AuthSessionError::BackendUnavailable);
         }
 
         // The mutation returns the updated hash so rotation and JWT claim retrieval are atomic.
         let Some(values) = parse_hash_field_pairs(result.iter().skip(3)) else {
-            log_error!("Redis auth session rotate returned invalid session fields: sid={}", sid);
+            error!("Redis auth session rotate returned invalid session fields: sid={}", sid);
             return Err(AuthSessionError::BackendUnavailable);
         };
         let Some(entry) = self.parse_hash_entry(sid, values) else {
             return Err(AuthSessionError::BackendUnavailable);
         };
         if entry.tenant_id != tenant_id {
-            log_error!(
+            error!(
                 "Redis auth session tenant mismatch: cookie_tid={} stored_tid={}",
-                tenant_id,
-                entry.tenant_id
+                tenant_id, entry.tenant_id
             );
             return Err(AuthSessionError::RefreshNotFound);
         }
 
-        log_notice!(
+        info!(
             "AuthSession refresh rotated: server=redis tenant_id={} account_id={} sid={} new_access_jti={}",
-            entry.tenant_id,
-            entry.account_id,
-            entry.sid,
-            jti
+            entry.tenant_id, entry.account_id, entry.sid, jti
         );
         Ok(entry.to_rotated_info(new_refresh_token, revoked_access_token))
     }
@@ -608,7 +586,7 @@ impl AuthSessionHandle {
         let mut connection: MultiplexedConnection = self.connection().await?;
 
         let script: &redis::Script = VALIDATE_SESSION_SCRIPT.get_or_init(|| {
-            log_notice!("Init with validate_session.lua script");
+            info!("Init with validate_session.lua script");
             redis::Script::new(include_str!("script/redis/validate_session.lua"))
         });
         let mut invocation: redis::ScriptInvocation = script.key(&session_key);
@@ -624,49 +602,45 @@ impl AuthSessionHandle {
                 .invoke_async(&mut connection)
                 .await
                 .map_err(|err: redis::RedisError| {
-                    log_error!(
+                    error!(
                         "Failed to validate Redis auth refresh session: sid={} error={}",
-                        sid,
-                        err
+                        sid, err
                     );
                     AuthSessionError::BackendUnavailable
                 })?;
 
         let Some(status) = result.first() else {
-            log_error!("Redis auth session validation returned empty status: sid={}", sid);
+            error!("Redis auth session validation returned empty status: sid={}", sid);
             return Err(AuthSessionError::BackendUnavailable);
         };
 
         let revoked_access_token: Option<RevokedAccessTokenInfo> =
             parse_revoked_token_fields(result.get(1), result.get(2));
         if status == "not_found" {
-            log_notice!(
+            info!(
                 "AuthSession refresh rejected: server=redis sid={} reason=not_found",
                 sid
             );
             return Err(AuthSessionError::RefreshNotFound);
         }
         if status == "expired" || status == "idle_timeout" {
-            log_notice!(
+            info!(
                 "AuthSession refresh rejected: server=redis sid={} reason={}",
-                sid,
-                status
+                sid, status
             );
             return Err(AuthSessionError::SessionExpired(revoked_access_token));
         }
         if status == "mismatch" {
-            log_warn!(
+            warn!(
                 "AuthSession refresh token mismatch; session revoked: server=redis sid={} revoked_access={:?}",
-                sid,
-                revoked_access_token
+                sid, revoked_access_token
             );
             return Err(AuthSessionError::RefreshTokenMismatch(revoked_access_token));
         }
         if status != "ok" {
-            log_error!(
+            error!(
                 "Redis auth session validation returned unexpected status: sid={} status={}",
-                sid,
-                status
+                sid, status
             );
             return Err(AuthSessionError::BackendUnavailable);
         }
@@ -674,7 +648,7 @@ impl AuthSessionHandle {
         // Validation intentionally returns current state without writing it;
         // only rotation after current-account verification mutates the session.
         let Some(values) = parse_hash_field_pairs(result.iter().skip(1)) else {
-            log_error!(
+            error!(
                 "Redis auth session validation returned invalid session fields: sid={}",
                 sid
             );
@@ -684,10 +658,9 @@ impl AuthSessionHandle {
             return Err(AuthSessionError::BackendUnavailable);
         };
         if entry.tenant_id != tenant_id {
-            log_error!(
+            error!(
                 "Redis auth session tenant mismatch: cookie_tid={} stored_tid={}",
-                tenant_id,
-                entry.tenant_id
+                tenant_id, entry.tenant_id
             );
             return Err(AuthSessionError::RefreshNotFound);
         }
@@ -712,7 +685,7 @@ impl AuthSessionHandle {
         let mut connection: MultiplexedConnection = self.connection().await?;
 
         let script: &redis::Script = REVOKE_SESSION_SCRIPT.get_or_init(|| {
-            log_notice!("Init with revoke_session.lua script");
+            info!("Init with revoke_session.lua script");
             redis::Script::new(include_str!("script/redis/revoke_session.lua"))
         });
         let mut invocation: redis::ScriptInvocation = script.key(&session_key);
@@ -723,22 +696,16 @@ impl AuthSessionHandle {
         match result {
             Ok(result) => {
                 let access_token: Option<RevokedAccessTokenInfo> = parse_revoked_token_result(&result);
-                log_notice!(
+                info!(
                     "AuthSession revoked refresh session: server=redis tenant_id={} account_id={} sid={} revoked_access={:?}",
-                    tenant_id,
-                    account_id,
-                    sid,
-                    access_token
+                    tenant_id, account_id, sid, access_token
                 );
                 Ok(RevokedSessionInfo { access_token })
             }
             Err(err) => {
-                log_error!(
+                error!(
                     "Failed to revoke Redis auth refresh session: server=redis tenant_id={} account_id={} sid={} error={}",
-                    tenant_id,
-                    account_id,
-                    sid,
-                    err
+                    tenant_id, account_id, sid, err
                 );
                 Err(AuthSessionError::BackendUnavailable)
             }
@@ -755,7 +722,7 @@ impl AuthSessionHandle {
         let mut connection: MultiplexedConnection = self.connection().await?;
 
         let script: &redis::Script = REVOKE_ALL_SESSIONS_SCRIPT.get_or_init(|| {
-            log_notice!("Init with revoke_all_sessions.lua script");
+            info!("Init with revoke_all_sessions.lua script");
             redis::Script::new(include_str!("script/redis/revoke_all_sessions.lua"))
         });
         let mut invocation: redis::ScriptInvocation = script.key(&user_sessions_key);
@@ -766,7 +733,7 @@ impl AuthSessionHandle {
         match result {
             Ok(result) => {
                 let access_tokens: Vec<RevokedAccessTokenInfo> = parse_revoked_token_pairs(result.iter());
-                log_notice!(
+                info!(
                     "AuthSession revoke-all complete: server=redis tenant_id={} account_id={} access_token_count={}",
                     tenant_id,
                     account_id,
@@ -775,11 +742,9 @@ impl AuthSessionHandle {
                 Ok(RevokedAllSessionsInfo { access_tokens })
             }
             Err(err) => {
-                log_error!(
+                error!(
                     "Failed to revoke all Redis auth refresh sessions: server=redis tenant_id={} account_id={} error={}",
-                    tenant_id,
-                    account_id,
-                    err
+                    tenant_id, account_id, err
                 );
                 Err(AuthSessionError::BackendUnavailable)
             }
@@ -807,7 +772,7 @@ impl AuthSessionHandle {
 
     async fn connection(&self) -> Result<MultiplexedConnection, AuthSessionError> {
         self.redis_pool.connection().await.map_err(|err: redis::RedisError| {
-            log_error!("Failed to connect to Redis for auth session server: {}", err);
+            error!("Failed to connect to Redis for auth session server: {}", err);
             AuthSessionError::BackendUnavailable
         })
     }
@@ -816,15 +781,14 @@ impl AuthSessionHandle {
         let stored_sid: String = match values.get("sid") {
             Some(stored_sid) => stored_sid.clone(),
             None => {
-                log_error!("Redis auth session entry missing sid: sid={}", sid);
+                error!("Redis auth session entry missing sid: sid={}", sid);
                 return None;
             }
         };
         if stored_sid != sid {
-            log_error!(
+            error!(
                 "Redis auth session sid mismatch: key_sid={} stored_sid={}",
-                sid,
-                stored_sid
+                sid, stored_sid
             );
             return None;
         }
@@ -834,7 +798,7 @@ impl AuthSessionHandle {
         {
             Some(tenant_id) => tenant_id,
             None => {
-                log_error!("Redis auth session entry missing or invalid tenant_id: sid={}", sid);
+                error!("Redis auth session entry missing or invalid tenant_id: sid={}", sid);
                 return None;
             }
         };
@@ -844,14 +808,14 @@ impl AuthSessionHandle {
         {
             Some(account_id) => account_id,
             None => {
-                log_error!("Redis auth session entry missing or invalid account_id: sid={}", sid);
+                error!("Redis auth session entry missing or invalid account_id: sid={}", sid);
                 return None;
             }
         };
         let username: String = match values.get("username") {
             Some(username) => username.clone(),
             None => {
-                log_error!("Redis auth session entry missing username: sid={}", sid);
+                error!("Redis auth session entry missing username: sid={}", sid);
                 return None;
             }
         };
@@ -861,7 +825,7 @@ impl AuthSessionHandle {
         {
             Some(role) => role,
             None => {
-                log_error!("Redis auth session entry missing or invalid role: sid={}", sid);
+                error!("Redis auth session entry missing or invalid role: sid={}", sid);
                 return None;
             }
         };
@@ -874,21 +838,21 @@ impl AuthSessionHandle {
         let jti: String = match values.get("jti") {
             Some(jti) => jti.clone(),
             None => {
-                log_error!("Redis auth session entry missing jti: sid={}", sid);
+                error!("Redis auth session entry missing jti: sid={}", sid);
                 return None;
             }
         };
         let jti_exp: u64 = match values.get("jti_exp").and_then(|value| value.parse::<u64>().ok()) {
             Some(jti_exp) => jti_exp,
             None => {
-                log_error!("Redis auth session entry missing jti_exp: sid={}", sid);
+                error!("Redis auth session entry missing jti_exp: sid={}", sid);
                 return None;
             }
         };
         let rti: String = match values.get("rti") {
             Some(rti) => rti.clone(),
             None => {
-                log_error!("Redis auth session entry missing rti: sid={}", sid);
+                error!("Redis auth session entry missing rti: sid={}", sid);
                 return None;
             }
         };
@@ -910,7 +874,7 @@ impl AuthSessionHandle {
         {
             Some(expires_at) => expires_at,
             None => {
-                log_error!("Redis auth session entry missing expires_at: sid={}", sid);
+                error!("Redis auth session entry missing expires_at: sid={}", sid);
                 return None;
             }
         };
@@ -934,7 +898,7 @@ impl AuthSessionHandle {
 
     fn redis_entry_fields(&self, entry: &SessionEntry) -> Result<Vec<(String, String)>, AuthSessionError> {
         let role_json: String = serde_json::to_string(&entry.role).map_err(|err: serde_json::Error| {
-            log_error!("Failed to serialize role for Redis auth session: {}", err);
+            error!("Failed to serialize role for Redis auth session: {}", err);
             AuthSessionError::BackendUnavailable
         })?;
         Ok(vec![
@@ -958,11 +922,11 @@ impl AuthSessionHandle {
 fn read_session_max(env_name: &str, default_value: u8) -> u8 {
     match std::env::var(env_name) {
         Ok(value) => value.parse().unwrap_or_else(|err: std::num::ParseIntError| {
-            log_warn!("Invalid {} format: {}, using default {}", env_name, err, default_value);
+            warn!("Invalid {} format: {}, using default {}", env_name, err, default_value);
             default_value
         }),
         Err(_) => {
-            log_warn!("{} not set, using default {}", env_name, default_value);
+            warn!("{} not set, using default {}", env_name, default_value);
             default_value
         }
     }
@@ -971,14 +935,14 @@ fn read_session_max(env_name: &str, default_value: u8) -> u8 {
 fn refresh_token_max_ttl_secs() -> u64 {
     match std::env::var("REFRESH_TOKEN_EXPIRATION_SECS") {
         Ok(value) => value.parse().unwrap_or_else(|err: std::num::ParseIntError| {
-            log_warn!(
+            warn!(
                 "Invalid REFRESH_TOKEN_EXPIRATION_SECS format: {}, using default 604800s",
                 err
             );
             604800
         }),
         Err(_) => {
-            log_warn!("REFRESH_TOKEN_EXPIRATION_SECS not set, using default 604800s");
+            warn!("REFRESH_TOKEN_EXPIRATION_SECS not set, using default 604800s");
             604800
         }
     }
@@ -987,11 +951,11 @@ fn refresh_token_max_ttl_secs() -> u64 {
 fn read_session_idle_timeout(env_name: &str, default_value: u64) -> u64 {
     match std::env::var(env_name) {
         Ok(value) => value.parse().unwrap_or_else(|err: std::num::ParseIntError| {
-            log_warn!("Invalid {} format: {}, using default {}s", env_name, err, default_value);
+            warn!("Invalid {} format: {}, using default {}s", env_name, err, default_value);
             default_value
         }),
         Err(_) => {
-            log_warn!("{} not set, using default {}s", env_name, default_value);
+            warn!("{} not set, using default {}s", env_name, default_value);
             default_value
         }
     }
@@ -1035,7 +999,7 @@ fn unix_now() -> u64 {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(duration) => duration.as_secs(),
         Err(err) => {
-            log_error!("System time error while computing auth session unix time: {}", err);
+            error!("System time error while computing auth session unix time: {}", err);
             0
         }
     }

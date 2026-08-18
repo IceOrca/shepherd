@@ -7,6 +7,8 @@ import { MyAssignmentsPage } from "../features/operations/MyAssignmentsPage";
 import { OperationsOverviewPage } from "../features/operations/OperationsOverviewPage";
 import { ReconciliationPage } from "../features/operations/ReconciliationPage";
 import { ShiftCoordinationPage } from "../features/operations/ShiftCoordinationPage";
+import { UrgentReconciliationPage } from "../features/operations/UrgentReconciliationPage";
+import { UrgentWorkPage } from "../features/operations/UrgentWorkPage";
 import { OperationsLayout } from "../layouts/OperationsLayout";
 
 function SessionGate() {
@@ -52,9 +54,11 @@ export function AppRouter() {
         <Route element={<OperationsLayout />}>
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<OperationsOverviewPage />} />
+          <Route path="/operations/work" element={<UrgentWorkPage />} />
           <Route path="/operations/my-shifts" element={<MyAssignmentsPage />} />
           <Route path="/operations/shifts" element={<ShiftCoordinationPage />} />
-          <Route path="/operations/reconciliation" element={<ReconciliationPage />} />
+          <Route path="/operations/reconciliation" element={<UrgentReconciliationPage />} />
+          <Route path="/operations/reconciliation/planned" element={<ReconciliationPage />} />
           <Route path="/admin/auth-users" element={<AuthUsersPage />} />
           <Route path="/admin/*" element={<Navigate to="/admin/auth-users" replace />} />
           <Route path="*" element={<NotFoundPage />} />

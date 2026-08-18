@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::{Extension, Json, Router, extract::State, http::StatusCode, routing::get};
-use infra_kernel::debug::*;
+use tracing::{error, warn, info, debug, trace};
 use crate::features::organization::core::{BranchSummary, FacilitySummary, OrganizationError};
 
 use crate::{AppContext, auth::AuthenticatedUser};
@@ -42,11 +42,9 @@ fn require_permission(user: &AuthenticatedUser, permission: &str) -> Result<(), 
     if user.has_permission(permission) {
         Ok(())
     } else {
-        log_notice!(
+        info!(
             "Business location request denied: tenant_id={} account_id={} required_permission={}",
-            user.tenant_id,
-            user.account_id,
-            permission
+            user.tenant_id, user.account_id, permission
         );
         Err(StatusCode::FORBIDDEN)
     }
@@ -56,12 +54,9 @@ fn business_status(operation: &str, user: &AuthenticatedUser, error: Organizatio
     let status = match error {
         OrganizationError::BackendUnavailable => StatusCode::SERVICE_UNAVAILABLE,
     };
-    log_error!(
+    error!(
         "Business location request failed: operation={} tenant_id={} account_id={} status={}",
-        operation,
-        user.tenant_id,
-        user.account_id,
-        status
+        operation, user.tenant_id, user.account_id, status
     );
     status
 }

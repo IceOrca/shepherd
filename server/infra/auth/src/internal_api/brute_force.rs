@@ -23,7 +23,7 @@ use validator::Validate;
 pub use crate::{LegacyAuthService, dto::AuthRequest};
 use infra_kernel::request::OriginatorIp;
 use infra_redis::RedisAdapter;
-use infra_kernel::debug::*;
+use tracing::{error, warn, info, debug, trace};
 use crate::account::Role;
 
 #[derive(Clone, Debug)]
@@ -218,11 +218,11 @@ fn read_role_policy(
 fn parse_env_u32(name: &str, default: u32) -> u32 {
     match std::env::var(name) {
         Ok(val) => val.parse().unwrap_or_else(|err: std::num::ParseIntError| {
-            log_warn!("Invalid {} format: {}, using default {}", name, err, default);
+            warn!("Invalid {} format: {}, using default {}", name, err, default);
             default
         }),
         Err(_) => {
-            log_warn!("{} not set, using default {}", name, default);
+            warn!("{} not set, using default {}", name, default);
             default
         }
     }
@@ -231,11 +231,11 @@ fn parse_env_u32(name: &str, default: u32) -> u32 {
 fn parse_env_u64(name: &str, default: u64) -> u64 {
     match std::env::var(name) {
         Ok(val) => val.parse().unwrap_or_else(|err: std::num::ParseIntError| {
-            log_warn!("Invalid {} format: {}, using default {}", name, err, default);
+            warn!("Invalid {} format: {}, using default {}", name, err, default);
             default
         }),
         Err(_) => {
-            log_warn!("{} not set, using default {}", name, default);
+            warn!("{} not set, using default {}", name, default);
             default
         }
     }
@@ -333,7 +333,7 @@ mod memory_ {
             if record.count >= policy.max_failures {
                 let locked_until: Instant = now + policy.lockout_duration;
                 record.locked_until = Some(locked_until);
-                log_warn!("Brute force key locked: key={} count={}", key, record.count);
+                warn!("Brute force key locked: key={} count={}", key, record.count);
                 BruteForceStatus {
                     remaining_attempts,
                     locked: Some(BruteForceBlock {
@@ -369,7 +369,7 @@ mod memory_ {
                         None => now.duration_since(record.first_failure) < record.failure_window,
                     });
 
-                    log_debug!("BruteForce cleanup: {} records", map.len());
+                    debug!("BruteForce cleanup: {} records", map.len());
                 }
             });
         }
@@ -425,7 +425,7 @@ mod redis_ {
         pub(super) fn new_arc(config: BruteForceConfig, redis_pool: Arc<RedisAdapter>) -> Arc<Self> {
             let key_prefix: String =
                 std::env::var("BRUTE_FORCE_REDIS_PREFIX").unwrap_or_else(|_| "infra:bruteforce:".to_string());
-            log_info!("BruteForce Redis server initialized with key_prefix={}", key_prefix);
+            info!("BruteForce Redis server initialized with key_prefix={}", key_prefix);
             Arc::new(Self {
                 redis_pool,
                 config,
@@ -468,7 +468,7 @@ mod redis_ {
             let mut connection: MultiplexedConnection = match connection {
                 Ok(connection) => connection,
                 Err(err) => {
-                    log_error!("Failed to connect to Redis while checking brute force lock: {}", err);
+                    error!("Failed to connect to Redis while checking brute force lock: {}", err);
                     return Err(Self::backend_unavailable_block());
                 }
             };
@@ -481,7 +481,7 @@ mod redis_ {
                 }),
                 Ok(_) => Ok(()),
                 Err(err) => {
-                    log_error!("Failed to read Redis brute force lock ttl: key={} error={}", key, err);
+                    error!("Failed to read Redis brute force lock ttl: key={} error={}", key, err);
                     Err(Self::backend_unavailable_block())
                 }
             }
@@ -498,7 +498,7 @@ mod redis_ {
             let mut connection: MultiplexedConnection = match connection {
                 Ok(connection) => connection,
                 Err(err) => {
-                    log_error!(
+                    error!(
                         "Failed to connect to Redis while recording brute force failure: {}",
                         err
                     );
@@ -547,7 +547,7 @@ mod redis_ {
                 Ok((count, retry_after_secs)) => {
                     let remaining_attempts: u32 = policy.max_failures.saturating_sub(count);
                     if retry_after_secs > 0 {
-                        log_warn!("Brute force key locked in Redis: key={} count={}", lock_key, count);
+                        warn!("Brute force key locked in Redis: key={} count={}", lock_key, count);
                         BruteForceStatus {
                             remaining_attempts,
                             locked: Some(BruteForceBlock {
@@ -563,11 +563,9 @@ mod redis_ {
                     }
                 }
                 Err(err) => {
-                    log_error!(
+                    error!(
                         "Failed to record Redis brute force failure: fail_key={} lock_key={} error={}",
-                        fail_key,
-                        lock_key,
-                        err
+                        fail_key, lock_key, err
                     );
                     Self::backend_unavailable_status()
                 }
@@ -579,7 +577,7 @@ mod redis_ {
             let mut connection: MultiplexedConnection = match connection {
                 Ok(connection) => connection,
                 Err(err) => {
-                    log_error!("Failed to connect to Redis while clearing brute force records: {}", err);
+                    error!("Failed to connect to Redis while clearing brute force records: {}", err);
                     return;
                 }
             };
@@ -595,7 +593,7 @@ mod redis_ {
                 .query_async(&mut connection)
                 .await;
             if let Err(err) = result {
-                log_error!("Failed to clear Redis brute force records: error={}", err);
+                error!("Failed to clear Redis brute force records: error={}", err);
             }
         }
 
@@ -604,7 +602,7 @@ mod redis_ {
             let mut connection: MultiplexedConnection = match connection {
                 Ok(connection) => connection,
                 Err(err) => {
-                    log_error!("Failed to connect to Redis while reading brute force attempts: {}", err);
+                    error!("Failed to connect to Redis while reading brute force attempts: {}", err);
                     return policy.max_failures;
                 }
             };
@@ -619,10 +617,9 @@ mod redis_ {
                 Ok(Some(count)) => policy.max_failures.saturating_sub(count),
                 Ok(None) => policy.max_failures,
                 Err(err) => {
-                    log_error!(
+                    error!(
                         "Failed to read Redis brute force attempts: key={} error={}",
-                        fail_key,
-                        err
+                        fail_key, err
                     );
                     policy.max_failures
                 }
@@ -741,12 +738,9 @@ pub async fn brute_force_guard_layer(
         .await;
 
     if let Err(block) = allowed {
-        log_warn!(
+        warn!(
             "Login blocked: username={} ip={:?} retry_after={}s reason={:?}",
-            login_key,
-            ip,
-            block.retry_after_secs,
-            block.reason
+            login_key, ip, block.retry_after_secs, block.reason
         );
         if matches!(&block.reason, BruteForceReason::BackendUnavailable) {
             auth_ctx

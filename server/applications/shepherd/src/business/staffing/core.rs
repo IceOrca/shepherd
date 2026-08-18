@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use uuid::Uuid;
 
+use tracing::{debug, error, info, trace, warn};
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum BusinessRecordStatus {
@@ -378,14 +379,16 @@ pub type DynStaffingRepo = Arc<dyn StaffingRepo + Send + Sync>;
 pub struct StaffingService {
     repo: DynStaffingRepo,
 }
-
 impl StaffingService {
     pub fn new_arc(repo: DynStaffingRepo) -> Arc<Self> {
         Arc::new(Self { repo })
     }
 
     pub async fn list_customers(&self, tenant_id: Uuid) -> Result<Vec<Customer>, StaffingError> {
-        self.repo.list_customers(tenant_id).await
+        debug!(operation = "list_customers", tenant_id = %tenant_id, "Staffing service operation accepted");
+        let result: Result<Vec<Customer>, StaffingError> = self.repo.list_customers(tenant_id).await;
+        log_staffing_operation("list_customers", tenant_id, None, None, &result);
+        result
     }
 
     pub async fn create_customer(
@@ -394,10 +397,27 @@ impl StaffingService {
         input: CustomerInput,
         audit_account_id: Uuid,
     ) -> Result<Customer, StaffingError> {
+        let customer_id: Uuid = Uuid::new_v4();
+        trace!(
+            operation = "create_customer",
+            tenant_id = %tenant_id,
+            audit_account_id = %audit_account_id,
+            customer_id = %customer_id,
+            "Validating staffing customer creation"
+        );
         validate_identity(&input.code, &input.name)?;
-        self.repo
-            .create_customer(tenant_id, Uuid::new_v4(), &input, audit_account_id)
-            .await
+        let result: Result<Customer, StaffingError> = self
+            .repo
+            .create_customer(tenant_id, customer_id, &input, audit_account_id)
+            .await;
+        log_staffing_operation(
+            "create_customer",
+            tenant_id,
+            Some(audit_account_id),
+            Some(customer_id),
+            &result,
+        );
+        result
     }
 
     pub async fn list_customer_facilities(
@@ -405,7 +425,16 @@ impl StaffingService {
         tenant_id: Uuid,
         customer_id: Uuid,
     ) -> Result<Vec<CustomerFacility>, StaffingError> {
-        self.repo.list_customer_facilities(tenant_id, customer_id).await
+        debug!(
+            operation = "list_customer_facilities",
+            tenant_id = %tenant_id,
+            customer_id = %customer_id,
+            "Staffing service operation accepted"
+        );
+        let result: Result<Vec<CustomerFacility>, StaffingError> =
+            self.repo.list_customer_facilities(tenant_id, customer_id).await;
+        log_staffing_operation("list_customer_facilities", tenant_id, None, Some(customer_id), &result);
+        result
     }
 
     pub async fn create_customer_facility(
@@ -415,17 +444,38 @@ impl StaffingService {
         input: CustomerFacilityInput,
         audit_account_id: Uuid,
     ) -> Result<CustomerFacility, StaffingError> {
+        let facility_id: Uuid = Uuid::new_v4();
+        trace!(
+            operation = "create_customer_facility",
+            tenant_id = %tenant_id,
+            audit_account_id = %audit_account_id,
+            customer_id = %customer_id,
+            facility_id = %facility_id,
+            "Validating staffing customer facility creation"
+        );
         validate_identity(&input.code, &input.name)?;
         if input.time_zone.is_empty() || input.time_zone.len() > 128 {
             return Err(StaffingError::InvalidInput("customer facility time zone is invalid"));
         }
-        self.repo
-            .create_customer_facility(tenant_id, Uuid::new_v4(), customer_id, &input, audit_account_id)
-            .await
+        let result: Result<CustomerFacility, StaffingError> = self
+            .repo
+            .create_customer_facility(tenant_id, facility_id, customer_id, &input, audit_account_id)
+            .await;
+        log_staffing_operation(
+            "create_customer_facility",
+            tenant_id,
+            Some(audit_account_id),
+            Some(facility_id),
+            &result,
+        );
+        result
     }
 
     pub async fn list_rate_agreements(&self, tenant_id: Uuid) -> Result<Vec<StaffingRateAgreement>, StaffingError> {
-        self.repo.list_rate_agreements(tenant_id).await
+        debug!(operation = "list_rate_agreements", tenant_id = %tenant_id, "Staffing service operation accepted");
+        let result: Result<Vec<StaffingRateAgreement>, StaffingError> = self.repo.list_rate_agreements(tenant_id).await;
+        log_staffing_operation("list_rate_agreements", tenant_id, None, None, &result);
+        result
     }
 
     pub async fn create_rate_agreement(
@@ -434,20 +484,47 @@ impl StaffingService {
         input: StaffingRateAgreementInput,
         audit_account_id: Uuid,
     ) -> Result<StaffingRateAgreement, StaffingError> {
+        let agreement_id: Uuid = Uuid::new_v4();
+        trace!(
+            operation = "create_rate_agreement",
+            tenant_id = %tenant_id,
+            audit_account_id = %audit_account_id,
+            agreement_id = %agreement_id,
+            customer_id = %input.customer_id,
+            customer_facility_id = ?input.customer_facility_id,
+            employee_id = ?input.employee_id,
+            job_id = %input.job_id,
+            "Validating staffing rate agreement creation"
+        );
         validate_identity(&input.code, &input.name)?;
         validate_currency(&input.currency)?;
         validate_positive_decimal(&input.bill_hourly_rate)?;
         validate_positive_decimal(&input.worker_hourly_rate)?;
-        if input.effective_to.is_some_and(|date| date < input.effective_from) {
+        if input
+            .effective_to
+            .is_some_and(|date: NaiveDate| date < input.effective_from)
+        {
             return Err(StaffingError::InvalidInput("rate agreement date range is invalid"));
         }
-        self.repo
-            .create_rate_agreement(tenant_id, Uuid::new_v4(), &input, audit_account_id)
-            .await
+        let result: Result<StaffingRateAgreement, StaffingError> = self
+            .repo
+            .create_rate_agreement(tenant_id, agreement_id, &input, audit_account_id)
+            .await;
+        log_staffing_operation(
+            "create_rate_agreement",
+            tenant_id,
+            Some(audit_account_id),
+            Some(agreement_id),
+            &result,
+        );
+        result
     }
 
     pub async fn list_shifts(&self, tenant_id: Uuid) -> Result<Vec<StaffingShift>, StaffingError> {
-        self.repo.list_shifts(tenant_id).await
+        debug!(operation = "list_staffing_shifts", tenant_id = %tenant_id, "Staffing service operation accepted");
+        let result: Result<Vec<StaffingShift>, StaffingError> = self.repo.list_shifts(tenant_id).await;
+        log_staffing_operation("list_staffing_shifts", tenant_id, None, None, &result);
+        result
     }
 
     pub async fn create_shift(
@@ -456,12 +533,33 @@ impl StaffingService {
         input: StaffingShiftInput,
         audit_account_id: Uuid,
     ) -> Result<StaffingShift, StaffingError> {
+        let shift_id: Uuid = Uuid::new_v4();
+        trace!(
+            operation = "create_staffing_shift",
+            tenant_id = %tenant_id,
+            audit_account_id = %audit_account_id,
+            shift_id = %shift_id,
+            customer_id = %input.customer_id,
+            customer_facility_id = %input.customer_facility_id,
+            job_id = %input.job_id,
+            required_workers = input.required_workers,
+            "Validating staffing shift creation"
+        );
         if input.ends_at <= input.starts_at || input.required_workers <= 0 {
             return Err(StaffingError::InvalidInput("staffing shift schedule is invalid"));
         }
-        self.repo
-            .create_shift(tenant_id, Uuid::new_v4(), &input, audit_account_id)
-            .await
+        let result: Result<StaffingShift, StaffingError> = self
+            .repo
+            .create_shift(tenant_id, shift_id, &input, audit_account_id)
+            .await;
+        log_staffing_operation(
+            "create_staffing_shift",
+            tenant_id,
+            Some(audit_account_id),
+            Some(shift_id),
+            &result,
+        );
+        result
     }
 
     pub async fn list_shift_assignments(
@@ -469,7 +567,16 @@ impl StaffingService {
         tenant_id: Uuid,
         shift_id: Uuid,
     ) -> Result<Vec<ShiftAssignment>, StaffingError> {
-        self.repo.list_shift_assignments(tenant_id, shift_id).await
+        debug!(
+            operation = "list_shift_assignments",
+            tenant_id = %tenant_id,
+            shift_id = %shift_id,
+            "Staffing service operation accepted"
+        );
+        let result: Result<Vec<ShiftAssignment>, StaffingError> =
+            self.repo.list_shift_assignments(tenant_id, shift_id).await;
+        log_staffing_operation("list_shift_assignments", tenant_id, None, Some(shift_id), &result);
+        result
     }
 
     pub async fn list_shift_candidates(
@@ -477,7 +584,16 @@ impl StaffingService {
         tenant_id: Uuid,
         shift_id: Uuid,
     ) -> Result<Vec<StaffingCandidate>, StaffingError> {
-        self.repo.list_shift_candidates(tenant_id, shift_id).await
+        debug!(
+            operation = "list_shift_candidates",
+            tenant_id = %tenant_id,
+            shift_id = %shift_id,
+            "Staffing service operation accepted"
+        );
+        let result: Result<Vec<StaffingCandidate>, StaffingError> =
+            self.repo.list_shift_candidates(tenant_id, shift_id).await;
+        log_staffing_operation("list_shift_candidates", tenant_id, None, Some(shift_id), &result);
+        result
     }
 
     pub async fn create_shift_assignment(
@@ -487,14 +603,34 @@ impl StaffingService {
         input: ShiftAssignmentInput,
         audit_account_id: Uuid,
     ) -> Result<ShiftAssignment, StaffingError> {
+        let assignment_id: Uuid = Uuid::new_v4();
+        trace!(
+            operation = "create_shift_assignment",
+            tenant_id = %tenant_id,
+            audit_account_id = %audit_account_id,
+            shift_id = %shift_id,
+            assignment_id = %assignment_id,
+            employee_id = %input.employee_id,
+            has_manual_rate = input.manual_rate.is_some(),
+            "Validating staffing shift assignment"
+        );
         if let Some(manual_rate) = &input.manual_rate {
             validate_currency(&manual_rate.currency)?;
             validate_positive_decimal(&manual_rate.bill_hourly_rate)?;
             validate_positive_decimal(&manual_rate.worker_hourly_rate)?;
         }
-        self.repo
-            .create_shift_assignment(tenant_id, Uuid::new_v4(), shift_id, &input, audit_account_id)
-            .await
+        let result: Result<ShiftAssignment, StaffingError> = self
+            .repo
+            .create_shift_assignment(tenant_id, assignment_id, shift_id, &input, audit_account_id)
+            .await;
+        log_staffing_operation(
+            "create_shift_assignment",
+            tenant_id,
+            Some(audit_account_id),
+            Some(assignment_id),
+            &result,
+        );
+        result
     }
 
     pub async fn approve_shift_assignment(
@@ -505,8 +641,18 @@ impl StaffingService {
         adjustment_reason: Option<String>,
         audit_account_id: Uuid,
     ) -> Result<ShiftAssignment, StaffingError> {
+        trace!(
+            operation = "approve_shift_assignment",
+            tenant_id = %tenant_id,
+            audit_account_id = %audit_account_id,
+            assignment_id = %assignment_id,
+            has_worked_seconds_override = worked_seconds.is_some(),
+            has_adjustment_reason = adjustment_reason.is_some(),
+            "Validating staffing reconciliation approval"
+        );
         validate_approval_input(worked_seconds, adjustment_reason.as_deref())?;
-        self.repo
+        let result: Result<ShiftAssignment, StaffingError> = self
+            .repo
             .approve_shift_assignment(
                 tenant_id,
                 assignment_id,
@@ -514,11 +660,23 @@ impl StaffingService {
                 adjustment_reason,
                 audit_account_id,
             )
-            .await
+            .await;
+        log_staffing_operation(
+            "approve_shift_assignment",
+            tenant_id,
+            Some(audit_account_id),
+            Some(assignment_id),
+            &result,
+        );
+        result
     }
 
     pub async fn list_reconciliations(&self, tenant_id: Uuid) -> Result<Vec<StaffingReconciliation>, StaffingError> {
-        self.repo.list_reconciliations(tenant_id).await
+        debug!(operation = "list_staffing_reconciliations", tenant_id = %tenant_id, "Staffing service operation accepted");
+        let result: Result<Vec<StaffingReconciliation>, StaffingError> =
+            self.repo.list_reconciliations(tenant_id).await;
+        log_staffing_operation("list_staffing_reconciliations", tenant_id, None, None, &result);
+        result
     }
 
     pub async fn upsert_customer_work_record(
@@ -528,20 +686,73 @@ impl StaffingService {
         input: CustomerWorkRecordInput,
         audit_account_id: Uuid,
     ) -> Result<CustomerWorkRecord, StaffingError> {
+        let record_id: Uuid = Uuid::new_v4();
+        trace!(
+            operation = "upsert_customer_work_record",
+            tenant_id = %tenant_id,
+            audit_account_id = %audit_account_id,
+            assignment_id = %assignment_id,
+            record_id = %record_id,
+            has_customer_reference = input.customer_reference.is_some(),
+            has_notes = input.notes.is_some(),
+            "Validating independent customer staffing evidence"
+        );
         if input.confirmed_ended_at <= input.confirmed_started_at {
             return Err(StaffingError::InvalidInput("customer work record schedule is invalid"));
         }
         if input
             .customer_reference
             .as_deref()
-            .is_some_and(|value| value.len() > 200)
-            || input.notes.as_deref().is_some_and(|value| value.len() > 1000)
+            .is_some_and(|value: &str| value.len() > 200)
+            || input.notes.as_deref().is_some_and(|value: &str| value.len() > 1000)
         {
             return Err(StaffingError::InvalidInput("customer work record text is invalid"));
         }
-        self.repo
-            .upsert_customer_work_record(tenant_id, Uuid::new_v4(), assignment_id, &input, audit_account_id)
-            .await
+        let result: Result<CustomerWorkRecord, StaffingError> = self
+            .repo
+            .upsert_customer_work_record(tenant_id, record_id, assignment_id, &input, audit_account_id)
+            .await;
+        log_staffing_operation(
+            "upsert_customer_work_record",
+            tenant_id,
+            Some(audit_account_id),
+            Some(assignment_id),
+            &result,
+        );
+        result
+    }
+}
+
+fn log_staffing_operation<T>(
+    operation: &'static str,
+    tenant_id: Uuid,
+    audit_account_id: Option<Uuid>,
+    resource_id: Option<Uuid>,
+    result: &Result<T, StaffingError>,
+) -> () {
+    match result {
+        Ok(_) => info!(
+            operation,
+            tenant_id = %tenant_id,
+            audit_account_id = ?audit_account_id,
+            resource_id = ?resource_id,
+            "Staffing service operation completed"
+        ),
+        Err(StaffingError::BackendUnavailable) => error!(
+            operation,
+            tenant_id = %tenant_id,
+            audit_account_id = ?audit_account_id,
+            resource_id = ?resource_id,
+            "Staffing service operation failed because the backend is unavailable"
+        ),
+        Err(service_error) => warn!(
+            operation,
+            tenant_id = %tenant_id,
+            audit_account_id = ?audit_account_id,
+            resource_id = ?resource_id,
+            reason = ?service_error,
+            "Staffing service operation was rejected"
+        ),
     }
 }
 
@@ -556,7 +767,7 @@ fn validate_approval_input(worked_seconds: Option<i64>, adjustment_reason: Optio
 }
 
 fn validate_identity(code: &str, name: &str) -> Result<(), StaffingError> {
-    let valid_boundary = code
+    let valid_boundary: bool = code
         .chars()
         .next()
         .zip(code.chars().last())
@@ -586,12 +797,12 @@ fn validate_currency(currency: &str) -> Result<(), StaffingError> {
 }
 
 fn validate_positive_decimal(value: &str) -> Result<(), StaffingError> {
-    let mut parts = value.split('.');
-    let whole = parts
+    let mut parts: std::str::Split<'_, char> = value.split('.');
+    let whole: &str = parts
         .next()
         .ok_or(StaffingError::InvalidInput("hourly rate is invalid"))?;
-    let fraction = parts.next();
-    let is_zero = value.chars().all(|character| character == '0' || character == '.');
+    let fraction: Option<&str> = parts.next();
+    let is_zero: bool = value.chars().all(|character| character == '0' || character == '.');
     if value.is_empty()
         || value != value.trim()
         || value.starts_with('-')

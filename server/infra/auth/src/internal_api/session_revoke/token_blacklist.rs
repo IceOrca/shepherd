@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use infra_redis::RedisAdapter;
-use infra_kernel::debug::*;
+use tracing::{error, warn, info, debug, trace};
 
 pub const DEFAULT_TOKEN_BLACKLIST_CHANNEL: &str = "infra:auth:blacklist:access_jti";
 
@@ -77,7 +77,7 @@ impl RedisTokenBlacklistPubSub {
         let channel: String = std::env::var("AUTH_TOKEN_BLACKLIST_CHANNEL")
             .unwrap_or_else(|_| DEFAULT_TOKEN_BLACKLIST_CHANNEL.to_string());
 
-        log_info!("RedisTokenBlacklistPubSub initialized: channel={}", channel);
+        info!("RedisTokenBlacklistPubSub initialized: channel={}", channel);
         Arc::new(Self { redis, channel })
     }
 
@@ -90,32 +90,29 @@ impl RedisTokenBlacklistPubSub {
         event: &AccessTokenBlacklistedEvent,
     ) -> Result<usize, TokenBlacklistPubSubError> {
         if event.jti.is_empty() {
-            log_warn!("Skipped publishing empty access-token blacklist jti");
+            warn!("Skipped publishing empty access-token blacklist jti");
             return Ok(0);
         }
         if event.is_expired() {
-            log_trace!(
+            trace!(
                 "Skipped publishing expired access-token blacklist event: jti={} expires_at={}",
-                event.jti,
-                event.expires_at
+                event.jti, event.expires_at
             );
             return Ok(0);
         }
 
         let payload: String = serde_json::to_string(event).map_err(|err: serde_json::Error| {
-            log_error!(
+            error!(
                 "Failed to serialize access-token blacklist event: jti={} error={}",
-                event.jti,
-                err
+                event.jti, err
             );
             TokenBlacklistPubSubError::SerializationFailed
         })?;
 
         let mut connection = self.redis.connection().await.map_err(|err: redis::RedisError| {
-            log_error!(
+            error!(
                 "Failed to connect Redis before publishing access-token blacklist event: jti={} error={}",
-                event.jti,
-                err
+                event.jti, err
             );
             TokenBlacklistPubSubError::RedisUnavailable
         })?;
@@ -125,22 +122,16 @@ impl RedisTokenBlacklistPubSub {
                 .publish(&self.channel, payload)
                 .await
                 .map_err(|err: redis::RedisError| {
-                    log_error!(
+                    error!(
                         "Failed to publish access-token blacklist event: channel={} jti={} error={}",
-                        self.channel,
-                        event.jti,
-                        err
+                        self.channel, event.jti, err
                     );
                     TokenBlacklistPubSubError::RedisUnavailable
                 })?;
 
-        log_notice!(
+        info!(
             "Published access-token blacklist event: channel={} jti={} tenant_id={:?} account_id={:?} subscribers={}",
-            self.channel,
-            event.jti,
-            event.tenant_id,
-            event.account_id,
-            subscriber_count
+            self.channel, event.jti, event.tenant_id, event.account_id, subscriber_count
         );
         Ok(subscriber_count)
     }
@@ -156,10 +147,9 @@ impl RedisTokenBlacklistPubSub {
             .get_async_pubsub()
             .await
             .map_err(|err: redis::RedisError| {
-                log_error!(
+                error!(
                     "Failed to connect Redis pub/sub for access-token blacklist events: channel={} error={}",
-                    self.channel,
-                    err
+                    self.channel, err
                 );
                 TokenBlacklistPubSubError::RedisUnavailable
             })?;
@@ -168,42 +158,38 @@ impl RedisTokenBlacklistPubSub {
             .subscribe(&self.channel)
             .await
             .map_err(|err: redis::RedisError| {
-                log_error!(
+                error!(
                     "Failed to subscribe access-token blacklist channel: channel={} error={}",
-                    self.channel,
-                    err
+                    self.channel, err
                 );
                 TokenBlacklistPubSubError::RedisUnavailable
             })?;
 
-        log_notice!("Subscribed to access-token blacklist events: channel={}", self.channel);
+        info!("Subscribed to access-token blacklist events: channel={}", self.channel);
 
         let mut message_stream = pubsub.on_message();
         while let Some(message) = message_stream.next().await {
             let payload: String = message.get_payload().map_err(|err: redis::RedisError| {
-                log_warn!(
+                warn!(
                     "Ignored malformed access-token blacklist pub/sub payload: channel={} error={}",
-                    self.channel,
-                    err
+                    self.channel, err
                 );
                 TokenBlacklistPubSubError::DeserializationFailed
             })?;
 
             let event: AccessTokenBlacklistedEvent =
                 serde_json::from_str(&payload).map_err(|err: serde_json::Error| {
-                    log_warn!(
+                    warn!(
                         "Ignored invalid access-token blacklist event JSON: channel={} error={}",
-                        self.channel,
-                        err
+                        self.channel, err
                     );
                     TokenBlacklistPubSubError::DeserializationFailed
                 })?;
 
             if event.is_expired() {
-                log_trace!(
+                trace!(
                     "Ignored expired access-token blacklist event from pub/sub: jti={} expires_at={}",
-                    event.jti,
-                    event.expires_at
+                    event.jti, event.expires_at
                 );
                 continue;
             }
@@ -211,7 +197,7 @@ impl RedisTokenBlacklistPubSub {
             handler(event).await;
         }
 
-        log_warn!(
+        warn!(
             "Redis access-token blacklist pub/sub message stream ended: channel={}",
             self.channel
         );
@@ -223,7 +209,7 @@ fn unix_now() -> u64 {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(duration) => duration.as_secs(),
         Err(err) => {
-            log_error!(
+            error!(
                 "System time error while computing token blacklist event unix time: {}",
                 err
             );

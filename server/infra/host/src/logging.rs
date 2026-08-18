@@ -1,24 +1,14 @@
-use std::sync::Arc;
-
 use axum::{
-    Json, Router,
-    http::StatusCode,
-    middleware,
-    response::IntoResponse,
-    routing::{MethodRouter, get, post},
-    extract::{Extension, State},
+    Router,
+    body::Body,
+    extract::{Extension, MatchedPath, Request},
+    http::{Method, StatusCode},
+    middleware::{self, Next},
+    response::Response,
 };
-use serde::{Deserialize, Serialize};
-
-use axum::body::Body;
-use axum::extract::{MatchedPath, Request};
-use axum::http::{Method, header};
-// use axum::http::Request;
-use axum::{middleware::Next, response::Response};
 use tower_http::classify::{ServerErrorsAsFailures, SharedClassifier};
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, MakeSpan, TraceLayer};
-use tracing::{Level, Span, info_span};
-use tracing_subscriber::{EnvFilter, Registry, fmt, prelude::*};
+use tracing::{debug, error, info, info_span, trace, warn, Level, Span};
 
 use crate::ip_extract::OriginatorIp;
 
@@ -29,45 +19,79 @@ async fn trace_layer(Extension(ip): Extension<OriginatorIp>, request: Request, n
         .get::<MatchedPath>()
         .map(MatchedPath::as_str)
         .unwrap_or(request.uri().path())
-        .to_string();
-
-    // Headers
+        .to_owned();
     let content_type: String = request
         .headers()
         .get(axum::http::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
+        .and_then(|value| value.to_str().ok())
         .unwrap_or("_")
-        .to_string();
-
+        .to_owned();
     let accept: String = request
         .headers()
         .get(axum::http::header::ACCEPT)
-        .and_then(|v| v.to_str().ok())
+        .and_then(|value| value.to_str().ok())
         .unwrap_or("_")
-        .to_string();
-
+        .to_owned();
     let user_agent: String = request
         .headers()
         .get(axum::http::header::USER_AGENT)
-        .and_then(|v| v.to_str().ok())
+        .and_then(|value| value.to_str().ok())
         .unwrap_or("_")
-        .to_string();
+        .to_owned();
 
-    let start: std::time::Instant = std::time::Instant::now();
-    let response: Response = next.run(request).await;
-    let latency: u128 = start.elapsed().as_millis();
-
-    tracing::info!(
+    trace!(
         ip = %ip.ip(),
         method = %method,
         path = %path,
         content_type = %content_type,
         accept = %accept,
         user_agent = %user_agent,
-        status = response.status().as_u16(),
-        latency_ms = latency,
-        "http request",
+        "HTTP request accepted by host trace layer"
     );
+    let started_at: std::time::Instant = std::time::Instant::now();
+    let response: Response = next.run(request).await;
+    let latency_ms: u128 = started_at.elapsed().as_millis();
+    let status: StatusCode = response.status();
+
+    info!(
+        ip = %ip.ip(),
+        method = %method,
+        path = %path,
+        content_type = %content_type,
+        accept = %accept,
+        user_agent = %user_agent,
+        status = status.as_u16(),
+        latency_ms,
+        "HTTP request completed"
+    );
+    if status.is_server_error() {
+        error!(
+            ip = %ip.ip(),
+            method = %method,
+            path = %path,
+            status = status.as_u16(),
+            latency_ms,
+            "HTTP request completed with server error"
+        );
+    } else if status.is_client_error() {
+        warn!(
+            ip = %ip.ip(),
+            method = %method,
+            path = %path,
+            status = status.as_u16(),
+            latency_ms,
+            "HTTP request completed with client error"
+        );
+    } else {
+        debug!(
+            ip = %ip.ip(),
+            method = %method,
+            path = %path,
+            status = status.as_u16(),
+            latency_ms,
+            "HTTP request response classification completed"
+        );
+    }
 
     response
 }
@@ -88,13 +112,13 @@ async fn default_trace_layer(request: Request, next: Next) -> Response {
         .get::<MatchedPath>()
         .map(MatchedPath::as_str)
         .unwrap_or(request.uri().path())
-        .to_string();
-
-    tracing::info!(path = %path, "matched route");
+        .to_owned();
+    trace!(path = %path, "Host matched route before handler execution");
     next.run(request).await
 }
 
 pub fn layer(router: Router) -> Router {
+    info!("Applying host HTTP trace layer");
     let host_router: Router = router.route_layer(middleware::from_fn(trace_layer));
     host_router
 }
@@ -104,9 +128,8 @@ pub struct CustomMakeSpan;
 
 impl<B> MakeSpan<B> for CustomMakeSpan {
     fn make_span(&mut self, request: &Request<B>) -> Span {
-        let path = request.uri().path();
-        let method = request.method().as_str();
-
+        let path: &str = request.uri().path();
+        let method: &str = request.method().as_str();
         info_span!(
             "http_request",
             %method,

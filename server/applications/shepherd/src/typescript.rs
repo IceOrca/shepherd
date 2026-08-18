@@ -13,6 +13,16 @@ use crate::{
             ManualRateOverrideRequest, ShiftAssignmentApproveRequest, ShiftAssignmentCreateRequest,
             StaffingRateAgreementCreateRequest, StaffingShiftCreateRequest,
         },
+        urgent_work::{
+            core::{
+                UrgentCustomerWorkRecord, UrgentWorkActionSource, UrgentWorkEmployee, UrgentWorkFacility,
+                UrgentWorkItem, UrgentWorkReconciliation, UrgentWorkStatus,
+            },
+            host::{
+                UrgentCustomerWorkRecordUpsertRequest, UrgentWorkEndRequest, UrgentWorkReconcileRequest,
+                UrgentWorkStartRequest,
+            },
+        },
         work_session::{
             core::{OwnStaffingAssignment, ShiftWorkSession},
             host::ShiftWorkActionRequest,
@@ -85,6 +95,17 @@ pub fn contract() -> String {
     push::<ShiftWorkSession>(&mut output, &config);
     push::<OwnStaffingAssignment>(&mut output, &config);
     push::<ShiftWorkActionRequest>(&mut output, &config);
+    push::<UrgentWorkStatus>(&mut output, &config);
+    push::<UrgentWorkActionSource>(&mut output, &config);
+    push::<UrgentWorkFacility>(&mut output, &config);
+    push::<UrgentWorkEmployee>(&mut output, &config);
+    push::<UrgentWorkItem>(&mut output, &config);
+    push::<UrgentCustomerWorkRecord>(&mut output, &config);
+    push::<UrgentWorkReconciliation>(&mut output, &config);
+    push::<UrgentWorkStartRequest>(&mut output, &config);
+    push::<UrgentWorkEndRequest>(&mut output, &config);
+    push::<UrgentCustomerWorkRecordUpsertRequest>(&mut output, &config);
+    push::<UrgentWorkReconcileRequest>(&mut output, &config);
     push::<PayBasis>(&mut output, &config);
     push::<PayrollRunStatus>(&mut output, &config);
     push::<EmployeeCompensation>(&mut output, &config);

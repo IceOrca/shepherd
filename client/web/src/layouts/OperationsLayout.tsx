@@ -14,6 +14,7 @@ import {
   UserRoundCog,
   Wifi,
   WifiOff,
+  Zap,
   X,
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -35,7 +36,13 @@ interface NavigationItem {
 const navigation: NavigationItem[] = [
   { label: "Tổng quan", to: "/dashboard", icon: LayoutDashboard },
   {
-    label: "Ca làm của tôi",
+    label: "Ghi nhận công việc",
+    to: "/operations/work",
+    icon: Zap,
+    permission: "business.urgent_work.read",
+  },
+  {
+    label: "Ca kế hoạch của tôi",
     to: "/operations/my-shifts",
     icon: CalendarClock,
     permission: "business.staffing_work.self.read",
@@ -82,8 +89,15 @@ function pageTitle(pathname: string): { title: string; description: string } {
 
   if (pathname === "/operations/my-shifts") {
     return {
-      title: "Ca làm của tôi",
-      description: "Theo dõi và ghi nhận thời gian làm việc tại khách hàng.",
+      title: "Ca kế hoạch của tôi",
+      description: "Theo dõi các ca đã được điều phối viên tạo và phân công trước.",
+    };
+  }
+
+  if (pathname === "/operations/work") {
+    return {
+      title: "Ghi nhận công việc",
+      description: "Chọn cơ sở, bắt đầu hoặc kết thúc cho bạn và đồng nghiệp tại hiện trường.",
     };
   }
 
@@ -96,8 +110,15 @@ function pageTitle(pathname: string): { title: string; description: string } {
 
   if (pathname === "/operations/reconciliation") {
     return {
-      title: "Đối soát ca làm",
-      description: "So sánh thời gian nhân viên ghi với xác nhận hoặc bill của khách hàng.",
+      title: "Đối soát công việc phát sinh",
+      description: "So sánh cả cơ sở và thời gian nhân viên ghi với bill của khách hàng.",
+    };
+  }
+
+  if (pathname === "/operations/reconciliation/planned") {
+    return {
+      title: "Đối soát ca kế hoạch",
+      description: "Đối soát các ca đã được tạo và phân công trước.",
     };
   }
 

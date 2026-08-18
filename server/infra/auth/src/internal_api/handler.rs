@@ -13,7 +13,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use jsonwebtoken::{Algorithm, Header, encode};
-use infra_kernel::debug::*;
+use tracing::{error, warn, info, debug, trace};
 use crate::{
     AccountMutationError, AuthenticateUserError, ChangeOwnPasswordError, CreateAccountError,
     account::{AccountSummary, AuthorizationCatalog, UserAccount},
@@ -48,7 +48,7 @@ pub async fn login(
     }
     let tenant: String = payload.normalized_tenant().ok_or(StatusCode::BAD_REQUEST)?;
     let login_key: String = tenant_login_key(&tenant, &payload.username);
-    log_info!(
+    info!(
         "Login credential verification started: tenant={} username={} source_ip={:?}",
         tenant,
         payload.username.trim(),
@@ -61,7 +61,7 @@ pub async fn login(
         .await
     {
         Ok((tenant_id, account)) => {
-            log_debug!(
+            debug!(
                 "Login credentials accepted: tenant={} tenant_id={} account_id={} username={} role={}",
                 tenant,
                 tenant_id,
@@ -76,7 +76,7 @@ pub async fn login(
         }
         Err(AuthenticateUserError::BackendUnavailable) => Err(StatusCode::SERVICE_UNAVAILABLE),
         Err(AuthenticateUserError::InvalidCredentials(role)) => {
-            log_notice!(
+            info!(
                 "Login credentials rejected: tenant={} username={} source_ip={:?}",
                 tenant,
                 payload.username.trim(),
@@ -114,10 +114,10 @@ async fn issue_login_response(
     let jti: String = Uuid::new_v4().to_string();
     let expiration: usize = ctx.jwt.expiration_for_role(&account.role);
     let access_expires_at: usize = now.checked_add(expiration).ok_or_else(|| {
-        log_error!("Access-token expiry overflow during login: account_id={}", account.id);
+        error!("Access-token expiry overflow during login: account_id={}", account.id);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    log_debug!(
+    debug!(
         "Creating refresh session for authenticated account: tenant_id={} account_id={} role={} access_expires_at={}",
         tenant_id,
         account.id,
@@ -157,11 +157,9 @@ async fn issue_login_response(
     ) {
         Ok(cookie) => cookie,
         Err(status) => {
-            log_error!(
+            error!(
                 "Failed to construct login refresh cookie; revoking new session: tenant_id={} account_id={} sid={}",
-                tenant_id,
-                account.id,
-                created.sid
+                tenant_id, account.id, created.sid
             );
             let _result: Result<RevokedSessionInfo, AuthSessionError> =
                 ctx.sessions.revoke_session(tenant_id, account.id, &created.sid).await;
@@ -169,11 +167,9 @@ async fn issue_login_response(
         }
     };
 
-    log_notice!(
+    info!(
         "Login successful: tenant_id={} account_id={} username={}",
-        tenant_id,
-        account.id,
-        account.username
+        tenant_id, account.id, account.username
     );
     Ok((
         StatusCode::OK,
@@ -191,12 +187,9 @@ pub async fn logout(
     State(ctx): State<Arc<LegacyAuthService>>,
     Extension(user): Extension<AuthenticatedUser>,
 ) -> Result<Response, StatusCode> {
-    log_info!(
+    info!(
         "Logout requested: tenant_id={} account_id={} sid={} jti={}",
-        user.tenant_id,
-        user.account_id,
-        user.sid,
-        user.jti
+        user.tenant_id, user.account_id, user.sid, user.jti
     );
     // Revoke the authoritative refresh session first. If Redis is unavailable,
     // leave the access JWT usable so the client can retry instead of creating a
@@ -210,11 +203,9 @@ pub async fn logout(
     if let Some(token) = revoked.access_token {
         revoke_access_token(&ctx, &token).await;
     }
-    log_notice!(
+    info!(
         "Logout completed: tenant_id={} account_id={} sid={}",
-        user.tenant_id,
-        user.account_id,
-        user.sid
+        user.tenant_id, user.account_id, user.sid
     );
     message_with_cleared_cookie("Logged out successfully")
 }
@@ -223,11 +214,9 @@ pub async fn logout_all(
     State(ctx): State<Arc<LegacyAuthService>>,
     Extension(user): Extension<AuthenticatedUser>,
 ) -> Result<Response, StatusCode> {
-    log_info!(
+    info!(
         "Logout-all requested: tenant_id={} account_id={} current_sid={}",
-        user.tenant_id,
-        user.account_id,
-        user.sid
+        user.tenant_id, user.account_id, user.sid
     );
     let revoked = ctx
         .sessions
@@ -238,7 +227,7 @@ pub async fn logout_all(
     for token in &revoked.access_tokens {
         revoke_access_token(&ctx, token).await;
     }
-    log_notice!(
+    info!(
         "Logout-all completed: tenant_id={} account_id={} revoked_session_tokens={}",
         user.tenant_id,
         user.account_id,
@@ -251,11 +240,11 @@ pub async fn refresh_session(State(ctx): State<Arc<LegacyAuthService>>, headers:
     let cookie: RefreshSessionCookie = match extract_refresh_session_cookie(&headers) {
         Some(cookie) => cookie,
         None => {
-            log_notice!("Refresh rejected before Redis lookup: reason=missing_or_malformed_cookie");
+            info!("Refresh rejected before Redis lookup: reason=missing_or_malformed_cookie");
             return refresh_error_response(StatusCode::UNAUTHORIZED, true);
         }
     };
-    log_debug!("Refresh requested: tenant_id={} sid={}", cookie.tenant_id, cookie.sid);
+    debug!("Refresh requested: tenant_id={} sid={}", cookie.tenant_id, cookie.sid);
     let permit = match ctx
         .sessions
         .try_acquire_refresh_attempt_permit(cookie.tenant_id, &cookie.sid)
@@ -263,10 +252,9 @@ pub async fn refresh_session(State(ctx): State<Arc<LegacyAuthService>>, headers:
     {
         Some(permit) => permit,
         None => {
-            log_notice!(
+            info!(
                 "Refresh rejected because another rotation is in flight: tenant_id={} sid={}",
-                cookie.tenant_id,
-                cookie.sid
+                cookie.tenant_id, cookie.sid
             );
             return refresh_error_response(StatusCode::CONFLICT, false);
         }
@@ -292,12 +280,9 @@ async fn refresh_session_inner(
         Ok(validated) => validated,
         Err(error) => return Err(handle_refresh_error(&ctx.access_revocation, error).await),
     };
-    log_debug!(
+    debug!(
         "Refresh session validated; loading current account state: tenant_id={} account_id={} sid={} username={}",
-        validated.tenant_id,
-        validated.account_id,
-        validated.sid,
-        validated.username
+        validated.tenant_id, validated.account_id, validated.sid, validated.username
     );
     let account_lookup: Option<UserAccount> = ctx
         .core_entity
@@ -307,7 +292,7 @@ async fn refresh_session_inner(
     let account: UserAccount = match account_lookup {
         Some(account) if account.id == validated.account_id && account.active => account,
         account => {
-            log_warn!(
+            warn!(
                 "Refresh session account is no longer eligible; revoking session: tenant_id={} expected_account_id={} actual_account_id={:?} active={:?} sid={}",
                 validated.tenant_id,
                 validated.account_id,
@@ -320,13 +305,9 @@ async fn refresh_session_inner(
         }
     };
     if account.auth_version != validated.auth_version {
-        log_notice!(
+        info!(
             "Refresh session uses a stale account authorization version; revoking session: tenant_id={} account_id={} sid={} session_version={} current_version={}",
-            validated.tenant_id,
-            validated.account_id,
-            validated.sid,
-            validated.auth_version,
-            account.auth_version
+            validated.tenant_id, validated.account_id, validated.sid, validated.auth_version, account.auth_version
         );
         revoke_validated_session(ctx, &validated).await?;
         return Err(StatusCode::UNAUTHORIZED);
@@ -335,7 +316,7 @@ async fn refresh_session_inner(
     let now: usize = unix_now()?;
     let expiration: usize = ctx.jwt.expiration_for_role(&account.role);
     let access_expires_at: usize = now.checked_add(expiration).ok_or_else(|| {
-        log_error!("Access-token expiry overflow during refresh: account_id={}", account.id);
+        error!("Access-token expiry overflow during refresh: account_id={}", account.id);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
     let new_jti: String = Uuid::new_v4().to_string();
@@ -374,13 +355,9 @@ async fn refresh_session_inner(
         || rotated.auth_version != account.auth_version
         || rotated.jti != new_jti
     {
-        log_error!(
+        error!(
             "Refresh session identity changed during rotation; revoking session: validated_tenant_id={} rotated_tenant_id={} validated_account_id={} rotated_account_id={} sid={}",
-            validated.tenant_id,
-            rotated.tenant_id,
-            validated.account_id,
-            rotated.account_id,
-            rotated.sid
+            validated.tenant_id, rotated.tenant_id, validated.account_id, rotated.account_id, rotated.sid
         );
         revoke_rotated_session(ctx, &rotated).await?;
         return Err(StatusCode::UNAUTHORIZED);
@@ -397,17 +374,15 @@ async fn refresh_session_inner(
     ) {
         Ok(cookie) => cookie,
         Err(status) => {
-            log_error!(
+            error!(
                 "Failed to construct rotated refresh cookie; revoking session: tenant_id={} account_id={} sid={}",
-                rotated.tenant_id,
-                rotated.account_id,
-                rotated.sid
+                rotated.tenant_id, rotated.account_id, rotated.sid
             );
             revoke_rotated_session(ctx, &rotated).await?;
             return Err(status);
         }
     };
-    log_notice!(
+    info!(
         "Refresh completed: tenant_id={} account_id={} sid={} old_access_revoked={} new_jti={}",
         rotated.tenant_id,
         rotated.account_id,
@@ -449,10 +424,9 @@ pub async fn list_accounts(
 ) -> Result<impl IntoResponse, StatusCode> {
     require_permission(&user, "auth.accounts.read")?;
     let accounts: Vec<AccountSummary> = ctx.core_entity.list_accounts(user.tenant_id).await.map_err(|error| {
-        log_error!(
+        error!(
             "Tenant account listing failed: tenant_id={} error={}",
-            user.tenant_id,
-            error
+            user.tenant_id, error
         );
         StatusCode::SERVICE_UNAVAILABLE
     })?;
@@ -469,10 +443,9 @@ pub async fn get_authorization_catalog(
         .list_authorization_catalog(user.tenant_id)
         .await
         .map_err(|error| {
-            log_error!(
+            error!(
                 "Tenant authorization catalog listing failed: tenant_id={} error={}",
-                user.tenant_id,
-                error
+                user.tenant_id, error
             );
             StatusCode::SERVICE_UNAVAILABLE
         })?;
@@ -659,7 +632,7 @@ fn encode_access_token(ctx: &LegacyAuthService, claims: &AccessClaims) -> Result
     let mut header: Header = Header::new(Algorithm::EdDSA);
     header.kid = Some(KID_MAIN!().to_owned());
     encode(&header, claims, ctx.jwt.encoding()).map_err(|error| {
-        log_error!("Failed to encode access JWT: {}", error);
+        error!("Failed to encode access JWT: {}", error);
         StatusCode::INTERNAL_SERVER_ERROR
     })
 }
@@ -692,10 +665,9 @@ async fn handle_refresh_error(access_revocation: &AccessRevocationCache, error: 
         AuthSessionError::RefreshTokenMismatch(revoked_access_token)
         | AuthSessionError::SessionExpired(revoked_access_token) => {
             if let Some(token) = revoked_access_token {
-                log_notice!(
+                info!(
                     "Blacklisting current access token after refresh-session invalidation: jti={} expires_at={}",
-                    token.jti,
-                    token.expires_at
+                    token.jti, token.expires_at
                 );
                 access_revocation.revoke_jti(&token.jti, token.expires_at).await;
             }
@@ -749,7 +721,7 @@ fn sensitive_headers(cookie: Option<HeaderValue>) -> HeaderMap {
 }
 
 fn session_backend_status(error: AuthSessionError) -> StatusCode {
-    log_error!("Authentication session operation failed: {}", error);
+    error!("Authentication session operation failed: {}", error);
     StatusCode::SERVICE_UNAVAILABLE
 }
 
@@ -770,7 +742,7 @@ async fn revoke_all_account_sessions(
     for token in &revoked.access_tokens {
         revoke_access_token(ctx, token).await;
     }
-    log_notice!(
+    info!(
         "Security-sensitive account change revoked sessions: tenant_id={} account_id={} revoked_access_tokens={}",
         tenant_id,
         account_id,
@@ -783,11 +755,9 @@ fn require_permission(user: &AuthenticatedUser, permission: &str) -> Result<(), 
     if user.has_permission(permission) {
         Ok(())
     } else {
-        log_notice!(
+        info!(
             "Account management denied: tenant_id={} account_id={} required_permission={}",
-            user.tenant_id,
-            user.account_id,
-            permission
+            user.tenant_id, user.account_id, permission
         );
         Err(StatusCode::FORBIDDEN)
     }
@@ -807,13 +777,13 @@ fn unix_now() -> Result<usize, StatusCode> {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() as usize)
         .map_err(|error| {
-            log_error!("System time error: {}", error);
+            error!("System time error: {}", error);
             StatusCode::INTERNAL_SERVER_ERROR
         })
 }
 
 pub async fn test_ping() -> impl IntoResponse {
-    log_info!("Received auth ping request");
+    info!("Received auth ping request");
     (StatusCode::OK, "Pong!")
 }
 

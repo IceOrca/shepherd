@@ -1,6 +1,6 @@
 use std::env;
 
-use infra_kernel::debug::log_warn;
+use infra_kernel::debug::warn;
 use jsonwebtoken::EncodingKey;
 
 pub(super) fn load_private_key(private_pem_path: &str) -> EncodingKey {
@@ -13,21 +13,18 @@ pub(super) fn load_private_key(private_pem_path: &str) -> EncodingKey {
 pub(super) fn read_expiration_secs(env_name: &str, default_value: usize) -> usize {
     let parsed_value: usize = match env::var(env_name) {
         Ok(value) => value.parse().unwrap_or_else(|error: std::num::ParseIntError| {
-            log_warn!(
+            warn!(
                 "Invalid {} format: {}, using default {}s",
-                env_name,
-                error,
-                default_value
+                env_name, error, default_value
             );
             default_value
         }),
         Err(_) => default_value,
     };
     if !(60..=86_400).contains(&parsed_value) {
-        log_warn!(
+        warn!(
             "{} must be between 60 and 86400 seconds, using default {}s",
-            env_name,
-            default_value
+            env_name, default_value
         );
         default_value
     } else {

@@ -16,7 +16,7 @@ pub use app_routes::AppRoutes;
 pub use infra_auth as auth;
 #[cfg(feature = "auth")]
 use infra_auth::AuthService;
-use infra_kernel::debug::*;
+use tracing::{error, warn, info, debug, trace};
 use infra_postgres::DatabaseAdapter;
 use infra_redis::RedisAdapter;
 use ratelimiting::RateLimiter;
@@ -51,7 +51,7 @@ impl HostContext {
             #[cfg(feature = "auth")]
             auth,
             ip: std::env::var("HOST_IP").unwrap_or_else(|_| {
-                log_warn!("HOST_IP not set, defaulting to 127.0.0.1");
+                warn!("HOST_IP not set, defaulting to 127.0.0.1");
                 "127.0.0.1".to_owned()
             }),
             port: std::env::var("HOST_PORT")

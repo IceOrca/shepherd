@@ -31,7 +31,7 @@ use axum::{
 };
 use axum::http::header::{HeaderValue, InvalidHeaderValue};
 
-use infra_kernel::debug::*;
+use tracing::{error, warn, info, debug, trace};
 pub use infra_kernel::request::PrincipalRateLimitKey;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -89,7 +89,7 @@ impl RateLimiter {
                     .and_then(|v: &HeaderValue| v.to_str().ok())
                     .and_then(|s: &str| s.parse::<u64>().ok())
                     .unwrap_or_else(|| {
-                        log_debug!("error_handler caller does not set RETRY_AFTER header");
+                        debug!("error_handler caller does not set RETRY_AFTER header");
                         wait_seconds
                     });
                 (
@@ -104,7 +104,7 @@ impl RateLimiter {
 
             GovernorError::UnableToExtractKey => {
                 // Can not extract Key - middleware did not inject
-                log_error!("Rate limit key extraction failed");
+                error!("Rate limit key extraction failed");
                 StatusCode::INTERNAL_SERVER_ERROR.into_response()
             }
 

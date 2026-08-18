@@ -28,7 +28,7 @@ use super::{
 
 use crate::ip_extract::OriginatorIp;
 
-use infra_kernel::debug::*;
+use tracing::{error, warn, info, debug, trace};
 
 #[derive(Clone, Debug)]
 pub struct VerifiedClient {
@@ -46,7 +46,7 @@ pub async fn client_token_layer(
         .get("X-Client-ID")
         .and_then(|v: &HeaderValue| v.to_str().ok())
         .ok_or_else(|| {
-            log_notice!("Missing X-Client-ID");
+            info!("Missing X-Client-ID");
             StatusCode::BAD_REQUEST
         })?;
 
@@ -57,7 +57,7 @@ pub async fn client_token_layer(
         }
 
         Err(e) => {
-            log_notice!("Invalid client token: {}", e);
+            info!("Invalid client token: {}", e);
             Ok((
                 StatusCode::UNAUTHORIZED,
                 Json(serde_json::json!({

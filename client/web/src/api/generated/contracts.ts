@@ -60,6 +60,28 @@ export type OwnStaffingAssignment = { assignment_id: string, shift_id: string, c
 
 export type ShiftWorkActionRequest = { latitude?: number | null, longitude?: number | null, accuracy_meters?: number | null, };
 
+export type UrgentWorkStatus = "active" | "completed" | "reconciled" | "cancelled";
+
+export type UrgentWorkActionSource = "self_reported" | "peer";
+
+export type UrgentWorkFacility = { facility_id: string, customer_id: string, customer_name: string, facility_name: string, address: string | null, time_zone: string, };
+
+export type UrgentWorkEmployee = { employee_id: string, employee_code: string, display_name: string, is_self: boolean, has_open_work: boolean, };
+
+export type UrgentWorkItem = { report_id: string, employee_id: string, employee_code: string, employee_name: string, claimed_customer_facility_id: string, customer_name: string, claimed_facility_name: string, status: UrgentWorkStatus, started_at: string, ended_at: string | null, worked_seconds: number | null, started_by_account_id: string, start_source: UrgentWorkActionSource, ended_by_account_id: string | null, end_source: UrgentWorkActionSource | null, reconciled_assignment_id: string | null, created_at: string, updated_at: string, };
+
+export type UrgentCustomerWorkRecord = { id: string, report_id: string, confirmed_customer_facility_id: string, confirmed_customer_name: string, confirmed_facility_name: string, confirmed_started_at: string, confirmed_ended_at: string, confirmed_worked_seconds: number, customer_reference: string | null, notes: string | null, updated_at: string, };
+
+export type UrgentWorkReconciliation = { work: UrgentWorkItem, customer_record: UrgentCustomerWorkRecord | null, reconciliation_status: ReconciliationStatus, final_customer_facility_id: string | null, final_job_id: string | null, final_worked_seconds: number | null, adjustment_reason: string | null, };
+
+export type UrgentWorkStartRequest = { customer_facility_id: string, employee_ids: Array<string>, latitude: number | null, longitude: number | null, accuracy_meters: number | null, };
+
+export type UrgentWorkEndRequest = { latitude: number | null, longitude: number | null, accuracy_meters: number | null, };
+
+export type UrgentCustomerWorkRecordUpsertRequest = { confirmed_customer_facility_id: string, confirmed_started_at: string, confirmed_ended_at: string, customer_reference?: string | null, notes?: string | null, };
+
+export type UrgentWorkReconcileRequest = { final_customer_facility_id: string, job_id: string, worked_seconds: number, adjustment_reason?: string | null, manual_rate?: ManualRateOverrideRequest | null, };
+
 export type PayBasis = "hourly" | "monthly";
 
 export type PayrollRunStatus = "draft" | "calculated" | "approved" | "paid";

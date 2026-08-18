@@ -24,16 +24,14 @@ if [ "${APP_ENV:-development}" != "development" ]; then
 fi
 
 auth_subject="${AUTH_DEV_SUBJECT:-}"
-dev_auth_email="${DEV_AUTH_EMAIL:-}"
-dev_auth_password="${DEV_AUTH_PASSWORD:-}"
+# Fixed local credentials are intentional for this development-only seed helper.
+# Callers may override either value without editing the script.
+dev_auth_email="${DEV_AUTH_EMAIL:-iceorca@shepherd.local}"
+dev_auth_password="${DEV_AUTH_PASSWORD:-01234567aA}"
 auth_admin_token="${AUTH_ADMIN_TOKEN:-}"
 auth_admin_url="http://127.0.0.1:${AUTH_PORT:-9999}"
 
 if [ -z "${auth_subject}" ]; then
-    if [ -z "${dev_auth_email}" ] || [ -z "${dev_auth_password}" ]; then
-        echo >&2 "Set DEV_AUTH_EMAIL and DEV_AUTH_PASSWORD, or set AUTH_DEV_SUBJECT to an existing Supabase Auth user UUID"
-        exit 2
-    fi
     if [ -z "${auth_admin_token}" ]; then
         echo >&2 "AUTH_ADMIN_TOKEN is required to create or find the development Auth user"
         exit 2
@@ -49,7 +47,7 @@ if [ -z "${auth_subject}" ]; then
         create_payload="$(jq --null-input --compact-output \
             --arg email "${dev_auth_email}" \
             --arg password "${dev_auth_password}" \
-            '{email: $email, password: $password, email_confirm: true, role: "authenticated", user_metadata: {username: "owner"}, app_metadata: {managed_by: "dev-seed"}}')"
+            '{email: $email, password: $password, email_confirm: true, role: "authenticated", user_metadata: {username: "iceorca"}, app_metadata: {managed_by: "dev-seed"}}')"
         created_user="$(curl --fail --silent --show-error \
             --request POST \
             --header "Authorization: Bearer ${auth_admin_token}" \
@@ -57,6 +55,16 @@ if [ -z "${auth_subject}" ]; then
             --data "${create_payload}" \
             "${auth_admin_url}/admin/users")"
         auth_subject="$(printf '%s' "${created_user}" | jq --raw-output '.id // empty')"
+    else
+        update_payload="$(jq --null-input --compact-output \
+            --arg password "${dev_auth_password}" \
+            '{password: $password, email_confirm: true, user_metadata: {username: "iceorca"}, app_metadata: {managed_by: "dev-seed"}}')"
+        curl --fail --silent --show-error --output /dev/null \
+            --request PUT \
+            --header "Authorization: Bearer ${auth_admin_token}" \
+            --header "Content-Type: application/json" \
+            --data "${update_payload}" \
+            "${auth_admin_url}/admin/users/${auth_subject}"
     fi
 fi
 

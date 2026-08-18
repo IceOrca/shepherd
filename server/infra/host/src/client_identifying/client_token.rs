@@ -24,7 +24,7 @@ use super::{
     dto::{ClientIdToken, CitHeader, CitPayload},
 };
 
-use infra_kernel::debug::*;
+use tracing::{error, warn, info, debug, trace};
 
 // ─────────────────────────────────────────
 // Public types
@@ -61,22 +61,22 @@ impl ClientTokenKey {
     pub fn new() -> Self {
         let expiration_secs: u64 = match std::env::var("CIT_EXPIRATION_SECS") {
             Ok(val) => val.parse().unwrap_or_else(|err: std::num::ParseIntError| {
-                log_warn!("Invalid CIT_EXPIRATION_SECS format: {}, using default 216000s", err);
+                warn!("Invalid CIT_EXPIRATION_SECS format: {}, using default 216000s", err);
                 216000
             }),
             Err(_) => {
-                log_warn!("CIT_EXPIRATION_SECS not set, using default 216000s");
+                warn!("CIT_EXPIRATION_SECS not set, using default 216000s");
                 216000
             }
         };
 
         let mut self_inst: Self = Self::load_from_pem(
             &std::env::var("CLIENT_TOKEN_PRIVATE_KEY_PATH").unwrap_or_else(|_| {
-                log_warn!("CLIENT_TOKEN_PRIVATE_KEY_PATH not set, using default path");
+                warn!("CLIENT_TOKEN_PRIVATE_KEY_PATH not set, using default path");
                 "./security/clienttokenkey/ctk_private.pem".into()
             }),
             &std::env::var("CLIENT_TOKEN_PUBLIC_KEY_PATH").unwrap_or_else(|_| {
-                log_warn!("CLIENT_TOKEN_PUBLIC_KEY_PATH not set, using default path");
+                warn!("CLIENT_TOKEN_PUBLIC_KEY_PATH not set, using default path");
                 "./security/clienttokenkey/ctk_public.pem".into()
             }),
         );
@@ -104,15 +104,9 @@ impl ClientTokenKey {
         let signing_key: SigningKey = extract_ed25519_private_pem(&private_pem);
         let verifying_key: VerifyingKey = extract_ed25519_public_pem(&public_pem);
         let public_key_bytes: Vec<u8> = verifying_key.to_bytes().to_vec();
-        log_notice!("Client token keys loaded successfully");
-        log_debug!("signing_key: {:?}", signing_key);
-        log_debug!("verifying_key: {:?}", verifying_key);
-        log_debug!(
-            "public key bytes: {:02x?}",
-            public_key_bytes
-                .iter()
-                .map(|b| format!("{:02x}", b))
-                .collect::<Vec<String>>()
+        info!(
+            public_key_length = public_key_bytes.len(),
+            "Client token signing and verification keys loaded"
         );
 
         Self {
@@ -161,6 +155,7 @@ impl ClientTokenHandle {
     }
 
     pub fn generate(&self, real_ip: &OriginatorIp) -> Result<String, String> {
+        trace!(client_ip = %real_ip.ip(), "Client identity token generation accepted");
         let key: &ClientTokenKey = &self.key;
         let header: CitHeader = CitHeader {
             alg: "EdDSA".to_string(),
@@ -170,7 +165,7 @@ impl ClientTokenHandle {
         let now: u64 = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|err: std::time::SystemTimeError| {
-                log_error!("System time error: {}", err);
+                error!("System time error: {}", err);
                 format!("System time error: {}", err)
             })?
             .as_secs();
@@ -193,15 +188,22 @@ impl ClientTokenHandle {
         // Sign
         let signature: Signature = key.signing_key.sign(signing_input.as_bytes());
         let sig_b64: String = URL_SAFE_NO_PAD.encode(signature.to_bytes());
-
-        Ok(format!("{}.{}", signing_input, sig_b64))
+        let token: String = format!("{}.{}", signing_input, sig_b64);
+        debug!(
+            client_id = %payload.cid,
+            expires_at = payload.exp,
+            "Client identity token generated"
+        );
+        Ok(token)
     }
 
     /// Verify and extract client_id
     pub fn verify(&self, token: &str, real_ip: &OriginatorIp) -> Result<ClientIdToken, ClientTokenError> {
+        trace!(client_ip = %real_ip.ip(), "Client identity token verification accepted");
         let key: &ClientTokenKey = &self.key;
         let parts: Vec<&str> = token.splitn(3, '.').collect();
         if parts.len() != 3 {
+            warn!(client_ip = %real_ip.ip(), "Client identity token has an invalid format");
             return Err(ClientTokenError::InvalidFormat);
         }
 
@@ -244,24 +246,30 @@ impl ClientTokenHandle {
         let now: u64 = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|err: std::time::SystemTimeError| {
-                log_error!("System time error: {}", err);
+                error!("System time error: {}", err);
                 ClientTokenError::InvalidFormat
             })?
             .as_secs();
         if now < payload.iat || now > payload.exp {
-            log_notice!("iat {} or exp {} is invalid, now {}", payload.iat, payload.exp, now);
+            warn!(
+                client_id = %payload.cid,
+                issued_at = payload.iat,
+                expires_at = payload.exp,
+                "Client identity token is outside its validity interval"
+            );
             return Err(ClientTokenError::InvalidExpiration);
         }
 
         if payload.cip != real_ip.ip() {
-            log_notice!(
-                "cip {} in token and originator IP {} is not match",
-                payload.cip,
-                real_ip.ip()
+            warn!(
+                client_id = %payload.cid,
+                request_ip = %real_ip.ip(),
+                "Client identity token IP binding does not match the request"
             );
             return Err(ClientTokenError::InvalidClientIp);
         }
 
+        debug!(client_id = %payload.cid, "Client identity token verified");
         Ok(ClientIdToken { client_id: payload.cid })
     }
 }

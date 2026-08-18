@@ -193,11 +193,70 @@ CREATE TABLE business_staffing_shifts (
 CREATE INDEX business_staffing_shifts_tenant_schedule_idx
     ON business_staffing_shifts (tenant_id, starts_at, customer_id, status);
 
+-- Urgent work is staff-reported evidence created without a planned shift. A
+-- supervisor creates the formal completed shift and assignment only when the
+-- independent staff and customer evidence has been reconciled.
+CREATE TABLE business_urgent_work_batches (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
+    actor_account_id UUID NOT NULL,
+    claimed_customer_facility_id UUID NOT NULL,
+    idempotency_key UUID NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT business_urgent_work_batches_tenant_id_id_uq UNIQUE (tenant_id, id),
+    CONSTRAINT business_urgent_work_batches_actor_tenant_fk
+        FOREIGN KEY (tenant_id, actor_account_id)
+        REFERENCES accounts (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_urgent_work_batches_facility_tenant_fk
+        FOREIGN KEY (tenant_id, claimed_customer_facility_id)
+        REFERENCES business_customer_facilities (tenant_id, id) ON DELETE RESTRICT,
+    UNIQUE (tenant_id, actor_account_id, idempotency_key)
+);
+
+CREATE TABLE business_urgent_work_reports (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
+    start_batch_id UUID NOT NULL,
+    employee_id UUID NOT NULL,
+    claimed_customer_facility_id UUID NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_by_account_id UUID NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT business_urgent_work_reports_tenant_id_id_uq UNIQUE (tenant_id, id),
+    CONSTRAINT business_urgent_work_reports_tenant_id_id_employee_uq UNIQUE (tenant_id, id, employee_id),
+    CONSTRAINT business_urgent_work_reports_batch_tenant_fk
+        FOREIGN KEY (tenant_id, start_batch_id)
+        REFERENCES business_urgent_work_batches (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_urgent_work_reports_employee_tenant_fk
+        FOREIGN KEY (tenant_id, employee_id)
+        REFERENCES hr_employees (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_urgent_work_reports_facility_tenant_fk
+        FOREIGN KEY (tenant_id, claimed_customer_facility_id)
+        REFERENCES business_customer_facilities (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_urgent_work_reports_created_by_tenant_fk
+        FOREIGN KEY (tenant_id, created_by_account_id)
+        REFERENCES accounts (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_urgent_work_reports_status_valid CHECK (
+        status IN ('active', 'completed', 'reconciled', 'cancelled')
+    ),
+    CONSTRAINT business_urgent_work_reports_updated_after_created CHECK (updated_at >= created_at)
+);
+
+CREATE UNIQUE INDEX business_urgent_work_reports_employee_active_uq
+    ON business_urgent_work_reports (tenant_id, employee_id)
+    WHERE status = 'active';
+CREATE INDEX business_urgent_work_reports_tenant_status_idx
+    ON business_urgent_work_reports (tenant_id, status, created_at DESC);
+CREATE INDEX business_urgent_work_reports_facility_created_idx
+    ON business_urgent_work_reports (tenant_id, claimed_customer_facility_id, created_at DESC);
+
 CREATE TABLE business_shift_assignments (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
     shift_id UUID NOT NULL,
     employee_id UUID NOT NULL,
+    urgent_work_report_id UUID,
     rate_agreement_id UUID,
     rate_source TEXT NOT NULL,
     currency TEXT NOT NULL,
@@ -219,6 +278,9 @@ CREATE TABLE business_shift_assignments (
     CONSTRAINT business_shift_assignments_employee_tenant_fk
         FOREIGN KEY (tenant_id, employee_id)
         REFERENCES hr_employees (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_shift_assignments_urgent_report_tenant_fk
+        FOREIGN KEY (tenant_id, urgent_work_report_id)
+        REFERENCES business_urgent_work_reports (tenant_id, id) ON DELETE RESTRICT,
     CONSTRAINT business_shift_assignments_rate_agreement_tenant_fk
         FOREIGN KEY (tenant_id, rate_agreement_id)
         REFERENCES business_staffing_rate_agreements (tenant_id, id) ON DELETE RESTRICT,
@@ -271,6 +333,9 @@ CREATE INDEX business_shift_assignments_tenant_employee_idx
     ON business_shift_assignments (tenant_id, employee_id, created_at DESC);
 CREATE INDEX business_shift_assignments_tenant_shift_idx
     ON business_shift_assignments (tenant_id, shift_id, status);
+CREATE UNIQUE INDEX business_shift_assignments_urgent_report_uq
+    ON business_shift_assignments (tenant_id, urgent_work_report_id)
+    WHERE urgent_work_report_id IS NOT NULL;
 
 -- Payroll consumes the approved worker-pay snapshot rather than resolving the
 -- employee's current compensation again.
@@ -300,6 +365,7 @@ AS $$
 BEGIN
     IF OLD.employee_id IS DISTINCT FROM NEW.employee_id
         OR OLD.shift_id IS DISTINCT FROM NEW.shift_id
+        OR OLD.urgent_work_report_id IS DISTINCT FROM NEW.urgent_work_report_id
         OR OLD.rate_agreement_id IS DISTINCT FROM NEW.rate_agreement_id
         OR OLD.rate_source IS DISTINCT FROM NEW.rate_source
         OR OLD.currency IS DISTINCT FROM NEW.currency
@@ -349,6 +415,18 @@ CREATE POLICY business_staffing_shifts_tenant_isolation ON business_staffing_shi
 ALTER TABLE business_shift_assignments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE business_shift_assignments FORCE ROW LEVEL SECURITY;
 CREATE POLICY business_shift_assignments_tenant_isolation ON business_shift_assignments
+    USING (tenant_id = shepherd_current_tenant_id())
+    WITH CHECK (tenant_id = shepherd_current_tenant_id());
+
+ALTER TABLE business_urgent_work_batches ENABLE ROW LEVEL SECURITY;
+ALTER TABLE business_urgent_work_batches FORCE ROW LEVEL SECURITY;
+CREATE POLICY business_urgent_work_batches_tenant_isolation ON business_urgent_work_batches
+    USING (tenant_id = shepherd_current_tenant_id())
+    WITH CHECK (tenant_id = shepherd_current_tenant_id());
+
+ALTER TABLE business_urgent_work_reports ENABLE ROW LEVEL SECURITY;
+ALTER TABLE business_urgent_work_reports FORCE ROW LEVEL SECURITY;
+CREATE POLICY business_urgent_work_reports_tenant_isolation ON business_urgent_work_reports
     USING (tenant_id = shepherd_current_tenant_id())
     WITH CHECK (tenant_id = shepherd_current_tenant_id());
 

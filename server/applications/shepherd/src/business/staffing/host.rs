@@ -7,7 +7,7 @@ use axum::{
     routing::{get, post, put},
 };
 use chrono::{DateTime, NaiveDate, Utc};
-use infra_kernel::debug::*;
+use tracing::{error, warn, info, debug, trace};
 use serde::Deserialize;
 use ts_rs::TS;
 use uuid::Uuid;
@@ -239,7 +239,7 @@ pub async fn create_customer(
     Json(payload): Json<CustomerCreateRequest>,
 ) -> Result<(StatusCode, Json<Customer>), StatusCode> {
     require_permission(&user, "business.customers.manage")?;
-    let customer = context
+    let customer: Customer = context
         .core
         .staffing
         .create_customer(user.tenant_id, payload.into(), user.account_id)
@@ -270,7 +270,7 @@ pub async fn create_customer_facility(
     Json(payload): Json<CustomerFacilityCreateRequest>,
 ) -> Result<(StatusCode, Json<CustomerFacility>), StatusCode> {
     require_permission(&user, "business.customers.manage")?;
-    let facility = context
+    let facility: CustomerFacility = context
         .core
         .staffing
         .create_customer_facility(user.tenant_id, customer_id, payload.into(), user.account_id)
@@ -299,7 +299,7 @@ pub async fn create_rate_agreement(
     Json(payload): Json<StaffingRateAgreementCreateRequest>,
 ) -> Result<(StatusCode, Json<StaffingRateAgreement>), StatusCode> {
     require_permission(&user, "business.staffing_rates.manage")?;
-    let agreement = context
+    let agreement: StaffingRateAgreement = context
         .core
         .staffing
         .create_rate_agreement(user.tenant_id, payload.into(), user.account_id)
@@ -328,7 +328,7 @@ pub async fn create_shift(
     Json(payload): Json<StaffingShiftCreateRequest>,
 ) -> Result<(StatusCode, Json<StaffingShift>), StatusCode> {
     require_permission(&user, "business.shifts.manage")?;
-    let shift = context
+    let shift: StaffingShift = context
         .core
         .staffing
         .create_shift(user.tenant_id, payload.into(), user.account_id)
@@ -374,7 +374,7 @@ pub async fn create_shift_assignment(
     Json(payload): Json<ShiftAssignmentCreateRequest>,
 ) -> Result<(StatusCode, Json<ShiftAssignment>), StatusCode> {
     require_permission(&user, "business.shifts.manage")?;
-    let assignment = context
+    let assignment: ShiftAssignment = context
         .core
         .staffing
         .create_shift_assignment(user.tenant_id, shift_id, payload.into(), user.account_id)
@@ -457,7 +457,7 @@ async fn reconcile(
 
 fn normalize_optional(value: Option<String>) -> Option<String> {
     value.and_then(|value| {
-        let normalized = value.trim().to_owned();
+        let normalized: String = value.trim().to_owned();
         (!normalized.is_empty()).then_some(normalized)
     })
 }
@@ -466,27 +466,22 @@ fn require_permission(user: &AuthenticatedUser, permission: &str) -> Result<(), 
     if user.has_permission(permission) {
         Ok(())
     } else {
-        log_notice!(
+        info!(
             "Staffing request denied: tenant_id={} account_id={} required_permission={}",
-            user.tenant_id,
-            user.account_id,
-            permission
+            user.tenant_id, user.account_id, permission
         );
         Err(StatusCode::FORBIDDEN)
     }
 }
 
 fn staffing_status(operation: &str, user: &AuthenticatedUser, error: StaffingError) -> StatusCode {
-    let status = match error {
+    let status: StatusCode = match error {
         StaffingError::NotFound => StatusCode::NOT_FOUND,
         StaffingError::Conflict => StatusCode::CONFLICT,
         StaffingError::InvalidInput(message) => {
-            log_warn!(
+            warn!(
                 "Staffing request input rejected: operation={} tenant_id={} account_id={} reason={}",
-                operation,
-                user.tenant_id,
-                user.account_id,
-                message
+                operation, user.tenant_id, user.account_id, message
             );
             StatusCode::BAD_REQUEST
         }
@@ -494,12 +489,9 @@ fn staffing_status(operation: &str, user: &AuthenticatedUser, error: StaffingErr
         StaffingError::BackendUnavailable => StatusCode::SERVICE_UNAVAILABLE,
     };
     if status.is_server_error() {
-        log_error!(
+        error!(
             "Staffing request failed: operation={} tenant_id={} account_id={} status={}",
-            operation,
-            user.tenant_id,
-            user.account_id,
-            status
+            operation, user.tenant_id, user.account_id, status
         );
     }
     status

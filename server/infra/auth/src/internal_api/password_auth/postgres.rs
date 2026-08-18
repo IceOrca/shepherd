@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use infra_kernel::debug::*;
+use tracing::{error, warn, info, debug, trace};
 use crate::{
     AccountMutationError, AccountRepo, StoreAccountError,
     account::{
@@ -36,10 +36,9 @@ impl AuthProvider {
         self.begin_active_tenant(tenant_id)
             .await
             .map_err(|error: String| {
-                log_error!(
+                error!(
                     "Failed to open tenant account transaction: tenant_id={} error={}",
-                    tenant_id,
-                    error
+                    tenant_id, error
                 );
                 AccountMutationError::BackendUnavailable
             })?
@@ -50,7 +49,7 @@ impl AuthProvider {
 #[async_trait]
 impl AccountRepo for AuthProvider {
     async fn resolve_active_tenant_id(&self, tenant: &str) -> Result<Option<Uuid>, String> {
-        log_debug!("Resolving active tenant login slug: tenant={}", tenant);
+        debug!("Resolving active tenant login slug: tenant={}", tenant);
         let tenant_id: Option<Uuid> = self
             .database
             .resolve_active_tenant_id(tenant)
@@ -58,12 +57,11 @@ impl AccountRepo for AuthProvider {
             .map_err(|error: TenantDbErr| error.to_string())?;
 
         match tenant_id {
-            Some(tenant_id) => log_debug!(
+            Some(tenant_id) => debug!(
                 "Active tenant login slug resolved: tenant={} tenant_id={}",
-                tenant,
-                tenant_id
+                tenant, tenant_id
             ),
-            None => log_info!("No active tenant found for login slug: tenant={}", tenant),
+            None => info!("No active tenant found for login slug: tenant={}", tenant),
         }
         Ok(tenant_id)
     }
@@ -151,7 +149,7 @@ impl AccountRepo for AuthProvider {
         .await
         .map_err(|error| error.to_string())?;
 
-        log_debug!(
+        debug!(
             "Loaded account authorization state: tenant_id={} account_id={} primary_role={} active_roles={} permissions={} auth_version={}",
             tenant_id,
             account_id,
@@ -202,11 +200,9 @@ impl AccountRepo for AuthProvider {
         .execute(transaction.connection())
         .await;
         if let Err(error) = insert_account {
-            log_error!(
+            error!(
                 "Account insert failed: tenant_id={} username={} error={}",
-                tenant_id,
-                account.username,
-                error
+                tenant_id, account.username, error
             );
             return Err(
                 if error
@@ -233,7 +229,7 @@ impl AccountRepo for AuthProvider {
         .execute(transaction.connection())
         .await
         .map_err(|error| {
-            log_error!(
+            error!(
                 "Primary account role insert failed: tenant_id={} account_id={} role={} error={}",
                 tenant_id,
                 account.id,
@@ -243,11 +239,9 @@ impl AccountRepo for AuthProvider {
             StoreAccountError::BackendUnavailable
         })?;
         transaction.commit().await.map_err(|error| {
-            log_error!(
+            error!(
                 "Account creation commit failed: tenant_id={} account_id={} error={}",
-                tenant_id,
-                account.id,
-                error
+                tenant_id, account.id, error
             );
             StoreAccountError::BackendUnavailable
         })
@@ -302,7 +296,7 @@ impl AccountRepo for AuthProvider {
                 updated_at: row.updated_at,
             });
         }
-        log_debug!(
+        debug!(
             "Listed tenant accounts: tenant_id={} account_count={}",
             tenant_id,
             accounts.len()
@@ -354,7 +348,7 @@ impl AccountRepo for AuthProvider {
         .fetch_all(transaction.connection())
         .await
         .map_err(|error| error.to_string())?;
-        log_debug!(
+        debug!(
             "Listed tenant authorization catalog: tenant_id={} roles={} permissions={}",
             tenant_id,
             roles.len(),
@@ -383,10 +377,9 @@ impl AccountRepo for AuthProvider {
             return Err("account became unavailable during authentication".to_owned());
         }
         transaction.commit().await.map_err(|error| error.to_string())?;
-        log_debug!(
+        debug!(
             "Successful-login audit persisted: tenant_id={} account_id={}",
-            tenant_id,
-            account_id
+            tenant_id, account_id
         );
         Ok(())
     }
@@ -417,10 +410,9 @@ impl AccountRepo for AuthProvider {
         .execute(transaction.connection())
         .await
         .map_err(|error| {
-            log_error!(
+            error!(
                 "Account password update failed: account_id={} error={}",
-                account_id,
-                error
+                account_id, error
             );
             AccountMutationError::BackendUnavailable
         })?;
@@ -431,11 +423,9 @@ impl AccountRepo for AuthProvider {
             .commit()
             .await
             .map_err(|_| AccountMutationError::BackendUnavailable)?;
-        log_notice!(
+        info!(
             "Account password changed and auth version advanced: tenant_id={} account_id={} actor_account_id={}",
-            tenant_id,
-            account_id,
-            audit_account_id
+            tenant_id, account_id, audit_account_id
         );
         Ok(())
     }
@@ -481,7 +471,7 @@ impl AccountRepo for AuthProvider {
             .commit()
             .await
             .map_err(|_| AccountMutationError::BackendUnavailable)?;
-        log_notice!(
+        info!(
             "Account status changed: tenant_id={} account_id={} status={} actor_account_id={}",
             tenant_id,
             account_id,
@@ -571,14 +561,13 @@ impl AccountRepo for AuthProvider {
         .await
         .map_err(|_| AccountMutationError::BackendUnavailable)?;
         transaction.commit().await.map_err(|error| {
-            log_error!(
+            error!(
                 "Account role replacement commit failed: account_id={} error={}",
-                account_id,
-                error
+                account_id, error
             );
             AccountMutationError::BackendUnavailable
         })?;
-        log_notice!(
+        info!(
             "Account roles replaced: tenant_id={} account_id={} primary_role={} role_count={} actor_account_id={}",
             tenant_id,
             account_id,
@@ -661,11 +650,9 @@ impl AccountRepo for AuthProvider {
             .execute(transaction.connection())
             .await
             .map_err(|error| {
-                log_warn!(
+                warn!(
                     "Account permission override rejected: account_id={} permission={} error={}",
-                    account_id,
-                    permission.code,
-                    error
+                    account_id, permission.code, error
                 );
                 AccountMutationError::InvalidPermission
             })?;
@@ -689,7 +676,7 @@ impl AccountRepo for AuthProvider {
             .commit()
             .await
             .map_err(|_| AccountMutationError::BackendUnavailable)?;
-        log_notice!(
+        info!(
             "Account permission overrides replaced: tenant_id={} account_id={} override_count={} actor_account_id={}",
             tenant_id,
             account_id,

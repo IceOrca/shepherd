@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
-use infra_kernel::debug::*;
+use tracing::{error, warn, info, debug, trace};
 use crate::features::people::core::{
     AttendanceSession, Department, DepartmentInput, Employee, EmployeeAssignment, EmployeeAssignmentInput,
     EmployeeInput, EmployeeStatus, HrError, HrRecordStatus, JobPosition, JobPositionInput, PeopleRepo,
@@ -22,7 +22,7 @@ impl PeopleProvider {
 
     async fn begin_active_tenant(&self, tenant_id: Uuid) -> Result<TenantTransaction, HrError> {
         self.database.begin_tenant(tenant_id).await.map_err(|error| {
-            log_error!("HR tenant transaction failed: tenant_id={} error={}", tenant_id, error);
+            error!("HR tenant transaction failed: tenant_id={} error={}", tenant_id, error);
             HrError::BackendUnavailable
         })
     }
@@ -203,7 +203,7 @@ impl PeopleRepo for PeopleProvider {
             .commit()
             .await
             .map_err(|error| database_failure("commit employee list", tenant_id, error))?;
-        log_info!(
+        info!(
             "Tenant employee directory loaded: tenant_id={} employees={}",
             tenant_id,
             rows.len()
@@ -296,13 +296,9 @@ impl PeopleRepo for PeopleProvider {
             .commit()
             .await
             .map_err(|error| database_failure("commit employee creation", tenant_id, error))?;
-        log_notice!(
+        info!(
             "Employee created: tenant_id={} employee_id={} employee_code={} linked_account_id={:?} audit_account_id={}",
-            tenant_id,
-            employee_id,
-            input.employee_code,
-            input.account_id,
-            audit_account_id
+            tenant_id, employee_id, input.employee_code, input.account_id, audit_account_id
         );
         Employee::try_from(row)
     }
@@ -424,7 +420,7 @@ impl PeopleRepo for PeopleProvider {
             .commit()
             .await
             .map_err(|error| database_failure("commit employee update", tenant_id, error))?;
-        log_notice!(
+        info!(
             "Employee updated: tenant_id={} employee_id={} status={} audit_account_id={}",
             tenant_id,
             employee_id,
@@ -490,12 +486,9 @@ impl PeopleRepo for PeopleProvider {
             .commit()
             .await
             .map_err(|error| database_failure("commit department creation", tenant_id, error))?;
-        log_notice!(
+        info!(
             "HR department created: tenant_id={} department_id={} code={} audit_account_id={}",
-            tenant_id,
-            department_id,
-            input.code,
-            audit_account_id
+            tenant_id, department_id, input.code, audit_account_id
         );
         Department::try_from(row)
     }
@@ -565,7 +558,7 @@ impl PeopleRepo for PeopleProvider {
             .commit()
             .await
             .map_err(|error| database_failure("commit department update", tenant_id, error))?;
-        log_notice!(
+        info!(
             "HR department updated: tenant_id={} department_id={} status={} audit_account_id={}",
             tenant_id,
             department_id,
@@ -629,12 +622,9 @@ impl PeopleRepo for PeopleProvider {
             .commit()
             .await
             .map_err(|error| database_failure("commit job creation", tenant_id, error))?;
-        log_notice!(
+        info!(
             "HR job position created: tenant_id={} job_id={} code={} audit_account_id={}",
-            tenant_id,
-            job_id,
-            input.code,
-            audit_account_id
+            tenant_id, job_id, input.code, audit_account_id
         );
         JobPosition::try_from(row)
     }
@@ -676,7 +666,7 @@ impl PeopleRepo for PeopleProvider {
             .commit()
             .await
             .map_err(|error| database_failure("commit job update", tenant_id, error))?;
-        log_notice!(
+        info!(
             "HR job position updated: tenant_id={} job_id={} status={} audit_account_id={}",
             tenant_id,
             job_id,
@@ -781,12 +771,9 @@ impl PeopleRepo for PeopleProvider {
             .await
             .map_err(|error| database_failure("check primary assignment overlap", tenant_id, error))?;
             if overlaps {
-                log_info!(
+                info!(
                     "Primary assignment rejected because dates overlap: tenant_id={} employee_id={} date_start={} date_end={:?}",
-                    tenant_id,
-                    employee_id,
-                    input.date_start,
-                    input.date_end
+                    tenant_id, employee_id, input.date_start, input.date_end
                 );
                 return Err(HrError::Conflict);
             }
@@ -823,7 +810,7 @@ impl PeopleRepo for PeopleProvider {
             .commit()
             .await
             .map_err(|error| database_failure("commit assignment creation", tenant_id, error))?;
-        log_notice!(
+        info!(
             "Employee assignment created: tenant_id={} employee_id={} assignment_id={} branch_id={} facility_id={:?} date_start={} date_end={:?} primary={} audit_account_id={}",
             tenant_id,
             employee_id,
@@ -919,13 +906,9 @@ impl PeopleRepo for PeopleProvider {
             .commit()
             .await
             .map_err(|error| database_failure("commit employee check in", tenant_id, error))?;
-        log_notice!(
+        info!(
             "Employee checked in: tenant_id={} employee_id={} attendance_session_id={} account_id={} facility_id={}",
-            tenant_id,
-            employee_id,
-            attendance_session_id,
-            account_id,
-            facility_id
+            tenant_id, employee_id, attendance_session_id, account_id, facility_id
         );
         Ok(row.into())
     }
@@ -967,23 +950,18 @@ impl PeopleRepo for PeopleProvider {
             .commit()
             .await
             .map_err(|error| database_failure("commit employee check out", tenant_id, error))?;
-        log_notice!(
+        info!(
             "Employee checked out: tenant_id={} employee_id={} attendance_session_id={} account_id={}",
-            tenant_id,
-            employee_id,
-            row.id,
-            account_id
+            tenant_id, employee_id, row.id, account_id
         );
         Ok(row.into())
     }
 }
 
 fn database_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> HrError {
-    log_error!(
+    error!(
         "HR database operation failed: operation={} tenant_id={} error={}",
-        operation,
-        tenant_id,
-        error
+        operation, tenant_id, error
     );
     HrError::BackendUnavailable
 }
@@ -1000,12 +978,9 @@ fn mutation_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> HrE
                 HrError::BackendUnavailable
             }
         });
-    log_error!(
+    error!(
         "HR mutation failed: operation={} tenant_id={} mapped_error={:?} error={}",
-        operation,
-        tenant_id,
-        mapped,
-        error
+        operation, tenant_id, mapped, error
     );
     mapped
 }

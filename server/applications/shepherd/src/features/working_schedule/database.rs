@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
-use infra_kernel::debug::*;
+use tracing::{error, warn, info, debug, trace};
 use crate::features::{
     people::core::{HrError, HrRecordStatus},
     working_schedule::core::{
@@ -25,10 +25,9 @@ impl WorkingScheduleProvider {
 
     async fn begin_active_tenant(&self, tenant_id: Uuid) -> Result<TenantTransaction, HrError> {
         self.database.begin_tenant(tenant_id).await.map_err(|error| {
-            log_error!(
+            error!(
                 "Working schedule tenant transaction failed: tenant_id={} error={}",
-                tenant_id,
-                error
+                tenant_id, error
             );
             HrError::BackendUnavailable
         })
@@ -135,7 +134,7 @@ impl WorkingScheduleRepo for WorkingScheduleProvider {
             .map_err(|error| database_failure("commit working schedule list", tenant_id, error))?;
 
         let schedules: Vec<WorkingSchedule> = assemble_schedules(schedule_rows, period_rows)?;
-        log_info!(
+        info!(
             "Tenant working schedules loaded: tenant_id={} schedules={}",
             tenant_id,
             schedules.len()
@@ -217,7 +216,7 @@ impl WorkingScheduleRepo for WorkingScheduleProvider {
             .commit()
             .await
             .map_err(|error| database_failure("commit working schedule creation", tenant_id, error))?;
-        log_notice!(
+        info!(
             "Working schedule created: tenant_id={} schedule_id={} code={} periods={} time_zone={} audit_account_id={}",
             tenant_id,
             schedule_id,
@@ -284,10 +283,9 @@ impl WorkingScheduleRepo for WorkingScheduleProvider {
         if has_assignments
             && (current_schedule.time_zone != input.time_zone || !periods_match(&current_periods, &input.periods))
         {
-            log_info!(
+            info!(
                 "Working schedule structural update rejected to preserve assignment history: tenant_id={} schedule_id={}",
-                tenant_id,
-                schedule_id
+                tenant_id, schedule_id
             );
             return Err(HrError::Conflict);
         }
@@ -322,7 +320,7 @@ impl WorkingScheduleRepo for WorkingScheduleProvider {
             .commit()
             .await
             .map_err(|error| database_failure("commit working schedule update", tenant_id, error))?;
-        log_notice!(
+        info!(
             "Working schedule updated: tenant_id={} schedule_id={} code={} status={} periods={} audit_account_id={}",
             tenant_id,
             schedule_id,
@@ -470,13 +468,9 @@ impl WorkingScheduleRepo for WorkingScheduleProvider {
         .await
         .map_err(|error| database_failure("check working schedule assignment overlap", tenant_id, error))?;
         if overlaps {
-            log_info!(
+            info!(
                 "Working schedule assignment rejected because dates overlap: tenant_id={} employee_id={} schedule_id={} date_start={} date_end={:?}",
-                tenant_id,
-                employee_id,
-                input.schedule_id,
-                input.date_start,
-                input.date_end
+                tenant_id, employee_id, input.schedule_id, input.date_start, input.date_end
             );
             return Err(HrError::Conflict);
         }
@@ -505,7 +499,7 @@ impl WorkingScheduleRepo for WorkingScheduleProvider {
             .commit()
             .await
             .map_err(|error| database_failure("commit employee schedule assignment", tenant_id, error))?;
-        log_notice!(
+        info!(
             "Employee working schedule assigned: tenant_id={} employee_id={} assignment_id={} schedule_id={} date_start={} date_end={:?} audit_account_id={}",
             tenant_id,
             employee_id,
@@ -645,11 +639,9 @@ fn periods_match(existing: &[PeriodRow], requested: &[WorkingPeriodInput]) -> bo
 }
 
 fn database_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> HrError {
-    log_error!(
+    error!(
         "Working schedule database operation failed: operation={} tenant_id={} error={}",
-        operation,
-        tenant_id,
-        error
+        operation, tenant_id, error
     );
     HrError::BackendUnavailable
 }
@@ -666,12 +658,9 @@ fn mutation_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> HrE
                 HrError::BackendUnavailable
             }
         });
-    log_error!(
+    error!(
         "Working schedule mutation failed: operation={} tenant_id={} mapped_error={:?} error={}",
-        operation,
-        tenant_id,
-        mapped,
-        error
+        operation, tenant_id, mapped, error
     );
     mapped
 }

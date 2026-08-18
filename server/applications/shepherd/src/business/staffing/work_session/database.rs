@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use infra_kernel::debug::*;
-use infra_postgres::{DatabaseAdapter, TenantTransaction};
+use tracing::{error, warn, info, debug, trace};
+use infra_postgres::{DatabaseAdapter, TenantDbErr, TenantTransaction};
 use uuid::Uuid;
 
 use super::{
@@ -21,14 +21,31 @@ impl StaffingWorkProvider {
     }
 
     async fn begin_tenant(&self, tenant_id: Uuid) -> Result<TenantTransaction, StaffingError> {
-        self.database.begin_tenant(tenant_id).await.map_err(|error| {
-            log_error!(
-                "Staffing work tenant transaction failed: tenant_id={} error={}",
-                tenant_id,
-                error
-            );
-            StaffingError::BackendUnavailable
-        })
+        debug!(
+            operation = "begin_staffing_work_tenant_transaction",
+            tenant_id = %tenant_id,
+            "Opening staffing-work RLS-scoped tenant transaction"
+        );
+        let result: Result<TenantTransaction, TenantDbErr> = self.database.begin_tenant(tenant_id).await;
+        match result {
+            Ok(transaction) => {
+                trace!(
+                    operation = "begin_staffing_work_tenant_transaction",
+                    tenant_id = %tenant_id,
+                    "Opened staffing-work RLS-scoped tenant transaction"
+                );
+                Ok(transaction)
+            }
+            Err(database_error) => {
+                error!(
+                    operation = "begin_staffing_work_tenant_transaction",
+                    tenant_id = %tenant_id,
+                    reason = %database_error,
+                    "Staffing-work tenant transaction failed"
+                );
+                Err(StaffingError::BackendUnavailable)
+            }
+        }
     }
 }
 
@@ -123,8 +140,8 @@ impl StaffingWorkRepo for StaffingWorkProvider {
         tenant_id: Uuid,
         account_id: Uuid,
     ) -> Result<Vec<OwnStaffingAssignment>, StaffingError> {
-        let mut transaction = self.begin_tenant(tenant_id).await?;
-        let rows = sqlx::query_as!(
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        let rows: Vec<OwnAssignmentRow> = sqlx::query_as!(
             OwnAssignmentRow,
             r#"
             SELECT assignment.id AS assignment_id, assignment.shift_id,
@@ -195,7 +212,7 @@ impl StaffingWorkRepo for StaffingWorkProvider {
         session_id: Uuid,
         input: &ShiftWorkActionInput,
     ) -> Result<ShiftWorkSession, StaffingError> {
-        let mut transaction = self.begin_tenant(tenant_id).await?;
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
 
         if let Some(existing) =
             find_by_start_key(&mut transaction, tenant_id, account_id, input.idempotency_key).await?
@@ -207,13 +224,13 @@ impl StaffingWorkRepo for StaffingWorkProvider {
             return Ok(existing.into());
         }
 
-        let context = lock_work_context(&mut transaction, tenant_id, assignment_id, account_id).await?;
+        let context: WorkContextRow = lock_work_context(&mut transaction, tenant_id, assignment_id, account_id).await?;
         if context.assignment_status != "assigned" || matches!(context.shift_status.as_str(), "cancelled" | "completed")
         {
             return Err(StaffingError::Conflict);
         }
 
-        let row = sqlx::query_as!(
+        let row: WorkSessionRow = sqlx::query_as!(
             WorkSessionRow,
             r#"
             INSERT INTO business_shift_work_sessions (
@@ -255,7 +272,7 @@ impl StaffingWorkRepo for StaffingWorkProvider {
         .await
         .map_err(|error| database_failure("mark staffing shift in progress", tenant_id, error))?;
 
-        let message = format!(
+        let message: String = format!(
             "Shift started\nStaff: {}\nCustomer: {}\nLocation: {}\nServer time: {}",
             context.employee_name, context.customer_name, context.facility_name, row.started_at
         );
@@ -275,7 +292,7 @@ impl StaffingWorkRepo for StaffingWorkProvider {
         account_id: Uuid,
         input: &ShiftWorkActionInput,
     ) -> Result<ShiftWorkSession, StaffingError> {
-        let mut transaction = self.begin_tenant(tenant_id).await?;
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
 
         if let Some(existing) = find_by_end_key(&mut transaction, tenant_id, account_id, input.idempotency_key).await? {
             transaction
@@ -285,12 +302,12 @@ impl StaffingWorkRepo for StaffingWorkProvider {
             return Ok(existing.into());
         }
 
-        let context = lock_work_context(&mut transaction, tenant_id, assignment_id, account_id).await?;
+        let context: WorkContextRow = lock_work_context(&mut transaction, tenant_id, assignment_id, account_id).await?;
         if context.assignment_status != "assigned" || context.shift_status == "cancelled" {
             return Err(StaffingError::Conflict);
         }
 
-        let row = sqlx::query_as!(
+        let row: WorkSessionRow = sqlx::query_as!(
             WorkSessionRow,
             r#"
             UPDATE business_shift_work_sessions AS session
@@ -325,7 +342,7 @@ impl StaffingWorkRepo for StaffingWorkProvider {
         .map_err(|error| mutation_failure("end staffing work", tenant_id, error))?
         .ok_or(StaffingError::Conflict)?;
 
-        let message = format!(
+        let message: String = format!(
             "Shift ended\nStaff: {}\nCustomer: {}\nLocation: {}\nServer time: {}\nWorked: {} seconds",
             context.employee_name,
             context.customer_name,
@@ -408,7 +425,7 @@ async fn find_by_idempotency_key(
     idempotency_key: Uuid,
     key_kind: &str,
 ) -> Result<Option<WorkSessionRow>, StaffingError> {
-    let row = if key_kind == "start" {
+    let row: Result<Option<WorkSessionRow>, sqlx::Error> = if key_kind == "start" {
         sqlx::query_as!(
             WorkSessionRow,
             r#"
@@ -484,17 +501,15 @@ async fn enqueue_notifications(
 }
 
 fn database_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> StaffingError {
-    log_error!(
+    error!(
         "Staffing work database operation failed: operation={} tenant_id={} error={}",
-        operation,
-        tenant_id,
-        error
+        operation, tenant_id, error
     );
     StaffingError::BackendUnavailable
 }
 
 fn mutation_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> StaffingError {
-    let mapped = match &error {
+    let mapped: StaffingError = match &error {
         sqlx::Error::Database(database_error) if database_error.is_unique_violation() => StaffingError::Conflict,
         sqlx::Error::Database(database_error)
             if database_error.is_check_violation() || database_error.is_foreign_key_violation() =>
@@ -503,11 +518,9 @@ fn mutation_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> Sta
         }
         _ => StaffingError::BackendUnavailable,
     };
-    log_error!(
+    error!(
         "Staffing work database mutation failed: operation={} tenant_id={} error={}",
-        operation,
-        tenant_id,
-        error
+        operation, tenant_id, error
     );
     mapped
 }
@@ -521,7 +534,7 @@ mod database_tests {
     use super::{ShiftWorkActionInput, StaffingWorkProvider, StaffingWorkRepo};
     use crate::business::staffing::{
         core::{ShiftAssignmentStatus, StaffingError, StaffingRepo},
-        model::StaffingProvider,
+        database::StaffingProvider,
     };
 
     #[tokio::test]

@@ -5,6 +5,7 @@ use jsonwebtoken::{
     jwk::{Jwk, JwkSet, KeyOperations, PublicKeyUse},
 };
 use tokio::sync::{Mutex, RwLock};
+use tracing::{debug, error, info, trace, warn};
 
 use super::{AccessTokenClaims, ExtProviderConfig, AccessTokenError, AuthenticatedPrincipal};
 
@@ -27,14 +28,24 @@ pub struct ExtProvider {
 
 impl ExtProvider {
     pub async fn from_env() -> Result<Arc<Self>, AccessTokenError> {
+        debug!("Loading external identity provider configuration");
         Self::from_config(ExtProviderConfig::from_env()?).await
     }
 
     pub async fn from_config(config: ExtProviderConfig) -> Result<Arc<Self>, AccessTokenError> {
+        info!(
+            issuer = %config.issuer,
+            audience = %config.audience,
+            algorithm_count = config.allowed_algorithms.len(),
+            "Initializing external identity provider"
+        );
         let client: reqwest::Client = reqwest::Client::builder()
             .timeout(config.http_timeout)
             .build()
-            .map_err(AccessTokenError::JwksUnavailable)?;
+            .map_err(|error: reqwest::Error| {
+                error!(error = %error, "External identity provider HTTP client initialization failed");
+                AccessTokenError::JwksUnavailable(error)
+            })?;
         let service: Arc<ExtProvider> = Arc::new(Self {
             config,
             client,
@@ -42,6 +53,7 @@ impl ExtProvider {
             refresh_guard: Mutex::new(()),
         });
         service.refresh_jwks(false).await?;
+        info!("External identity provider initialized");
         Ok(service)
     }
 
@@ -50,12 +62,21 @@ impl ExtProvider {
     }
 
     pub async fn validate_access_token(&self, token: &str) -> Result<AuthenticatedPrincipal, AccessTokenError> {
+        trace!("External access-token validation accepted");
         let header: jsonwebtoken::Header =
-            jsonwebtoken::decode_header(token).map_err(AccessTokenError::InvalidToken)?;
+            jsonwebtoken::decode_header(token).map_err(|error: jsonwebtoken::errors::Error| {
+                warn!(error = %error, "External access token header is invalid");
+                AccessTokenError::InvalidToken(error)
+            })?;
         if !self.config.allowed_algorithms.contains(&header.alg) {
+            warn!(algorithm = ?header.alg, "External access token uses a disallowed signing algorithm");
             return Err(AccessTokenError::DisallowedAlgorithm);
         }
-        let kid: &str = header.kid.as_deref().ok_or(AccessTokenError::MissingKeyId)?;
+        let kid: &str = header.kid.as_deref().ok_or_else(|| {
+            warn!("External access token is missing its signing key identifier");
+            AccessTokenError::MissingKeyId
+        })?;
+        debug!(kid, algorithm = ?header.alg, "Resolving external access-token signing key");
         let key: DecodingKey = self.decoding_key(kid, header.alg).await?;
 
         let mut validation: Validation = Validation::new(header.alg);
@@ -67,17 +88,22 @@ impl ExtProvider {
         validation.validate_aud = true;
         validation.leeway = self.config.clock_skew.as_secs();
 
-        let token: jsonwebtoken::TokenData<AccessTokenClaims> =
-            decode::<AccessTokenClaims>(token, &key, &validation).map_err(AccessTokenError::InvalidToken)?;
+        let token: jsonwebtoken::TokenData<AccessTokenClaims> = decode::<AccessTokenClaims>(token, &key, &validation)
+            .map_err(|error: jsonwebtoken::errors::Error| {
+            warn!(kid, error = %error, "External access token signature or claims are invalid");
+            AccessTokenError::InvalidToken(error)
+        })?;
         let principal: AuthenticatedPrincipal = AuthenticatedPrincipal::try_from(token.claims)?;
         if principal
             .issued_at
             .is_some_and(|issued_at| issued_at > jsonwebtoken::get_current_timestamp() + validation.leeway)
         {
+            warn!(subject = %principal.subject, "External access token issued-at claim is in the future");
             return Err(AccessTokenError::InvalidClaims(
                 "issued-at is unreasonably far in the future".to_owned(),
             ));
         }
+        debug!(subject = %principal.subject, "External access token validated");
         Ok(principal)
     }
 
@@ -90,9 +116,15 @@ impl ExtProvider {
             (cache.set.find(kid).cloned(), is_fresh)
         };
         if cache_is_fresh && let Some(jwk) = cached_key.as_ref() {
+            trace!(kid, "Using fresh cached external signing key");
             return decoding_key_from_jwk(jwk, algorithm);
         }
 
+        debug!(
+            kid,
+            key_was_cached = cached_key.is_some(),
+            "Refreshing external signing keys"
+        );
         match self.refresh_jwks(cached_key.is_none()).await {
             Ok(()) => self
                 .jwks
@@ -105,9 +137,10 @@ impl ExtProvider {
                 .and_then(|jwk| decoding_key_from_jwk(&jwk, algorithm)),
             Err(error) => {
                 if let Some(jwk) = cached_key {
-                    tracing::warn!(error = %error, kid, "using stale provider signing key after JWKS refresh failed");
+                    warn!(error = %error, kid, "Using stale provider signing key after JWKS refresh failed");
                     decoding_key_from_jwk(&jwk, algorithm)
                 } else {
+                    error!(error = %error, kid, "No provider signing key is available after JWKS refresh failed");
                     Err(error)
                 }
             }
@@ -127,9 +160,14 @@ impl ExtProvider {
         let unknown_kid_refresh_is_throttled: bool = force
             && cache_age.is_some_and(|age: std::time::Duration| age.as_secs() < UNKNOWN_KID_REFRESH_COOLDOWN_SECS);
         if (cache_is_fresh && !force) || unknown_kid_refresh_is_throttled {
+            trace!(
+                force,
+                cache_is_fresh, unknown_kid_refresh_is_throttled, "External signing-key refresh skipped"
+            );
             return Ok(());
         }
 
+        debug!(force, "Fetching external signing keys");
         let set: jsonwebtoken::jwk::JwkSet = self
             .client
             .get(&self.config.jwks_url)
@@ -141,13 +179,16 @@ impl ExtProvider {
             .await
             .map_err(AccessTokenError::JwksUnavailable)?;
         if set.keys.is_empty() {
+            error!("External identity provider returned an empty signing-key set");
             return Err(AccessTokenError::EmptyJwks);
         }
+        let key_count: usize = set.keys.len();
 
         *self.jwks.write().await = CachedJwks {
             set,
             fetched_at: Some(Instant::now()),
         };
+        info!(key_count, force, "External signing-key cache refreshed");
         Ok(())
     }
 }

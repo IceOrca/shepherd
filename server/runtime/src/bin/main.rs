@@ -3,7 +3,8 @@
 use std::net::SocketAddr;
 use std::path::Path;
 
-use infra_kernel::debug::*;
+use tracing::{error, warn, info, debug, trace};
+use infra_kernel::debug::Debugging;
 use tokio::signal;
 
 #[tokio::main]
@@ -16,7 +17,7 @@ async fn main() {
         router,
         worker,
     } = shepherd_runtime::build().await;
-    log_notice!("Starting server on {}:{}", context.ip, context.port);
+    info!("Starting server on {}:{}", context.ip, context.port);
 
     let address: String = format!("{}:{}", context.ip, context.port);
     let result = axum::serve(
@@ -52,8 +53,8 @@ async fn shutdown_signal() {
         let mut terminate: signal::unix::Signal = signal::unix::signal(signal::unix::SignalKind::terminate())
             .unwrap_or_else(|error: std::io::Error| panic!("failed to install SIGTERM handler: {error}"));
         tokio::select! {
-            _ = ctrl_c => log_notice!("Ctrl+C received, shutting down gracefully"),
-            _ = terminate.recv() => log_notice!("SIGTERM received, shutting down gracefully"),
+            _ = ctrl_c => info!("Ctrl+C received, shutting down gracefully"),
+            _ = terminate.recv() => info!("SIGTERM received, shutting down gracefully"),
         }
     }
 

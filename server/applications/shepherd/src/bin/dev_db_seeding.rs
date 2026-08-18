@@ -1,7 +1,10 @@
+#![cfg_attr(debug_assertions, allow(unused))]
+
 use std::{collections::HashMap, error::Error, io, sync::Arc};
 
 use chrono::{NaiveDate, NaiveTime};
-use infra_kernel::debug::*;
+use tracing::{error, warn, info, debug, trace};
+use infra_kernel::debug::Debugging;
 use infra_postgres::DatabaseAdapter;
 use uuid::Uuid;
 
@@ -11,6 +14,14 @@ const ACME2_TENANT_ID: &str = "00000000-0000-4000-8000-000000000003";
 const DEV_ATTENDANCE_ID_NAMESPACE: u128 = 0xd3a7_7e00_0000_4000_8000_0000_0000_0000;
 const DEV_STAFFING_SHIFT_ID_NAMESPACE: u128 = 0x51f7_0000_0000_4000_8000_0000_0000_0000;
 const DEV_STAFFING_ASSIGNMENT_ID_NAMESPACE: u128 = 0xa551_0000_0000_4000_8000_0000_0000_0000;
+const DEV_URGENT_BATCH_ID_NAMESPACE: u128 = 0xb47c_0000_0000_4000_8000_0000_0000_0000;
+const DEV_URGENT_REPORT_ID_NAMESPACE: u128 = 0xc47c_0000_0000_4000_8000_0000_0000_0000;
+const DEV_URGENT_SESSION_ID_NAMESPACE: u128 = 0xd47c_0000_0000_4000_8000_0000_0000_0000;
+const DEV_URGENT_CUSTOMER_RECORD_ID_NAMESPACE: u128 = 0xe47c_0000_0000_4000_8000_0000_0000_0000;
+
+struct SeedIdRow {
+    id: Uuid,
+}
 
 struct DevTenant {
     id: &'static str,
@@ -99,7 +110,7 @@ const DEV_BRANCHES: &[DevBranch] = &[
 
 const ACME_ACCOUNTS: &[DevAccount] = &[
     DevAccount {
-        username: "owner",
+        username: "iceorca",
         role: DevRole::TenantOwner,
     },
     DevAccount {
@@ -182,30 +193,28 @@ const DEV_TENANTS: &[DevTenant] = &[
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     Debugging::init();
-    log_notice!("Development seed started: configured_tenants={}", DEV_TENANTS.len());
+    info!("Development seed started: configured_tenants={}", DEV_TENANTS.len());
     require_development_environment()?;
     let auth_issuer = std::env::var("AUTH_ISSUER_URL")
         .map_err(|_| io::Error::other("AUTH_ISSUER_URL is required for development seeding"))?;
     let auth_subject = std::env::var("AUTH_DEV_SUBJECT")
         .map_err(|_| io::Error::other("AUTH_DEV_SUBJECT is required for development seeding"))?;
-    log_debug!("Development environment guard accepted APP_ENV=development");
+    debug!("Development environment guard accepted APP_ENV=development");
 
-    log_info!("Connecting to PostgreSQL; migrations must already be applied with the SQLx CLI");
+    info!("Connecting to PostgreSQL; migrations must already be applied with the SQLx CLI");
     let database: Arc<DatabaseAdapter> = DatabaseAdapter::new_arc().await;
     for tenant in DEV_TENANTS {
         if let Err(error) = seed_tenant(&database, tenant, &auth_issuer, &auth_subject).await {
-            log_error!(
+            error!(
                 "Development tenant seed failed: tenant_slug={} tenant_id={} error={}",
-                tenant.slug,
-                tenant.id,
-                error
+                tenant.slug, tenant.id, error
             );
             return Err(error.into());
         }
     }
 
     let account_count: usize = DEV_TENANTS.iter().map(|tenant: &DevTenant| tenant.accounts.len()).sum();
-    log_notice!(
+    info!(
         "Development seed completed successfully: tenants={} accounts={}",
         DEV_TENANTS.len(),
         account_count
@@ -214,7 +223,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("tenant_slugs=acme,acme1,acme2");
     println!("accounts_created_or_verified={account_count}");
     println!("auth_identity_issuer={auth_issuer}");
-    println!("auth_identity_subject={auth_subject}");
+    println!("auth_identity_linked=true");
     Ok(())
 }
 
@@ -225,7 +234,7 @@ async fn seed_tenant(
     auth_subject: &str,
 ) -> Result<(), io::Error> {
     let tenant_id: Uuid = Uuid::parse_str(tenant.id).map_err(io::Error::other)?;
-    log_notice!(
+    info!(
         "Provisioning development tenant: tenant_slug={} tenant_id={} display_name={} expected_accounts={}",
         tenant.slug,
         tenant_id,
@@ -236,10 +245,9 @@ async fn seed_tenant(
         .provision_tenant(tenant_id, tenant.slug, tenant.display_name)
         .await
         .map_err(io::Error::other)?;
-    log_info!(
+    info!(
         "Tenant provisioned in shared tenant registry: tenant_slug={} tenant_id={}",
-        tenant.slug,
-        tenant_id
+        tenant.slug, tenant_id
     );
 
     let owner_definition: &DevAccount = tenant
@@ -280,7 +288,7 @@ async fn seed_tenant(
     seed_hr_infra(database, tenant_id, tenant, &seeded_accounts, owner.id).await?;
     seed_staffing_business(database, tenant_id, tenant, owner.id).await?;
 
-    log_notice!(
+    info!(
         "Development tenant seed completed: tenant_slug={} tenant_id={} accounts={} branches={} facilities={} employees={}",
         tenant.slug,
         tenant_id,
@@ -304,14 +312,17 @@ async fn seed_staffing_business(
     let mut transaction = database.begin_tenant(tenant_id).await.map_err(io::Error::other)?;
     let effective_date =
         NaiveDate::from_ymd_opt(2026, 1, 1).ok_or_else(|| io::Error::other("invalid staffing seed date"))?;
-    let job_id: Uuid = sqlx::query_scalar!(
+    let job: SeedIdRow = sqlx::query_as!(
+        SeedIdRow,
         "SELECT id FROM hr_jobs WHERE tenant_id = $1 AND code = 'employee'",
         tenant_id,
     )
     .fetch_one(transaction.connection())
     .await
     .map_err(io::Error::other)?;
-    let employee_id: Uuid = sqlx::query_scalar!(
+    let job_id: Uuid = job.id;
+    let employee: SeedIdRow = sqlx::query_as!(
+        SeedIdRow,
         r#"
         SELECT employee.id
         FROM hr_employees AS employee
@@ -334,6 +345,17 @@ async fn seed_staffing_business(
     .fetch_one(transaction.connection())
     .await
     .map_err(io::Error::other)?;
+    let employee_id: Uuid = employee.id;
+    let owner_employee: SeedIdRow = sqlx::query_as!(
+        SeedIdRow,
+        "SELECT id FROM hr_employees WHERE tenant_id = $1 AND account_id = $2 AND status = 'active'",
+        tenant_id,
+        owner_account_id,
+    )
+    .fetch_one(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    let owner_employee_id: Uuid = owner_employee.id;
 
     let karaoke_a_id =
         ensure_staffing_customer(&mut transaction, tenant_id, "karaoke-a", "Karaoke A", owner_account_id).await?;
@@ -451,14 +473,102 @@ async fn seed_staffing_business(
     .await
     .map_err(io::Error::other)?;
 
-    transaction.commit().await.map_err(io::Error::other)?;
-    log_notice!(
-        "Development staffing business committed: tenant_slug={} tenant_id={} sample_employee_id={} sample_shift_id={} sample_assignment_id={}",
-        tenant.slug,
+    let urgent_batch_id: Uuid = Uuid::from_u128(tenant_id.as_u128() ^ DEV_URGENT_BATCH_ID_NAMESPACE);
+    let urgent_report_id: Uuid = Uuid::from_u128(tenant_id.as_u128() ^ DEV_URGENT_REPORT_ID_NAMESPACE);
+    let urgent_session_id: Uuid = Uuid::from_u128(tenant_id.as_u128() ^ DEV_URGENT_SESSION_ID_NAMESPACE);
+    let urgent_customer_record_id: Uuid =
+        Uuid::from_u128(tenant_id.as_u128() ^ DEV_URGENT_CUSTOMER_RECORD_ID_NAMESPACE);
+    let urgent_batch_insert: sqlx::postgres::PgQueryResult = sqlx::query!(
+        r#"
+        INSERT INTO business_urgent_work_batches (
+            id, tenant_id, actor_account_id, claimed_customer_facility_id, idempotency_key
+        ) VALUES ($1, $2, $3, $4, $1)
+        ON CONFLICT (id) DO NOTHING
+        "#,
+        urgent_batch_id,
         tenant_id,
-        employee_id,
-        shift_id,
-        assignment_id
+        owner_account_id,
+        karaoke_a_facility_id,
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    let urgent_report_insert: sqlx::postgres::PgQueryResult = sqlx::query!(
+        r#"
+        INSERT INTO business_urgent_work_reports (
+            id, tenant_id, start_batch_id, employee_id, claimed_customer_facility_id,
+            status, created_by_account_id
+        ) VALUES ($1, $2, $3, $4, $5, 'completed', $6)
+        ON CONFLICT (id) DO NOTHING
+        "#,
+        urgent_report_id,
+        tenant_id,
+        urgent_batch_id,
+        owner_employee_id,
+        karaoke_a_facility_id,
+        owner_account_id,
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    let urgent_session_insert: sqlx::postgres::PgQueryResult = sqlx::query!(
+        r#"
+        INSERT INTO business_urgent_work_sessions (
+            id, tenant_id, report_id, employee_id, started_at, ended_at,
+            end_idempotency_key, started_by_account_id, start_source,
+            ended_by_account_id, end_source
+        ) VALUES (
+            $1, $2, $3, $4, CURRENT_TIMESTAMP - INTERVAL '5 hours',
+            CURRENT_TIMESTAMP - INTERVAL '1 hour', $1, $5, 'self', $5, 'self'
+        )
+        ON CONFLICT (id) DO NOTHING
+        "#,
+        urgent_session_id,
+        tenant_id,
+        urgent_report_id,
+        owner_employee_id,
+        owner_account_id,
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    let urgent_customer_record_insert: sqlx::postgres::PgQueryResult = sqlx::query!(
+        r#"
+        INSERT INTO business_urgent_customer_work_records (
+            id, tenant_id, report_id, confirmed_customer_facility_id,
+            confirmed_started_at, confirmed_ended_at, customer_reference,
+            notes, recorded_by_account_id
+        )
+        SELECT $1, $2, $3, $4, session.started_at, session.ended_at,
+               'DEV-MATCHED-001', 'Development matched urgent evidence', $5
+        FROM business_urgent_work_sessions AS session
+        WHERE session.tenant_id = $2 AND session.report_id = $3 AND session.ended_at IS NOT NULL
+        ON CONFLICT (id) DO NOTHING
+        "#,
+        urgent_customer_record_id,
+        tenant_id,
+        urgent_report_id,
+        karaoke_a_facility_id,
+        owner_account_id,
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    trace!(
+        tenant_slug = tenant.slug,
+        tenant_id = %tenant_id,
+        urgent_report_id = %urgent_report_id,
+        batch_rows = urgent_batch_insert.rows_affected(),
+        report_rows = urgent_report_insert.rows_affected(),
+        session_rows = urgent_session_insert.rows_affected(),
+        customer_rows = urgent_customer_record_insert.rows_affected(),
+        "Development matched urgent-work evidence ensured"
+    );
+
+    transaction.commit().await.map_err(io::Error::other)?;
+    info!(
+        "Development staffing business committed: tenant_slug={} tenant_id={} sample_employee_id={} sample_shift_id={} sample_assignment_id={} urgent_report_id={}",
+        tenant.slug, tenant_id, employee_id, shift_id, assignment_id, urgent_report_id
     );
     Ok(())
 }
@@ -598,7 +708,7 @@ async fn seed_hr_infra(
     let mut transaction = database.begin_tenant(tenant_id).await.map_err(io::Error::other)?;
     let effective_date: NaiveDate =
         NaiveDate::from_ymd_opt(2026, 1, 1).ok_or_else(|| io::Error::other("invalid HR seed effective date"))?;
-    log_info!(
+    info!(
         "Seeding Odoo-inspired HR infra: tenant_slug={} tenant_id={} employees={} effective_date={}",
         tenant.slug,
         tenant_id,
@@ -709,7 +819,7 @@ async fn seed_hr_infra(
         .await
         .map_err(io::Error::other)?;
         employee_ids.insert(account.id, employee_id);
-        log_debug!(
+        debug!(
             "Development employee ensured: tenant_slug={} employee_id={} employee_code={} account_id={} role={}",
             tenant.slug,
             employee_id,
@@ -887,14 +997,9 @@ async fn seed_hr_infra(
         .await
         .map_err(io::Error::other)?;
         employee_facility_ids.insert(employee_id, facility_id);
-        log_debug!(
+        debug!(
             "Development HR assignment ensured: tenant_slug={} employee_id={} assignment_id={} branch_id={} facility_id={} manager_employee_id={:?}",
-            tenant.slug,
-            employee_id,
-            assignment_id,
-            branch_id,
-            facility_id,
-            manager_employee_id
+            tenant.slug, employee_id, assignment_id, branch_id, facility_id, manager_employee_id
         );
     }
 
@@ -972,13 +1077,9 @@ async fn seed_hr_infra(
         .fetch_one(transaction.connection())
         .await
         .map_err(io::Error::other)?;
-        log_debug!(
+        debug!(
             "Development working schedule assignment ensured: tenant_slug={} employee_id={} schedule_id={} assignment_id={} effective_date={}",
-            tenant.slug,
-            employee_id,
-            standard_schedule_id,
-            schedule_assignment_id,
-            effective_date
+            tenant.slug, employee_id, standard_schedule_id, schedule_assignment_id, effective_date
         );
     }
 
@@ -1004,7 +1105,7 @@ async fn seed_hr_infra(
     .await?;
 
     transaction.commit().await.map_err(io::Error::other)?;
-    log_notice!(
+    info!(
         "Development HR infra committed: tenant_slug={} tenant_id={} departments=2 jobs=3 employees={} assignments={} working_schedules=1 schedule_assignments={} completed_attendance_sessions={} open_attendance_sessions={}",
         tenant.slug,
         tenant_id,
@@ -1215,7 +1316,7 @@ async fn seed_payroll_configuration(
         .map_err(io::Error::other)?;
     }
 
-    log_info!(
+    info!(
         "Development payroll configuration ensured: tenant_slug={} tenant_id={} compensations={} warehouse_rules={} time_rules=1 overtime_rules=2 currency=VND",
         tenant.slug,
         tenant_id,
@@ -1365,22 +1466,17 @@ async fn seed_attendance_sessions(
             if seeded {
                 open_count += 1;
             } else {
-                log_info!(
+                info!(
                     "Open attendance fixture skipped because another session is already open: tenant_slug={} employee_id={} username={}",
-                    tenant.slug,
-                    employee_id,
-                    account.username
+                    tenant.slug, employee_id, account.username
                 );
             }
         }
     }
 
-    log_info!(
+    info!(
         "Development attendance ensured: tenant_slug={} tenant_id={} completed_sessions={} open_sessions={}",
-        tenant.slug,
-        tenant_id,
-        completed_count,
-        open_count
+        tenant.slug, tenant_id, completed_count, open_count
     );
     Ok((completed_count, open_count))
 }
@@ -1546,7 +1642,7 @@ async fn seed_branches_and_facilities(
     owner_account_id: Uuid,
 ) -> Result<(), io::Error> {
     let mut transaction = database.begin_tenant(tenant_id).await.map_err(io::Error::other)?;
-    log_info!(
+    info!(
         "Seeding development branch hierarchy: tenant_slug={} tenant_id={} branches={}",
         tenant.slug,
         tenant_id,
@@ -1579,7 +1675,7 @@ async fn seed_branches_and_facilities(
         .fetch_one(transaction.connection())
         .await
         .map_err(io::Error::other)?;
-        log_debug!(
+        debug!(
             "Development branch ensured: tenant_slug={} branch_id={} branch_code={} facilities={}",
             tenant.slug,
             branch_id,
@@ -1612,21 +1708,17 @@ async fn seed_branches_and_facilities(
             .fetch_one(transaction.connection())
             .await
             .map_err(io::Error::other)?;
-            log_debug!(
+            debug!(
                 "Development facility ensured: tenant_slug={} branch_id={} facility_id={} facility_code={}",
-                tenant.slug,
-                branch_id,
-                facility_id,
-                facility.code
+                tenant.slug, branch_id, facility_id, facility.code
             );
         }
     }
 
     transaction.commit().await.map_err(io::Error::other)?;
-    log_notice!(
+    info!(
         "Development branch hierarchy committed: tenant_slug={} tenant_id={}",
-        tenant.slug,
-        tenant_id
+        tenant.slug, tenant_id
     );
     Ok(())
 }

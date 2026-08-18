@@ -5,7 +5,7 @@ use axum::{
     extract::{Extension, Path, State},
     http::StatusCode,
 };
-use infra_kernel::debug::*;
+use tracing::{error, warn, info, debug, trace};
 use crate::features::people::core::{AttendanceSession, Department, Employee, EmployeeAssignment, HrError, JobPosition};
 use uuid::Uuid;
 
@@ -284,11 +284,9 @@ pub(crate) fn require_permission(user: &AuthenticatedUser, permission: &str) -> 
     if user.has_permission(permission) {
         Ok(())
     } else {
-        log_notice!(
+        info!(
             "HR request denied: tenant_id={} account_id={} required_permission={}",
-            user.tenant_id,
-            user.account_id,
-            permission
+            user.tenant_id, user.account_id, permission
         );
         Err(StatusCode::FORBIDDEN)
     }
@@ -299,24 +297,18 @@ pub(crate) fn hr_status(operation: &str, user: &AuthenticatedUser, error: HrErro
         HrError::NotFound => StatusCode::NOT_FOUND,
         HrError::Conflict => StatusCode::CONFLICT,
         HrError::InvalidInput(reason) => {
-            log_notice!(
+            info!(
                 "HR input rejected: operation={} tenant_id={} account_id={} reason={}",
-                operation,
-                user.tenant_id,
-                user.account_id,
-                reason
+                operation, user.tenant_id, user.account_id, reason
             );
             StatusCode::BAD_REQUEST
         }
         HrError::BackendUnavailable => StatusCode::SERVICE_UNAVAILABLE,
     };
     if status == StatusCode::SERVICE_UNAVAILABLE {
-        log_error!(
+        error!(
             "HR request failed: operation={} tenant_id={} account_id={} status={}",
-            operation,
-            user.tenant_id,
-            user.account_id,
-            status
+            operation, user.tenant_id, user.account_id, status
         );
     }
     status

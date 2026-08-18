@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
-use infra_kernel::debug::*;
+use tracing::{error, warn, info, debug, trace};
 use crate::features::payroll::core::{
     EmployeeCompensation, EmployeeCompensationInput, FacilityRateRule, FacilityRateRuleInput, OvertimeRule,
     OvertimeRuleInput, PayBasis, PayrollEmployeeResult, PayrollError, PayrollLine, PayrollRepo, PayrollRun,
@@ -674,7 +674,7 @@ impl PayrollRepo for PayrollProvider {
             .commit()
             .await
             .map_err(|error| database_failure("commit payroll calculation", tenant_id, error))?;
-        log_notice!(
+        info!(
             "Monthly payroll calculated: tenant_id={} payroll_run_id={} period_start={} period_end={} employees={} lines={} currency={}",
             tenant_id,
             payroll_run_id,
@@ -739,10 +739,9 @@ impl PayrollRepo for PayrollProvider {
 
 async fn begin_tenant(provider: &PayrollProvider, tenant_id: Uuid) -> Result<TenantTransaction, PayrollError> {
     provider.db.begin_tenant(tenant_id).await.map_err(|error| {
-        log_error!(
+        error!(
             "Payroll tenant transaction failed: tenant_id={} error={}",
-            tenant_id,
-            error
+            tenant_id, error
         );
         PayrollError::BackendUnavailable
     })
@@ -1475,11 +1474,9 @@ fn assemble_run(
 }
 
 fn database_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> PayrollError {
-    log_error!(
+    error!(
         "Payroll database operation failed: operation={} tenant_id={} error={}",
-        operation,
-        tenant_id,
-        error
+        operation, tenant_id, error
     );
     PayrollError::BackendUnavailable
 }
@@ -1494,11 +1491,9 @@ fn mutation_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> Pay
         }
         _ => PayrollError::BackendUnavailable,
     };
-    log_error!(
+    error!(
         "Payroll database mutation failed: operation={} tenant_id={} error={}",
-        operation,
-        tenant_id,
-        error
+        operation, tenant_id, error
     );
     mapped_error
 }

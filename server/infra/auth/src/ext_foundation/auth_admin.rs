@@ -8,7 +8,9 @@ use axum::{
     routing::{get, put},
 };
 use chrono::{DateTime, Utc};
-use infra_kernel::debug::*;
+use infra_postgres::TenantTransaction;
+use sqlx::postgres::PgQueryResult;
+use tracing::{error, warn, info, debug, trace};
 use reqwest::Url;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::json;
@@ -139,6 +141,10 @@ struct MappedAccount {
     primary_role: String,
 }
 
+struct ExistsRow {
+    exists: bool,
+}
+
 #[derive(Clone, Debug, Serialize, TS)]
 #[ts(export)]
 pub struct AuthUserSummary {
@@ -172,12 +178,14 @@ pub struct SetAuthUserStatusRequest {
 
 impl AuthAdminService {
     pub fn from_env() -> Result<Arc<Self>, AuthAdminConfigError> {
-        let raw_url = required_env("AUTH_ADMIN_URL").ok_or(AuthAdminConfigError::MissingUrl)?;
-        let parsed_url = Url::parse(&raw_url).map_err(|error| AuthAdminConfigError::InvalidUrl(error.to_string()))?;
+        debug!("Loading Auth administration provider configuration");
+        let raw_url: String = required_env("AUTH_ADMIN_URL").ok_or(AuthAdminConfigError::MissingUrl)?;
+        let parsed_url: Url =
+            Url::parse(&raw_url).map_err(|error| AuthAdminConfigError::InvalidUrl(error.to_string()))?;
         if !matches!(parsed_url.scheme(), "http" | "https") || parsed_url.host_str().is_none() {
             return Err(AuthAdminConfigError::UnsupportedUrl);
         }
-        let timeout_secs =
+        let timeout_secs: u64 =
             std::env::var("AUTH_ADMIN_HTTP_TIMEOUT_SECS").map_or(Ok(DEFAULT_HTTP_TIMEOUT_SECS), |value| {
                 value
                     .parse::<u64>()
@@ -185,20 +193,23 @@ impl AuthAdminService {
                     .filter(|value| *value > 0)
                     .ok_or(AuthAdminConfigError::InvalidTimeout)
             })?;
-        let client = reqwest::Client::builder()
+        let client: reqwest::Client = reqwest::Client::builder()
             .timeout(Duration::from_secs(timeout_secs))
             .build()
             .map_err(AuthAdminConfigError::Client)?;
 
-        Ok(Arc::new(Self {
+        let service: Arc<Self> = Arc::new(Self {
             client,
             base_url: raw_url.trim().trim_end_matches('/').to_owned(),
             admin_token: required_env("AUTH_ADMIN_TOKEN").ok_or(AuthAdminConfigError::MissingToken)?,
-        }))
+        });
+        info!(timeout_secs, "Auth administration provider initialized");
+        Ok(service)
     }
 
     async fn get_user(&self, user_id: Uuid) -> Result<Option<ExtProviderUser>, ProviderError> {
-        let response = self
+        trace!(auth_user_id = %user_id, "Auth provider user lookup accepted");
+        let response: reqwest::Response = self
             .client
             .get(format!("{}/admin/users/{user_id}", self.base_url))
             .bearer_auth(&self.admin_token)
@@ -206,13 +217,21 @@ impl AuthAdminService {
             .await
             .map_err(ProviderError::Transport)?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
+            debug!(auth_user_id = %user_id, "Auth provider user was not found");
             return Ok(None);
         }
-        read_provider_response(response).await.map(Some)
+        let user: ExtProviderUser = read_provider_response(response).await?;
+        debug!(auth_user_id = %user_id, "Auth provider user loaded");
+        Ok(Some(user))
     }
 
     async fn create_user(&self, request: &CreateAuthUserRequest) -> Result<ExtProviderUser, ProviderError> {
-        let mut attributes = serde_json::Map::new();
+        trace!(
+            primary_role = %request.primary_role,
+            password_supplied = request.password.is_some(),
+            "Auth provider user creation accepted"
+        );
+        let mut attributes: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
         attributes.insert("email".to_owned(), json!(request.email));
         attributes.insert("email_confirm".to_owned(), json!(true));
         attributes.insert("role".to_owned(), json!("authenticated"));
@@ -221,7 +240,7 @@ impl AuthAdminService {
         if let Some(password) = request.password.as_ref() {
             attributes.insert("password".to_owned(), json!(password));
         }
-        let response = self
+        let response: reqwest::Response = self
             .client
             .post(format!("{}/admin/users", self.base_url))
             .bearer_auth(&self.admin_token)
@@ -229,11 +248,14 @@ impl AuthAdminService {
             .send()
             .await
             .map_err(ProviderError::Transport)?;
-        read_provider_response(response).await
+        let user: ExtProviderUser = read_provider_response(response).await?;
+        info!(auth_user_id = %user.id, "Auth provider user created");
+        Ok(user)
     }
 
     async fn set_disabled(&self, user_id: Uuid, disabled: bool) -> Result<ExtProviderUser, ProviderError> {
-        let response = self
+        trace!(auth_user_id = %user_id, disabled, "Auth provider status change accepted");
+        let response: reqwest::Response = self
             .client
             .put(format!("{}/admin/users/{user_id}", self.base_url))
             .bearer_auth(&self.admin_token)
@@ -243,28 +265,35 @@ impl AuthAdminService {
             .send()
             .await
             .map_err(ProviderError::Transport)?;
-        read_provider_response(response).await
+        let user: ExtProviderUser = read_provider_response(response).await?;
+        info!(auth_user_id = %user_id, disabled, "Auth provider status changed");
+        Ok(user)
     }
 
     async fn delete_user_after_failed_link(&self, user_id: Uuid) {
-        let result = self
+        let result: Result<reqwest::Response, reqwest::Error> = self
             .client
             .delete(format!("{}/admin/users/{user_id}", self.base_url))
             .bearer_auth(&self.admin_token)
             .send()
             .await;
         if let Err(error) = result {
-            log_error!(
+            error!(
                 "Failed to compensate unlinked Auth user: auth_user_id={} error={}",
-                user_id,
-                error
+                user_id, error
             );
         }
     }
 }
 
 pub fn routes(auth: Arc<AuthService>, policy: AuthAdminPolicy) -> Router {
-    let state = Arc::new(AuthAdminContext { auth, policy });
+    debug!(
+        read_permission = policy.read_permission,
+        create_permission = policy.create_permission,
+        disable_permission = policy.disable_permission,
+        "Registering Auth administration routes"
+    );
+    let state: Arc<AuthAdminContext> = Arc::new(AuthAdminContext { auth, policy });
     Router::new()
         .route("/admin/auth-users", get(list_users).post(create_user))
         .route("/admin/auth-users/{auth_user_id}/status", put(set_user_status))
@@ -275,28 +304,33 @@ async fn list_users(
     State(context): State<Arc<AuthAdminContext>>,
     Extension(actor): Extension<AuthenticatedUser>,
 ) -> Result<Json<Vec<AuthUserSummary>>, AdminApiError> {
+    info!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, "Auth user list request accepted");
     require_permission(&actor, context.policy.read_permission)?;
-    let accounts = load_mapped_accounts(&context, actor.tenant_id).await?;
-    let mut users = Vec::with_capacity(accounts.len());
+    let accounts: Vec<MappedAccount> = load_mapped_accounts(&context, actor.tenant_id).await?;
+    let mut users: Vec<AuthUserSummary> = Vec::with_capacity(accounts.len());
     for account in accounts {
-        let provider_user = match Uuid::parse_str(&account.subject) {
+        let provider_user: Option<ExtProviderUser> = match Uuid::parse_str(&account.subject) {
             Ok(user_id) => context
                 .admin
                 .get_user(user_id)
                 .await
                 .map_err(|error| provider_failure("load Auth user", &actor, error))?,
             Err(error) => {
-                log_error!(
+                error!(
                     "Mapped Auth subject is not a UUID: tenant_id={} account_id={} error={}",
-                    actor.tenant_id,
-                    account.account_id,
-                    error
+                    actor.tenant_id, account.account_id, error
                 );
                 None
             }
         };
         users.push(summary(account, provider_user));
     }
+    info!(
+        tenant_id = %actor.tenant_id,
+        actor_id = %actor.account_id,
+        user_count = users.len(),
+        "Auth user list request completed"
+    );
     Ok(Json(users))
 }
 
@@ -305,17 +339,23 @@ async fn create_user(
     Extension(actor): Extension<AuthenticatedUser>,
     Json(mut request): Json<CreateAuthUserRequest>,
 ) -> Result<(StatusCode, Json<AuthUserSummary>), AdminApiError> {
+    info!(
+        tenant_id = %actor.tenant_id,
+        actor_id = %actor.account_id,
+        primary_role = %request.primary_role,
+        "Auth user creation request accepted"
+    );
     require_permission(&actor, context.policy.create_permission)?;
     normalize_create_request(&mut request)?;
     ensure_username_available(&context, &actor, &request.username).await?;
     ensure_role_available(&context, &actor, &request.primary_role).await?;
 
-    let provider_user = context
+    let provider_user: ExtProviderUser = context
         .admin
         .create_user(&request)
         .await
         .map_err(|error| provider_failure("create Auth user", &actor, error))?;
-    let account = match link_created_user(&context, &actor, &request, provider_user.id).await {
+    let account: MappedAccount = match link_created_user(&context, &actor, &request, provider_user.id).await {
         Ok(account) => account,
         Err(error) => {
             context.admin.delete_user_after_failed_link(provider_user.id).await;
@@ -335,6 +375,13 @@ async fn create_user(
         Some(actor.tenant_id),
         Some(actor.account_id),
     );
+    info!(
+        tenant_id = %actor.tenant_id,
+        actor_id = %actor.account_id,
+        account_id = %account.account_id,
+        auth_user_id = %provider_user.id,
+        "Auth user creation request completed"
+    );
     Ok((StatusCode::CREATED, Json(summary(account, Some(provider_user)))))
 }
 
@@ -344,28 +391,33 @@ async fn set_user_status(
     Path(auth_user_id): Path<String>,
     Json(request): Json<SetAuthUserStatusRequest>,
 ) -> Result<Json<AuthUserSummary>, AdminApiError> {
+    info!(
+        tenant_id = %actor.tenant_id,
+        actor_id = %actor.account_id,
+        disabled = request.disabled,
+        "Auth user status request accepted"
+    );
     require_permission(&actor, context.policy.disable_permission)?;
-    let user_id = Uuid::parse_str(&auth_user_id)
+    let user_id: Uuid = Uuid::parse_str(&auth_user_id)
         .map_err(|_| AdminApiError::Validation("The identity-provider user ID is invalid.".to_owned()))?;
-    let account = load_mapped_account(&context, &actor, &auth_user_id).await?;
+    let account: MappedAccount = load_mapped_account(&context, &actor, &auth_user_id).await?;
     if account.account_id == actor.account_id && request.disabled {
         return Err(AdminApiError::Validation(
             "You cannot disable the account currently in use.".to_owned(),
         ));
     }
 
-    let previously_disabled = account.account_status == "disabled";
-    let provider_user = context
+    let previously_disabled: bool = account.account_status == "disabled";
+    let provider_user: ExtProviderUser = context
         .admin
         .set_disabled(user_id, request.disabled)
         .await
         .map_err(|error| provider_failure("change Auth user status", &actor, error))?;
     if let Err(error) = update_account_status(&context, &actor, account.account_id, request.disabled).await {
         if let Err(compensation_error) = context.admin.set_disabled(user_id, previously_disabled).await {
-            log_error!(
+            error!(
                 "Failed to compensate Auth status change: auth_user_id={} error={}",
-                user_id,
-                compensation_error
+                user_id, compensation_error
             );
         }
         record_audit(
@@ -383,21 +435,30 @@ async fn set_user_status(
         Some(actor.tenant_id),
         Some(actor.account_id),
     );
-    let mut updated_account = account;
+    let mut updated_account: MappedAccount = account;
     updated_account.account_status = if request.disabled { "disabled" } else { "active" }.to_owned();
+    info!(
+        tenant_id = %actor.tenant_id,
+        actor_id = %actor.account_id,
+        account_id = %updated_account.account_id,
+        auth_user_id = %user_id,
+        disabled = request.disabled,
+        "Auth user status request completed"
+    );
     Ok(Json(summary(updated_account, Some(provider_user))))
 }
 
 async fn load_mapped_accounts(context: &AuthService, tenant_id: Uuid) -> Result<Vec<MappedAccount>, AdminApiError> {
-    let mut transaction = context.db.begin_tenant(tenant_id).await.map_err(|error| {
-        log_error!(
+    trace!(tenant_id = %tenant_id, "Loading mapped Auth accounts");
+    let mut transaction: TenantTransaction = context.db.begin_tenant(tenant_id).await.map_err(|error| {
+        error!(
             "Auth account list transaction failed: tenant_id={} error={}",
-            tenant_id,
-            error
+            tenant_id, error
         );
         AdminApiError::Internal
     })?;
-    let rows = sqlx::query!(
+    let rows: Vec<MappedAccount> = sqlx::query_as!(
+        MappedAccount,
         r#"
         SELECT identity.subject, account.id AS account_id, account.username,
                account.status AS account_status, account.primary_role_code AS primary_role
@@ -412,28 +473,19 @@ async fn load_mapped_accounts(context: &AuthService, tenant_id: Uuid) -> Result<
     .fetch_all(transaction.connection())
     .await
     .map_err(|error| {
-        log_error!("Auth account list failed: tenant_id={} error={}", tenant_id, error);
+        error!("Auth account list failed: tenant_id={} error={}", tenant_id, error);
         AdminApiError::Internal
     })?;
     transaction.commit().await.map_err(|error| {
-        log_error!(
+        error!(
             "Auth account list commit failed: tenant_id={} error={}",
-            tenant_id,
-            error
+            tenant_id, error
         );
         AdminApiError::Internal
     })?;
 
-    Ok(rows
-        .into_iter()
-        .map(|row| MappedAccount {
-            subject: row.subject,
-            account_id: row.account_id,
-            username: row.username,
-            account_status: row.account_status,
-            primary_role: row.primary_role,
-        })
-        .collect())
+    debug!(tenant_id = %tenant_id, account_count = rows.len(), "Mapped Auth accounts loaded");
+    Ok(rows)
 }
 
 async fn load_mapped_account(
@@ -453,15 +505,16 @@ async fn ensure_username_available(
     actor: &AuthenticatedUser,
     username: &str,
 ) -> Result<(), AdminApiError> {
-    let mut transaction = context.db.begin_tenant(actor.tenant_id).await.map_err(|error| {
-        log_error!(
+    trace!(tenant_id = %actor.tenant_id, "Checking Auth username availability");
+    let mut transaction: TenantTransaction = context.db.begin_tenant(actor.tenant_id).await.map_err(|error| {
+        error!(
             "Auth username check transaction failed: tenant_id={} error={}",
-            actor.tenant_id,
-            error
+            actor.tenant_id, error
         );
         AdminApiError::Internal
     })?;
-    let exists = sqlx::query_scalar!(
+    let row: ExistsRow = sqlx::query_as!(
+        ExistsRow,
         r#"SELECT EXISTS (
             SELECT 1 FROM accounts WHERE tenant_id = $1 AND lower(username) = lower($2)
         ) AS "exists!""#,
@@ -471,24 +524,24 @@ async fn ensure_username_available(
     .fetch_one(transaction.connection())
     .await
     .map_err(|error| {
-        log_error!(
+        error!(
             "Auth username check failed: tenant_id={} error={}",
-            actor.tenant_id,
-            error
+            actor.tenant_id, error
         );
         AdminApiError::Internal
     })?;
     transaction.commit().await.map_err(|error| {
-        log_error!(
+        error!(
             "Auth username check commit failed: tenant_id={} error={}",
-            actor.tenant_id,
-            error
+            actor.tenant_id, error
         );
         AdminApiError::Internal
     })?;
-    if exists {
+    if row.exists {
+        warn!(tenant_id = %actor.tenant_id, "Auth username availability check rejected a duplicate");
         Err(AdminApiError::Conflict("The username is already in use.".to_owned()))
     } else {
+        debug!(tenant_id = %actor.tenant_id, "Auth username is available");
         Ok(())
     }
 }
@@ -498,15 +551,16 @@ async fn ensure_role_available(
     actor: &AuthenticatedUser,
     role: &str,
 ) -> Result<(), AdminApiError> {
-    let mut transaction = context.db.begin_tenant(actor.tenant_id).await.map_err(|error| {
-        log_error!(
+    trace!(tenant_id = %actor.tenant_id, role, "Checking Auth role availability");
+    let mut transaction: TenantTransaction = context.db.begin_tenant(actor.tenant_id).await.map_err(|error| {
+        error!(
             "Auth role check transaction failed: tenant_id={} error={}",
-            actor.tenant_id,
-            error
+            actor.tenant_id, error
         );
         AdminApiError::Internal
     })?;
-    let exists = sqlx::query_scalar!(
+    let row: ExistsRow = sqlx::query_as!(
+        ExistsRow,
         r#"SELECT EXISTS (
             SELECT 1 FROM roles WHERE code = $1 AND is_active
         ) AS "exists!""#,
@@ -515,27 +569,25 @@ async fn ensure_role_available(
     .fetch_one(transaction.connection())
     .await
     .map_err(|error| {
-        log_error!(
+        error!(
             "Auth role check failed: tenant_id={} role={} error={}",
-            actor.tenant_id,
-            role,
-            error
+            actor.tenant_id, role, error
         );
         AdminApiError::Internal
     })?;
     transaction.commit().await.map_err(|error| {
-        log_error!(
+        error!(
             "Auth role check commit failed: tenant_id={} role={} error={}",
-            actor.tenant_id,
-            role,
-            error
+            actor.tenant_id, role, error
         );
         AdminApiError::Internal
     })?;
 
-    if exists {
+    if row.exists {
+        debug!(tenant_id = %actor.tenant_id, role, "Auth role is available");
         Ok(())
     } else {
+        warn!(tenant_id = %actor.tenant_id, role, "Auth role availability check rejected an unavailable role");
         Err(AdminApiError::Validation("Role is not available.".to_owned()))
     }
 }
@@ -546,16 +598,22 @@ async fn link_created_user(
     request: &CreateAuthUserRequest,
     auth_user_id: Uuid,
 ) -> Result<MappedAccount, AdminApiError> {
-    let account_id = Uuid::new_v4();
-    let mut transaction = context.db.begin_tenant(actor.tenant_id).await.map_err(|error| {
-        log_error!(
+    let account_id: Uuid = Uuid::new_v4();
+    debug!(
+        tenant_id = %actor.tenant_id,
+        actor_id = %actor.account_id,
+        account_id = %account_id,
+        auth_user_id = %auth_user_id,
+        "Linking created Auth user to application account"
+    );
+    let mut transaction: TenantTransaction = context.db.begin_tenant(actor.tenant_id).await.map_err(|error| {
+        error!(
             "Auth account create transaction failed: tenant_id={} error={}",
-            actor.tenant_id,
-            error
+            actor.tenant_id, error
         );
         AdminApiError::Internal
     })?;
-    sqlx::query!(
+    let account_insert: PgQueryResult = sqlx::query!(
         r#"
         INSERT INTO accounts (
             id, tenant_id, username, status, primary_role_code,
@@ -572,7 +630,8 @@ async fn link_created_user(
     .execute(transaction.connection())
     .await
     .map_err(|error| account_create_error("insert account", actor, error))?;
-    sqlx::query!(
+    trace!(rows_affected = account_insert.rows_affected(), account_id = %account_id, "Application account inserted");
+    let role_insert: PgQueryResult = sqlx::query!(
         r#"
         INSERT INTO account_roles (tenant_id, account_id, role_code, assigned_by_account_id)
         VALUES ($1, $2, $3, $4)
@@ -585,7 +644,8 @@ async fn link_created_user(
     .execute(transaction.connection())
     .await
     .map_err(|error| account_create_error("assign primary role", actor, error))?;
-    sqlx::query!(
+    trace!(rows_affected = role_insert.rows_affected(), account_id = %account_id, "Primary Auth role assigned");
+    let identity_insert: PgQueryResult = sqlx::query!(
         r#"
         INSERT INTO account_identities (issuer, subject, tenant_id, account_id)
         VALUES ($1, $2, $3, $4)
@@ -598,16 +658,21 @@ async fn link_created_user(
     .execute(transaction.connection())
     .await
     .map_err(|error| account_create_error("link Auth identity", actor, error))?;
+    trace!(rows_affected = identity_insert.rows_affected(), account_id = %account_id, "External Auth identity linked");
     transaction.commit().await.map_err(|error| {
-        log_error!(
+        error!(
             "Auth account create commit failed: tenant_id={} actor_id={} error={}",
-            actor.tenant_id,
-            actor.account_id,
-            error
+            actor.tenant_id, actor.account_id, error
         );
         AdminApiError::Internal
     })?;
 
+    info!(
+        tenant_id = %actor.tenant_id,
+        account_id = %account_id,
+        auth_user_id = %auth_user_id,
+        "Created Auth user linked to application account"
+    );
     Ok(MappedAccount {
         subject: auth_user_id.to_string(),
         account_id,
@@ -623,17 +688,22 @@ async fn update_account_status(
     account_id: Uuid,
     disabled: bool,
 ) -> Result<(), AdminApiError> {
-    let status = if disabled { "disabled" } else { "active" };
-    let mut transaction = context.db.begin_tenant(actor.tenant_id).await.map_err(|error| {
-        log_error!(
+    let status: &str = if disabled { "disabled" } else { "active" };
+    debug!(
+        tenant_id = %actor.tenant_id,
+        actor_id = %actor.account_id,
+        account_id = %account_id,
+        status,
+        "Updating application account status"
+    );
+    let mut transaction: TenantTransaction = context.db.begin_tenant(actor.tenant_id).await.map_err(|error| {
+        error!(
             "Auth account status transaction failed: tenant_id={} account_id={} error={}",
-            actor.tenant_id,
-            account_id,
-            error
+            actor.tenant_id, account_id, error
         );
         AdminApiError::Internal
     })?;
-    let result = sqlx::query!(
+    let result: PgQueryResult = sqlx::query!(
         r#"
         UPDATE accounts
         SET status = $3, updated_at = CURRENT_TIMESTAMP, updated_by_account_id = $4
@@ -647,28 +717,27 @@ async fn update_account_status(
     .execute(transaction.connection())
     .await
     .map_err(|error| {
-        log_error!(
+        error!(
             "Auth account status update failed: tenant_id={} account_id={} error={}",
-            actor.tenant_id,
-            account_id,
-            error
+            actor.tenant_id, account_id, error
         );
         AdminApiError::Internal
     })?;
     if result.rows_affected() != 1 {
+        warn!(tenant_id = %actor.tenant_id, account_id = %account_id, "Application account status target was not found");
         return Err(AdminApiError::NotFound(
             "The account to update was not found.".to_owned(),
         ));
     }
     transaction.commit().await.map_err(|error| {
-        log_error!(
+        error!(
             "Auth account status commit failed: tenant_id={} account_id={} error={}",
-            actor.tenant_id,
-            account_id,
-            error
+            actor.tenant_id, account_id, error
         );
         AdminApiError::Internal
-    })
+    })?;
+    info!(tenant_id = %actor.tenant_id, account_id = %account_id, status, "Application account status updated");
+    Ok(())
 }
 
 fn normalize_create_request(request: &mut CreateAuthUserRequest) -> Result<(), AdminApiError> {
@@ -704,8 +773,10 @@ fn normalize_create_request(request: &mut CreateAuthUserRequest) -> Result<(), A
 
 fn require_permission(actor: &AuthenticatedUser, permission: &str) -> Result<(), AdminApiError> {
     if actor.has_permission(permission) {
+        trace!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, permission, "Auth administration permission accepted");
         Ok(())
     } else {
+        warn!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, permission, "Auth administration permission rejected");
         Err(AdminApiError::Forbidden)
     }
 }
@@ -743,12 +814,9 @@ fn user_is_banned(user: &ExtProviderUser) -> bool {
 }
 
 fn account_create_error(operation: &str, actor: &AuthenticatedUser, error: sqlx::Error) -> AdminApiError {
-    log_error!(
+    error!(
         "Auth account create step failed: operation={} tenant_id={} actor_id={} error={}",
-        operation,
-        actor.tenant_id,
-        actor.account_id,
-        error
+        operation, actor.tenant_id, actor.account_id, error
     );
     if error
         .as_database_error()
@@ -761,13 +829,30 @@ fn account_create_error(operation: &str, actor: &AuthenticatedUser, error: sqlx:
 }
 
 fn provider_failure(operation: &str, actor: &AuthenticatedUser, error: ProviderError) -> AdminApiError {
-    log_error!(
-        "Auth provider administration failed: operation={} tenant_id={} actor_id={} error={}",
-        operation,
-        actor.tenant_id,
-        actor.account_id,
-        error
-    );
+    match &error {
+        ProviderError::Transport(transport_error) => error!(
+            operation,
+            tenant_id = %actor.tenant_id,
+            actor_id = %actor.account_id,
+            timeout = transport_error.is_timeout(),
+            connect = transport_error.is_connect(),
+            "Auth provider administration transport failed"
+        ),
+        ProviderError::Response { status, .. } => warn!(
+            operation,
+            tenant_id = %actor.tenant_id,
+            actor_id = %actor.account_id,
+            status,
+            "Auth provider administration request was rejected"
+        ),
+        ProviderError::InvalidResponse(response_error) => error!(
+            operation,
+            tenant_id = %actor.tenant_id,
+            actor_id = %actor.account_id,
+            decode = response_error.is_decode(),
+            "Auth provider administration returned an invalid response"
+        ),
+    }
     match error {
         ProviderError::Response {
             status: 400 | 422,

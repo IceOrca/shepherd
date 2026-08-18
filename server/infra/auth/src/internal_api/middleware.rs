@@ -10,7 +10,7 @@ use axum::{
     response::Response,
 };
 use jsonwebtoken::{Algorithm, Header, TokenData, Validation, decode, decode_header};
-use infra_kernel::debug::*;
+use tracing::{error, warn, info, debug, trace};
 use infra_kernel::request::PrincipalRateLimitKey;
 use crate::account::Role;
 #[cfg(feature = "password-auth")]
@@ -45,27 +45,26 @@ pub async fn require_authenticated(
         .filter(|token: &&str| !token.is_empty())
         .ok_or(StatusCode::UNAUTHORIZED)?;
     let header: Header = decode_header(token).map_err(|error| {
-        log_notice!("JWT header invalid: {}", error);
+        info!("JWT header invalid: {}", error);
         StatusCode::UNAUTHORIZED
     })?;
     if header.alg != Algorithm::EdDSA || header.kid.as_deref() != Some(KID_MAIN!()) {
-        log_notice!(
+        info!(
             "JWT rejected because signing metadata is unexpected: algorithm={:?} kid={:?}",
-            header.alg,
-            header.kid
+            header.alg, header.kid
         );
         return Err(StatusCode::UNAUTHORIZED);
     }
     let validation = build_jwt_validation();
     let token_data: TokenData<AccessClaims> = decode(token, auth_ctx.jwt.decoding(), &validation).map_err(|error| {
-        log_notice!("JWT invalid: {}", error);
+        info!("JWT invalid: {}", error);
         StatusCode::UNAUTHORIZED
     })?;
 
     let now: usize = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| {
-            log_error!("System time error: {}", error);
+            error!("System time error: {}", error);
             StatusCode::INTERNAL_SERVER_ERROR
         })?
         .as_secs() as usize;
@@ -78,7 +77,7 @@ pub async fn require_authenticated(
     }
 
     let user: AuthenticatedUser = AuthenticatedUser::from_claims(&token_data.claims).map_err(|_| {
-        log_notice!("JWT contains an invalid tenant or account UUID");
+        info!("JWT contains an invalid tenant or account UUID");
         StatusCode::UNAUTHORIZED
     })?;
     #[cfg(feature = "password-auth")]
@@ -96,7 +95,7 @@ pub async fn require_authenticated(
                 && account.permissions == user.permissions
         })
         .ok_or_else(|| {
-            log_notice!(
+            info!(
                 "JWT rejected because current account authorization changed: tenant_id={} account_id={} token_auth_version={}",
                 user.tenant_id,
                 user.account_id,
@@ -105,18 +104,14 @@ pub async fn require_authenticated(
             StatusCode::UNAUTHORIZED
         })?;
     #[cfg(feature = "password-auth")]
-    log_trace!(
+    trace!(
         "Current account authorization confirmed: tenant_id={} account_id={} auth_version={}",
-        user.tenant_id,
-        current_account.id,
-        current_account.auth_version
+        user.tenant_id, current_account.id, current_account.auth_version
     );
     let tenant = TenantContext { id: user.tenant_id };
-    log_trace!(
+    trace!(
         "JWT accepted: tenant_id={} account_id={} jti={}",
-        user.tenant_id,
-        user.account_id,
-        user.jti
+        user.tenant_id, user.account_id, user.jti
     );
     request.extensions_mut().insert(tenant);
     request.extensions_mut().insert(PrincipalRateLimitKey::new(format!(
@@ -135,11 +130,9 @@ pub async fn require_account_creator(
     if user.has_permission("auth.accounts.create") {
         Ok(next.run(request).await)
     } else {
-        log_notice!(
+        info!(
             "Account creation denied: tenant_id={} account_id={} username={}",
-            user.tenant_id,
-            user.account_id,
-            user.username
+            user.tenant_id, user.account_id, user.username
         );
         Err(StatusCode::FORBIDDEN)
     }
@@ -153,11 +146,9 @@ pub async fn require_tenant_owner(
     if user.role == Role::TenantOwner {
         Ok(next.run(request).await)
     } else {
-        log_notice!(
+        info!(
             "Tenant-owner route denied: tenant_id={} account_id={} username={}",
-            user.tenant_id,
-            user.account_id,
-            user.username
+            user.tenant_id, user.account_id, user.username
         );
         Err(StatusCode::FORBIDDEN)
     }

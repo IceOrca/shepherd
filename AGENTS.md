@@ -1,33 +1,240 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
+## Product Mission and Business Vocabulary
 
-Reusable server capabilities live in `server/crates/infra/`. `kernel` owns neutral primitives and debugging; `infra/postgres` and `infra/redis` are thin adapters; `auth` owns authentication; and `host` owns `HostContext`, `AppRoutes`, Axum policies, logging, audit, and rate limiting. Host enables its Cargo `auth` feature by default; use `default-features = false` only intentionally. HRM code lives in `server/crates/applications/hrm/`, `server/runtime/` is the composition root, and migrations remain in `server/migrations`.
+Shepherd is a highly customized, multi-tenant staffing-business operations system for small and medium staffing suppliers. It is not a standard ERP, a standard HRM or attendance product, or an implementation of a generic worldwide business workflow. Product decisions must follow the client's actual staffing operation instead of forcing that operation into conventional ERP processes.
 
-The Vite/React application is under `client/web/src`; API helpers and generated `ts-rs` contracts belong in `src/api`. Deployment configuration is in `deploy/` and the root Compose files. Treat `server/target`, `client/web/dist`, and generated API files as build outputs.
+The primary project target is to free supervisors and managers from routinely copying staff messages such as "start work" and "end work" from Zalo, Telegram, or similar chat groups into multi-sheet Excel workbooks. Shepherd moves responsibility for recording facility, start, and finish evidence to staff while preserving the acting account when one employee records work for a coworker. Supervisors remain responsible for dispatch, exceptions, independent customer evidence, and the final business conclusion.
+
+A tenant company (the staffing supplier, called **A** below) receives staffing orders from its customers, sends available staff to a customer facility, records staff-reported work, and reconciles that record with customer confirmation or billing evidence. Urgent work recorded without a pre-created shift is the default workflow; planned shifts remain available when the operation has enough lead time.
+
+End-of-day reconciliation is mandatory for every completed work report because Shepherd and the customer maintain separate records and do not synchronize their systems. A `matched` classification means the two evidence sources currently agree and the report is ready for supervisor review; it must never automatically approve, finalize, bill, or pay the work. Only an explicit supervisor reconciliation creates the locked business result. When evidence differs, the supervisor must contact the customer, agree on the true result, and record the conclusion and normalized audit reason.
+
+Use these terms consistently:
+
+- **Tenant / staffing company / A**: the company operating Shepherd and supplying workers.
+- **Customer**: a business buying staffing services from A, such as a restaurant, coffee shop, karaoke business, or hotel.
+- **Customer facility**: the customer's specific workplace where a shift occurs. It is not one of A's internal branches or facilities.
+- **Staff / employee**: A's worker assigned to perform work at a customer facility.
+- **Supervisor / coordinator**: A's user who dispatches workers, optionally creates planned shifts, monitors work, enters customer evidence, and reconciles results.
+- **Urgent work report**: staff evidence created without a pre-existing shift. It records the employee, staff-claimed customer facility, server timestamps, and the accounts that pressed Start and Finish.
+- **Peer clocking**: one staff member starts or finishes urgent work for another staff member at the same customer facility. It is valid staff-side evidence and must retain actor provenance; it is not supervisor-authored routine time.
+- **Staff work evidence**: immutable server-timestamped start/end sessions created when a staff member presses Start or Finish for themselves or a coworker.
+- **Customer work evidence**: the independent confirmation, bill, or time record supplied by the customer facility.
+- **Reconciled result**: the final locked duration and financial snapshot accepted after comparing both evidence sources.
+
+## Detailed Application Requirements
+
+The primary, urgent/unplanned business workflow is:
+
+1. A customer urgently orders workers for a facility. The supervisor may select and transport staff without creating any shift or assignment in Shepherd.
+2. At the workplace, an active employee logs in, selects an active customer facility from the manager-maintained list, and selects themselves plus any coworkers whose work they are starting. The facility is selected, never manually typed.
+3. The employee presses **Start**. Shepherd creates one immutable urgent report per selected employee in a single idempotent batch. The first peer batch includes the acting employee; later peer actions require the actor to have work evidence at the same facility.
+4. After work, each employee may press **Finish** for themselves, or a coworker at that facility may finish for them. Every transition stores both the subject employee and acting account with `self` or `peer` provenance.
+5. PostgreSQL/server processing owns all work timestamps. Browser or device time is never authoritative.
+6. A supervisor receives separate customer confirmation or a bill and records the customer-confirmed facility and time interval without modifying staff evidence.
+7. Shepherd compares claimed versus confirmed facility and exact start/end time and classifies the report as waiting for staff, waiting for customer, matched, discrepant, or reconciled.
+8. At the end of the day, a supervisor must review every completed report, including reports classified as matched. `matched` is evidence comparison only and never triggers automatic approval.
+9. If evidence differs, the supervisor contacts the customer and agrees on the true facility and time. The supervisor records that conclusion and its normalized audit reason.
+10. The supervisor explicitly reconciles and locks the final facility, job, duration, rates, and financial result. Reconciliation atomically creates a completed formal shift and approved assignment linked to the urgent report so billing, worker pay, margin, and payroll use the existing immutable assignment snapshot.
+
+The optional planned workflow remains supported. A supervisor may create a shift, inspect suitability and availability, assign staff up to capacity, and let each assigned employee start and finish the assignment. In planned mode, customer and facility derive from the assignment; staff do not choose them.
+
+The product replaces supervisors' routine manual transcription of staff time and facility from Zalo, Telegram, or similar chat groups into multi-sheet Excel workbooks. Staff are responsible for reporting start, finish, and the claimed facility, including peer clocking when a coworker has no usable phone. Supervisors remain responsible for dispatching, optional planning, exceptional corrections, customer evidence, and mandatory end-of-day reconciliation. The client accepts that peer clocking may be imperfect because independent customer evidence and the supervisor's final conclusion remain authoritative.
+
+Current scope and non-goals:
+
+- Customer systems do not integrate or synchronize with Shepherd yet; customer evidence is entered manually by A.
+- GPS collection is disabled. Preserve the existing location DTOs, columns, and code for a future opt-in feature, but do not expose a GPS control or store coordinates while the flags are false.
+- Shepherd does not infer presence, silently auto-clock workers, or trust browser timestamps.
+- Reconciliation is never automatic. Every completed planned assignment or urgent report requires an explicit supervisor action before it becomes an approved financial or payroll input.
+- `matched` means that independent evidence currently agrees; it does not mean approved, reconciled, billable, or payable.
+- A matched duration may be finalized without an adjustment reason. Any mismatch or manual final-duration override requires a normalized audit reason.
+- Routine staff work must not be entered by supervisors as if it came from the employee. Peer actions are staff-side evidence with explicit actor provenance. Staff and customer records are independent evidence sources.
+
+## Staffing Domain Invariants
+
+Preserve these rules in database constraints and server-side transactions, not only in the UI:
+
+- Every business record is tenant-scoped and protected by PostgreSQL RLS using the current tenant context.
+- A customer facility belongs to exactly one customer in the same tenant.
+- A shift fixes the customer, customer facility, job, scheduled interval, and required worker count.
+- A shift cannot accept assignments beyond its required capacity once its authoritative status is `filled`.
+- An employee can be assigned only when active, when an effective primary HR assignment matches the shift job on the facility-local work date, and when no non-cancelled staffing assignment overlaps the interval.
+- A shift assignment fixes the employee and snapshots the customer bill rate and worker pay rate. Later rate-agreement changes must not rewrite historical assignments.
+- An employee may have at most one open staffing work session across planned and urgent work, and a planned assignment or urgent report may have at most one open session.
+- Start and finish operations require idempotency keys. Repeated delivery of the same action must return the same transition; competing actions must create exactly one transition.
+- Work-session timestamps are generated by PostgreSQL/server processing. In planned mode, facility and employee identity derive from the assignment. In urgent mode, the selected active facility and employee set are fixed in the accepted batch and cannot later be rewritten.
+- Urgent peer start/end requires the actor to be an active employee with authorized same-facility work context. Store the acting account and `self`/`peer` source on each transition.
+- Completed work-session totals are immutable staff evidence. Planned customer evidence is stored in `business_customer_work_records`; urgent customer evidence, including confirmed facility, is stored in `business_urgent_customer_work_records`. Each has one current record per subject and its own audit account and timestamps.
+- Final reconciliation requires an explicit authorized supervisor action, positive completed staff time, customer evidence, and no open session. A discrepancy or final override requires an adjustment reason. Exact matches still require the explicit action but do not require an adjustment reason.
+- Urgent reconciliation compares claimed and customer-confirmed facility, exact start/end timestamps, and duration. It creates the completed shift and approved assignment snapshot exactly once and links that assignment to the urgent report.
+- Approved/cancelled assignment snapshots are immutable. When every non-cancelled assignment is reconciled, the shift may become `completed`.
+- Payroll consumes approved staffing-assignment worker-pay snapshots and must not double-count the same work as internal attendance.
+- Notification delivery failure must never roll back an accepted work-session transition; notification outbox writes remain in the work transaction.
+
+## Staffing Data Model and State Transitions
+
+Keep the database explicit rather than collapsing evidence or customer locations into HR tables:
+
+- `business_customers`: tenant-owned customer organizations.
+- `business_customer_facilities`: customer workplaces and their IANA time zones.
+- `business_staffing_rate_agreements`: effective-dated customer bill and worker pay rates, optionally specialized by facility or employee.
+- `business_staffing_shifts`: one customer order interval, job, facility, required capacity, and operational status.
+- `business_urgent_work_batches`: one idempotent urgent Start action, acting account, selected facility, and target employee set.
+- `business_urgent_work_reports`: one employee's urgent staff-side claim, lifecycle, and immutable selected facility.
+- `business_shift_assignments`: one employee allocated to a shift plus immutable rate snapshots and the eventual reconciled financial result.
+- `business_shift_work_sessions`: one or more employee start/end intervals and optional reserved GPS fields.
+- `business_urgent_work_sessions`: urgent start/end evidence with self/peer actor provenance and reserved GPS fields.
+- `business_customer_work_records`: customer-side evidence kept separate from employee sessions.
+- `business_urgent_customer_work_records`: urgent customer-side facility and time evidence kept separate from staff claims.
+- `notification_outbox`: durable notifications produced by committed staff actions.
+
+State transitions are monotonic:
+
+- Shift: `open -> filled -> in_progress -> completed`; `cancelled` is terminal. A shift may remain `open` until required capacity is reached. The first staff start moves it into progress. Completion follows reconciliation of all non-cancelled assignments.
+- Assignment: `assigned -> approved` after reconciliation, or `assigned -> cancelled`; approved and cancelled assignments are terminal.
+- Urgent report: `active -> completed -> reconciled`; `cancelled` is terminal. Reconciliation creates a linked terminal assignment snapshot rather than rewriting the urgent evidence.
+- Work session: open with `started_at`, then closed once with `ended_at` and generated positive duration.
+- Reconciliation status is derived from evidence and assignment state (`pending_staff`, `pending_customer`, `matched`, `discrepancy`, `reconciled`) rather than maintained as a second mutable source of truth.
+
+Lock the shift row while assigning so capacity cannot race. Lock assignment/work context while starting or ending so ownership and one-open-session rules cannot race. Urgent batches lock the acting and target employee rows before the idempotency decision and inserts; urgent end locks the report/session before checking repeated delivery. The cross-workflow one-open-session guard also locks the employee row. Upsert customer evidence only while planned assignments are still `assigned` or urgent reports are `completed`. Reconciliation, formal snapshot creation, financial calculation, and approval audit fields belong in one tenant transaction.
+
+Store instants as UTC `TIMESTAMPTZ`. Use the customer facility's IANA time zone only when deriving the local work date for effective HR assignments and rate agreements or when formatting for users. Represent money and hourly rates with PostgreSQL `NUMERIC` and decimal strings at API boundaries; never use floating-point arithmetic for financial snapshots.
+
+## Authentication, Authorization, and Multi-Tenancy
+
+Supabase Auth (GoTrue) is the external identity provider. It owns credentials, social identities, access/refresh sessions, JWT signing, and recovery. Shepherd owns tenants, `accounts`, account status, account identities, roles, permissions, employee links, and RLS authorization.
+
+- Public signup is disabled. A Google or other social identity must not create an application user merely because the provider authenticated it.
+- Every accepted JWT `issuer + subject` must map to an active Shepherd account and tenant before application access is granted.
+- Keep the application account database separate from the Supabase Auth database; this is required for business authorization and tenant membership.
+- Reusable auth/account primitives, current-user profile, role and permission handling, auth administration, and auth routes belong in reusable infra. Application crates must not be dependencies of infra crates.
+- Role codes and permission codes are data-driven. Define them in migrations or application specifications; do not hardcode role-to-permission policy in Rust.
+- `AuthenticatedUser` remains the request identity boundary and includes tenant/account IDs, username, optional email, primary role, roles, and permissions.
+- Auth administration creates or manages GoTrue users through its admin API, never by modifying GoTrue tables directly.
+
+## Software Architecture and API Design
+
+Reusable server capabilities live in `server/infra/`. `kernel` owns neutral primitives and debugging; `postgres` and `redis` are thin adapters; `auth` and `authz` own reusable authentication and authorization behavior; `app-sdk`, `jobs`, `notifier`, and `worker` own reusable application-support capabilities; and `host` owns `HostContext`, `AppRoutes`, Axum policies, logging, audit, and rate limiting. `infra-host` enables its Cargo `auth` feature by default; use `default-features = false` only intentionally. The composition root is `server/runtime/`.
+
+Application code lives in `server/applications/shepherd/` and is divided by business area:
+
+- `hr`: A's employees, departments, jobs, schedules, attendance, compensation, and payroll capabilities.
+- `business`: A's own branch/facility organization and customer staffing operations, including customers, customer facilities, rates, shifts, assignments, work sessions, and reconciliation.
+
+`server/applications/shepherd/src/features/` is an existing implementation grouping, not an API-domain boundary. Route ownership is defined by `hr.rs` and `business.rs`. Keep new staffing behavior under `src/business/staffing/`; do not create a nested HR/business API or move reusable infrastructure into the application crate.
+
+HR and business are sibling domains with a close relationship; neither is nested inside the other. Mount their routers as siblings with Axum `merge`:
+
+- `/api/hr/...`
+- `/api/business/...`
+- `/api/me`
+
+Never introduce `/api/hr/business/...`. Frontend calls must use the same `/api` paths. Caddy should proxy `/api/*`; route ownership remains in Axum.
+
+Staffing code follows `host -> core <- database`:
+
+- `core.rs`: domain types, repository traits, validation, and services without Axum or SQLx.
+- `database.rs`: PostgreSQL/SQLx repository implementation and tenant transactions.
+- `work_session/`: employee-owned start/finish behavior separated from supervisor staffing coordination.
+- `urgent_work/`: default staff-selected-facility and peer start/finish evidence plus supervisor reconciliation into formal snapshots.
+
+Important staffing APIs include:
+
+- `GET /api/business/staffing/urgent-work/facilities`
+- `GET /api/business/staffing/urgent-work/employees`
+- `GET /api/business/staffing/urgent-work/me`
+- `GET /api/business/staffing/urgent-work/team`
+- `POST /api/business/staffing/urgent-work/start`
+- `POST /api/business/staffing/urgent-work/{report_id}/end`
+- `GET /api/business/staffing/urgent-work/reconciliations`
+- `PUT /api/business/staffing/urgent-work/{report_id}/customer-record`
+- `POST /api/business/staffing/urgent-work/{report_id}/reconcile`
+
+- `GET/POST /api/business/staffing/shifts`
+- `GET/POST /api/business/staffing/shifts/{shift_id}/assignments`
+- `GET /api/business/staffing/shifts/{shift_id}/candidates`
+- `GET /api/business/staffing/assignments/me`
+- `POST /api/business/staffing/assignments/{assignment_id}/start`
+- `POST /api/business/staffing/assignments/{assignment_id}/end`
+- `GET /api/business/staffing/reconciliations`
+- `PUT /api/business/staffing/assignments/{assignment_id}/customer-record`
+- `POST /api/business/staffing/assignments/{assignment_id}/reconcile`
+
+Do not duplicate Rust DTO shapes manually in TypeScript. Register public contracts in `typescript.rs` and regenerate the tracked `client/web/src/api/generated/contracts.ts` file with `scripts/generate-api-types.sh`; never hand-edit it.
+
+
+## Frontend Product Design
+
+The Vite/React application is under `client/web/src`. API helpers and generated `ts-rs` contracts belong in `src/api`; feature-specific calls belong beside their feature.
+
+Maintain role-oriented workflows:
+
+- **Employee**: an urgent-work-first dashboard; choose an active customer facility, choose themselves and present coworkers, start/finish work, and view own/team evidence and actor provenance. **My shifts** remains available for optional planned assignments.
+- **Supervisor/coordinator**: dashboard, urgent **Reconciliation**, and optional **Shift coordination** pages; enter independent customer facility/time evidence, compare both sources, lock final results, and create planned shifts when time permits.
+- **Auth administrator**: pre-provision and disable external Auth users while maintaining Shepherd account mappings.
+
+The UI may explain why a candidate is unavailable, but the backend remains authoritative. Never prefill customer evidence from staff evidence: convenience must not make two independent sources appear to agree. Use generated contracts and invalidate the appropriate TanStack Query keys after mutations.
+
+GPS is controlled by both `STAFFING_GPS_ENABLED` and `VITE_STAFFING_GPS_ENABLED`; both default to `false` in development Compose. When disabled, the client hides GPS controls and sends no coordinates, and the server discards any supplied coordinates.
+
+## Project Structure and Deployment
+
+Migrations remain in `server/migrations`. Deployment configuration is in `deploy/` and the root Compose files. Treat `server/target` and `client/web/dist` as disposable build outputs. Generated API contracts are tracked outputs: regenerate and commit them when Rust DTOs change, but never edit them manually. Current work is development-focused: do not modify production deployment configuration unless the user explicitly requests it.
+
 
 ## Build, Test, and Development Commands
 
-The user starts Compose before development. Run install, build, format, lint, and test commands inside containers; never use host `cargo` or `npm`.
+The user starts Compose before development. Run language toolchains inside containers; never use host `cargo` or `npm`. Run repository orchestration scripts from the repository root when instructed below.
+
 
 - `docker compose exec -T server bash -c 'cargo test --workspace'` runs server tests.
 - `docker compose exec -T server bash -c 'cargo clippy --workspace && cargo check --workspace'` validates Rust.
-- `docker compose exec -T client bash -c 'npm run lint'` checks TypeScript; replace `lint` with `build` or `dev` as needed.
+- `docker compose exec -T client sh -c 'npm run lint'` checks TypeScript; replace `lint` with `build` or `dev` as needed. The Alpine client image does not contain Bash.
 - `bash scripts/generate-api-types.sh` regenerates TypeScript DTO contracts using Cargo inside `server`.
+- `DEV_AUTH_EMAIL=... DEV_AUTH_PASSWORD=... sh scripts/dev-data-seeding.sh` creates/reuses a development GoTrue user through the admin API, resets the application dev database, and seeds linked application data.
+
 Use `-it` for an interactive shell and `-T` for non-interactive automation.
 
 ## Container and Database Rules
 
 Keep images minimal. The server uses Rust Bookworm: do not add `build-essential`, `libpq-dev`, or `postgresql-client`; access and migrations use SQLx, not Diesel. Add OS packages only for demonstrated needs. Run manual `psql` only in `postgres-db` (PostgreSQL Alpine), never the server image.
 
-## Coding Style & Naming Conventions
+The current phase is development. Schema changes may use `cargo sqlx database reset -y` inside the server container when a clean database is useful. Reset only the application development database, never the separate Supabase Auth database, and reseed through `scripts/dev-data-seeding.sh`. Apply all durable schema and permission changes through ordered migrations even when the dev database was manually inspected.
+
+## Coding Style and Naming Conventions
 
 Format Rust inside the server container with `cargo fmt --all`; it uses 120-column formatting and forbids unsafe code, `unwrap`, and unchecked indexing. Use Rust `snake_case` modules/functions and `PascalCase` types. Infra crates must not depend on application crates. TypeScript is strict: two-space indentation, `PascalCase` components, and `camelCase` functions/variables.
 
-## Testing Guidelines
+### Type, SQLx, and Logging Policies
+
+Use explicit data types in Rust and TypeScript. Every non-destructured local binding, constant, collection, callback return, and intermediate query result must have an explicit type where the language permits it. Do not rely on inferred numeric, collection, optional, or result types. Public Rust and TypeScript APIs must always state their parameter and return types. This applies to all new code and every file or line edited during refactoring.
+
+For SQLx, prefer the most strongly checked compatible API in this exact order: `query_as!` first for typed mapped rows, then `query!`, then runtime `query_as`, and finally runtime `query`. Use a lower-priority API only when the higher-priority API cannot express the required query; document the reason in a nearby comment. Give every query result an explicit Rust type.
+
+Add structured `tracing` logs around normal server operations as well as failures. Log request acceptance and completion at `info` or `debug`, detailed branch and decision context at `trace`, client or validation rejections at `warn`, and unexpected/infrastructure failures at `error`. Include safe correlation and business identifiers such as operation, tenant ID, account ID, shift ID, assignment ID, counts, and status. Never log credentials, bearer/access or refresh tokens, cookies, database URLs, private keys, raw GPS coordinates, or unnecessarily sensitive personal data.
+
+Browser API clients must log only safe lifecycle metadata with `console.debug`/`info`/`warn`/`error`: request operation/path/method/status and non-secret identifiers or counts. Never log passwords, Authorization headers, session storage contents, OAuth callback fragments, token values, request bodies, or upstream error bodies.
+
+## Testing and Acceptance Guidelines
 
 Rust tests are colocated in `mod tests` blocks and use `#[test]` or `#[tokio::test]`. Add focused regression tests and run Cargo tests plus client type checks. No client test runner or coverage threshold is configured.
 
-## Commit & Pull Request Guidelines
+For staffing changes, verify at minimum:
 
-Git history is unavailable, so use concise imperative subjects such as `Add session expiry validation`. Keep commits scoped. PRs should explain changes, list verification, link issues, call out migrations/configuration, and include UI screenshots. Never commit credentials, private JWT keys, or populated `.env` files.
+- tenant isolation and permission checks;
+- assignment capacity, effective job suitability, and overlapping-shift rejection;
+- urgent facility selection, peer actor provenance, and same-facility authorization;
+- concurrent start/end idempotency, one-open-session constraints across urgent/planned modes, and server timestamps;
+- GPS absence when disabled;
+- customer evidence cannot overwrite staff sessions;
+- reconciliation compares exact time and facility, refuses missing evidence/open sessions, and requires reasons for discrepancies;
+- financial snapshots and payroll inputs are derived only after reconciliation;
+- employee, supervisor, and admin frontend routes compile against regenerated contracts.
+
+If unrelated workspace tests are already failing or hanging, report the exact crate/test and still run the narrow affected package tests. Do not modify unrelated code merely to make the workspace green.
+
+## Commit and Pull Request Guidelines
+
+Git history may be unavailable, so use concise imperative subjects such as `Add staffing reconciliation evidence`. Keep commits scoped. PRs should explain changes, list verification, link issues, call out migrations/configuration, and include UI screenshots. Never commit credentials, private JWT keys, populated `.env` files, or development passwords.

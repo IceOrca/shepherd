@@ -11,7 +11,7 @@ use serde::Serialize;
 use crate::jwt;
 use crate::LegacyAuthService;
 
-use infra_kernel::debug::*;
+use tracing::{error, warn, info, debug, trace};
 
 #[derive(Serialize)]
 pub struct JwksResponse {

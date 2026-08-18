@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import {
   BriefcaseBusiness,
   Building2,
@@ -10,16 +10,33 @@ import {
 } from "lucide-react";
 import { useMemo } from "react";
 import { Link } from "react-router-dom";
-import type { StaffingShift } from "../../api/generated/contracts";
+import type { Customer, StaffingShift, UrgentWorkItem } from "../../api/generated/contracts";
 import { useAuth } from "../auth/AuthProvider";
 import { friendlyApiError } from "../../shared/api/client";
 import { formatDateTime, formatDuration, shiftStatusLabel } from "../../shared/lib/format";
 import {
   listCustomers,
-  listOwnAssignments,
+  listOwnUrgentWork,
   listStaffingShifts,
   operationsQueryKeys,
 } from "./api";
+
+type MetricTone = "blue" | "emerald" | "amber" | "violet";
+
+interface MetricCardProps {
+  icon: typeof BriefcaseBusiness;
+  label: string;
+  value: string | number;
+  note: string;
+  tone: MetricTone;
+}
+
+interface QueryLifecycle {
+  error: unknown;
+  isFetching: boolean;
+  isPending: boolean;
+  refetch(): Promise<unknown>;
+}
 
 function MetricCard({
   icon: Icon,
@@ -27,14 +44,8 @@ function MetricCard({
   value,
   note,
   tone,
-}: {
-  icon: typeof BriefcaseBusiness;
-  label: string;
-  value: string | number;
-  note: string;
-  tone: "blue" | "emerald" | "amber" | "violet";
-}) {
-  const tones = {
+}: MetricCardProps): React.JSX.Element {
+  const tones: Record<MetricTone, string> = {
     blue: "bg-blue-50 text-blue-700",
     emerald: "bg-emerald-50 text-emerald-700",
     amber: "bg-amber-50 text-amber-700",
@@ -57,11 +68,11 @@ function MetricCard({
   );
 }
 
-function OverviewSkeleton() {
+function OverviewSkeleton(): React.JSX.Element {
   return (
     <div className="space-y-6" aria-label="Đang tải tổng quan">
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {Array.from({ length: 4 }, (_, index) => (
+        {Array.from({ length: 4 }, (_value: unknown, index: number): React.JSX.Element => (
           <div className="panel p-5" key={index}>
             <div className="skeleton h-4 w-28" />
             <div className="skeleton mt-4 h-9 w-16" />
@@ -96,47 +107,56 @@ function statusClass(status: StaffingShift["status"]): string {
   }
 }
 
-export function OperationsOverviewPage() {
-  const auth = useAuth();
-  const permissions = auth.profile?.permissions ?? [];
-  const canReadShifts = permissions.includes("business.shifts.read");
-  const canReadCustomers = permissions.includes("business.customers.read");
-  const canReadOwnAssignments = permissions.includes("business.staffing_work.self.read");
+export function OperationsOverviewPage(): React.JSX.Element {
+  const auth: ReturnType<typeof useAuth> = useAuth();
+  const permissions: string[] = auth.profile?.permissions ?? [];
+  const canReadShifts: boolean = permissions.includes("business.shifts.read");
+  const canReadCustomers: boolean = permissions.includes("business.customers.read");
+  const canReadUrgentWork: boolean = permissions.includes("business.urgent_work.read");
 
-  const shiftsQuery = useQuery({
+  const shiftsQuery: UseQueryResult<StaffingShift[], Error> = useQuery({
     queryKey: operationsQueryKeys.shifts,
     queryFn: listStaffingShifts,
     enabled: canReadShifts,
   });
-  const customersQuery = useQuery({
+  const customersQuery: UseQueryResult<Customer[], Error> = useQuery({
     queryKey: operationsQueryKeys.customers,
     queryFn: listCustomers,
     enabled: canReadCustomers,
   });
-  const ownAssignmentsQuery = useQuery({
-    queryKey: operationsQueryKeys.ownAssignments,
-    queryFn: listOwnAssignments,
-    enabled: canReadOwnAssignments && !canReadShifts,
+  const ownUrgentWorkQuery: UseQueryResult<UrgentWorkItem[], Error> = useQuery({
+    queryKey: operationsQueryKeys.urgentOwnWork,
+    queryFn: listOwnUrgentWork,
+    enabled: canReadUrgentWork && !canReadShifts,
   });
 
-  const relevantQueries = canReadShifts
+  const relevantQueries: QueryLifecycle[] = canReadShifts
     ? [shiftsQuery, ...(canReadCustomers ? [customersQuery] : [])]
-    : canReadOwnAssignments
-      ? [ownAssignmentsQuery]
+    : canReadUrgentWork
+      ? [ownUrgentWorkQuery]
       : [];
-  const isPending = relevantQueries.some((query) => query.isPending);
-  const firstError = relevantQueries.find((query) => query.error)?.error;
+  const isPending: boolean = relevantQueries.some((query: QueryLifecycle): boolean => query.isPending);
+  const firstError: unknown = relevantQueries.find((query: QueryLifecycle): boolean => Boolean(query.error))?.error;
 
-  const upcomingShifts = useMemo(
-    () =>
+  const upcomingShifts: StaffingShift[] = useMemo<StaffingShift[]>(
+    (): StaffingShift[] =>
       [...(shiftsQuery.data ?? [])]
-        .filter((shift) => shift.status !== "cancelled" && new Date(shift.ends_at).getTime() >= Date.now())
-        .sort((left, right) => new Date(left.starts_at).getTime() - new Date(right.starts_at).getTime())
+        .filter(
+          (shift: StaffingShift): boolean =>
+            shift.status !== "cancelled" && new Date(shift.ends_at).getTime() >= Date.now(),
+        )
+        .sort(
+          (left: StaffingShift, right: StaffingShift): number =>
+            new Date(left.starts_at).getTime() - new Date(right.starts_at).getTime(),
+        )
         .slice(0, 6),
     [shiftsQuery.data],
   );
-  const customerNames = useMemo(
-    () => new Map((customersQuery.data ?? []).map((customer) => [customer.id, customer.name])),
+  const customerNames: Map<string, string> = useMemo<Map<string, string>>(
+    (): Map<string, string> =>
+      new Map(
+        (customersQuery.data ?? []).map((customer: Customer): [string, string] => [customer.id, customer.name]),
+      ),
     [customersQuery.data],
   );
 
@@ -154,7 +174,9 @@ export function OperationsOverviewPage() {
         </p>
         <button
           className="action-secondary mt-5"
-          onClick={() => void Promise.all(relevantQueries.map((query) => query.refetch()))}
+          onClick={(): void =>
+            void Promise.all(relevantQueries.map((query: QueryLifecycle): Promise<unknown> => query.refetch()))
+          }
           type="button"
         >
           <RefreshCw className="size-4" />
@@ -165,40 +187,45 @@ export function OperationsOverviewPage() {
   }
 
   if (!canReadShifts) {
-    const assignments = ownAssignmentsQuery.data ?? [];
-    const active = assignments.filter((assignment) => assignment.is_working);
-    const scheduled = assignments.filter(
-      (assignment) => assignment.status === "assigned" && new Date(assignment.ends_at).getTime() >= Date.now(),
+    const work: UrgentWorkItem[] = ownUrgentWorkQuery.data ?? [];
+    const active: UrgentWorkItem[] = work.filter((item: UrgentWorkItem): boolean => item.status === "active");
+    const completed: UrgentWorkItem[] = work.filter(
+      (item: UrgentWorkItem): boolean => item.status === "completed" || item.status === "reconciled",
     );
-    const workedSeconds = assignments.reduce((sum, assignment) => sum + assignment.observed_worked_seconds, 0);
+    const workedSeconds: number = work.reduce(
+      (sum: number, item: UrgentWorkItem): number => sum + (item.worked_seconds ?? 0),
+      0,
+    );
 
     return (
       <div className="space-y-6">
         <section className="overflow-hidden rounded-2xl bg-gradient-to-br from-blue-700 via-blue-600 to-cyan-500 p-6 text-white shadow-xl shadow-blue-900/10 sm:p-8">
           <p className="text-sm font-bold text-blue-100">Chào {auth.profile?.username},</p>
           <h2 className="mt-2 max-w-2xl text-2xl font-black tracking-tight sm:text-3xl">
-            Sẵn sàng cho ca làm tiếp theo của bạn?
+            Ghi nhận công việc ngay khi đến cơ sở
           </h2>
           <p className="mt-3 max-w-xl text-sm leading-6 text-blue-50">
-            Mở danh sách ca để xem nơi làm việc và ghi nhận bắt đầu hoặc kết thúc ngay tại hiện trường.
+            Không cần chờ quản lý tạo ca. Chọn đúng cơ sở, chọn bạn và đồng nghiệp, rồi bắt đầu bằng thời gian máy chủ.
           </p>
-          <Link className="mt-6 inline-flex min-h-11 items-center rounded-xl bg-white px-5 text-sm font-bold text-blue-700 shadow-lg" to="/operations/my-shifts">
-            Mở ca làm của tôi
+          <Link className="mt-6 inline-flex min-h-11 items-center rounded-xl bg-white px-5 text-sm font-bold text-blue-700 shadow-lg" to="/operations/work">
+            Ghi nhận công việc
           </Link>
         </section>
 
         <div className="grid gap-4 sm:grid-cols-3">
-          <MetricCard icon={Clock3} label="Đang làm việc" value={active.length} note="Ca đang mở phiên làm" tone="emerald" />
-          <MetricCard icon={CalendarCheck2} label="Ca sắp tới" value={scheduled.length} note="Ca còn hiệu lực" tone="blue" />
+          <MetricCard icon={Clock3} label="Đang làm việc" value={active.length} note="Phiên công việc đang mở" tone="emerald" />
+          <MetricCard icon={UsersRound} label="Đã hoàn thành" value={completed.length} note="Chờ hoặc đã đối soát" tone="blue" />
           <MetricCard icon={BriefcaseBusiness} label="Đã ghi nhận" value={formatDuration(workedSeconds)} note="Tổng thời gian quan sát" tone="violet" />
         </div>
       </div>
     );
   }
 
-  const shifts = shiftsQuery.data ?? [];
-  const openCount = shifts.filter((shift) => shift.status === "open").length;
-  const inProgressCount = shifts.filter((shift) => shift.status === "in_progress").length;
+  const shifts: StaffingShift[] = shiftsQuery.data ?? [];
+  const openCount: number = shifts.filter((shift: StaffingShift): boolean => shift.status === "open").length;
+  const inProgressCount: number = shifts.filter(
+    (shift: StaffingShift): boolean => shift.status === "in_progress",
+  ).length;
 
   return (
     <div className="space-y-6">
@@ -217,11 +244,17 @@ export function OperationsOverviewPage() {
           </div>
           <button
             className="action-secondary min-h-9 px-3"
-            disabled={relevantQueries.some((query) => query.isFetching)}
-            onClick={() => void Promise.all(relevantQueries.map((query) => query.refetch()))}
+            disabled={relevantQueries.some((query: QueryLifecycle): boolean => query.isFetching)}
+            onClick={(): void =>
+              void Promise.all(relevantQueries.map((query: QueryLifecycle): Promise<unknown> => query.refetch()))
+            }
             type="button"
           >
-            <RefreshCw className={`size-4 ${relevantQueries.some((query) => query.isFetching) ? "animate-spin" : ""}`} />
+            <RefreshCw
+              className={`size-4 ${
+                relevantQueries.some((query: QueryLifecycle): boolean => query.isFetching) ? "animate-spin" : ""
+              }`}
+            />
             Làm mới
           </button>
         </div>
@@ -234,7 +267,7 @@ export function OperationsOverviewPage() {
           </div>
         ) : (
           <div className="divide-y divide-slate-100">
-            {upcomingShifts.map((shift) => (
+            {upcomingShifts.map((shift: StaffingShift): React.JSX.Element => (
               <article className="grid gap-3 px-5 py-4 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center sm:px-6" key={shift.id}>
                 <div className="min-w-0">
                   <p className="truncate font-bold text-slate-900">

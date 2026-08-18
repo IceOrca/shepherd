@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use infra_kernel::debug::*;
+use tracing::{error, warn, info, debug, trace};
 use crate::features::organization::core::{BranchSummary, FacilitySummary, OrganizationError, OrganizationRepo};
 use uuid::Uuid;
 
@@ -21,10 +21,9 @@ impl OrganizationProvider {
 impl OrganizationRepo for OrganizationProvider {
     async fn list_active_branches(&self, tenant_id: Uuid) -> Result<Vec<BranchSummary>, OrganizationError> {
         let mut transaction = self.db.begin_tenant(tenant_id).await.map_err(|error| {
-            log_error!(
+            error!(
                 "Branch list tenant transaction failed: tenant_id={} error={}",
-                tenant_id,
-                error
+                tenant_id, error
             );
             OrganizationError::BackendUnavailable
         })?;
@@ -42,18 +41,17 @@ impl OrganizationRepo for OrganizationProvider {
         .fetch_all(transaction.connection())
         .await
         .map_err(|error| {
-            log_error!("Branch list failed: tenant_id={} error={}", tenant_id, error);
+            error!("Branch list failed: tenant_id={} error={}", tenant_id, error);
             OrganizationError::BackendUnavailable
         })?;
         transaction.commit().await.map_err(|error| {
-            log_error!(
+            error!(
                 "Branch list transaction commit failed: tenant_id={} error={}",
-                tenant_id,
-                error
+                tenant_id, error
             );
             OrganizationError::BackendUnavailable
         })?;
-        log_info!(
+        info!(
             "Active tenant branches loaded: tenant_id={} branches={}",
             tenant_id,
             branches.len()
@@ -63,10 +61,9 @@ impl OrganizationRepo for OrganizationProvider {
 
     async fn list_active_facilities(&self, tenant_id: Uuid) -> Result<Vec<FacilitySummary>, OrganizationError> {
         let mut transaction = self.db.begin_tenant(tenant_id).await.map_err(|error| {
-            log_error!(
+            error!(
                 "Facility list tenant transaction failed: tenant_id={} error={}",
-                tenant_id,
-                error
+                tenant_id, error
             );
             OrganizationError::BackendUnavailable
         })?;
@@ -88,18 +85,17 @@ impl OrganizationRepo for OrganizationProvider {
         .fetch_all(transaction.connection())
         .await
         .map_err(|error| {
-            log_error!("Facility list failed: tenant_id={} error={}", tenant_id, error);
+            error!("Facility list failed: tenant_id={} error={}", tenant_id, error);
             OrganizationError::BackendUnavailable
         })?;
         transaction.commit().await.map_err(|error| {
-            log_error!(
+            error!(
                 "Facility list transaction commit failed: tenant_id={} error={}",
-                tenant_id,
-                error
+                tenant_id, error
             );
             OrganizationError::BackendUnavailable
         })?;
-        log_info!(
+        info!(
             "Active tenant facilities loaded: tenant_id={} facilities={}",
             tenant_id,
             facilities.len()

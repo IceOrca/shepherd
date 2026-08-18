@@ -10,5 +10,6 @@ pub fn routes() -> Router<Arc<AppContext>> {
     Router::new()
         .merge(features::organization::host::routes())
         .merge(staffing::host::routes())
+        .merge(staffing::urgent_work::host::routes())
         .merge(staffing::work_session::host::routes())
 }

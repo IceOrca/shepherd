@@ -41,7 +41,7 @@ impl JwtHandle {
         let public_pem: Vec<u8> = decode::read_public_key(public_pem_path);
         let decoding_key: DecodingKey = decode::parse_public_key(public_pem_path, &public_pem);
 
-        infra_kernel::debug::log_notice!("JWT public key loaded successfully");
+        infra_kernel::debug::info!("JWT public key loaded successfully");
         Self { decoding_key }
     }
 
@@ -50,7 +50,7 @@ impl JwtHandle {
         let decoding_key: DecodingKey = decode::parse_public_key(public_pem_path, &public_pem);
         let encoding_key: EncodingKey = encode::load_private_key(private_pem_path);
 
-        infra_kernel::debug::log_notice!("JWT signing and validation keys loaded successfully");
+        infra_kernel::debug::info!("JWT signing and validation keys loaded successfully");
         Self {
             decoding_key,
             encoding_key,

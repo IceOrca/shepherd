@@ -10,9 +10,38 @@ export class ApiError extends Error {
   }
 }
 
+interface ClientApiLogContext {
+  path: string;
+  method: string;
+  hasAccessToken: boolean;
+  hasBody: boolean;
+  status?: number;
+  refreshed?: boolean;
+}
+
 let authenticationLostHandler: (() => void) | null = null;
 let authenticationRefreshHandler: (() => Promise<string | null>) | null = null;
 let accessToken: string | null = null;
+
+function requestMethod(init: RequestInit): string {
+  return init.method ?? "GET";
+}
+
+function logClientApiRequest(context: ClientApiLogContext): void {
+  console.debug("Shepherd API request dispatched", context);
+}
+
+function logClientApiResponse(context: ClientApiLogContext): void {
+  if (context.status !== undefined && context.status >= 500) {
+    console.error("Shepherd API request failed", context);
+    return;
+  }
+  if (context.status !== undefined && context.status >= 400) {
+    console.warn("Shepherd API request rejected", context);
+    return;
+  }
+  console.info("Shepherd API request completed", context);
+}
 
 export function setAuthenticationLostHandler(handler: (() => void) | null): void {
   authenticationLostHandler = handler;
@@ -29,7 +58,7 @@ export function setApiAccessToken(token: string | null): void {
 }
 
 async function readPayload(response: Response): Promise<unknown> {
-  const text = await response.text();
+  const text: string = await response.text();
   if (!text) {
     return null;
   }
@@ -41,15 +70,20 @@ async function readPayload(response: Response): Promise<unknown> {
 }
 
 async function sendRequest(path: string, init: RequestInit): Promise<Response> {
-  const headers = new Headers(init.headers);
+  const headers: Headers = new Headers(init.headers);
+  const hasBody: boolean = typeof init.body === "string";
+  const hasAccessToken: boolean = accessToken !== null;
+  const method: string = requestMethod(init);
+
   headers.set("Accept", "application/json");
-  if (typeof init.body === "string" && !headers.has("Content-Type")) {
+  if (hasBody && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
   if (accessToken) {
     headers.set("Authorization", `Bearer ${accessToken}`);
   }
 
+  logClientApiRequest({ path, method, hasAccessToken, hasBody });
   return fetchWithTimeout(path, {
     ...init,
     headers,
@@ -57,15 +91,34 @@ async function sendRequest(path: string, init: RequestInit): Promise<Response> {
 }
 
 export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
-  let response = await sendRequest(path, init);
+  const method: string = requestMethod(init);
+  const hasBody: boolean = typeof init.body === "string";
+  const hadAccessToken: boolean = accessToken !== null;
+  let response: Response = await sendRequest(path, init);
+  let refreshed: boolean = false;
+
   if (response.status === 401 && authenticationRefreshHandler) {
-    const refreshedToken = await authenticationRefreshHandler();
+    console.info("Shepherd API authentication refresh requested", { path, method });
+    const refreshedToken: string | null = await authenticationRefreshHandler();
     if (refreshedToken) {
+      refreshed = true;
       response = await sendRequest(path, init);
+    } else {
+      console.warn("Shepherd API authentication refresh did not return a usable token", { path, method });
     }
   }
 
-  const payload = await readPayload(response);
+  const payload: unknown = await readPayload(response);
+  const logContext: ClientApiLogContext = {
+    path,
+    method,
+    hasAccessToken: hadAccessToken,
+    hasBody,
+    status: response.status,
+    refreshed,
+  };
+  logClientApiResponse(logContext);
+
   if (!response.ok) {
     if (response.status === 401) {
       authenticationLostHandler?.();
@@ -79,7 +132,7 @@ function apiErrorMessage(payload: unknown): string | null {
   if (!payload || typeof payload !== "object") {
     return null;
   }
-  const message = (payload as { message?: unknown }).message;
+  const message: unknown = (payload as { message?: unknown }).message;
   return typeof message === "string" && message.length <= 300 ? message : null;
 }
 
@@ -91,7 +144,7 @@ export function friendlyApiError(error: unknown, fallback: string): string {
     return "Máy chủ phản hồi quá lâu. Vui lòng thử lại.";
   }
   if (error instanceof ApiError) {
-    const serverMessage = apiErrorMessage(error.payload);
+    const serverMessage: string | null = apiErrorMessage(error.payload);
     switch (error.status) {
       case 400:
         return serverMessage ?? "Dữ liệu gửi lên chưa hợp lệ.";

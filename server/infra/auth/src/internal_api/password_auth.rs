@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use infra_kernel::{
-    debug::{log_error, log_notice},
+    debug::{error, notice},
     security::{hash_passphrase, verify_passphrase},
 };
 use uuid::Uuid;
@@ -119,7 +119,7 @@ impl AuthMngtEntity {
     pub async fn new_arc(acct_auth_ops: DynAccountRepo) -> Arc<Self> {
         let dummy_passphrase_key: String =
             hash_passphrase("infra-auth-dummy-credential").unwrap_or_else(|error: String| {
-                log_error!("Failed to initialize dummy authentication passphrase key: {}", error);
+                error!("Failed to initialize dummy authentication passphrase key: {}", error);
                 panic!("Failed to initialize dummy authentication passphrase key");
             });
 
@@ -138,11 +138,9 @@ impl AuthMngtEntity {
             .find_by_username(tenant_id, username)
             .await
             .map_err(|error: String| {
-                log_error!(
+                error!(
                     "Error fetching current account state for tenant={} username='{}': {}",
-                    tenant_id,
-                    username,
-                    error
+                    tenant_id, username, error
                 );
                 error
             })
@@ -161,7 +159,7 @@ impl AuthMngtEntity {
                 return Err(AuthenticateUserError::InvalidCredentials(None));
             }
             Err(error) => {
-                log_error!("Error resolving active tenant slug='{}': {}", tenant, error);
+                error!("Error resolving active tenant slug='{}': {}", tenant, error);
                 return Err(AuthenticateUserError::BackendUnavailable);
             }
         };
@@ -195,11 +193,9 @@ impl AuthMngtEntity {
             .mark_authenticated(tenant_id, account.id)
             .await
             .map_err(|error: String| {
-                log_error!(
+                error!(
                     "Failed to persist successful-login audit: tenant={} account={} error={}",
-                    tenant_id,
-                    account.id,
-                    error
+                    tenant_id, account.id, error
                 );
                 AuthenticateUserError::BackendUnavailable
             })?;
@@ -225,7 +221,7 @@ impl AuthMngtEntity {
         }
 
         let passphrase_key: String = hash_passphrase(passphrase_plain).map_err(|error: String| {
-            log_error!("Failed to hash passphrase for '{}': {}", username, error);
+            error!("Failed to hash passphrase for '{}': {}", username, error);
             CreateAccountError::BackendUnavailable
         })?;
         let new_account = UserAccount {
@@ -247,11 +243,9 @@ impl AuthMngtEntity {
                 StoreAccountError::BackendUnavailable => CreateAccountError::BackendUnavailable,
             })?;
 
-        log_notice!(
+        info!(
             "New account '{}' registered in tenant={} by account={:?}",
-            username,
-            tenant_id,
-            audit_account_id
+            username, tenant_id, audit_account_id
         );
         Ok(new_account)
     }
