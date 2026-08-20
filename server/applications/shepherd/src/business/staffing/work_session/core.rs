@@ -182,7 +182,7 @@ fn log_staffing_work_operation<T>(
     account_id: Uuid,
     assignment_id: Option<Uuid>,
     result: &Result<T, StaffingError>,
-) -> () {
+) {
     match result {
         Ok(_) => info!(
             operation,

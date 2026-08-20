@@ -607,12 +607,15 @@ impl StaffingRepo for StaffingProvider {
         tenant_id: Uuid,
         shift_id: Uuid,
     ) -> Result<Vec<ShiftAssignment>, StaffingError> {
-        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
-        let rows: Vec<AssignmentRow> = list_assignments(&mut transaction, tenant_id, shift_id).await?;
-        transaction
-            .commit()
+        let rows: Vec<AssignmentRow> = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
+                list_assignments(connection, tenant_id, shift_id).await
+            })
             .await
-            .map_err(|error| database_failure("commit staffing assignment list", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| {
+                tenant_database_failure("list staffing shift assignments", tenant_id, error)
+            })?;
         rows.into_iter().map(ShiftAssignment::try_from).collect()
     }
 
@@ -621,24 +624,21 @@ impl StaffingRepo for StaffingProvider {
         tenant_id: Uuid,
         shift_id: Uuid,
     ) -> Result<Vec<StaffingCandidate>, StaffingError> {
-        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
-        let shift_exists: bool = sqlx::query_scalar!(
-            r#"SELECT EXISTS (
-                SELECT 1 FROM business_staffing_shifts WHERE tenant_id = $1 AND id = $2
-            ) AS "exists!""#,
-            tenant_id,
-            shift_id,
-        )
-        .fetch_one(transaction.connection())
-        .await
-        .map_err(|error| database_failure("find staffing shift candidates", tenant_id, error))?;
-        if !shift_exists {
-            return Err(StaffingError::NotFound);
-        }
-
-        let rows: Vec<CandidateRow> = sqlx::query_as!(
-            CandidateRow,
-            r#"
+        let result: (bool, Vec<CandidateRow>) = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
+                let shift_exists: bool = sqlx::query_scalar!(
+                    r#"SELECT EXISTS (
+                        SELECT 1 FROM business_staffing_shifts WHERE tenant_id = $1 AND id = $2
+                    ) AS "exists!""#,
+                    tenant_id,
+                    shift_id,
+                )
+                .fetch_one(&mut *connection)
+                .await?;
+                let rows: Vec<CandidateRow> = sqlx::query_as!(
+                    CandidateRow,
+                    r#"
             WITH target AS (
                 SELECT shift.id, shift.job_id, shift.starts_at, shift.ends_at,
                        (shift.starts_at AT TIME ZONE facility.time_zone)::DATE AS work_date
@@ -699,16 +699,21 @@ impl StaffingRepo for StaffingProvider {
             WHERE employee.tenant_id = $1 AND employee.status = 'active'
             ORDER BY "suitable!" DESC, "available!" DESC, lower(employee.display_name), employee.employee_code
             "#,
-            tenant_id,
-            shift_id,
-        )
-        .fetch_all(transaction.connection())
-        .await
-        .map_err(|error| database_failure("list staffing shift candidates", tenant_id, error))?;
-        transaction
-            .commit()
+                    tenant_id,
+                    shift_id,
+                )
+                .fetch_all(connection)
+                .await?;
+                Ok((shift_exists, rows))
+            })
             .await
-            .map_err(|error| database_failure("commit staffing shift candidates", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| {
+                tenant_database_failure("list staffing shift candidates", tenant_id, error)
+            })?;
+        let (shift_exists, rows): (bool, Vec<CandidateRow>) = result;
+        if !shift_exists {
+            return Err(StaffingError::NotFound);
+        }
         Ok(rows.into_iter().map(StaffingCandidate::from).collect())
     }
 
@@ -1072,10 +1077,12 @@ impl StaffingRepo for StaffingProvider {
     }
 
     async fn list_reconciliations(&self, tenant_id: Uuid) -> Result<Vec<StaffingReconciliation>, StaffingError> {
-        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
-        let rows: Vec<ReconciliationRow> = sqlx::query_as!(
-            ReconciliationRow,
-            r#"
+        let rows: Vec<ReconciliationRow> = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
+                sqlx::query_as!(
+                    ReconciliationRow,
+                    r#"
             SELECT assignment.id AS assignment_id, assignment.shift_id, assignment.employee_id,
                    employee.employee_code, employee.display_name AS employee_name,
                    customer.name AS customer_name, facility.name AS customer_facility_name,
@@ -1117,15 +1124,13 @@ impl StaffingRepo for StaffingProvider {
               AND assignment.urgent_work_report_id IS NULL
             ORDER BY shift.starts_at DESC, employee.display_name, assignment.id
             "#,
-            tenant_id,
-        )
-        .fetch_all(transaction.connection())
-        .await
-        .map_err(|error| database_failure("list staffing reconciliations", tenant_id, error))?;
-        transaction
-            .commit()
+                    tenant_id,
+                )
+                .fetch_all(connection)
+                .await
+            })
             .await
-            .map_err(|error| database_failure("commit staffing reconciliation list", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_database_failure("list staffing reconciliations", tenant_id, error))?;
 
         rows.into_iter()
             .map(|row| {
@@ -1199,54 +1204,58 @@ impl StaffingRepo for StaffingProvider {
         input: &CustomerWorkRecordInput,
         audit_account_id: Uuid,
     ) -> Result<CustomerWorkRecord, StaffingError> {
-        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
-        let row: CustomerWorkRecordRow = sqlx::query_as!(
-            CustomerWorkRecordRow,
-            r#"
-            INSERT INTO business_customer_work_records (
-                id, tenant_id, assignment_id, confirmed_started_at, confirmed_ended_at,
-                customer_reference, notes, recorded_by_account_id
-            )
-            SELECT $1, $2, assignment.id, $4, $5, $6, $7, $8
-            FROM business_shift_assignments AS assignment
-            WHERE assignment.tenant_id = $2 AND assignment.id = $3 AND assignment.status = 'assigned'
-            ON CONFLICT (tenant_id, assignment_id) DO UPDATE
-            SET confirmed_started_at = EXCLUDED.confirmed_started_at,
-                confirmed_ended_at = EXCLUDED.confirmed_ended_at,
-                customer_reference = EXCLUDED.customer_reference,
-                notes = EXCLUDED.notes,
-                recorded_by_account_id = EXCLUDED.recorded_by_account_id,
-                updated_at = CURRENT_TIMESTAMP
-            RETURNING id, assignment_id, confirmed_started_at, confirmed_ended_at,
-                      confirmed_worked_seconds AS "confirmed_worked_seconds!",
-                      customer_reference, notes, updated_at
-            "#,
-            record_id,
-            tenant_id,
-            assignment_id,
-            input.confirmed_started_at,
-            input.confirmed_ended_at,
-            input.customer_reference,
-            input.notes,
-            audit_account_id,
-        )
-        .fetch_optional(transaction.connection())
-        .await
-        .map_err(|error| mutation_failure("upsert customer staffing work record", tenant_id, error))?
-        .ok_or(StaffingError::Conflict)?;
-        transaction
-            .commit()
+        let row: Option<CustomerWorkRecordRow> = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
+                sqlx::query_as!(
+                    CustomerWorkRecordRow,
+                    r#"
+                    INSERT INTO business_customer_work_records (
+                        id, tenant_id, assignment_id, confirmed_started_at, confirmed_ended_at,
+                        customer_reference, notes, recorded_by_account_id
+                    )
+                    SELECT $1, $2, assignment.id, $4, $5, $6, $7, $8
+                    FROM business_shift_assignments AS assignment
+                    WHERE assignment.tenant_id = $2
+                      AND assignment.id = $3
+                      AND assignment.status = 'assigned'
+                    ON CONFLICT (tenant_id, assignment_id) DO UPDATE
+                    SET confirmed_started_at = EXCLUDED.confirmed_started_at,
+                        confirmed_ended_at = EXCLUDED.confirmed_ended_at,
+                        customer_reference = EXCLUDED.customer_reference,
+                        notes = EXCLUDED.notes,
+                        recorded_by_account_id = EXCLUDED.recorded_by_account_id,
+                        updated_at = CURRENT_TIMESTAMP
+                    RETURNING id, assignment_id, confirmed_started_at, confirmed_ended_at,
+                              confirmed_worked_seconds AS "confirmed_worked_seconds!",
+                              customer_reference, notes, updated_at
+                    "#,
+                    record_id,
+                    tenant_id,
+                    assignment_id,
+                    input.confirmed_started_at,
+                    input.confirmed_ended_at,
+                    input.customer_reference,
+                    input.notes,
+                    audit_account_id,
+                )
+                .fetch_optional(connection)
+                .await
+            })
             .await
-            .map_err(|error| database_failure("commit customer staffing work record", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| {
+                tenant_mutation_failure("upsert customer staffing work record", tenant_id, error)
+            })?;
+        let row: CustomerWorkRecordRow = row.ok_or(StaffingError::Conflict)?;
         Ok(row.into())
     }
 }
 
 async fn list_assignments(
-    transaction: &mut TenantTransaction,
+    connection: &mut sqlx::PgConnection,
     tenant_id: Uuid,
     shift_id: Uuid,
-) -> Result<Vec<AssignmentRow>, StaffingError> {
+) -> Result<Vec<AssignmentRow>, sqlx::Error> {
     sqlx::query_as!(
         AssignmentRow,
         r#"
@@ -1266,9 +1275,8 @@ async fn list_assignments(
         tenant_id,
         shift_id,
     )
-    .fetch_all(transaction.connection())
+    .fetch_all(connection)
     .await
-    .map_err(|error| database_failure("list staffing assignments", tenant_id, error))
 }
 
 fn database_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> StaffingError {

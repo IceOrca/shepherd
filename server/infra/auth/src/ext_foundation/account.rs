@@ -9,7 +9,8 @@ use axum::{
     routing::get,
 };
 use infra_kernel::request::PrincipalRateLimitKey;
-use infra_postgres::{DatabaseAdapter, TenantDbErr, TenantTransaction};
+use infra_postgres::{DatabaseAdapter, TenantDbErr};
+use sqlx::PgConnection;
 use serde::Serialize;
 use tracing::{debug, error, info, trace, warn};
 use ts_rs::TS;
@@ -188,49 +189,75 @@ async fn load_account(
         "External identity mapped to application account"
     );
 
-    let mut transaction: TenantTransaction =
-        db.begin_tenant(identity.tenant_id)
-            .await
-            .map_err(|database_error: TenantDbErr| {
-                error!(
-                    tenant_id = %identity.tenant_id,
-                    account_id = %identity.account_id,
-                    reason = %database_error,
-                    "Application account authorization transaction could not be opened"
-                );
-                StatusCode::SERVICE_UNAVAILABLE
-            })?;
-    trace!(
-        operation = "load_application_account",
-        tenant_id = %identity.tenant_id,
-        account_id = %identity.account_id,
-        "Opened tenant-scoped transaction for application account resolution"
-    );
-    let account: UserAccount = sqlx::query_as!(
-        UserAccount,
-        r#"
-        SELECT id, tenant_id, username, status, primary_role_code
-        FROM accounts
-        WHERE tenant_id = $1 AND id = $2
-        "#,
-        identity.tenant_id,
-        identity.account_id,
-    )
-    .fetch_optional(transaction.connection())
-    .await
-    .map_err(|database_error: sqlx::Error| {
+    let tenant_id: Uuid = identity.tenant_id;
+    let account_id: Uuid = identity.account_id;
+    let authorization_rows: (Option<UserAccount>, Vec<AccountRole>, Vec<AccountPermission>) = db
+        .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            let account: Option<UserAccount> = sqlx::query_as!(
+                UserAccount,
+                r#"
+                SELECT id, tenant_id, username, status, primary_role_code
+                FROM accounts
+                WHERE tenant_id = $1 AND id = $2
+                "#,
+                tenant_id,
+                account_id,
+            )
+            .fetch_optional(&mut *connection)
+            .await?;
+            let role_rows: Vec<AccountRole> = sqlx::query_as!(
+                AccountRole,
+                r#"
+                SELECT role_code
+                FROM account_roles
+                WHERE tenant_id = $1 AND account_id = $2
+                ORDER BY role_code
+                "#,
+                tenant_id,
+                account_id,
+            )
+            .fetch_all(&mut *connection)
+            .await?;
+            let permission_rows: Vec<AccountPermission> = sqlx::query_as!(
+                AccountPermission,
+                r#"
+                SELECT permission_code AS "permission_code!", effect AS "effect!"
+                FROM (
+                    SELECT role_permission.permission_code, 'allow'::TEXT AS effect, 0 AS precedence
+                    FROM account_roles AS account_role
+                    INNER JOIN role_permissions AS role_permission ON role_permission.role_code = account_role.role_code
+                    WHERE account_role.tenant_id = $1 AND account_role.account_id = $2
+                    UNION ALL
+                    SELECT permission_code AS "permission_code!", effect AS "effect!", 1 AS precedence
+                    FROM account_permissions
+                    WHERE tenant_id = $1 AND account_id = $2
+                      AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+                ) AS grants
+                ORDER BY permission_code, precedence
+                "#,
+                tenant_id,
+                account_id,
+            )
+            .fetch_all(connection)
+            .await?;
+            Ok((account, role_rows, permission_rows))
+        })
+        .await
+        .map_err(|database_error: TenantDbErr| {
+            error!(
+                tenant_id = %tenant_id,
+                account_id = %account_id,
+                reason = %database_error,
+                "Application account authorization tenant operation failed"
+            );
+            StatusCode::SERVICE_UNAVAILABLE
+        })?;
+    let (account, role_rows, permission_rows): (Option<UserAccount>, Vec<AccountRole>, Vec<AccountPermission>) =
+        authorization_rows;
+    let account: UserAccount = account.ok_or_else(|| {
         error!(
-            tenant_id = %identity.tenant_id,
-            account_id = %identity.account_id,
-            reason = %database_error,
-            "Application account lookup failed"
-        );
-        StatusCode::SERVICE_UNAVAILABLE
-    })?
-    .ok_or_else(|| {
-        error!(
-            tenant_id = %identity.tenant_id,
-            account_id = %identity.account_id,
+            tenant_id = %tenant_id,
+            account_id = %account_id,
             "External identity references a missing application account"
         );
         StatusCode::SERVICE_UNAVAILABLE
@@ -253,59 +280,6 @@ async fn load_account(
         "Application account is active"
     );
 
-    let role_rows: Vec<AccountRole> = sqlx::query_as!(
-        AccountRole,
-        r#"
-        SELECT role_code
-        FROM account_roles
-        WHERE tenant_id = $1 AND account_id = $2
-        ORDER BY role_code
-        "#,
-        account.tenant_id,
-        account.id,
-    )
-    .fetch_all(transaction.connection())
-    .await
-    .map_err(|database_error: sqlx::Error| {
-        error!(
-            tenant_id = %account.tenant_id,
-            account_id = %account.id,
-            reason = %database_error,
-            "Application account role lookup failed"
-        );
-        StatusCode::SERVICE_UNAVAILABLE
-    })?;
-    let permission_rows: Vec<AccountPermission> = sqlx::query_as!(
-        AccountPermission,
-        r#"
-        SELECT permission_code AS "permission_code!", effect AS "effect!"
-        FROM (
-            SELECT role_permission.permission_code, 'allow'::TEXT AS effect, 0 AS precedence
-            FROM account_roles AS account_role
-            INNER JOIN role_permissions AS role_permission ON role_permission.role_code = account_role.role_code
-            WHERE account_role.tenant_id = $1 AND account_role.account_id = $2
-            UNION ALL
-            SELECT permission_code AS "permission_code!", effect AS "effect!", 1 AS precedence
-            FROM account_permissions
-            WHERE tenant_id = $1 AND account_id = $2
-              AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
-        ) AS grants
-        ORDER BY permission_code, precedence
-        "#,
-        account.tenant_id,
-        account.id,
-    )
-    .fetch_all(transaction.connection())
-    .await
-    .map_err(|database_error: sqlx::Error| {
-        error!(
-            tenant_id = %account.tenant_id,
-            account_id = %account.id,
-            reason = %database_error,
-            "Application account permission lookup failed"
-        );
-        StatusCode::SERVICE_UNAVAILABLE
-    })?;
     debug!(
         operation = "load_application_account",
         tenant_id = %account.tenant_id,
@@ -314,22 +288,6 @@ async fn load_account(
         permission_grant_row_count = permission_rows.len(),
         "Loaded application role and permission grants"
     );
-    transaction.commit().await.map_err(|database_error: sqlx::Error| {
-        error!(
-            tenant_id = %account.tenant_id,
-            account_id = %account.id,
-            reason = %database_error,
-            "Application account authorization transaction commit failed"
-        );
-        StatusCode::SERVICE_UNAVAILABLE
-    })?;
-    trace!(
-        operation = "load_application_account",
-        tenant_id = %account.tenant_id,
-        account_id = %account.id,
-        "Committed application account authorization lookup"
-    );
-
     let roles: Vec<String> = role_rows.into_iter().map(|row: AccountRole| row.role_code).collect();
     let mut permission_set: BTreeSet<String> = BTreeSet::new();
     for row in permission_rows {

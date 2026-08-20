@@ -1,12 +1,13 @@
 use std::{str::FromStr, time::Duration};
 
 use sqlx::{
-    PgConnection, PgPool, Postgres, Transaction,
-    postgres::{PgConnectOptions, PgPoolOptions},
+    ConnectOptions, PgConnection, PgPool, Postgres, Transaction,
+    postgres::{PgConnectOptions, PgPoolOptions, PgQueryResult},
 };
 use thiserror::Error;
-use tracing::{debug, error, trace};
+use tracing::{error, warn, info, debug, trace};
 use uuid::Uuid;
+use tracing::log::LevelFilter;
 
 #[derive(Debug, Error)]
 pub enum TenantDbErr {
@@ -39,11 +40,18 @@ impl PostgresCli {
         let statement_timeout_ms: u64 = env_u64("DB_STATEMENT_TIMEOUT_MS", 15_000);
         let lock_timeout_ms: u64 = env_u64("DB_LOCK_TIMEOUT_MS", 3_000);
         let idle_in_transaction_timeout_ms: u64 = env_u64("DB_IDLE_IN_TRANSACTION_TIMEOUT_MS", 30_000);
-
+        let log_lvl: LevelFilter = std::env::var("DB_QUERY_LOG_LEVEL")
+            .ok()
+            .and_then(|v: String| v.parse().ok())
+            .unwrap_or(LevelFilter::Trace);
+        let warn_slow_time: Duration = Duration::from_secs(env_u64("DB_SLOW_QUERY_WARN_SECS", 2));
         // Shared tables have stable relation OIDs, so SQLx's prepared statement
         // cache can remain enabled. Tenant isolation is provided by row keys
         // and transaction-local RLS context instead of search_path switching.
         let connect_options: PgConnectOptions = PgConnectOptions::from_str(database_url)?;
+        let connect_options: PgConnectOptions = connect_options
+            .log_statements(log_lvl)
+            .log_slow_statements(LevelFilter::Warn, warn_slow_time);
         let connect = PgPoolOptions::new()
             .max_connections(max_connections)
             .acquire_timeout(acquire_timeout)
@@ -227,7 +235,7 @@ impl PostgresCli {
             return Ok(());
         }
 
-        let inserted = sqlx::query!(
+        let inserted: Result<PgQueryResult, sqlx::Error> = sqlx::query!(
             r#"
             INSERT INTO tenants (id, slug, display_name, status)
             VALUES ($1, $2, $3, 'active')
@@ -458,7 +466,7 @@ mod tests {
             .await?;
         assert_eq!(visible_account_count, 0, "RLS leaked another tenant's account");
 
-        let cross_tenant_insert: Result<sqlx::postgres::PgQueryResult, sqlx::Error> = sqlx::query!(
+        let cross_tenant_insert: Result<PgQueryResult, sqlx::Error> = sqlx::query!(
             r#"
             INSERT INTO accounts (id, tenant_id, username, primary_role_code)
             VALUES ($1, $2, 'rls-cross-tenant', 'employee')
@@ -573,7 +581,7 @@ mod tests {
         sqlx::query!("SAVEPOINT duplicate_open_attendance_session")
             .execute(transaction.connection())
             .await?;
-        let duplicate_open_session: Result<sqlx::postgres::PgQueryResult, sqlx::Error> = sqlx::query!(
+        let duplicate_open_session: Result<PgQueryResult, sqlx::Error> = sqlx::query!(
             r#"
             INSERT INTO hr_attendance_sessions (id, tenant_id, employee_id, facility_id, check_in_by_account_id)
             VALUES ($1, $2, $3, $4, $5)

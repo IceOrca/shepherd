@@ -9,7 +9,7 @@ use axum::{
     routing::{get, put},
 };
 use chrono::{DateTime, Utc};
-use infra_postgres::TenantTransaction;
+use infra_postgres::{TenantDbErr, TenantTransaction};
 use reqwest::Url;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::json;
@@ -689,39 +689,30 @@ async fn set_user_status(
 
 async fn load_mapped_accounts(context: &AuthService, tenant_id: Uuid) -> Result<Vec<MappedAccount>, AdminApiError> {
     trace!(tenant_id = %tenant_id, "Loading mapped Auth accounts");
-    let mut transaction: TenantTransaction = context.db.begin_tenant(tenant_id).await.map_err(|error| {
-        error!(
-            "Auth account list transaction failed: tenant_id={} error={}",
-            tenant_id, error
-        );
-        AdminApiError::Internal
-    })?;
-    let rows: Vec<MappedAccount> = sqlx::query_as!(
-        MappedAccount,
-        r#"
-        SELECT identity.subject, account.id AS account_id, account.username,
-               account.status AS account_status, account.primary_role_code AS primary_role
-        FROM account_identities AS identity
-        INNER JOIN accounts AS account
-            ON account.tenant_id = identity.tenant_id AND account.id = identity.account_id
-        WHERE identity.tenant_id = $1
-        ORDER BY lower(account.username), account.id
-        "#,
-        tenant_id,
-    )
-    .fetch_all(transaction.connection())
-    .await
-    .map_err(|error| {
-        error!("Auth account list failed: tenant_id={} error={}", tenant_id, error);
-        AdminApiError::Internal
-    })?;
-    transaction.commit().await.map_err(|error| {
-        error!(
-            "Auth account list commit failed: tenant_id={} error={}",
-            tenant_id, error
-        );
-        AdminApiError::Internal
-    })?;
+    let rows: Vec<MappedAccount> = context
+        .db
+        .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            sqlx::query_as!(
+                MappedAccount,
+                r#"
+                SELECT identity.subject, account.id AS account_id, account.username,
+                       account.status AS account_status, account.primary_role_code AS primary_role
+                FROM account_identities AS identity
+                INNER JOIN accounts AS account
+                    ON account.tenant_id = identity.tenant_id AND account.id = identity.account_id
+                WHERE identity.tenant_id = $1
+                ORDER BY lower(account.username), account.id
+                "#,
+                tenant_id,
+            )
+            .fetch_all(connection)
+            .await
+        })
+        .await
+        .map_err(|error: TenantDbErr| {
+            error!(tenant_id = %tenant_id, error = %error, "Auth account list tenant operation failed");
+            AdminApiError::Internal
+        })?;
 
     debug!(tenant_id = %tenant_id, account_count = rows.len(), "Mapped Auth accounts loaded");
     Ok(rows)
@@ -1084,37 +1075,26 @@ async fn ensure_username_available(
     username: &str,
 ) -> Result<(), AdminApiError> {
     trace!(tenant_id = %actor.tenant_id, "Checking Auth username availability");
-    let mut transaction: TenantTransaction = context.db.begin_tenant(actor.tenant_id).await.map_err(|error| {
-        error!(
-            "Auth username check transaction failed: tenant_id={} error={}",
-            actor.tenant_id, error
-        );
-        AdminApiError::Internal
-    })?;
-    let row: ExistsRow = sqlx::query_as!(
-        ExistsRow,
-        r#"SELECT EXISTS (
-            SELECT 1 FROM accounts WHERE tenant_id = $1 AND lower(username) = lower($2)
-        ) AS "exists!""#,
-        actor.tenant_id,
-        username,
-    )
-    .fetch_one(transaction.connection())
-    .await
-    .map_err(|error| {
-        error!(
-            "Auth username check failed: tenant_id={} error={}",
-            actor.tenant_id, error
-        );
-        AdminApiError::Internal
-    })?;
-    transaction.commit().await.map_err(|error| {
-        error!(
-            "Auth username check commit failed: tenant_id={} error={}",
-            actor.tenant_id, error
-        );
-        AdminApiError::Internal
-    })?;
+    let tenant_id: Uuid = actor.tenant_id;
+    let row: ExistsRow = context
+        .db
+        .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            sqlx::query_as!(
+                ExistsRow,
+                r#"SELECT EXISTS (
+                    SELECT 1 FROM accounts WHERE tenant_id = $1 AND lower(username) = lower($2)
+                ) AS "exists!""#,
+                tenant_id,
+                username,
+            )
+            .fetch_one(connection)
+            .await
+        })
+        .await
+        .map_err(|error: TenantDbErr| {
+            error!(tenant_id = %tenant_id, error = %error, "Auth username tenant operation failed");
+            AdminApiError::Internal
+        })?;
     if row.exists {
         warn!(tenant_id = %actor.tenant_id, "Auth username availability check rejected a duplicate");
         Err(AdminApiError::Conflict("The username is already in use.".to_owned()))
@@ -1130,47 +1110,37 @@ async fn ensure_role_grantable(
     role: &str,
 ) -> Result<(), AdminApiError> {
     trace!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, role, "Checking Auth role assignment grant");
-    let mut transaction: TenantTransaction = context.db.begin_tenant(actor.tenant_id).await.map_err(|error| {
-        error!(
-            "Auth role assignment check transaction failed: tenant_id={} actor_id={} error={}",
-            actor.tenant_id, actor.account_id, error
-        );
-        AdminApiError::Internal
-    })?;
-    let row: ExistsRow = sqlx::query_as!(
-        ExistsRow,
-        r#"SELECT EXISTS (
-            SELECT 1
-            FROM account_roles AS actor_role
-            INNER JOIN auth_role_assignment_grants AS role_grant
-                ON role_grant.grantor_role_code = actor_role.role_code
-            INNER JOIN roles AS target_role
-                ON target_role.code = role_grant.target_role_code
-               AND target_role.is_active
-            WHERE actor_role.tenant_id = $1
-              AND actor_role.account_id = $2
-              AND role_grant.target_role_code = $3
-        ) AS "exists!""#,
-        actor.tenant_id,
-        actor.account_id,
-        role,
-    )
-    .fetch_one(transaction.connection())
-    .await
-    .map_err(|error| {
-        error!(
-            "Auth role assignment check failed: tenant_id={} actor_id={} role={} error={}",
-            actor.tenant_id, actor.account_id, role, error
-        );
-        AdminApiError::Internal
-    })?;
-    transaction.commit().await.map_err(|error| {
-        error!(
-            "Auth role assignment check commit failed: tenant_id={} actor_id={} role={} error={}",
-            actor.tenant_id, actor.account_id, role, error
-        );
-        AdminApiError::Internal
-    })?;
+    let tenant_id: Uuid = actor.tenant_id;
+    let actor_account_id: Uuid = actor.account_id;
+    let row: ExistsRow = context
+        .db
+        .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            sqlx::query_as!(
+                ExistsRow,
+                r#"SELECT EXISTS (
+                    SELECT 1
+                    FROM account_roles AS actor_role
+                    INNER JOIN auth_role_assignment_grants AS role_grant
+                        ON role_grant.grantor_role_code = actor_role.role_code
+                    INNER JOIN roles AS target_role
+                        ON target_role.code = role_grant.target_role_code
+                       AND target_role.is_active
+                    WHERE actor_role.tenant_id = $1
+                      AND actor_role.account_id = $2
+                      AND role_grant.target_role_code = $3
+                ) AS "exists!""#,
+                tenant_id,
+                actor_account_id,
+                role,
+            )
+            .fetch_one(connection)
+            .await
+        })
+        .await
+        .map_err(|error: TenantDbErr| {
+            error!(tenant_id = %tenant_id, actor_id = %actor_account_id, role, error = %error, "Auth role assignment tenant operation failed");
+            AdminApiError::Internal
+        })?;
 
     if row.exists {
         debug!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, role, "Auth role assignment grant accepted");
@@ -1234,7 +1204,7 @@ async fn link_created_user(
     )
     .execute(transaction.connection())
     .await
-    .map_err(|error| account_create_error("assign primary role", actor, error))?;
+    .map_err(|error: sqlx::Error| account_create_error("assign primary role", actor, error))?;
     trace!(rows_affected = role_insert.rows_affected(), account_id = %account_id, "Primary Auth role assigned");
     let identity_insert: PgQueryResult = sqlx::query!(
         r#"
@@ -1344,46 +1314,36 @@ async fn update_account_status(
         status,
         "Updating application account status"
     );
-    let mut transaction: TenantTransaction = context.db.begin_tenant(actor.tenant_id).await.map_err(|error| {
-        error!(
-            "Auth account status transaction failed: tenant_id={} account_id={} error={}",
-            actor.tenant_id, account_id, error
-        );
-        AdminApiError::Internal
-    })?;
-    let result: PgQueryResult = sqlx::query!(
-        r#"
-        UPDATE accounts
-        SET status = $3, updated_at = CURRENT_TIMESTAMP, updated_by_account_id = $4
-        WHERE tenant_id = $1 AND id = $2
-        "#,
-        actor.tenant_id,
-        account_id,
-        status,
-        actor.account_id,
-    )
-    .execute(transaction.connection())
-    .await
-    .map_err(|error| {
-        error!(
-            "Auth account status update failed: tenant_id={} account_id={} error={}",
-            actor.tenant_id, account_id, error
-        );
-        AdminApiError::Internal
-    })?;
+    let tenant_id: Uuid = actor.tenant_id;
+    let actor_account_id: Uuid = actor.account_id;
+    let result: PgQueryResult = context
+        .db
+        .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            sqlx::query!(
+                r#"
+                UPDATE accounts
+                SET status = $3, updated_at = CURRENT_TIMESTAMP, updated_by_account_id = $4
+                WHERE tenant_id = $1 AND id = $2
+                "#,
+                tenant_id,
+                account_id,
+                status,
+                actor_account_id,
+            )
+            .execute(connection)
+            .await
+        })
+        .await
+        .map_err(|error: TenantDbErr| {
+            error!(tenant_id = %tenant_id, account_id = %account_id, error = %error, "Auth account status tenant operation failed");
+            AdminApiError::Internal
+        })?;
     if result.rows_affected() != 1 {
         warn!(tenant_id = %actor.tenant_id, account_id = %account_id, "Application account status target was not found");
         return Err(AdminApiError::NotFound(
             "The account to update was not found.".to_owned(),
         ));
     }
-    transaction.commit().await.map_err(|error| {
-        error!(
-            "Auth account status commit failed: tenant_id={} account_id={} error={}",
-            actor.tenant_id, account_id, error
-        );
-        AdminApiError::Internal
-    })?;
     info!(tenant_id = %actor.tenant_id, account_id = %account_id, status, "Application account status updated");
     Ok(())
 }

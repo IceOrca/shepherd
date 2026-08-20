@@ -729,7 +729,7 @@ fn log_staffing_operation<T>(
     audit_account_id: Option<Uuid>,
     resource_id: Option<Uuid>,
     result: &Result<T, StaffingError>,
-) -> () {
+) {
     match result {
         Ok(_) => info!(
             operation,

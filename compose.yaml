@@ -102,7 +102,7 @@ services:
       - server
 
   supabase-auth:
-    image: supabase/gotrue:v2.195.0
+    image: supabase/gotrue:v2.196.0
     container_name: shepherd-auth
     restart: unless-stopped
     env_file:

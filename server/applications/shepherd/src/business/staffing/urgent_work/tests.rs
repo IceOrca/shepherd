@@ -268,7 +268,7 @@ impl Fixture {
     }
 }
 
-fn init_tracing() -> () {
+fn init_tracing() {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
         let result: Result<(), Box<dyn Error + Send + Sync>> = tracing_subscriber::fmt()

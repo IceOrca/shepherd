@@ -502,7 +502,7 @@ fn log_result<T>(
     actor_account_id: Option<Uuid>,
     resource_id: Option<Uuid>,
     result: &Result<T, UrgentWorkError>,
-) -> () {
+) {
     match result {
         Ok(_) => {
             info!(operation, tenant_id = %tenant_id, actor_account_id = ?actor_account_id, resource_id = ?resource_id, "Urgent-work operation completed")

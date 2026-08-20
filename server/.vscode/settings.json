@@ -24,6 +24,8 @@
       "source.organizeImports": "never",
     },
   },
-  "rust-analyzer.cargo.targetDir": true,
-  "rust-analyzer.diagnostics.disabled": ["inactive-code"],
+  "rust-analyzer.cargo.targetDir": null,
+  "rust-analyzer.diagnostics.disabled": [
+    "inactive-code"
+  ],
 }

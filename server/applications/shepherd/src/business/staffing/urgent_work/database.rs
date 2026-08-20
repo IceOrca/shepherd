@@ -328,13 +328,13 @@ impl UrgentWorkRepo for UrgentWorkProvider {
         tenant_id: Uuid,
         actor_account_id: Uuid,
     ) -> Result<Vec<UrgentWorkItem>, UrgentWorkError> {
-        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
-        let rows: Vec<WorkItemRow> =
-            load_work_items(&mut transaction, tenant_id, Some(actor_account_id), false).await?;
-        transaction
-            .commit()
+        let rows: Vec<WorkItemRow> = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
+                load_work_items(connection, tenant_id, actor_account_id, false).await
+            })
             .await
-            .map_err(|error: sqlx::Error| tenant_failure("commit own urgent work list", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_runner_failure("list own urgent work", tenant_id, error))?;
         rows.into_iter().map(UrgentWorkItem::try_from).collect()
     }
 
@@ -343,12 +343,13 @@ impl UrgentWorkRepo for UrgentWorkProvider {
         tenant_id: Uuid,
         actor_account_id: Uuid,
     ) -> Result<Vec<UrgentWorkItem>, UrgentWorkError> {
-        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
-        let rows: Vec<WorkItemRow> = load_work_items(&mut transaction, tenant_id, Some(actor_account_id), true).await?;
-        transaction
-            .commit()
+        let rows: Vec<WorkItemRow> = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
+                load_work_items(connection, tenant_id, actor_account_id, true).await
+            })
             .await
-            .map_err(|error: sqlx::Error| tenant_failure("commit urgent team work list", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_runner_failure("list team urgent work", tenant_id, error))?;
         rows.into_iter().map(UrgentWorkItem::try_from).collect()
     }
 
@@ -703,12 +704,13 @@ impl UrgentWorkRepo for UrgentWorkProvider {
     }
 
     async fn list_reconciliations(&self, tenant_id: Uuid) -> Result<Vec<UrgentWorkReconciliation>, UrgentWorkError> {
-        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
-        let rows: Vec<ReconciliationRow> = load_reconciliation_rows(&mut transaction, tenant_id, None).await?;
-        transaction
-            .commit()
+        let rows: Vec<ReconciliationRow> = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
+                load_reconciliation_rows(connection, tenant_id, None).await
+            })
             .await
-            .map_err(|error: sqlx::Error| tenant_failure("commit urgent reconciliation list", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_runner_failure("list urgent reconciliations", tenant_id, error))?;
         rows.into_iter().map(reconciliation_from_row).collect()
     }
 
@@ -790,12 +792,11 @@ impl UrgentWorkRepo for UrgentWorkProvider {
 }
 
 async fn load_work_items(
-    transaction: &mut TenantTransaction,
+    connection: &mut sqlx::PgConnection,
     tenant_id: Uuid,
-    actor_account_id: Option<Uuid>,
+    actor_account_id: Uuid,
     team_scope: bool,
-) -> Result<Vec<WorkItemRow>, UrgentWorkError> {
-    let account_id: Uuid = actor_account_id.ok_or(UrgentWorkError::Forbidden)?;
+) -> Result<Vec<WorkItemRow>, sqlx::Error> {
     sqlx::query_as!(
         WorkItemRow,
         r#"
@@ -836,12 +837,11 @@ async fn load_work_items(
         ORDER BY (report.status = 'active') DESC, session.started_at DESC, employee.display_name, report.id
         "#,
         tenant_id,
-        account_id,
+        actor_account_id,
         team_scope,
     )
-    .fetch_all(transaction.connection())
+    .fetch_all(connection)
     .await
-    .map_err(|error: sqlx::Error| database_failure("load urgent work items", tenant_id, error))
 }
 
 async fn load_batch_items(
@@ -993,10 +993,10 @@ async fn load_customer_record(
 }
 
 async fn load_reconciliation_rows(
-    transaction: &mut TenantTransaction,
+    connection: &mut sqlx::PgConnection,
     tenant_id: Uuid,
     report_id: Option<Uuid>,
-) -> Result<Vec<ReconciliationRow>, UrgentWorkError> {
+) -> Result<Vec<ReconciliationRow>, sqlx::Error> {
     sqlx::query_as!(
         ReconciliationRow,
         r#"
@@ -1052,9 +1052,8 @@ async fn load_reconciliation_rows(
         tenant_id,
         report_id,
     )
-    .fetch_all(transaction.connection())
+    .fetch_all(connection)
     .await
-    .map_err(|error: sqlx::Error| database_failure("load urgent reconciliations", tenant_id, error))
 }
 
 fn reconciliation_from_row(row: ReconciliationRow) -> Result<UrgentWorkReconciliation, UrgentWorkError> {
@@ -1398,7 +1397,9 @@ async fn reconcile_report(
     }
     trace!(tenant_id = %tenant_id, report_id = %report_id, shift_id = %shift_id, assignment_id = %assignment_id, shift_rows = shift_insert.rows_affected(), assignment_rows = assignment_insert.rows_affected(), customer_rows = customer_copy.rows_affected(), "Urgent work converted to approved staffing snapshot");
     let mut rows: Vec<ReconciliationRow> =
-        load_reconciliation_rows(&mut transaction, tenant_id, Some(report_id)).await?;
+        load_reconciliation_rows(transaction.connection(), tenant_id, Some(report_id))
+            .await
+            .map_err(|error: sqlx::Error| database_failure("load reconciled urgent work", tenant_id, error))?;
     let row: ReconciliationRow = rows.pop().ok_or(UrgentWorkError::BackendUnavailable)?;
     transaction
         .commit()

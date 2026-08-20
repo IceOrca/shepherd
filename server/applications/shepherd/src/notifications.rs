@@ -2,7 +2,8 @@ use std::{sync::Arc, time::Duration};
 
 use tracing::{error, warn, info, debug, trace};
 use infra_notifier::{NotificationChannel, NotificationError, Notifier};
-use infra_postgres::{DatabaseAdapter, TenantTransaction};
+use infra_postgres::{DatabaseAdapter, TenantDbErr};
+use sqlx::{PgConnection, postgres::PgQueryResult};
 use tokio::{
     sync::{Mutex, mpsc},
     time::MissedTickBehavior,
@@ -103,46 +104,43 @@ impl NotificationDispatcher {
     }
 
     async fn claim(&self, tenant_id: Uuid) -> Result<Vec<OutboxDelivery>, String> {
-        let mut transaction: TenantTransaction = self
+        let rows: Vec<OutboxDelivery> = self
             .database
-            .begin_tenant(tenant_id)
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                sqlx::query_as!(
+                    OutboxDelivery,
+                    r#"
+                    WITH candidates AS (
+                        SELECT id
+                        FROM notification_outbox
+                        WHERE tenant_id = $1
+                          AND next_attempt_at <= CURRENT_TIMESTAMP
+                          AND (
+                              status = 'pending'
+                              OR (status = 'processing' AND locked_at < CURRENT_TIMESTAMP - INTERVAL '5 minutes')
+                          )
+                        ORDER BY created_at, id
+                        FOR UPDATE SKIP LOCKED
+                        LIMIT $2
+                    )
+                    UPDATE notification_outbox AS outbox
+                    SET status = 'processing',
+                        locked_at = CURRENT_TIMESTAMP,
+                        attempt_count = outbox.attempt_count + 1
+                    FROM candidates
+                    WHERE outbox.tenant_id = $1 AND outbox.id = candidates.id
+                    RETURNING outbox.id, outbox.channel, outbox.destination, outbox.message,
+                              outbox.attempt_count
+                    "#,
+                    tenant_id,
+                    CLAIM_BATCH_SIZE,
+                )
+                .fetch_all(connection)
+                .await
+            })
             .await
-            .map_err(|error| format!("open tenant notification transaction: {error}"))?;
-        let rows = sqlx::query_as!(
-            OutboxDelivery,
-            r#"
-            WITH candidates AS (
-                SELECT id
-                FROM notification_outbox
-                WHERE tenant_id = $1
-                  AND next_attempt_at <= CURRENT_TIMESTAMP
-                  AND (
-                      status = 'pending'
-                      OR (status = 'processing' AND locked_at < CURRENT_TIMESTAMP - INTERVAL '5 minutes')
-                  )
-                ORDER BY created_at, id
-                FOR UPDATE SKIP LOCKED
-                LIMIT $2
-            )
-            UPDATE notification_outbox AS outbox
-            SET status = 'processing',
-                locked_at = CURRENT_TIMESTAMP,
-                attempt_count = outbox.attempt_count + 1
-            FROM candidates
-            WHERE outbox.tenant_id = $1 AND outbox.id = candidates.id
-            RETURNING outbox.id, outbox.channel, outbox.destination, outbox.message,
-                      outbox.attempt_count
-            "#,
-            tenant_id,
-            CLAIM_BATCH_SIZE,
-        )
-        .fetch_all(transaction.connection())
-        .await
-        .map_err(|error| format!("claim notification outbox: {error}"))?;
-        transaction
-            .commit()
-            .await
-            .map_err(|error| format!("commit notification claim: {error}"))?;
+            .map_err(|error: TenantDbErr| format!("claim notification outbox: {error}"))?;
+        debug!(tenant_id = %tenant_id, delivery_count = rows.len(), "Notification outbox claim completed");
         Ok(rows)
     }
 
@@ -183,25 +181,27 @@ impl NotificationDispatcher {
         outbox_id: Uuid,
         provider_message_id: Option<&str>,
     ) -> Result<(), String> {
-        let mut transaction: TenantTransaction = self.notification_transaction(tenant_id).await?;
-        sqlx::query!(
-            r#"
-            UPDATE notification_outbox
-            SET status = 'sent', sent_at = CURRENT_TIMESTAMP, locked_at = NULL,
-                provider_message_id = $3, last_error = NULL
-            WHERE tenant_id = $1 AND id = $2 AND status = 'processing'
-            "#,
-            tenant_id,
-            outbox_id,
-            provider_message_id,
-        )
-        .execute(transaction.connection())
-        .await
-        .map_err(|error| format!("mark notification sent: {error}"))?;
-        transaction
-            .commit()
+        let result: PgQueryResult = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                sqlx::query!(
+                    r#"
+                    UPDATE notification_outbox
+                    SET status = 'sent', sent_at = CURRENT_TIMESTAMP, locked_at = NULL,
+                        provider_message_id = $3, last_error = NULL
+                    WHERE tenant_id = $1 AND id = $2 AND status = 'processing'
+                    "#,
+                    tenant_id,
+                    outbox_id,
+                    provider_message_id,
+                )
+                .execute(connection)
+                .await
+            })
             .await
-            .map_err(|error| format!("commit notification success: {error}"))
+            .map_err(|error: TenantDbErr| format!("mark notification sent: {error}"))?;
+        debug!(tenant_id = %tenant_id, outbox_id = %outbox_id, rows_affected = result.rows_affected(), "Notification outbox sent state persisted");
+        Ok(())
     }
 
     async fn mark_failed(&self, tenant_id: Uuid, delivery: &OutboxDelivery, error: &NotificationError) {
@@ -237,39 +237,34 @@ impl NotificationDispatcher {
         retry_delay_seconds: f64,
         error: &str,
     ) -> Result<(), String> {
-        let mut transaction = self.notification_transaction(tenant_id).await?;
-        sqlx::query!(
-            r#"
-            UPDATE notification_outbox
-            SET status = CASE WHEN $3 THEN 'failed' ELSE 'pending' END,
-                next_attempt_at = CASE
-                    WHEN $3 THEN next_attempt_at
-                    ELSE CURRENT_TIMESTAMP + make_interval(secs => $4)
-                END,
-                locked_at = NULL,
-                last_error = $5
-            WHERE tenant_id = $1 AND id = $2 AND status = 'processing'
-            "#,
-            tenant_id,
-            outbox_id,
-            terminal,
-            retry_delay_seconds,
-            error,
-        )
-        .execute(transaction.connection())
-        .await
-        .map_err(|database_error| format!("record notification failure: {database_error}"))?;
-        transaction
-            .commit()
+        let result: PgQueryResult = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                sqlx::query!(
+                    r#"
+                    UPDATE notification_outbox
+                    SET status = CASE WHEN $3 THEN 'failed' ELSE 'pending' END,
+                        next_attempt_at = CASE
+                            WHEN $3 THEN next_attempt_at
+                            ELSE CURRENT_TIMESTAMP + make_interval(secs => $4)
+                        END,
+                        locked_at = NULL,
+                        last_error = $5
+                    WHERE tenant_id = $1 AND id = $2 AND status = 'processing'
+                    "#,
+                    tenant_id,
+                    outbox_id,
+                    terminal,
+                    retry_delay_seconds,
+                    error,
+                )
+                .execute(connection)
+                .await
+            })
             .await
-            .map_err(|database_error| format!("commit notification failure: {database_error}"))
-    }
-
-    async fn notification_transaction(&self, tenant_id: Uuid) -> Result<TenantTransaction, String> {
-        self.database
-            .begin_tenant(tenant_id)
-            .await
-            .map_err(|error| format!("open notification transaction: {error}"))
+            .map_err(|database_error: TenantDbErr| format!("record notification failure: {database_error}"))?;
+        debug!(tenant_id = %tenant_id, outbox_id = %outbox_id, terminal, rows_affected = result.rows_affected(), "Notification outbox failure state persisted");
+        Ok(())
     }
 }
 

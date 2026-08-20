@@ -125,7 +125,7 @@ impl<T> TreeNode<T> {
         }
     }
 
-    fn childlist_push_back(childlist: &mut ChildList<SharedNode<T>>, child: &SharedNode<T>) -> () {
+    fn childlist_push_back(childlist: &mut ChildList<SharedNode<T>>, child: &SharedNode<T>) {
         cfg_if::cfg_if! {
             if #[cfg(feature = "use-VecDeque-as-childlist")] {
                 childlist.push_back(Arc::clone(child));
@@ -135,7 +135,7 @@ impl<T> TreeNode<T> {
         }
     }
 
-    fn childlist_push_front(childlist: &mut ChildList<SharedNode<T>>, child: &SharedNode<T>) -> () {
+    fn childlist_push_front(childlist: &mut ChildList<SharedNode<T>>, child: &SharedNode<T>) {
         cfg_if::cfg_if! {
             if #[cfg(feature = "use-VecDeque-as-childlist")] {
                 childlist.push_front(Arc::clone(child));
@@ -183,7 +183,7 @@ impl<T> TreeNode<T> {
         }
     }
 
-    async fn reindex_childlist(childlist: &mut ChildList<SharedNode<T>>, start_from: usize) -> () {
+    async fn reindex_childlist(childlist: &mut ChildList<SharedNode<T>>, start_from: usize) {
         for position in start_from..childlist.len() {
             if let Some(child) = childlist.get(position) {
                 let mut hier_info = child.hier_info.write().await;
@@ -192,12 +192,12 @@ impl<T> TreeNode<T> {
         }
     }
 
-    async fn set_parent(pself: &SharedNode<T>, parent: WeakNode<T>) -> () {
+    async fn set_parent(pself: &SharedNode<T>, parent: WeakNode<T>) {
         let mut parent_cell = pself.parent.write().await;
         *parent_cell = parent;
     }
 
-    async fn detach_subtree_root(pself: &SharedNode<T>) -> () {
+    async fn detach_subtree_root(pself: &SharedNode<T>) {
         Self::set_parent(pself, Weak::new()).await;
         {
             let mut hier_info = pself.hier_info.write().await;
@@ -212,7 +212,7 @@ impl<T> TreeNode<T> {
     }
 
     #[cfg(feature = "depth-inlined")]
-    async fn rebase_depths(pself: &SharedNode<T>, depth: u16) -> () {
+    async fn rebase_depths(pself: &SharedNode<T>, depth: u16) {
         let mut stack: Vec<(SharedNode<T>, u16)> = vec![(Arc::clone(pself), depth)];
 
         while let Some((node, node_depth)) = stack.pop() {

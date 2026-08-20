@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use sqlx::PgConnection;
-use tracing::{debug, error, info};
+use tracing::{error, warn, info, debug, trace};
 use uuid::Uuid;
 
 pub mod sql;
@@ -19,7 +19,7 @@ impl DatabaseAdapter {
             .unwrap_or_else(|_| panic!("DATABASE_URL must be configured before database initialization"));
         debug!("DATABASE_URL is configured; credentials and URL are intentionally not logged");
         info!("Opening PostgreSQL shared-table connection pool");
-        Self::connect(&database_url).await.unwrap_or_else(|error| {
+        Self::connect(&database_url).await.unwrap_or_else(|error: TenantDbErr| {
             error!("Failed to connect to PostgreSQL: {}", error);
             panic!("Failed to connect to PostgreSQL");
         })
@@ -44,7 +44,7 @@ impl DatabaseAdapter {
     }
 
     pub async fn begin_tenant(&self, tenant_id: Uuid) -> Result<TenantTransaction, TenantDbErr> {
-        debug!("Opening RLS-scoped tenant transaction: tenant_id={}", tenant_id);
+        trace!("Opening RLS-scoped tenant transaction: tenant_id={}", tenant_id);
         self.client.begin_tenant(tenant_id).await
     }
 
@@ -60,7 +60,7 @@ impl DatabaseAdapter {
     }
 
     pub async fn resolve_active_tenant_id(&self, tenant: &str) -> Result<Option<Uuid>, TenantDbErr> {
-        debug!("Resolving active tenant ID: tenant={}", tenant);
+        trace!("Resolving active tenant ID: tenant={}", tenant);
         let result: Result<Option<Uuid>, TenantDbErr> = self.client.resolve_active_tenant_id(tenant).await;
         match &result {
             Ok(Some(tenant_id)) => {

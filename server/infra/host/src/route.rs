@@ -13,7 +13,7 @@ use axum::{
 use axum::middleware::from_fn_with_state;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::timeout::TimeoutLayer;
-use tracing::{debug, info, warn};
+use tracing::{error, warn, info, debug, trace};
 
 use crate::HostContext;
 use crate::ip_extract;

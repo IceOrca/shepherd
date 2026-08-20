@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use crate::features::organization::core::{BranchSummary, FacilitySummary, OrganizationError, OrganizationRepo};
 use infra_postgres::{DatabaseAdapter, TenantDbErr};
 use sqlx::PgConnection;
-use tracing::{error, info};
+use tracing::{error, warn, info, debug, trace};
 use uuid::Uuid;
 
 pub struct OrganizationProvider {

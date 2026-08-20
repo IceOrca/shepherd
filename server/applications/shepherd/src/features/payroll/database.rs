@@ -10,7 +10,8 @@ use crate::features::payroll::core::{
 };
 use uuid::Uuid;
 
-use infra_postgres::{DatabaseAdapter, TenantTransaction};
+use infra_postgres::{DatabaseAdapter, TenantDbErr, TenantTransaction};
+use sqlx::PgConnection;
 
 pub struct PayrollProvider {
     db: Arc<DatabaseAdapter>,
@@ -214,6 +215,12 @@ struct PayrollLineRow {
     description: String,
 }
 
+struct PayrollRunData {
+    run: PayrollRunRow,
+    results: Vec<PayrollResultRow>,
+    lines: Vec<PayrollLineRow>,
+}
+
 impl From<PayrollLineRow> for PayrollLine {
     fn from(row: PayrollLineRow) -> Self {
         Self {
@@ -242,40 +249,43 @@ impl PayrollRepo for PayrollProvider {
         tenant_id: Uuid,
         employee_id: Uuid,
     ) -> Result<Vec<EmployeeCompensation>, PayrollError> {
-        let mut transaction: TenantTransaction = begin_tenant(self, tenant_id).await?;
-        let employee_exists: bool = sqlx::query_scalar!(
-            r#"SELECT EXISTS (SELECT 1 FROM hr_employees WHERE tenant_id = $1 AND id = $2) AS "exists!""#,
-            tenant_id,
-            employee_id,
-        )
-        .fetch_one(transaction.connection())
-        .await
-        .map_err(|error| database_failure("validate compensation employee", tenant_id, error))?;
+        let result: (bool, Vec<CompensationRow>) = self
+            .db
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                let employee_exists: bool = sqlx::query_scalar!(
+                    r#"SELECT EXISTS (
+                        SELECT 1 FROM hr_employees WHERE tenant_id = $1 AND id = $2
+                    ) AS "exists!""#,
+                    tenant_id,
+                    employee_id,
+                )
+                .fetch_one(&mut *connection)
+                .await?;
+                let rows: Vec<CompensationRow> = sqlx::query_as!(
+                    CompensationRow,
+                    r#"
+                    SELECT id, employee_id, currency, pay_basis,
+                           hourly_rate::TEXT AS hourly_rate,
+                           monthly_rate::TEXT AS monthly_rate,
+                           standard_monthly_hours::TEXT AS standard_monthly_hours,
+                           effective_from, effective_to, created_at
+                    FROM hr_employee_compensations
+                    WHERE tenant_id = $1 AND employee_id = $2
+                    ORDER BY effective_from DESC, id
+                    "#,
+                    tenant_id,
+                    employee_id,
+                )
+                .fetch_all(connection)
+                .await?;
+                Ok((employee_exists, rows))
+            })
+            .await
+            .map_err(|error: TenantDbErr| tenant_database_failure("list employee compensations", tenant_id, error))?;
+        let (employee_exists, rows): (bool, Vec<CompensationRow>) = result;
         if !employee_exists {
             return Err(PayrollError::NotFound);
         }
-        let rows: Vec<CompensationRow> = sqlx::query_as!(
-            CompensationRow,
-            r#"
-            SELECT id, employee_id, currency, pay_basis,
-                   hourly_rate::TEXT AS hourly_rate,
-                   monthly_rate::TEXT AS monthly_rate,
-                   standard_monthly_hours::TEXT AS standard_monthly_hours,
-                   effective_from, effective_to, created_at
-            FROM hr_employee_compensations
-            WHERE tenant_id = $1 AND employee_id = $2
-            ORDER BY effective_from DESC, id
-            "#,
-            tenant_id,
-            employee_id,
-        )
-        .fetch_all(transaction.connection())
-        .await
-        .map_err(|error| database_failure("list compensations", tenant_id, error))?;
-        transaction
-            .commit()
-            .await
-            .map_err(|error| database_failure("commit compensation list", tenant_id, error))?;
         rows.into_iter().map(EmployeeCompensation::try_from).collect()
     }
 
@@ -370,27 +380,27 @@ impl PayrollRepo for PayrollProvider {
     }
 
     async fn list_facility_rules(&self, tenant_id: Uuid) -> Result<Vec<FacilityRateRule>, PayrollError> {
-        let mut transaction: TenantTransaction = begin_tenant(self, tenant_id).await?;
-        let rows: Vec<FacilityRuleRow> = sqlx::query_as!(
-            FacilityRuleRow,
-            r#"
-            SELECT id, code, name, facility_id, employee_id,
-                   base_multiplier::TEXT AS "base_multiplier!",
-                   hourly_adjustment::TEXT AS "hourly_adjustment!",
-                   priority, effective_from, effective_to, is_active
-            FROM payroll_facility_rate_rules
-            WHERE tenant_id = $1
-            ORDER BY lower(name), effective_from DESC, priority DESC
-            "#,
-            tenant_id,
-        )
-        .fetch_all(transaction.connection())
-        .await
-        .map_err(|error| database_failure("list facility payroll rules", tenant_id, error))?;
-        transaction
-            .commit()
+        let rows: Vec<FacilityRuleRow> = self
+            .db
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                sqlx::query_as!(
+                    FacilityRuleRow,
+                    r#"
+                    SELECT id, code, name, facility_id, employee_id,
+                           base_multiplier::TEXT AS "base_multiplier!",
+                           hourly_adjustment::TEXT AS "hourly_adjustment!",
+                           priority, effective_from, effective_to, is_active
+                    FROM payroll_facility_rate_rules
+                    WHERE tenant_id = $1
+                    ORDER BY lower(name), effective_from DESC, priority DESC
+                    "#,
+                    tenant_id,
+                )
+                .fetch_all(connection)
+                .await
+            })
             .await
-            .map_err(|error| database_failure("commit facility payroll rule list", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_database_failure("list facility payroll rules", tenant_id, error))?;
         Ok(rows.into_iter().map(FacilityRateRule::from).collect())
     }
 
@@ -401,75 +411,75 @@ impl PayrollRepo for PayrollProvider {
         input: &FacilityRateRuleInput,
         audit_account_id: Uuid,
     ) -> Result<FacilityRateRule, PayrollError> {
-        let mut transaction: TenantTransaction = begin_tenant(self, tenant_id).await?;
-        let row: Option<FacilityRuleRow> = sqlx::query_as!(
-            FacilityRuleRow,
-            r#"
-            INSERT INTO payroll_facility_rate_rules (
-                id, tenant_id, code, name, facility_id, employee_id, base_multiplier,
-                hourly_adjustment, priority, effective_from, effective_to, is_active, created_by_account_id
-            )
-            SELECT
-                $1, $2, $3, $4, facility.id, employee.id,
-                $7::TEXT::NUMERIC, $8::TEXT::NUMERIC, $9, $10, $11, $12, $13
-            FROM facilities AS facility
-            LEFT JOIN hr_employees AS employee
-                ON employee.tenant_id = facility.tenant_id AND employee.id = $6
-            WHERE facility.tenant_id = $2
-              AND facility.id = $5
-              AND ($6::UUID IS NULL OR employee.id IS NOT NULL)
-            RETURNING id, code, name, facility_id, employee_id,
-                      base_multiplier::TEXT AS "base_multiplier!",
-                      hourly_adjustment::TEXT AS "hourly_adjustment!",
-                      priority, effective_from, effective_to, is_active
-            "#,
-            rule_id,
-            tenant_id,
-            input.code,
-            input.name,
-            input.facility_id,
-            input.employee_id,
-            input.base_multiplier,
-            input.hourly_adjustment,
-            input.priority,
-            input.effective_from,
-            input.effective_to,
-            input.is_active,
-            audit_account_id,
-        )
-        .fetch_optional(transaction.connection())
-        .await
-        .map_err(|error| mutation_failure("create facility payroll rule", tenant_id, error))?;
-        let row: FacilityRuleRow = row.ok_or(PayrollError::NotFound)?;
-        transaction
-            .commit()
+        let row: Option<FacilityRuleRow> = self
+            .db
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                sqlx::query_as!(
+                    FacilityRuleRow,
+                    r#"
+                    INSERT INTO payroll_facility_rate_rules (
+                        id, tenant_id, code, name, facility_id, employee_id, base_multiplier,
+                        hourly_adjustment, priority, effective_from, effective_to, is_active, created_by_account_id
+                    )
+                    SELECT
+                        $1, $2, $3, $4, facility.id, employee.id,
+                        $7::TEXT::NUMERIC, $8::TEXT::NUMERIC, $9, $10, $11, $12, $13
+                    FROM facilities AS facility
+                    LEFT JOIN hr_employees AS employee
+                        ON employee.tenant_id = facility.tenant_id AND employee.id = $6
+                    WHERE facility.tenant_id = $2
+                      AND facility.id = $5
+                      AND ($6::UUID IS NULL OR employee.id IS NOT NULL)
+                    RETURNING id, code, name, facility_id, employee_id,
+                              base_multiplier::TEXT AS "base_multiplier!",
+                              hourly_adjustment::TEXT AS "hourly_adjustment!",
+                              priority, effective_from, effective_to, is_active
+                    "#,
+                    rule_id,
+                    tenant_id,
+                    input.code,
+                    input.name,
+                    input.facility_id,
+                    input.employee_id,
+                    input.base_multiplier,
+                    input.hourly_adjustment,
+                    input.priority,
+                    input.effective_from,
+                    input.effective_to,
+                    input.is_active,
+                    audit_account_id,
+                )
+                .fetch_optional(connection)
+                .await
+            })
             .await
-            .map_err(|error| database_failure("commit facility payroll rule creation", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_mutation_failure("create facility payroll rule", tenant_id, error))?;
+        let row: FacilityRuleRow = row.ok_or(PayrollError::NotFound)?;
         Ok(row.into())
     }
 
     async fn list_time_band_rules(&self, tenant_id: Uuid) -> Result<Vec<TimeBandRule>, PayrollError> {
-        let mut transaction: TenantTransaction = begin_tenant(self, tenant_id).await?;
-        let rows: Vec<TimeBandRuleRow> = sqlx::query_as!(
-            TimeBandRuleRow,
-            r#"
-            SELECT id, code, name, weekdays, start_time, end_time, spans_next_day,
-                   premium_multiplier::TEXT AS "premium_multiplier!",
-                   hourly_adjustment::TEXT AS "hourly_adjustment!",
-                   priority, effective_from, effective_to, is_active
-            FROM payroll_time_band_rules
-            WHERE tenant_id = $1
-            ORDER BY priority DESC, lower(name), effective_from DESC
-            "#,
-            tenant_id,
-        )
-        .fetch_all(transaction.connection())
-        .await
-        .map_err(|error| database_failure("list time band rules", tenant_id, error))?;
-        transaction
-            .commit()
+        let rows: Vec<TimeBandRuleRow> = self
+            .db
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                sqlx::query_as!(
+                    TimeBandRuleRow,
+                    r#"
+                    SELECT id, code, name, weekdays, start_time, end_time, spans_next_day,
+                           premium_multiplier::TEXT AS "premium_multiplier!",
+                           hourly_adjustment::TEXT AS "hourly_adjustment!",
+                           priority, effective_from, effective_to, is_active
+                    FROM payroll_time_band_rules
+                    WHERE tenant_id = $1
+                    ORDER BY priority DESC, lower(name), effective_from DESC
+                    "#,
+                    tenant_id,
+                )
+                .fetch_all(connection)
+                .await
+            })
             .await
-            .map_err(|error| database_failure("commit time band rule list", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_database_failure("list time band rules", tenant_id, error))?;
         Ok(rows.into_iter().map(TimeBandRule::from).collect())
     }
 
@@ -480,72 +490,72 @@ impl PayrollRepo for PayrollProvider {
         input: &TimeBandRuleInput,
         audit_account_id: Uuid,
     ) -> Result<TimeBandRule, PayrollError> {
-        let mut transaction: TenantTransaction = begin_tenant(self, tenant_id).await?;
-        let row: TimeBandRuleRow = sqlx::query_as!(
-            TimeBandRuleRow,
-            r#"
-            INSERT INTO payroll_time_band_rules (
-                id, tenant_id, code, name, weekdays, start_time, end_time, spans_next_day,
-                premium_multiplier, hourly_adjustment, priority, effective_from, effective_to,
-                is_active, created_by_account_id
-            )
-            VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8,
-                $9::TEXT::NUMERIC, $10::TEXT::NUMERIC, $11, $12, $13, $14, $15
-            )
-            RETURNING id, code, name, weekdays, start_time, end_time, spans_next_day,
-                      premium_multiplier::TEXT AS "premium_multiplier!",
-                      hourly_adjustment::TEXT AS "hourly_adjustment!",
-                      priority, effective_from, effective_to, is_active
-            "#,
-            rule_id,
-            tenant_id,
-            input.code,
-            input.name,
-            &input.weekdays,
-            input.start_time,
-            input.end_time,
-            input.spans_next_day,
-            input.premium_multiplier,
-            input.hourly_adjustment,
-            input.priority,
-            input.effective_from,
-            input.effective_to,
-            input.is_active,
-            audit_account_id,
-        )
-        .fetch_one(transaction.connection())
-        .await
-        .map_err(|error| mutation_failure("create time band rule", tenant_id, error))?;
-        transaction
-            .commit()
+        let row: TimeBandRuleRow = self
+            .db
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                sqlx::query_as!(
+                    TimeBandRuleRow,
+                    r#"
+                    INSERT INTO payroll_time_band_rules (
+                        id, tenant_id, code, name, weekdays, start_time, end_time, spans_next_day,
+                        premium_multiplier, hourly_adjustment, priority, effective_from, effective_to,
+                        is_active, created_by_account_id
+                    )
+                    VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8,
+                        $9::TEXT::NUMERIC, $10::TEXT::NUMERIC, $11, $12, $13, $14, $15
+                    )
+                    RETURNING id, code, name, weekdays, start_time, end_time, spans_next_day,
+                              premium_multiplier::TEXT AS "premium_multiplier!",
+                              hourly_adjustment::TEXT AS "hourly_adjustment!",
+                              priority, effective_from, effective_to, is_active
+                    "#,
+                    rule_id,
+                    tenant_id,
+                    input.code,
+                    input.name,
+                    &input.weekdays,
+                    input.start_time,
+                    input.end_time,
+                    input.spans_next_day,
+                    input.premium_multiplier,
+                    input.hourly_adjustment,
+                    input.priority,
+                    input.effective_from,
+                    input.effective_to,
+                    input.is_active,
+                    audit_account_id,
+                )
+                .fetch_one(connection)
+                .await
+            })
             .await
-            .map_err(|error| database_failure("commit time band rule creation", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_mutation_failure("create time band rule", tenant_id, error))?;
         Ok(row.into())
     }
 
     async fn list_overtime_rules(&self, tenant_id: Uuid) -> Result<Vec<OvertimeRule>, PayrollError> {
-        let mut transaction: TenantTransaction = begin_tenant(self, tenant_id).await?;
-        let rows: Vec<OvertimeRuleRow> = sqlx::query_as!(
-            OvertimeRuleRow,
-            r#"
-            SELECT id, code, name, threshold_minutes,
-                   premium_multiplier::TEXT AS "premium_multiplier!",
-                   hourly_adjustment::TEXT AS "hourly_adjustment!",
-                   priority, effective_from, effective_to, is_active
-            FROM payroll_overtime_rules
-            WHERE tenant_id = $1
-            ORDER BY threshold_minutes, priority DESC, effective_from DESC
-            "#,
-            tenant_id,
-        )
-        .fetch_all(transaction.connection())
-        .await
-        .map_err(|error| database_failure("list overtime rules", tenant_id, error))?;
-        transaction
-            .commit()
+        let rows: Vec<OvertimeRuleRow> = self
+            .db
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                sqlx::query_as!(
+                    OvertimeRuleRow,
+                    r#"
+                    SELECT id, code, name, threshold_minutes,
+                           premium_multiplier::TEXT AS "premium_multiplier!",
+                           hourly_adjustment::TEXT AS "hourly_adjustment!",
+                           priority, effective_from, effective_to, is_active
+                    FROM payroll_overtime_rules
+                    WHERE tenant_id = $1
+                    ORDER BY threshold_minutes, priority DESC, effective_from DESC
+                    "#,
+                    tenant_id,
+                )
+                .fetch_all(connection)
+                .await
+            })
             .await
-            .map_err(|error| database_failure("commit overtime rule list", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_database_failure("list overtime rules", tenant_id, error))?;
         Ok(rows.into_iter().map(OvertimeRule::from).collect())
     }
 
@@ -556,66 +566,80 @@ impl PayrollRepo for PayrollProvider {
         input: &OvertimeRuleInput,
         audit_account_id: Uuid,
     ) -> Result<OvertimeRule, PayrollError> {
-        let mut transaction: TenantTransaction = begin_tenant(self, tenant_id).await?;
-        let row: OvertimeRuleRow = sqlx::query_as!(
-            OvertimeRuleRow,
-            r#"
-            INSERT INTO payroll_overtime_rules (
-                id, tenant_id, code, name, threshold_minutes, premium_multiplier,
-                hourly_adjustment, priority, effective_from, effective_to, is_active, created_by_account_id
-            )
-            VALUES (
-                $1, $2, $3, $4, $5, $6::TEXT::NUMERIC,
-                $7::TEXT::NUMERIC, $8, $9, $10, $11, $12
-            )
-            RETURNING id, code, name, threshold_minutes,
-                      premium_multiplier::TEXT AS "premium_multiplier!",
-                      hourly_adjustment::TEXT AS "hourly_adjustment!",
-                      priority, effective_from, effective_to, is_active
-            "#,
-            rule_id,
-            tenant_id,
-            input.code,
-            input.name,
-            input.threshold_minutes,
-            input.premium_multiplier,
-            input.hourly_adjustment,
-            input.priority,
-            input.effective_from,
-            input.effective_to,
-            input.is_active,
-            audit_account_id,
-        )
-        .fetch_one(transaction.connection())
-        .await
-        .map_err(|error| mutation_failure("create overtime rule", tenant_id, error))?;
-        transaction
-            .commit()
+        let row: OvertimeRuleRow = self
+            .db
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                sqlx::query_as!(
+                    OvertimeRuleRow,
+                    r#"
+                    INSERT INTO payroll_overtime_rules (
+                        id, tenant_id, code, name, threshold_minutes, premium_multiplier,
+                        hourly_adjustment, priority, effective_from, effective_to, is_active, created_by_account_id
+                    )
+                    VALUES (
+                        $1, $2, $3, $4, $5, $6::TEXT::NUMERIC,
+                        $7::TEXT::NUMERIC, $8, $9, $10, $11, $12
+                    )
+                    RETURNING id, code, name, threshold_minutes,
+                              premium_multiplier::TEXT AS "premium_multiplier!",
+                              hourly_adjustment::TEXT AS "hourly_adjustment!",
+                              priority, effective_from, effective_to, is_active
+                    "#,
+                    rule_id,
+                    tenant_id,
+                    input.code,
+                    input.name,
+                    input.threshold_minutes,
+                    input.premium_multiplier,
+                    input.hourly_adjustment,
+                    input.priority,
+                    input.effective_from,
+                    input.effective_to,
+                    input.is_active,
+                    audit_account_id,
+                )
+                .fetch_one(connection)
+                .await
+            })
             .await
-            .map_err(|error| database_failure("commit overtime rule creation", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_mutation_failure("create overtime rule", tenant_id, error))?;
         Ok(row.into())
     }
 
     async fn list_runs(&self, tenant_id: Uuid) -> Result<Vec<PayrollRun>, PayrollError> {
-        let mut transaction: TenantTransaction = begin_tenant(self, tenant_id).await?;
-        let rows: Vec<PayrollRunRow> = list_run_rows(&mut transaction, tenant_id).await?;
-        transaction
-            .commit()
+        let rows: Vec<PayrollRunRow> = self
+            .db
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                sqlx::query_as!(
+                    PayrollRunRow,
+                    r#"
+                    SELECT id, period_start, period_end, time_zone, currency, status,
+                           calculated_at, approved_at, created_at
+                    FROM payroll_runs
+                    WHERE tenant_id = $1
+                    ORDER BY period_start DESC, created_at DESC, id
+                    "#,
+                    tenant_id,
+                )
+                .fetch_all(connection)
+                .await
+            })
             .await
-            .map_err(|error| database_failure("commit payroll run list", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_database_failure("list payroll runs", tenant_id, error))?;
         rows.into_iter()
-            .map(|row| assemble_run(row, Vec::new(), Vec::new()))
+            .map(|row: PayrollRunRow| -> Result<PayrollRun, PayrollError> { assemble_run(row, Vec::new(), Vec::new()) })
             .collect()
     }
 
     async fn find_run(&self, tenant_id: Uuid, payroll_run_id: Uuid) -> Result<Option<PayrollRun>, PayrollError> {
-        let mut transaction: TenantTransaction = begin_tenant(self, tenant_id).await?;
-        let run: Option<PayrollRun> = load_run(&mut transaction, tenant_id, payroll_run_id).await?;
-        transaction
-            .commit()
+        let data: Option<PayrollRunData> = self
+            .db
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                load_run_data(connection, tenant_id, payroll_run_id).await
+            })
             .await
-            .map_err(|error| database_failure("commit payroll run lookup", tenant_id, error))?;
-        Ok(run)
+            .map_err(|error: TenantDbErr| tenant_database_failure("find payroll run", tenant_id, error))?;
+        data.map(assemble_run_data).transpose()
     }
 
     async fn calculate_run(
@@ -673,7 +697,7 @@ impl PayrollRepo for PayrollProvider {
         transaction
             .commit()
             .await
-            .map_err(|error| database_failure("commit payroll calculation", tenant_id, error))?;
+            .map_err(|error: sqlx::Error| database_failure("commit payroll calculation", tenant_id, error))?;
         info!(
             "Monthly payroll calculated: tenant_id={} payroll_run_id={} period_start={} period_end={} employees={} lines={} currency={}",
             tenant_id,
@@ -732,7 +756,7 @@ impl PayrollRepo for PayrollProvider {
         transaction
             .commit()
             .await
-            .map_err(|error| database_failure("commit payroll run approval", tenant_id, error))?;
+            .map_err(|error: sqlx::Error| database_failure("commit payroll run approval", tenant_id, error))?;
         Ok(run)
     }
 }
@@ -1361,31 +1385,22 @@ async fn aggregate_employee_results(
     Ok(())
 }
 
-async fn list_run_rows(
-    transaction: &mut TenantTransaction,
-    tenant_id: Uuid,
-) -> Result<Vec<PayrollRunRow>, PayrollError> {
-    sqlx::query_as!(
-        PayrollRunRow,
-        r#"
-        SELECT id, period_start, period_end, time_zone, currency, status,
-               calculated_at, approved_at, created_at
-        FROM payroll_runs
-        WHERE tenant_id = $1
-        ORDER BY period_start DESC, created_at DESC, id
-        "#,
-        tenant_id,
-    )
-    .fetch_all(transaction.connection())
-    .await
-    .map_err(|error| database_failure("list payroll runs", tenant_id, error))
-}
-
 async fn load_run(
     transaction: &mut TenantTransaction,
     tenant_id: Uuid,
     payroll_run_id: Uuid,
 ) -> Result<Option<PayrollRun>, PayrollError> {
+    let data: Option<PayrollRunData> = load_run_data(transaction.connection(), tenant_id, payroll_run_id)
+        .await
+        .map_err(|error: sqlx::Error| database_failure("load payroll run", tenant_id, error))?;
+    data.map(assemble_run_data).transpose()
+}
+
+async fn load_run_data(
+    connection: &mut PgConnection,
+    tenant_id: Uuid,
+    payroll_run_id: Uuid,
+) -> Result<Option<PayrollRunData>, sqlx::Error> {
     let row: Option<PayrollRunRow> = sqlx::query_as!(
         PayrollRunRow,
         r#"
@@ -1397,9 +1412,8 @@ async fn load_run(
         tenant_id,
         payroll_run_id,
     )
-    .fetch_optional(transaction.connection())
-    .await
-    .map_err(|error| database_failure("load payroll run", tenant_id, error))?;
+    .fetch_optional(&mut *connection)
+    .await?;
     let Some(row) = row else {
         return Ok(None);
     };
@@ -1421,9 +1435,8 @@ async fn load_run(
         tenant_id,
         payroll_run_id,
     )
-    .fetch_all(transaction.connection())
-    .await
-    .map_err(|error| database_failure("load payroll employee results", tenant_id, error))?;
+    .fetch_all(&mut *connection)
+    .await?;
     let lines: Vec<PayrollLineRow> = sqlx::query_as!(
         PayrollLineRow,
         r#"
@@ -1441,16 +1454,20 @@ async fn load_run(
         tenant_id,
         payroll_run_id,
     )
-    .fetch_all(transaction.connection())
-    .await
-    .map_err(|error| database_failure("load payroll lines", tenant_id, error))?;
+    .fetch_all(connection)
+    .await?;
 
-    assemble_run(
-        row,
-        results.into_iter().map(PayrollEmployeeResult::from).collect(),
-        lines.into_iter().map(PayrollLine::from).collect(),
-    )
-    .map(Some)
+    Ok(Some(PayrollRunData {
+        run: row,
+        results,
+        lines,
+    }))
+}
+
+fn assemble_run_data(data: PayrollRunData) -> Result<PayrollRun, PayrollError> {
+    let results: Vec<PayrollEmployeeResult> = data.results.into_iter().map(PayrollEmployeeResult::from).collect();
+    let lines: Vec<PayrollLine> = data.lines.into_iter().map(PayrollLine::from).collect();
+    assemble_run(data.run, results, lines)
 }
 
 fn assemble_run(
@@ -1479,6 +1496,23 @@ fn database_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> Pay
         operation, tenant_id, error
     );
     PayrollError::BackendUnavailable
+}
+
+fn tenant_database_failure(operation: &str, tenant_id: Uuid, error: TenantDbErr) -> PayrollError {
+    error!(
+        operation,
+        tenant_id = %tenant_id,
+        reason = %error,
+        "Payroll automatic tenant operation failed"
+    );
+    PayrollError::BackendUnavailable
+}
+
+fn tenant_mutation_failure(operation: &str, tenant_id: Uuid, error: TenantDbErr) -> PayrollError {
+    match error {
+        TenantDbErr::Sqlx(sqlx_error) => mutation_failure(operation, tenant_id, sqlx_error),
+        tenant_error => tenant_database_failure(operation, tenant_id, tenant_error),
+    }
 }
 
 fn mutation_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> PayrollError {

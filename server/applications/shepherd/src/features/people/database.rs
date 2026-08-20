@@ -265,38 +265,38 @@ impl PeopleRepo for PeopleProvider {
         input: &EmployeeInput,
         audit_account_id: Uuid,
     ) -> Result<Employee, HrError> {
-        let mut transaction = self.begin_active_tenant(tenant_id).await?;
-        let row: EmployeeRow = sqlx::query_as!(
-            EmployeeRow,
-            r#"
-            INSERT INTO hr_employees (
-                id, tenant_id, account_id, employee_code, display_name, work_email, work_phone, badge_id,
-                status, hire_date, termination_date, created_by_account_id, updated_by_account_id
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12)
-            RETURNING id, account_id, employee_code, display_name, work_email, work_phone, badge_id,
-                      status, hire_date, termination_date, created_at, updated_at
-            "#,
-            employee_id,
-            tenant_id,
-            input.account_id,
-            input.employee_code,
-            input.display_name,
-            input.work_email,
-            input.work_phone,
-            input.badge_id,
-            input.status.as_code(),
-            input.hire_date,
-            input.termination_date,
-            audit_account_id,
-        )
-        .fetch_one(transaction.connection())
-        .await
-        .map_err(|error| mutation_failure("create employee", tenant_id, error))?;
-        transaction
-            .commit()
+        let row: EmployeeRow = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                sqlx::query_as!(
+                    EmployeeRow,
+                    r#"
+                    INSERT INTO hr_employees (
+                        id, tenant_id, account_id, employee_code, display_name, work_email, work_phone, badge_id,
+                        status, hire_date, termination_date, created_by_account_id, updated_by_account_id
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12)
+                    RETURNING id, account_id, employee_code, display_name, work_email, work_phone, badge_id,
+                              status, hire_date, termination_date, created_at, updated_at
+                    "#,
+                    employee_id,
+                    tenant_id,
+                    input.account_id,
+                    input.employee_code,
+                    input.display_name,
+                    input.work_email,
+                    input.work_phone,
+                    input.badge_id,
+                    input.status.as_code(),
+                    input.hire_date,
+                    input.termination_date,
+                    audit_account_id,
+                )
+                .fetch_one(connection)
+                .await
+            })
             .await
-            .map_err(|error| database_failure("commit employee creation", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_mutation_failure("create employee", tenant_id, error))?;
         info!(
             "Employee created: tenant_id={} employee_id={} employee_code={} linked_account_id={:?} audit_account_id={}",
             tenant_id, employee_id, input.employee_code, input.account_id, audit_account_id
@@ -460,33 +460,33 @@ impl PeopleRepo for PeopleProvider {
         input: &DepartmentInput,
         audit_account_id: Uuid,
     ) -> Result<Department, HrError> {
-        let mut transaction = self.begin_active_tenant(tenant_id).await?;
-        let row: DepartmentRow = sqlx::query_as!(
-            DepartmentRow,
-            r#"
-            INSERT INTO hr_departments (
-                id, tenant_id, code, name, parent_department_id, manager_employee_id, status,
-                created_by_account_id, updated_by_account_id
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
-            RETURNING id, code, name, parent_department_id, manager_employee_id, status, created_at, updated_at
-            "#,
-            department_id,
-            tenant_id,
-            input.code,
-            input.name,
-            input.parent_department_id,
-            input.manager_employee_id,
-            input.status.as_code(),
-            audit_account_id,
-        )
-        .fetch_one(transaction.connection())
-        .await
-        .map_err(|error| mutation_failure("create department", tenant_id, error))?;
-        transaction
-            .commit()
+        let row: DepartmentRow = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                sqlx::query_as!(
+                    DepartmentRow,
+                    r#"
+                    INSERT INTO hr_departments (
+                        id, tenant_id, code, name, parent_department_id, manager_employee_id, status,
+                        created_by_account_id, updated_by_account_id
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+                    RETURNING id, code, name, parent_department_id, manager_employee_id, status, created_at, updated_at
+                    "#,
+                    department_id,
+                    tenant_id,
+                    input.code,
+                    input.name,
+                    input.parent_department_id,
+                    input.manager_employee_id,
+                    input.status.as_code(),
+                    audit_account_id,
+                )
+                .fetch_one(connection)
+                .await
+            })
             .await
-            .map_err(|error| database_failure("commit department creation", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_mutation_failure("create department", tenant_id, error))?;
         info!(
             "HR department created: tenant_id={} department_id={} code={} audit_account_id={}",
             tenant_id, department_id, input.code, audit_account_id
@@ -598,31 +598,31 @@ impl PeopleRepo for PeopleProvider {
         input: &JobPositionInput,
         audit_account_id: Uuid,
     ) -> Result<JobPosition, HrError> {
-        let mut transaction = self.begin_active_tenant(tenant_id).await?;
-        let row: JobRow = sqlx::query_as!(
-            JobRow,
-            r#"
-            INSERT INTO hr_jobs (
-                id, tenant_id, code, name, department_id, status, created_by_account_id, updated_by_account_id
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
-            RETURNING id, code, name, department_id, status, created_at, updated_at
-            "#,
-            job_id,
-            tenant_id,
-            input.code,
-            input.name,
-            input.department_id,
-            input.status.as_code(),
-            audit_account_id,
-        )
-        .fetch_one(transaction.connection())
-        .await
-        .map_err(|error| mutation_failure("create job", tenant_id, error))?;
-        transaction
-            .commit()
+        let row: JobRow = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                sqlx::query_as!(
+                    JobRow,
+                    r#"
+                    INSERT INTO hr_jobs (
+                        id, tenant_id, code, name, department_id, status, created_by_account_id, updated_by_account_id
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+                    RETURNING id, code, name, department_id, status, created_at, updated_at
+                    "#,
+                    job_id,
+                    tenant_id,
+                    input.code,
+                    input.name,
+                    input.department_id,
+                    input.status.as_code(),
+                    audit_account_id,
+                )
+                .fetch_one(connection)
+                .await
+            })
             .await
-            .map_err(|error| database_failure("commit job creation", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_mutation_failure("create job", tenant_id, error))?;
         info!(
             "HR job position created: tenant_id={} job_id={} code={} audit_account_id={}",
             tenant_id, job_id, input.code, audit_account_id
@@ -637,36 +637,36 @@ impl PeopleRepo for PeopleProvider {
         input: &JobPositionInput,
         audit_account_id: Uuid,
     ) -> Result<JobPosition, HrError> {
-        let mut transaction = self.begin_active_tenant(tenant_id).await?;
-        let row: Option<JobRow> = sqlx::query_as!(
-            JobRow,
-            r#"
-            UPDATE hr_jobs
-            SET code = $3,
-                name = $4,
-                department_id = $5,
-                status = $6,
-                updated_at = CURRENT_TIMESTAMP,
-                updated_by_account_id = $7
-            WHERE tenant_id = $1 AND id = $2
-            RETURNING id, code, name, department_id, status, created_at, updated_at
-            "#,
-            tenant_id,
-            job_id,
-            input.code,
-            input.name,
-            input.department_id,
-            input.status.as_code(),
-            audit_account_id,
-        )
-        .fetch_optional(transaction.connection())
-        .await
-        .map_err(|error| mutation_failure("update job", tenant_id, error))?;
-        let row = row.ok_or(HrError::NotFound)?;
-        transaction
-            .commit()
+        let row: Option<JobRow> = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                sqlx::query_as!(
+                    JobRow,
+                    r#"
+                    UPDATE hr_jobs
+                    SET code = $3,
+                        name = $4,
+                        department_id = $5,
+                        status = $6,
+                        updated_at = CURRENT_TIMESTAMP,
+                        updated_by_account_id = $7
+                    WHERE tenant_id = $1 AND id = $2
+                    RETURNING id, code, name, department_id, status, created_at, updated_at
+                    "#,
+                    tenant_id,
+                    job_id,
+                    input.code,
+                    input.name,
+                    input.department_id,
+                    input.status.as_code(),
+                    audit_account_id,
+                )
+                .fetch_optional(connection)
+                .await
+            })
             .await
-            .map_err(|error| database_failure("commit job update", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_mutation_failure("update job", tenant_id, error))?;
+        let row: JobRow = row.ok_or(HrError::NotFound)?;
         info!(
             "HR job position updated: tenant_id={} job_id={} status={} audit_account_id={}",
             tenant_id,
@@ -678,37 +678,40 @@ impl PeopleRepo for PeopleProvider {
     }
 
     async fn list_assignments(&self, tenant_id: Uuid, employee_id: Uuid) -> Result<Vec<EmployeeAssignment>, HrError> {
-        let mut transaction = self.begin_active_tenant(tenant_id).await?;
-        let employee_exists: bool = sqlx::query_scalar!(
-            r#"SELECT EXISTS (SELECT 1 FROM hr_employees WHERE tenant_id = $1 AND id = $2) AS "exists!""#,
-            tenant_id,
-            employee_id,
-        )
-        .fetch_one(transaction.connection())
-        .await
-        .map_err(|error| database_failure("validate employee for assignment list", tenant_id, error))?;
+        let result: (bool, Vec<AssignmentRow>) = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                let employee_exists: bool = sqlx::query_scalar!(
+                    r#"SELECT EXISTS (
+                        SELECT 1 FROM hr_employees WHERE tenant_id = $1 AND id = $2
+                    ) AS "exists!""#,
+                    tenant_id,
+                    employee_id,
+                )
+                .fetch_one(&mut *connection)
+                .await?;
+                let rows: Vec<AssignmentRow> = sqlx::query_as!(
+                    AssignmentRow,
+                    r#"
+                    SELECT id, employee_id, branch_id, facility_id, department_id, job_id, manager_employee_id,
+                           date_start, date_end, is_primary, created_at
+                    FROM hr_employee_assignments
+                    WHERE tenant_id = $1 AND employee_id = $2
+                    ORDER BY date_start DESC, created_at DESC
+                    "#,
+                    tenant_id,
+                    employee_id,
+                )
+                .fetch_all(connection)
+                .await?;
+                Ok((employee_exists, rows))
+            })
+            .await
+            .map_err(|error: TenantDbErr| tenant_database_failure("list employee assignments", tenant_id, error))?;
+        let (employee_exists, rows): (bool, Vec<AssignmentRow>) = result;
         if !employee_exists {
             return Err(HrError::NotFound);
         }
-        let rows: Vec<AssignmentRow> = sqlx::query_as!(
-            AssignmentRow,
-            r#"
-            SELECT id, employee_id, branch_id, facility_id, department_id, job_id, manager_employee_id,
-                   date_start, date_end, is_primary, created_at
-            FROM hr_employee_assignments
-            WHERE tenant_id = $1 AND employee_id = $2
-            ORDER BY date_start DESC, created_at DESC
-            "#,
-            tenant_id,
-            employee_id,
-        )
-        .fetch_all(transaction.connection())
-        .await
-        .map_err(|error| database_failure("list employee assignments", tenant_id, error))?;
-        transaction
-            .commit()
-            .await
-            .map_err(|error| database_failure("commit assignment list", tenant_id, error))?;
         Ok(rows.into_iter().map(EmployeeAssignment::from).collect())
     }
 
@@ -831,36 +834,42 @@ impl PeopleRepo for PeopleProvider {
         tenant_id: Uuid,
         employee_id: Uuid,
     ) -> Result<Vec<AttendanceSession>, HrError> {
-        let mut transaction: TenantTransaction = self.begin_active_tenant(tenant_id).await?;
-        let employee_exists: bool = sqlx::query_scalar!(
-            r#"SELECT EXISTS (SELECT 1 FROM hr_employees WHERE tenant_id = $1 AND id = $2) AS "exists!""#,
-            tenant_id,
-            employee_id,
-        )
-        .fetch_one(transaction.connection())
-        .await
-        .map_err(|error| database_failure("validate employee for attendance list", tenant_id, error))?;
+        let result: (bool, Vec<AttendanceSessionRow>) = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                let employee_exists: bool = sqlx::query_scalar!(
+                    r#"SELECT EXISTS (
+                        SELECT 1 FROM hr_employees WHERE tenant_id = $1 AND id = $2
+                    ) AS "exists!""#,
+                    tenant_id,
+                    employee_id,
+                )
+                .fetch_one(&mut *connection)
+                .await?;
+                let rows: Vec<AttendanceSessionRow> = sqlx::query_as!(
+                    AttendanceSessionRow,
+                    r#"
+                    SELECT id, employee_id, facility_id, check_in_at, check_out_at,
+                           worked_seconds, created_at, updated_at
+                    FROM hr_attendance_sessions
+                    WHERE tenant_id = $1 AND employee_id = $2
+                    ORDER BY check_in_at DESC, id DESC
+                    "#,
+                    tenant_id,
+                    employee_id,
+                )
+                .fetch_all(connection)
+                .await?;
+                Ok((employee_exists, rows))
+            })
+            .await
+            .map_err(|error: TenantDbErr| {
+                tenant_database_failure("list employee attendance sessions", tenant_id, error)
+            })?;
+        let (employee_exists, rows): (bool, Vec<AttendanceSessionRow>) = result;
         if !employee_exists {
             return Err(HrError::NotFound);
         }
-        let rows: Vec<AttendanceSessionRow> = sqlx::query_as!(
-            AttendanceSessionRow,
-            r#"
-            SELECT id, employee_id, facility_id, check_in_at, check_out_at, worked_seconds, created_at, updated_at
-            FROM hr_attendance_sessions
-            WHERE tenant_id = $1 AND employee_id = $2
-            ORDER BY check_in_at DESC, id DESC
-            "#,
-            tenant_id,
-            employee_id,
-        )
-        .fetch_all(transaction.connection())
-        .await
-        .map_err(|error| database_failure("list attendance sessions", tenant_id, error))?;
-        transaction
-            .commit()
-            .await
-            .map_err(|error| database_failure("commit attendance session list", tenant_id, error))?;
         Ok(rows.into_iter().map(AttendanceSession::from).collect())
     }
 
@@ -872,41 +881,44 @@ impl PeopleRepo for PeopleProvider {
         account_id: Uuid,
         facility_id: Uuid,
     ) -> Result<AttendanceSession, HrError> {
-        let mut transaction: TenantTransaction = self.begin_active_tenant(tenant_id).await?;
-        let row: Option<AttendanceSessionRow> = sqlx::query_as!(
-            AttendanceSessionRow,
-            r#"
-            INSERT INTO hr_attendance_sessions (id, tenant_id, employee_id, facility_id, check_in_by_account_id)
-            SELECT $1, $2, employee.id, facility.id, $4
-            FROM hr_employees AS employee
-            INNER JOIN facilities AS facility
-                ON facility.tenant_id = employee.tenant_id
-               AND facility.id = $5
-               AND facility.status = 'active'
-            INNER JOIN branches AS branch
-                ON branch.tenant_id = facility.tenant_id
-               AND branch.id = facility.branch_id
-               AND branch.status = 'active'
-            WHERE employee.tenant_id = $2
-              AND employee.id = $3
-              AND employee.account_id = $4
-              AND employee.status = 'active'
-            RETURNING id, employee_id, facility_id, check_in_at, check_out_at, worked_seconds, created_at, updated_at
-            "#,
-            attendance_session_id,
-            tenant_id,
-            employee_id,
-            account_id,
-            facility_id,
-        )
-        .fetch_optional(transaction.connection())
-        .await
-        .map_err(|error| mutation_failure("check in employee", tenant_id, error))?;
-        let row: AttendanceSessionRow = row.ok_or(HrError::NotFound)?;
-        transaction
-            .commit()
+        let row: Option<AttendanceSessionRow> = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                sqlx::query_as!(
+                    AttendanceSessionRow,
+                    r#"
+                    INSERT INTO hr_attendance_sessions (
+                        id, tenant_id, employee_id, facility_id, check_in_by_account_id
+                    )
+                    SELECT $1, $2, employee.id, facility.id, $4
+                    FROM hr_employees AS employee
+                    INNER JOIN facilities AS facility
+                        ON facility.tenant_id = employee.tenant_id
+                       AND facility.id = $5
+                       AND facility.status = 'active'
+                    INNER JOIN branches AS branch
+                        ON branch.tenant_id = facility.tenant_id
+                       AND branch.id = facility.branch_id
+                       AND branch.status = 'active'
+                    WHERE employee.tenant_id = $2
+                      AND employee.id = $3
+                      AND employee.account_id = $4
+                      AND employee.status = 'active'
+                    RETURNING id, employee_id, facility_id, check_in_at, check_out_at,
+                              worked_seconds, created_at, updated_at
+                    "#,
+                    attendance_session_id,
+                    tenant_id,
+                    employee_id,
+                    account_id,
+                    facility_id,
+                )
+                .fetch_optional(connection)
+                .await
+            })
             .await
-            .map_err(|error| database_failure("commit employee check in", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_mutation_failure("check in employee", tenant_id, error))?;
+        let row: AttendanceSessionRow = row.ok_or(HrError::NotFound)?;
         info!(
             "Employee checked in: tenant_id={} employee_id={} attendance_session_id={} account_id={} facility_id={}",
             tenant_id, employee_id, attendance_session_id, account_id, facility_id
@@ -920,37 +932,37 @@ impl PeopleRepo for PeopleProvider {
         employee_id: Uuid,
         account_id: Uuid,
     ) -> Result<AttendanceSession, HrError> {
-        let mut transaction: TenantTransaction = self.begin_active_tenant(tenant_id).await?;
-        let row: Option<AttendanceSessionRow> = sqlx::query_as!(
-            AttendanceSessionRow,
-            r#"
-            UPDATE hr_attendance_sessions AS attendance
-            SET check_out_at = CURRENT_TIMESTAMP,
-                check_out_by_account_id = $3,
-                updated_at = CURRENT_TIMESTAMP
-            FROM hr_employees AS employee
-            WHERE attendance.tenant_id = $1
-              AND attendance.employee_id = $2
-              AND attendance.check_out_at IS NULL
-              AND employee.tenant_id = attendance.tenant_id
-              AND employee.id = attendance.employee_id
-              AND employee.account_id = $3
-            RETURNING attendance.id, attendance.employee_id, attendance.facility_id, attendance.check_in_at,
-                      attendance.check_out_at, attendance.worked_seconds, attendance.created_at,
-                      attendance.updated_at
-            "#,
-            tenant_id,
-            employee_id,
-            account_id,
-        )
-        .fetch_optional(transaction.connection())
-        .await
-        .map_err(|error| mutation_failure("check out employee", tenant_id, error))?;
-        let row: AttendanceSessionRow = row.ok_or(HrError::NotFound)?;
-        transaction
-            .commit()
+        let row: Option<AttendanceSessionRow> = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                sqlx::query_as!(
+                    AttendanceSessionRow,
+                    r#"
+                    UPDATE hr_attendance_sessions AS attendance
+                    SET check_out_at = CURRENT_TIMESTAMP,
+                        check_out_by_account_id = $3,
+                        updated_at = CURRENT_TIMESTAMP
+                    FROM hr_employees AS employee
+                    WHERE attendance.tenant_id = $1
+                      AND attendance.employee_id = $2
+                      AND attendance.check_out_at IS NULL
+                      AND employee.tenant_id = attendance.tenant_id
+                      AND employee.id = attendance.employee_id
+                      AND employee.account_id = $3
+                    RETURNING attendance.id, attendance.employee_id, attendance.facility_id,
+                              attendance.check_in_at, attendance.check_out_at, attendance.worked_seconds,
+                              attendance.created_at, attendance.updated_at
+                    "#,
+                    tenant_id,
+                    employee_id,
+                    account_id,
+                )
+                .fetch_optional(connection)
+                .await
+            })
             .await
-            .map_err(|error| database_failure("commit employee check out", tenant_id, error))?;
+            .map_err(|error: TenantDbErr| tenant_mutation_failure("check out employee", tenant_id, error))?;
+        let row: AttendanceSessionRow = row.ok_or(HrError::NotFound)?;
         info!(
             "Employee checked out: tenant_id={} employee_id={} attendance_session_id={} account_id={}",
             tenant_id, employee_id, row.id, account_id
@@ -975,6 +987,13 @@ fn tenant_database_failure(operation: &str, tenant_id: Uuid, error: TenantDbErr)
         "HR automatic tenant operation failed"
     );
     HrError::BackendUnavailable
+}
+
+fn tenant_mutation_failure(operation: &str, tenant_id: Uuid, error: TenantDbErr) -> HrError {
+    match error {
+        TenantDbErr::Sqlx(sqlx_error) => mutation_failure(operation, tenant_id, sqlx_error),
+        tenant_error => tenant_database_failure(operation, tenant_id, tenant_error),
+    }
 }
 
 fn mutation_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> HrError {

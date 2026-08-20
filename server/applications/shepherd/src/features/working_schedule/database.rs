@@ -343,36 +343,41 @@ impl WorkingScheduleRepo for WorkingScheduleProvider {
         tenant_id: Uuid,
         employee_id: Uuid,
     ) -> Result<Vec<EmployeeScheduleAssignment>, HrError> {
-        let mut transaction = self.begin_active_tenant(tenant_id).await?;
-        let employee_exists: bool = sqlx::query_scalar!(
-            r#"SELECT EXISTS (SELECT 1 FROM hr_employees WHERE tenant_id = $1 AND id = $2) AS "exists!""#,
-            tenant_id,
-            employee_id,
-        )
-        .fetch_one(transaction.connection())
-        .await
-        .map_err(|error| database_failure("validate employee for schedule assignment list", tenant_id, error))?;
+        let result: (bool, Vec<ScheduleAssignmentRow>) = self
+            .database
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                let employee_exists: bool = sqlx::query_scalar!(
+                    r#"SELECT EXISTS (
+                        SELECT 1 FROM hr_employees WHERE tenant_id = $1 AND id = $2
+                    ) AS "exists!""#,
+                    tenant_id,
+                    employee_id,
+                )
+                .fetch_one(&mut *connection)
+                .await?;
+                let rows: Vec<ScheduleAssignmentRow> = sqlx::query_as!(
+                    ScheduleAssignmentRow,
+                    r#"
+                    SELECT id, employee_id, schedule_id, date_start, date_end, created_at
+                    FROM hr_employee_schedule_assignments
+                    WHERE tenant_id = $1 AND employee_id = $2
+                    ORDER BY date_start DESC, created_at DESC
+                    "#,
+                    tenant_id,
+                    employee_id,
+                )
+                .fetch_all(connection)
+                .await?;
+                Ok((employee_exists, rows))
+            })
+            .await
+            .map_err(|error: TenantDbErr| {
+                tenant_database_failure("list employee schedule assignments", tenant_id, error)
+            })?;
+        let (employee_exists, rows): (bool, Vec<ScheduleAssignmentRow>) = result;
         if !employee_exists {
             return Err(HrError::NotFound);
         }
-        let rows: Vec<ScheduleAssignmentRow> = sqlx::query_as!(
-            ScheduleAssignmentRow,
-            r#"
-            SELECT id, employee_id, schedule_id, date_start, date_end, created_at
-            FROM hr_employee_schedule_assignments
-            WHERE tenant_id = $1 AND employee_id = $2
-            ORDER BY date_start DESC, created_at DESC
-            "#,
-            tenant_id,
-            employee_id,
-        )
-        .fetch_all(transaction.connection())
-        .await
-        .map_err(|error| database_failure("list employee schedule assignments", tenant_id, error))?;
-        transaction
-            .commit()
-            .await
-            .map_err(|error| database_failure("commit employee schedule assignment list", tenant_id, error))?;
         Ok(rows.into_iter().map(EmployeeScheduleAssignment::from).collect())
     }
 
