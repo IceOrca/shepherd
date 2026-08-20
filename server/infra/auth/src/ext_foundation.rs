@@ -11,6 +11,7 @@ use axum::Router;
 use crate::AuthService;
 
 pub mod account;
+pub(crate) mod account_cache;
 pub mod auth_admin;
 mod claims;
 mod config;
@@ -19,6 +20,7 @@ pub mod middleware;
 mod service;
 
 pub use claims::{AccessTokenClaims, Audience, AuthenticatedPrincipal};
+pub use account_cache::AuthenticatedUserCacheConfigError;
 pub use config::ExtProviderConfig;
 pub use error::AccessTokenError;
 pub use service::ExtProvider;

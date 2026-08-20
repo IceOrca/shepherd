@@ -158,6 +158,7 @@ struct MappedAccount {
     subject: String,
     account_id: Uuid,
     username: String,
+    email: Option<String>,
     account_status: String,
     primary_role: String,
 }
@@ -646,6 +647,7 @@ async fn set_user_status(
         ));
     }
 
+    invalidate_account_cache(&context, &actor, &auth_user_id, "before_status_change").await;
     let previously_disabled: bool = account.account_status == "disabled";
     let provider_user: ExtProviderUser = context
         .admin
@@ -667,6 +669,7 @@ async fn set_user_status(
         );
         return Err(error);
     }
+    invalidate_account_cache(&context, &actor, &auth_user_id, "after_status_change").await;
 
     record_audit(
         "auth.user.status.change",
@@ -695,7 +698,7 @@ async fn load_mapped_accounts(context: &AuthService, tenant_id: Uuid) -> Result<
             sqlx::query_as!(
                 MappedAccount,
                 r#"
-                SELECT identity.subject, account.id AS account_id, account.username,
+                SELECT identity.subject, account.id AS account_id, account.username, account.email,
                        account.status AS account_status, account.primary_role_code AS primary_role
                 FROM account_identities AS identity
                 INNER JOIN accounts AS account
@@ -1177,14 +1180,15 @@ async fn link_created_user(
     let account_insert: PgQueryResult = sqlx::query!(
         r#"
         INSERT INTO accounts (
-            id, tenant_id, username, status, primary_role_code,
+            id, tenant_id, username, email, status, primary_role_code,
             created_by_account_id, updated_by_account_id
         )
-        VALUES ($1, $2, $3, 'active', $4, $5, $5)
+        VALUES ($1, $2, $3, $4, 'active', $5, $6, $6)
         "#,
         account_id,
         actor.tenant_id,
         request.username,
+        request.email,
         request.primary_role,
         actor.account_id,
     )
@@ -1296,8 +1300,26 @@ async fn link_created_user(
         account_id,
         username: request.username.clone(),
         account_status: "active".to_owned(),
+        email: Some(request.email.clone()),
         primary_role: request.primary_role.clone(),
     })
+}
+
+async fn invalidate_account_cache(context: &AuthService, actor: &AuthenticatedUser, subject: &str, phase: &str) {
+    let invalidation_result: Result<(), crate::ext_foundation::account_cache::AuthenticatedUserCacheError> = context
+        .account_cache
+        .invalidate(&context.provider.config().issuer, subject)
+        .await;
+    if let Err(cache_error) = invalidation_result {
+        warn!(
+            operation = "invalidate_auth_admin_account_cache",
+            tenant_id = %actor.tenant_id,
+            actor_id = %actor.account_id,
+            phase,
+            reason = %cache_error,
+            "Auth administration cache invalidation failed; mandatory cache expiry limits stale access"
+        );
+    }
 }
 
 async fn update_account_status(
@@ -1401,7 +1423,7 @@ fn summary(account: MappedAccount, provider_user: Option<ExtProviderUser>) -> Au
         auth_user_id: account.subject,
         account_id: account.account_id,
         username: account.username,
-        email: provider_user.as_ref().and_then(|user| user.email.clone()),
+        email: account.email,
         primary_role: account.primary_role,
         account_status: account.account_status,
         provider_status: provider_status.to_owned(),

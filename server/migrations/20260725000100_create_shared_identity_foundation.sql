@@ -70,6 +70,7 @@ CREATE TABLE accounts (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
     username TEXT NOT NULL,
+    email TEXT,
     status TEXT NOT NULL DEFAULT 'active',
     primary_role_code TEXT NOT NULL DEFAULT 'employee' REFERENCES roles (code) ON DELETE RESTRICT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -89,12 +90,23 @@ CREATE TABLE accounts (
         username = btrim(username) AND char_length(username) BETWEEN 3 AND 128
     ),
     CONSTRAINT accounts_status_valid CHECK (status IN ('active', 'disabled')),
+    CONSTRAINT accounts_email_valid CHECK (
+        email IS NULL OR (
+            email = btrim(email)
+            AND email = lower(email)
+            AND char_length(email) BETWEEN 3 AND 320
+            AND email ~ '^[^[:space:]@]+@[^[:space:]@]+[.][^[:space:]@]+$'
+        )
+    ),
     CONSTRAINT accounts_primary_role_supported
         CHECK (primary_role_code IN ('tenant_owner', 'supervisor', 'employee')),
     CONSTRAINT accounts_updated_after_created CHECK (updated_at >= created_at)
 );
 
 CREATE UNIQUE INDEX accounts_tenant_username_normalized_uq ON accounts (tenant_id, lower(username));
+CREATE UNIQUE INDEX accounts_tenant_email_normalized_uq
+    ON accounts (tenant_id, lower(email))
+    WHERE email IS NOT NULL;
 CREATE INDEX accounts_tenant_status_idx ON accounts (tenant_id, status);
 CREATE INDEX accounts_tenant_primary_role_idx ON accounts (tenant_id, primary_role_code);
 

@@ -62,5 +62,34 @@ that workflow; they are not the product's primary purpose.
   boundaries.
 - Keep GPS disabled until the customer explicitly chooses to introduce it.
 
+## Authentication and tenant access
+
+Supabase Auth (GoTrue) owns credentials, external identities, login sessions,
+JWT signing, and account recovery. Shepherd separately owns application
+accounts, tenant membership, account status, email, roles, permissions, and
+employee links. A valid GoTrue login therefore does not by itself grant access:
+the JWT issuer and subject must map to an active Shepherd account.
+
+The API validates signed access tokens locally and caches each successfully
+resolved `AuthenticatedUser` in Redis. The cache contains the Shepherd tenant
+and account IDs, username, application-owned email, roles, and permissions. It
+uses a deterministic hashed identity key and a mandatory 60-second expiry by
+default, so repeated requests avoid querying account and authorization tables
+without allowing Redis keys to grow indefinitely.
+
+PostgreSQL remains authoritative. Cache misses and Redis outages fall back to
+the application database, while missing or disabled accounts remain rejected.
+Account status and future identity, email, role, or permission changes must
+invalidate the affected cache entry. Disabling an account therefore forces an
+already-issued GoTrue JWT through the current Shepherd account-status check.
+Business queries still establish tenant context through SQLx transactions so
+PostgreSQL RLS remains the final tenant-isolation boundary.
+
+Development cache lifetime is configured with
+`AUTH_ACCOUNT_CACHE_TTL_SECS` (default `60`, allowed range `1..=3600`). The
+development seed workflow stores the login catalog emails in `accounts.email`
+and clears only Shepherd's authenticated-user cache namespace after resetting
+the application database.
+
 Detailed product invariants, architecture rules, API boundaries, and development
 commands are maintained in [AGENTS.md](./AGENTS.md).

@@ -6,6 +6,7 @@ edition.workspace = true
 [features]
 default = ["ext-foundation"]
 ext-foundation = [
+    "dep:base64",
     "dep:async-trait",
     "dep:reqwest",
     "dep:chrono",
@@ -17,6 +18,8 @@ ext-foundation = [
     "dep:ts-rs",
     "dep:uuid",
     "dep:infra-postgres",
+    "dep:infra-redis",
+    "dep:redis",
 ]
 jwt = ["dep:uuid"]
 jwks = ["jwt", "dep:base64"]

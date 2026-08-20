@@ -11,14 +11,17 @@ use axum::{
 use infra_kernel::request::PrincipalRateLimitKey;
 use infra_postgres::{DatabaseAdapter, TenantDbErr};
 use sqlx::PgConnection;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, trace, warn};
 use ts_rs::TS;
 use uuid::Uuid;
 
-use crate::{AuthService, ext_foundation::AuthenticatedPrincipal};
+use crate::{
+    AuthService,
+    ext_foundation::{AuthenticatedPrincipal, account_cache::AuthenticatedUserCacheError},
+};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AuthenticatedUser {
     pub tenant_id: Uuid,
     pub account_id: Uuid,
@@ -90,6 +93,7 @@ struct UserAccount {
     pub tenant_id: Uuid,
     pub username: String,
     pub status: String,
+    pub email: Option<String>,
     pub primary_role_code: String,
 }
 
@@ -120,7 +124,38 @@ pub async fn resolve_application_account(
         subject = %subject,
         "Resolving application account for authenticated external identity"
     );
-    let user: AuthenticatedUser = load_account(&ctx.db, &principal).await?;
+    let cache_result: Result<Option<AuthenticatedUser>, AuthenticatedUserCacheError> =
+        ctx.account_cache.get(&principal).await;
+    let cached_user: Option<AuthenticatedUser> = match cache_result {
+        Ok(user) => user,
+        Err(cache_error) => {
+            warn!(
+                operation = "resolve_application_account",
+                issuer = %issuer,
+                subject = %subject,
+                reason = %cache_error,
+                "Authenticated-user cache unavailable; resolving from PostgreSQL"
+            );
+            None
+        }
+    };
+    let user: AuthenticatedUser = if let Some(user) = cached_user {
+        user
+    } else {
+        let loaded_user: AuthenticatedUser = load_account(&ctx.db, &principal).await?;
+        let cache_write_result: Result<(), AuthenticatedUserCacheError> =
+            ctx.account_cache.put(&principal, &loaded_user).await;
+        if let Err(cache_error) = cache_write_result {
+            warn!(
+                operation = "resolve_application_account",
+                tenant_id = %loaded_user.tenant_id,
+                account_id = %loaded_user.account_id,
+                reason = %cache_error,
+                "Authenticated-user cache write failed; request will continue"
+            );
+        }
+        loaded_user
+    };
     let tenant_id: Uuid = user.tenant_id;
     let account_id: Uuid = user.account_id;
     debug!(
@@ -196,7 +231,7 @@ async fn load_account(
             let account: Option<UserAccount> = sqlx::query_as!(
                 UserAccount,
                 r#"
-                SELECT id, tenant_id, username, status, primary_role_code
+                SELECT id, tenant_id, username, email, status, primary_role_code
                 FROM accounts
                 WHERE tenant_id = $1 AND id = $2
                 "#,
@@ -311,7 +346,7 @@ async fn load_account(
         tenant_id: account.tenant_id,
         account_id: account.id,
         username: account.username,
-        email: principal.email.clone(),
+        email: account.email,
         primary_role: account.primary_role_code,
         roles,
         permissions,

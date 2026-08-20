@@ -112,5 +112,16 @@ docker compose exec -T postgres-db sh -c \
 docker compose exec -T -e AUTH_DEV_IDENTITIES_JSON="${auth_identities_json}" server bash -c \
     'cargo sqlx database reset -y && RUST_LOG=debug SQLX_OFFLINE=false cargo run -p shepherd --bin shepherd-dev-db-seeding'
 
+# A database reset may relink the same external subject to a new development
+# account UUID. Remove only the bounded application-principal cache namespace;
+# unrelated Redis sessions, rate limits, and queues remain untouched.
+docker compose exec -T redis-cache sh -c \
+    'redis-cli --scan --pattern "auth:application-user:v1:*" |
+        while IFS= read -r cache_key; do
+            if [ -n "$cache_key" ]; then
+                redis-cli UNLINK "$cache_key" >/dev/null
+            fi
+        done'
+
 echo "Development data is ready for ${seeded_auth_account_count} Auth accounts"
 echo "Login catalog: ${dev_accounts_file}"

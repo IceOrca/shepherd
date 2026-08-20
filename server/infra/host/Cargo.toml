@@ -39,7 +39,7 @@ infra-kernel.workspace = true
 infra-auth = { path = "../auth", optional = true, default-features = false, features = ["ext-foundation"] }
 infra-postgres.workspace = true
 infra-redis.workspace = true
-infra-ntree.workspace = true
+# infra-ntree.workspace = true
 
 
 [features]

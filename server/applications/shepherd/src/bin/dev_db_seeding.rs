@@ -23,6 +23,12 @@ struct SeedIdRow {
     id: Uuid,
 }
 
+struct ExistingDevAccountRow {
+    id: Uuid,
+    email: Option<String>,
+    primary_role_code: String,
+}
+
 struct DevTenant {
     id: &'static str,
     slug: &'static str,
@@ -62,6 +68,17 @@ impl DevRole {
             Self::Employee => "employee",
         }
     }
+}
+
+fn dev_auth_email(tenant_slug: &str, username: &str) -> String {
+    if username == "iceorca" {
+        return "iceorca@shepherd.local".to_owned();
+    }
+    let local_suffix: String = username
+        .strip_prefix(&format!("{tenant_slug}_"))
+        .unwrap_or(username)
+        .replace('_', "");
+    format!("{tenant_slug}.{local_suffix}@shepherd.local")
 }
 
 #[derive(Clone, Debug)]
@@ -300,10 +317,12 @@ async fn seed_tenant(
         .iter()
         .find(|account: &&DevAccount| account.role == DevRole::TenantOwner)
         .ok_or_else(|| io::Error::other(format!("tenant '{}' has no owner seed definition", tenant.slug)))?;
+    let owner_email: String = dev_auth_email(tenant.slug, owner_definition.username);
     let owner: SeedAccount = ensure_account(
         database,
         tenant_id,
         owner_definition.username,
+        &owner_email,
         owner_definition.role,
         None,
     )
@@ -325,10 +344,12 @@ async fn seed_tenant(
         .iter()
         .filter(|account: &&DevAccount| account.role != DevRole::TenantOwner)
     {
+        let account_email: String = dev_auth_email(tenant.slug, account_definition.username);
         let account: SeedAccount = ensure_account(
             database,
             tenant_id,
             account_definition.username,
+            &account_email,
             account_definition.role,
             Some(owner.id),
         )
@@ -1826,12 +1847,19 @@ async fn ensure_account(
     database: &DatabaseAdapter,
     tenant_id: Uuid,
     username: &str,
+    email: &str,
     role: DevRole,
     audit_account_id: Option<Uuid>,
 ) -> Result<SeedAccount, io::Error> {
-    let mut transaction = database.begin_tenant(tenant_id).await.map_err(io::Error::other)?;
-    let existing = sqlx::query!(
-        "SELECT id, username, primary_role_code FROM accounts WHERE tenant_id = $1 AND lower(username) = lower($2)",
+    let mut transaction: infra_postgres::TenantTransaction =
+        database.begin_tenant(tenant_id).await.map_err(io::Error::other)?;
+    let existing: Option<ExistingDevAccountRow> = sqlx::query_as!(
+        ExistingDevAccountRow,
+        r#"
+        SELECT id, email, primary_role_code
+        FROM accounts
+        WHERE tenant_id = $1 AND lower(username) = lower($2)
+        "#,
         tenant_id,
         username,
     )
@@ -1839,7 +1867,7 @@ async fn ensure_account(
     .await
     .map_err(io::Error::other)?;
 
-    let account_id = if let Some(account) = existing {
+    let account_id: Uuid = if let Some(account) = existing {
         if account.primary_role_code != role.as_code() {
             return Err(io::Error::other(format!(
                 "existing development account '{username}' has role {}, expected {}",
@@ -1847,29 +1875,38 @@ async fn ensure_account(
                 role.as_code()
             )));
         }
+        if account.email.as_deref() != Some(email) {
+            return Err(io::Error::other(format!(
+                "existing development account '{username}' has a different email than '{email}'"
+            )));
+        }
         account.id
     } else {
-        sqlx::query_scalar!(
+        let new_account_id: Uuid = Uuid::new_v4();
+        let inserted: SeedIdRow = sqlx::query_as!(
+            SeedIdRow,
             r#"
             INSERT INTO accounts (
-                id, tenant_id, username, status, primary_role_code,
+                id, tenant_id, username, email, status, primary_role_code,
                 created_by_account_id, updated_by_account_id
             )
-            VALUES ($1, $2, $3, 'active', $4, $5, $5)
+            VALUES ($1, $2, $3, $4, 'active', $5, $6, $6)
             RETURNING id
             "#,
-            Uuid::new_v4(),
+            new_account_id,
             tenant_id,
             username,
+            email,
             role.as_code(),
             audit_account_id,
         )
         .fetch_one(transaction.connection())
         .await
-        .map_err(io::Error::other)?
+        .map_err(io::Error::other)?;
+        inserted.id
     };
 
-    sqlx::query!(
+    let role_insert: sqlx::postgres::PgQueryResult = sqlx::query!(
         r#"
         INSERT INTO account_roles (tenant_id, account_id, role_code, assigned_by_account_id)
         VALUES ($1, $2, $3, $4)
@@ -1883,6 +1920,12 @@ async fn ensure_account(
     .execute(transaction.connection())
     .await
     .map_err(io::Error::other)?;
+    trace!(
+        tenant_id = %tenant_id,
+        account_id = %account_id,
+        rows_affected = role_insert.rows_affected(),
+        "Development account role ensured"
+    );
     transaction.commit().await.map_err(io::Error::other)?;
 
     Ok(SeedAccount {

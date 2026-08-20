@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     "infra/kernel",
-    "infra/ntree",
+    # "infra/ntree",
     "infra/auth",
     "infra/authz",
     "infra/postgres",
@@ -64,7 +64,7 @@ calamine = { version = "*" }
 rust_xlsxwriter = { version = "*" }
 # reusable infra crates
 infra-kernel = { path = "infra/kernel" }
-infra-ntree = { path = "infra/ntree" }
+# infra-ntree = { path = "infra/ntree" }
 infra-auth = { path = "infra/auth" }
 infra-authz = { path = "infra/authz" }
 infra-postgres = { path = "infra/postgres" }
