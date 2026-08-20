@@ -90,4 +90,7 @@ Configure provider credentials with `TELEGRAM_BOT_TOKEN` and `ZALO_OA_ACCESS_TOK
 destinations are chat IDs. Zalo destinations are OA user IDs and remain subject to Zalo's recipient/message eligibility
 rules. A bounded Tokio `mpsc` channel wakes the dispatcher after a committed action; polling still defaults to two seconds
 via `NOTIFICATION_POLL_INTERVAL_SECS` for recovery after restarts or missed signals. Failed transient deliveries retry
-from the durable `notification_outbox`; a provider failure never rolls back a recorded work session.
+from the durable `notification_outbox`; a provider failure never rolls back a recorded work session. Provider HTTP,
+whole-delivery, retry/backoff, batch, processing-lock, and graceful-shutdown limits are environment-configured as
+documented in the root README. The dispatcher checks cancellation between tenants and deliveries, and timed-out
+deliveries remain eligible for the durable retry policy.

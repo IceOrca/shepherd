@@ -14,18 +14,17 @@ use uuid::Uuid;
 
 use infra_postgres::{DatabaseAdapter, TenantDbErr, TenantTransaction};
 use sqlx::PgConnection;
-
 pub struct WorkingScheduleProvider {
-    database: Arc<DatabaseAdapter>,
+    db: Arc<DatabaseAdapter>,
 }
 
 impl WorkingScheduleProvider {
-    pub fn new_arc(database: Arc<DatabaseAdapter>) -> Arc<Self> {
-        Arc::new(Self { database })
+    pub fn new_arc(db: Arc<DatabaseAdapter>) -> Arc<Self> {
+        Arc::new(Self { db })
     }
 
     async fn begin_active_tenant(&self, tenant_id: Uuid) -> Result<TenantTransaction, HrError> {
-        self.database.begin_tenant(tenant_id).await.map_err(|error| {
+        self.db.begin_tenant(tenant_id).await.map_err(|error| {
             error!(
                 "Working schedule tenant transaction failed: tenant_id={} error={}",
                 tenant_id, error
@@ -103,7 +102,7 @@ impl From<ScheduleAssignmentRow> for EmployeeScheduleAssignment {
 impl WorkingScheduleRepo for WorkingScheduleProvider {
     async fn list_schedules(&self, tenant_id: Uuid) -> Result<Vec<WorkingSchedule>, HrError> {
         let (schedule_rows, period_rows): (Vec<ScheduleRow>, Vec<PeriodRow>) = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
                 let schedule_rows: Vec<ScheduleRow> = sqlx::query_as!(
                     ScheduleRow,
@@ -147,7 +146,7 @@ impl WorkingScheduleRepo for WorkingScheduleProvider {
 
     async fn find_schedule(&self, tenant_id: Uuid, schedule_id: Uuid) -> Result<Option<WorkingSchedule>, HrError> {
         let result: Option<(ScheduleRow, Vec<PeriodRow>)> = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
                 let schedule_row: Option<ScheduleRow> = sqlx::query_as!(
                     ScheduleRow,
@@ -344,7 +343,7 @@ impl WorkingScheduleRepo for WorkingScheduleProvider {
         employee_id: Uuid,
     ) -> Result<Vec<EmployeeScheduleAssignment>, HrError> {
         let result: (bool, Vec<ScheduleAssignmentRow>) = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
                 let employee_exists: bool = sqlx::query_scalar!(
                     r#"SELECT EXISTS (
@@ -651,7 +650,7 @@ fn periods_match(existing: &[PeriodRow], requested: &[WorkingPeriodInput]) -> bo
 
 fn database_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> HrError {
     error!(
-        "Working schedule database operation failed: operation={} tenant_id={} error={}",
+        "Working schedule db operation failed: operation={} tenant_id={} error={}",
         operation, tenant_id, error
     );
     HrError::BackendUnavailable

@@ -1,4 +1,8 @@
+use std::time::Duration;
+
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
+
+use crate::WorkerTimeout;
 
 #[derive(Clone)]
 pub(crate) struct WorkerState {
@@ -33,6 +37,13 @@ impl WorkerState {
     pub(crate) async fn shutdown(&self) {
         self.cancel();
         self.wait().await;
+    }
+
+    pub(crate) async fn shutdown_with_timeout(&self, timeout: Duration) -> Result<(), WorkerTimeout> {
+        self.cancel();
+        tokio::time::timeout(timeout, self.wait())
+            .await
+            .map_err(|_elapsed: tokio::time::error::Elapsed| WorkerTimeout::new(timeout))
     }
 
     pub(crate) async fn wait(&self) {

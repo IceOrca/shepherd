@@ -15,12 +15,12 @@ use super::core::{
 };
 
 pub struct StaffingProvider {
-    database: Arc<DatabaseAdapter>,
+    db: Arc<DatabaseAdapter>,
 }
 
 impl StaffingProvider {
-    pub fn new_arc(database: Arc<DatabaseAdapter>) -> Arc<Self> {
-        Arc::new(Self { database })
+    pub fn new_arc(db: Arc<DatabaseAdapter>) -> Arc<Self> {
+        Arc::new(Self { db })
     }
 
     async fn begin_tenant(&self, tenant_id: Uuid) -> Result<TenantTransaction, StaffingError> {
@@ -29,7 +29,7 @@ impl StaffingProvider {
             tenant_id = %tenant_id,
             "Opening staffing RLS-scoped tenant transaction"
         );
-        let result: Result<TenantTransaction, TenantDbErr> = self.database.begin_tenant(tenant_id).await;
+        let result: Result<TenantTransaction, TenantDbErr> = self.db.begin_tenant(tenant_id).await;
         match result {
             Ok(transaction) => {
                 trace!(
@@ -334,7 +334,7 @@ struct ResolvedRateRow {
 impl StaffingRepo for StaffingProvider {
     async fn list_customers(&self, tenant_id: Uuid) -> Result<Vec<Customer>, StaffingError> {
         let rows: Vec<CustomerRow> = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
                 sqlx::query_as!(
                     CustomerRow,
@@ -362,7 +362,7 @@ impl StaffingRepo for StaffingProvider {
         audit_account_id: Uuid,
     ) -> Result<Customer, StaffingError> {
         let row: CustomerRow = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
                 sqlx::query_as!(
                     CustomerRow,
@@ -400,7 +400,7 @@ impl StaffingRepo for StaffingProvider {
         customer_id: Uuid,
     ) -> Result<Vec<CustomerFacility>, StaffingError> {
         let rows: Vec<CustomerFacilityRow> = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
                 sqlx::query_as!(
                     CustomerFacilityRow,
@@ -430,7 +430,7 @@ impl StaffingRepo for StaffingProvider {
         audit_account_id: Uuid,
     ) -> Result<CustomerFacility, StaffingError> {
         let row: CustomerFacilityRow = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
                 sqlx::query_as!(
                     CustomerFacilityRow,
@@ -462,7 +462,7 @@ impl StaffingRepo for StaffingProvider {
 
     async fn list_rate_agreements(&self, tenant_id: Uuid) -> Result<Vec<StaffingRateAgreement>, StaffingError> {
         let rows: Vec<RateAgreementRow> = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
                 sqlx::query_as!(
                     RateAgreementRow,
@@ -493,7 +493,7 @@ impl StaffingRepo for StaffingProvider {
         audit_account_id: Uuid,
     ) -> Result<StaffingRateAgreement, StaffingError> {
         let row: RateAgreementRow = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
                 sqlx::query_as!(
                     RateAgreementRow,
@@ -541,7 +541,7 @@ impl StaffingRepo for StaffingProvider {
 
     async fn list_shifts(&self, tenant_id: Uuid) -> Result<Vec<StaffingShift>, StaffingError> {
         let rows: Vec<ShiftRow> = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
                 sqlx::query_as!(
                     ShiftRow,
@@ -570,7 +570,7 @@ impl StaffingRepo for StaffingProvider {
         audit_account_id: Uuid,
     ) -> Result<StaffingShift, StaffingError> {
         let row: ShiftRow = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
                 sqlx::query_as!(
                     ShiftRow,
@@ -608,7 +608,7 @@ impl StaffingRepo for StaffingProvider {
         shift_id: Uuid,
     ) -> Result<Vec<ShiftAssignment>, StaffingError> {
         let rows: Vec<AssignmentRow> = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
                 list_assignments(connection, tenant_id, shift_id).await
             })
@@ -625,7 +625,7 @@ impl StaffingRepo for StaffingProvider {
         shift_id: Uuid,
     ) -> Result<Vec<StaffingCandidate>, StaffingError> {
         let result: (bool, Vec<CandidateRow>) = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
                 let shift_exists: bool = sqlx::query_scalar!(
                     r#"SELECT EXISTS (
@@ -1078,7 +1078,7 @@ impl StaffingRepo for StaffingProvider {
 
     async fn list_reconciliations(&self, tenant_id: Uuid) -> Result<Vec<StaffingReconciliation>, StaffingError> {
         let rows: Vec<ReconciliationRow> = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
                 sqlx::query_as!(
                     ReconciliationRow,
@@ -1205,7 +1205,7 @@ impl StaffingRepo for StaffingProvider {
         audit_account_id: Uuid,
     ) -> Result<CustomerWorkRecord, StaffingError> {
         let row: Option<CustomerWorkRecordRow> = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
                 sqlx::query_as!(
                     CustomerWorkRecordRow,
@@ -1281,7 +1281,7 @@ async fn list_assignments(
 
 fn database_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> StaffingError {
     error!(
-        "Staffing database operation failed: operation={} tenant_id={} error={}",
+        "Staffing db operation failed: operation={} tenant_id={} error={}",
         operation, tenant_id, error
     );
     StaffingError::BackendUnavailable
@@ -1310,7 +1310,7 @@ fn mutation_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> Sta
         sqlx::Error::Database(database_error)
             if database_error.is_check_violation() || database_error.is_foreign_key_violation() =>
         {
-            StaffingError::InvalidInput("staffing data violates a database constraint")
+            StaffingError::InvalidInput("staffing data violates a db constraint")
         }
         _ => StaffingError::BackendUnavailable,
     };

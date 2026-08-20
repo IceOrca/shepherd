@@ -10,10 +10,12 @@ mod state;
 
 pub use asynchronous::AsyncWorker;
 pub use blocking::BlockingWorker;
-pub use error::WorkerClosed;
+pub use error::{WorkerClosed, WorkerTimeout};
 pub use queue::{QueueConfig, QueueConfigError, QueueShutdownMode, TaskSender};
 
 use tokio_util::sync::CancellationToken;
+
+use std::time::Duration;
 
 use state::WorkerState;
 
@@ -53,6 +55,10 @@ impl Worker {
 
     pub async fn shutdown(&self) {
         self.state.shutdown().await;
+    }
+
+    pub async fn shutdown_with_timeout(&self, timeout: Duration) -> Result<(), WorkerTimeout> {
+        self.state.shutdown_with_timeout(timeout).await
     }
 
     pub async fn wait(&self) {

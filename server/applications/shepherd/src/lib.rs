@@ -42,18 +42,17 @@ pub struct ApplicationCore {
 }
 
 impl ApplicationCore {
-    pub fn new_arc(database: Arc<DatabaseAdapter>) -> Arc<Self> {
+    pub fn new_arc(db: Arc<DatabaseAdapter>) -> Arc<Self> {
         let organization: Arc<OrganizationService> =
-            OrganizationService::new_arc(OrganizationProvider::new_arc(Arc::clone(&database)));
-        let people: Arc<PeopleService> = PeopleService::new_arc(PeopleProvider::new_arc(Arc::clone(&database)));
+            OrganizationService::new_arc(OrganizationProvider::new_arc(Arc::clone(&db)));
+        let people: Arc<PeopleService> = PeopleService::new_arc(PeopleProvider::new_arc(Arc::clone(&db)));
         let working_schedules: Arc<WorkingScheduleService> =
-            WorkingScheduleService::new_arc(WorkingScheduleProvider::new_arc(Arc::clone(&database)));
-        let payroll: Arc<PayrollService> = PayrollService::new_arc(PayrollProvider::new_arc(Arc::clone(&database)));
-        let staffing: Arc<StaffingService> = StaffingService::new_arc(StaffingProvider::new_arc(Arc::clone(&database)));
+            WorkingScheduleService::new_arc(WorkingScheduleProvider::new_arc(Arc::clone(&db)));
+        let payroll: Arc<PayrollService> = PayrollService::new_arc(PayrollProvider::new_arc(Arc::clone(&db)));
+        let staffing: Arc<StaffingService> = StaffingService::new_arc(StaffingProvider::new_arc(Arc::clone(&db)));
         let urgent_work: Arc<UrgentWorkService> =
-            UrgentWorkService::new_arc(UrgentWorkProvider::new_arc(Arc::clone(&database)));
-        let staffing_work: Arc<StaffingWorkService> =
-            StaffingWorkService::new_arc(StaffingWorkProvider::new_arc(database));
+            UrgentWorkService::new_arc(UrgentWorkProvider::new_arc(Arc::clone(&db)));
+        let staffing_work: Arc<StaffingWorkService> = StaffingWorkService::new_arc(StaffingWorkProvider::new_arc(db));
 
         Arc::new(Self {
             organization,
@@ -70,19 +69,19 @@ impl ApplicationCore {
 #[derive(Clone)]
 pub struct AppContext {
     pub auth: Arc<infra_auth::AuthService>,
-    pub database: Arc<DatabaseAdapter>,
+    pub db: Arc<DatabaseAdapter>,
     pub core: Arc<ApplicationCore>,
     pub notifications: Arc<notifications::NotificationDispatcher>,
 }
 
 impl AppContext {
-    pub fn new_arc(auth: Arc<infra_auth::AuthService>, database: Arc<DatabaseAdapter>) -> Arc<Self> {
+    pub fn new_arc(auth: Arc<infra_auth::AuthService>, db: Arc<DatabaseAdapter>) -> Arc<Self> {
         let notifications: Arc<notifications::NotificationDispatcher> =
-            notifications::NotificationDispatcher::new_arc(Arc::clone(&database));
-        let core: Arc<ApplicationCore> = ApplicationCore::new_arc(Arc::clone(&database));
+            notifications::NotificationDispatcher::new_arc(Arc::clone(&db));
+        let core: Arc<ApplicationCore> = ApplicationCore::new_arc(Arc::clone(&db));
         Arc::new(Self {
             auth,
-            database,
+            db,
             core,
             notifications,
         })

@@ -5,9 +5,11 @@ use std::time::Duration;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tracing::{debug, warn};
 
 const TELEGRAM_API_ROOT: &str = "https://api.telegram.org";
 const ZALO_MESSAGE_URL: &str = "https://openapi.zalo.me/v3.0/oa/message/cs";
+const DEFAULT_PROVIDER_HTTP_TIMEOUT_SECS: u64 = 10;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NotificationChannel {
@@ -36,6 +38,8 @@ pub enum NotificationError {
     NotConfigured,
     #[error("notification provider request failed")]
     Transport,
+    #[error("notification provider request timed out")]
+    TimedOut,
     #[error("notification provider is temporarily unavailable")]
     Unavailable,
     #[error("notification provider rejected the request: {0}")]
@@ -46,7 +50,10 @@ pub enum NotificationError {
 
 impl NotificationError {
     pub fn is_retryable(&self) -> bool {
-        matches!(self, Self::Transport | Self::Unavailable | Self::InvalidResponse)
+        matches!(
+            self,
+            Self::Transport | Self::TimedOut | Self::Unavailable | Self::InvalidResponse
+        )
     }
 }
 
@@ -59,8 +66,13 @@ pub struct Notifier {
 
 impl Notifier {
     pub fn from_env() -> Self {
+        let request_timeout_secs: u64 = positive_env_u64(
+            "NOTIFICATION_PROVIDER_HTTP_TIMEOUT_SECS",
+            DEFAULT_PROVIDER_HTTP_TIMEOUT_SECS,
+        );
+        debug!(request_timeout_secs, "Resolved notification provider HTTP timeout");
         let client = Client::builder()
-            .timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(request_timeout_secs))
             .build()
             .unwrap_or_else(|error| panic!("failed to construct notification HTTP client: {error}"));
         Self {
@@ -156,6 +168,39 @@ fn non_empty_env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|value| !value.trim().is_empty())
 }
 
+fn positive_env_u64(name: &str, default: u64) -> u64 {
+    let raw_value: String = match std::env::var(name) {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => return default,
+        Err(std::env::VarError::NotUnicode(_value)) => {
+            warn!(
+                configuration = name,
+                default, "Configuration is not valid Unicode; using default"
+            );
+            return default;
+        }
+    };
+    match raw_value.parse::<u64>() {
+        Ok(value) if value > 0 => value,
+        Ok(_zero) => {
+            warn!(
+                configuration = name,
+                default, "Configuration must be greater than zero; using default"
+            );
+            default
+        }
+        Err(error) => {
+            warn!(
+                configuration = name,
+                default,
+                error = %error,
+                "Configuration is not an unsigned integer; using default"
+            );
+            default
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct TelegramRequest<'a> {
     chat_id: &'a str,
@@ -219,6 +264,7 @@ mod tests {
     #[test]
     fn only_transport_failures_are_retryable() {
         assert!(NotificationError::Transport.is_retryable());
+        assert!(NotificationError::TimedOut.is_retryable());
         assert!(NotificationError::Unavailable.is_retryable());
         assert!(NotificationError::InvalidResponse.is_retryable());
         assert!(!NotificationError::NotConfigured.is_retryable());

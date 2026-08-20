@@ -310,7 +310,7 @@ impl PayrollRepo for PayrollProvider {
         )
         .fetch_optional(transaction.connection())
         .await
-        .map_err(|error| database_failure("lock compensation employee", tenant_id, error))?
+        .map_err(|error: sqlx::Error| database_failure("lock compensation employee", tenant_id, error))?
         .unwrap_or(false);
         if !employee_exists {
             return Err(PayrollError::NotFound);
@@ -333,7 +333,7 @@ impl PayrollRepo for PayrollProvider {
         )
         .fetch_one(transaction.connection())
         .await
-        .map_err(|error| database_failure("check compensation overlap", tenant_id, error))?;
+        .map_err(|error: sqlx::Error| database_failure("check compensation overlap", tenant_id, error))?;
         if overlaps {
             return Err(PayrollError::Conflict);
         }

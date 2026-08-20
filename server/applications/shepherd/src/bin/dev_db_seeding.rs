@@ -264,9 +264,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     debug!("Development environment guard accepted APP_ENV=development");
 
     info!("Connecting to PostgreSQL; migrations must already be applied with the SQLx CLI");
-    let database: Arc<DatabaseAdapter> = DatabaseAdapter::new_arc().await;
+    let db: Arc<DatabaseAdapter> = DatabaseAdapter::new_arc().await;
     for tenant in DEV_TENANTS {
-        if let Err(error) = seed_tenant(&database, tenant, &auth_issuer, &auth_identities).await {
+        if let Err(error) = seed_tenant(&db, tenant, &auth_issuer, &auth_identities).await {
             error!(
                 "Development tenant seed failed: tenant_slug={} tenant_id={} error={}",
                 tenant.slug, tenant.id, error
@@ -290,7 +290,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 }
 
 async fn seed_tenant(
-    database: &Arc<DatabaseAdapter>,
+    db: &Arc<DatabaseAdapter>,
     tenant: &DevTenant,
     auth_issuer: &str,
     auth_identities: &HashMap<String, Uuid>,
@@ -303,8 +303,7 @@ async fn seed_tenant(
         tenant.display_name,
         tenant.accounts.len()
     );
-    database
-        .provision_tenant(tenant_id, tenant.slug, tenant.display_name)
+    db.provision_tenant(tenant_id, tenant.slug, tenant.display_name)
         .await
         .map_err(io::Error::other)?;
     info!(
@@ -319,7 +318,7 @@ async fn seed_tenant(
         .ok_or_else(|| io::Error::other(format!("tenant '{}' has no owner seed definition", tenant.slug)))?;
     let owner_email: String = dev_auth_email(tenant.slug, owner_definition.username);
     let owner: SeedAccount = ensure_account(
-        database,
+        db,
         tenant_id,
         owner_definition.username,
         &owner_email,
@@ -328,7 +327,7 @@ async fn seed_tenant(
     )
     .await?;
     ensure_seed_identity(
-        database,
+        db,
         tenant,
         owner_definition,
         &owner,
@@ -346,7 +345,7 @@ async fn seed_tenant(
     {
         let account_email: String = dev_auth_email(tenant.slug, account_definition.username);
         let account: SeedAccount = ensure_account(
-            database,
+            db,
             tenant_id,
             account_definition.username,
             &account_email,
@@ -355,7 +354,7 @@ async fn seed_tenant(
         )
         .await?;
         ensure_seed_identity(
-            database,
+            db,
             tenant,
             account_definition,
             &account,
@@ -367,9 +366,9 @@ async fn seed_tenant(
         seeded_accounts.push(account);
     }
 
-    seed_branches_and_facilities(database, tenant_id, tenant, owner.id).await?;
-    seed_hr_infra(database, tenant_id, tenant, &seeded_accounts, owner.id).await?;
-    seed_staffing_business(database, tenant_id, tenant, owner.id).await?;
+    seed_branches_and_facilities(db, tenant_id, tenant, owner.id).await?;
+    seed_hr_infra(db, tenant_id, tenant, &seeded_accounts, owner.id).await?;
+    seed_staffing_business(db, tenant_id, tenant, owner.id).await?;
 
     info!(
         "Development tenant seed completed: tenant_slug={} tenant_id={} accounts={} branches={} facilities={} employees={}",
@@ -387,7 +386,7 @@ async fn seed_tenant(
 }
 
 async fn ensure_seed_identity(
-    database: &DatabaseAdapter,
+    db: &DatabaseAdapter,
     tenant: &DevTenant,
     account_definition: &DevAccount,
     account: &SeedAccount,
@@ -402,7 +401,7 @@ async fn ensure_seed_identity(
         ))
     })?;
     let auth_subject_string: String = auth_subject.to_string();
-    ensure_identity(database, auth_issuer, &auth_subject_string, tenant_id, account.id).await?;
+    ensure_identity(db, auth_issuer, &auth_subject_string, tenant_id, account.id).await?;
     debug!(
         tenant_slug = tenant.slug,
         tenant_id = %tenant_id,
@@ -415,12 +414,12 @@ async fn ensure_seed_identity(
 }
 
 async fn seed_staffing_business(
-    database: &DatabaseAdapter,
+    db: &DatabaseAdapter,
     tenant_id: Uuid,
     tenant: &DevTenant,
     owner_account_id: Uuid,
 ) -> Result<(), io::Error> {
-    let mut transaction = database.begin_tenant(tenant_id).await.map_err(io::Error::other)?;
+    let mut transaction = db.begin_tenant(tenant_id).await.map_err(io::Error::other)?;
     let effective_date =
         NaiveDate::from_ymd_opt(2026, 1, 1).ok_or_else(|| io::Error::other("invalid staffing seed date"))?;
     let job: SeedIdRow = sqlx::query_as!(
@@ -810,13 +809,13 @@ async fn ensure_staffing_rate(
 }
 
 async fn seed_hr_infra(
-    database: &DatabaseAdapter,
+    db: &DatabaseAdapter,
     tenant_id: Uuid,
     tenant: &DevTenant,
     accounts: &[SeedAccount],
     owner_account_id: Uuid,
 ) -> Result<(), io::Error> {
-    let mut transaction = database.begin_tenant(tenant_id).await.map_err(io::Error::other)?;
+    let mut transaction = db.begin_tenant(tenant_id).await.map_err(io::Error::other)?;
     let effective_date: NaiveDate =
         NaiveDate::from_ymd_opt(2026, 1, 1).ok_or_else(|| io::Error::other("invalid HR seed effective date"))?;
     info!(
@@ -1747,12 +1746,12 @@ async fn ensure_dev_job(
 }
 
 async fn seed_branches_and_facilities(
-    database: &DatabaseAdapter,
+    db: &DatabaseAdapter,
     tenant_id: Uuid,
     tenant: &DevTenant,
     owner_account_id: Uuid,
 ) -> Result<(), io::Error> {
-    let mut transaction = database.begin_tenant(tenant_id).await.map_err(io::Error::other)?;
+    let mut transaction = db.begin_tenant(tenant_id).await.map_err(io::Error::other)?;
     info!(
         "Seeding development branch hierarchy: tenant_slug={} tenant_id={} branches={}",
         tenant.slug,
@@ -1844,7 +1843,7 @@ fn require_development_environment() -> Result<(), io::Error> {
 }
 
 async fn ensure_account(
-    database: &DatabaseAdapter,
+    db: &DatabaseAdapter,
     tenant_id: Uuid,
     username: &str,
     email: &str,
@@ -1852,7 +1851,7 @@ async fn ensure_account(
     audit_account_id: Option<Uuid>,
 ) -> Result<SeedAccount, io::Error> {
     let mut transaction: infra_postgres::TenantTransaction =
-        database.begin_tenant(tenant_id).await.map_err(io::Error::other)?;
+        db.begin_tenant(tenant_id).await.map_err(io::Error::other)?;
     let existing: Option<ExistingDevAccountRow> = sqlx::query_as!(
         ExistingDevAccountRow,
         r#"
@@ -1936,7 +1935,7 @@ async fn ensure_account(
 }
 
 async fn ensure_identity(
-    database: &DatabaseAdapter,
+    db: &DatabaseAdapter,
     issuer: &str,
     subject: &str,
     tenant_id: Uuid,
@@ -1954,7 +1953,7 @@ async fn ensure_identity(
         tenant_id,
         account_id,
     )
-    .execute(database.global_pool())
+    .execute(db.global_pool())
     .await
     .map_err(io::Error::other)?;
     Ok(())

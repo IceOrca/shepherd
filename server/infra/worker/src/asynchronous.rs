@@ -1,10 +1,10 @@
-use std::future::Future;
+use std::{future::Future, time::Duration};
 
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, debug, info_span};
+use tracing::{Instrument, debug, info_span, warn};
 
-use crate::{QueueConfig, TaskSender, WorkerClosed, async_queue, queue::bounded, state::WorkerState};
+use crate::{QueueConfig, TaskSender, WorkerClosed, WorkerTimeout, async_queue, queue::bounded, state::WorkerState};
 
 /// Supervises futures spawned on Tokio's asynchronous executor.
 #[derive(Clone)]
@@ -47,6 +47,42 @@ impl AsyncWorker {
         Ok(self.state.tracker().spawn(future))
     }
 
+    /// Spawns finite asynchronous work with an execution deadline.
+    ///
+    /// Long-lived service loops should use [`Self::spawn`] and cooperate with
+    /// the supplied cancellation token instead.
+    pub fn spawn_with_timeout<F, Fut, T>(
+        &self,
+        name: impl Into<String>,
+        timeout: Duration,
+        task: F,
+    ) -> Result<JoinHandle<Result<T, WorkerTimeout>>, WorkerClosed>
+    where
+        F: FnOnce(CancellationToken) -> Fut + Send + 'static,
+        Fut: Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+    {
+        let name: String = name.into();
+        let timed_task_name: String = name.clone();
+        self.spawn(name, move |cancellation: CancellationToken| async move {
+            let task_cancellation: CancellationToken = cancellation.clone();
+            let result: Result<T, tokio::time::error::Elapsed> =
+                tokio::time::timeout(timeout, task(task_cancellation)).await;
+            match result {
+                Ok(output) => Ok(output),
+                Err(_elapsed) => {
+                    cancellation.cancel();
+                    warn!(
+                        task.name = %timed_task_name,
+                        timeout_ms = timeout.as_millis(),
+                        "Finite async worker task timed out"
+                    );
+                    Err(WorkerTimeout::new(timeout))
+                }
+            }
+        })
+    }
+
     pub fn start_queue<T, H, Fut>(
         &self,
         name: impl Into<String>,
@@ -80,6 +116,10 @@ impl AsyncWorker {
         self.state.shutdown().await;
     }
 
+    pub async fn shutdown_with_timeout(&self, timeout: Duration) -> Result<(), WorkerTimeout> {
+        self.state.shutdown_with_timeout(timeout).await
+    }
+
     pub async fn wait(&self) {
         self.state.wait().await;
     }
@@ -99,7 +139,7 @@ mod tests {
     };
 
     use super::AsyncWorker;
-    use crate::{QueueConfig, QueueShutdownMode};
+    use crate::{QueueConfig, QueueShutdownMode, WorkerTimeout};
 
     #[tokio::test]
     async fn shutdown_cancels_and_waits_for_async_tasks() {
@@ -195,5 +235,77 @@ mod tests {
 
         let result = worker.spawn("too-late", |_cancellation| async {});
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn finite_async_task_returns_timeout_error() {
+        use std::time::Duration;
+
+        let worker: AsyncWorker = AsyncWorker::new();
+        let handle: tokio::task::JoinHandle<Result<(), WorkerTimeout>> = worker
+            .spawn_with_timeout("never-finishes", Duration::from_millis(10), |_cancellation| async {
+                std::future::pending::<()>().await;
+            })
+            .expect("open worker should accept a task");
+
+        let result: Result<(), WorkerTimeout> = handle.await.expect("timed task should join");
+        assert_eq!(result, Err(WorkerTimeout::new(Duration::from_millis(10))));
+        worker.wait().await;
+    }
+
+    #[tokio::test]
+    async fn async_queue_timeout_releases_concurrency_for_later_work() {
+        use std::{
+            sync::{
+                Arc,
+                atomic::{AtomicUsize, Ordering},
+            },
+            time::Duration,
+        };
+
+        let worker: AsyncWorker = AsyncWorker::new();
+        let completed_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+        let handler_completed_count: Arc<AtomicUsize> = Arc::clone(&completed_count);
+        let queue_config: QueueConfig = QueueConfig::new(2, 1)
+            .expect("valid queue configuration")
+            .with_task_timeout(Duration::from_millis(10));
+        let sender: crate::TaskSender<u32> = worker
+            .start_queue(
+                "timeout-queue",
+                queue_config,
+                move |value: u32, _cancellation: tokio_util::sync::CancellationToken| {
+                    let task_completed_count: Arc<AtomicUsize> = Arc::clone(&handler_completed_count);
+                    async move {
+                        if value == 1 {
+                            std::future::pending::<()>().await;
+                        }
+                        task_completed_count.fetch_add(1, Ordering::SeqCst);
+                    }
+                },
+            )
+            .expect("open worker should start a queue");
+
+        sender.send(1).await.expect("queue should accept timed task");
+        sender.send(2).await.expect("queue should accept later task");
+        sender.shutdown();
+        worker.wait().await;
+
+        assert_eq!(completed_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn shutdown_timeout_bounds_non_cooperative_async_task() {
+        use std::time::Duration;
+
+        let worker: AsyncWorker = AsyncWorker::new();
+        let task_handle: tokio::task::JoinHandle<()> = worker
+            .spawn("non-cooperative", |_cancellation| async {
+                std::future::pending::<()>().await;
+            })
+            .expect("open worker should accept a task");
+        drop(task_handle);
+
+        let result: Result<(), WorkerTimeout> = worker.shutdown_with_timeout(Duration::from_millis(10)).await;
+        assert_eq!(result, Err(WorkerTimeout::new(Duration::from_millis(10))));
     }
 }

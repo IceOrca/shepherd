@@ -2,7 +2,7 @@ use std::{future::Future, sync::Arc};
 
 use tokio::sync::{Semaphore, mpsc};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
-use tracing::{Instrument, debug, info_span};
+use tracing::{Instrument, debug, info_span, warn};
 
 use crate::{QueueConfig, QueueShutdownMode};
 
@@ -102,8 +102,25 @@ pub(crate) async fn run<T, H, Fut>(
             let span = info_span!("async_queue_task", queue.name = %task_name);
             async move {
                 debug!(queue.name = %task_name, "Async queued task started");
-                handler(task, cancellation).await;
-                debug!(queue.name = %task_name, "Async queued task finished");
+                let task_cancellation: CancellationToken = cancellation.clone();
+                if let Some(task_timeout) = config.task_timeout() {
+                    let result: Result<(), tokio::time::error::Elapsed> =
+                        tokio::time::timeout(task_timeout, handler(task, task_cancellation)).await;
+                    match result {
+                        Ok(()) => debug!(queue.name = %task_name, "Async queued task finished"),
+                        Err(_elapsed) => {
+                            cancellation.cancel();
+                            warn!(
+                                queue.name = %task_name,
+                                timeout_ms = task_timeout.as_millis(),
+                                "Async queued task timed out"
+                            );
+                        }
+                    }
+                } else {
+                    handler(task, task_cancellation).await;
+                    debug!(queue.name = %task_name, "Async queued task finished");
+                }
             }
             .instrument(span)
             .await;

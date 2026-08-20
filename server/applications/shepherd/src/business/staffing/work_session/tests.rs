@@ -15,7 +15,7 @@ use crate::business::staffing::{
 type TestResult = Result<(), Box<dyn Error>>;
 
 struct Fixture {
-    database: Arc<DatabaseAdapter>,
+    db: Arc<DatabaseAdapter>,
     tenant_id: Uuid,
     account_id: Uuid,
     assignment_id: Uuid,
@@ -24,7 +24,7 @@ struct Fixture {
 impl Fixture {
     async fn create() -> Result<Self, Box<dyn Error>> {
         let database_url = std::env::var("DATABASE_URL")?;
-        let database = DatabaseAdapter::connect(&database_url).await?;
+        let db = DatabaseAdapter::connect(&database_url).await?;
         let tenant_id = Uuid::new_v4();
         let account_id = Uuid::new_v4();
         let employee_id = Uuid::new_v4();
@@ -35,10 +35,9 @@ impl Fixture {
         let assignment_id = Uuid::new_v4();
         let tenant_slug = format!("staffing-work-cases-{}", tenant_id.simple());
 
-        database
-            .provision_tenant(tenant_id, &tenant_slug, "Staffing work cases tenant")
+        db.provision_tenant(tenant_id, &tenant_slug, "Staffing work cases tenant")
             .await?;
-        let mut setup = database.begin_tenant(tenant_id).await?;
+        let mut setup = db.begin_tenant(tenant_id).await?;
         sqlx::query!(
             r#"
             INSERT INTO accounts (id, tenant_id, username, primary_role_code)
@@ -162,7 +161,7 @@ impl Fixture {
         setup.commit().await?;
 
         Ok(Self {
-            database,
+            db,
             tenant_id,
             account_id,
             assignment_id,
@@ -170,15 +169,15 @@ impl Fixture {
     }
 
     fn work_provider(&self) -> Arc<StaffingWorkProvider> {
-        StaffingWorkProvider::new_arc(Arc::clone(&self.database))
+        StaffingWorkProvider::new_arc(Arc::clone(&self.db))
     }
 
     fn staffing_provider(&self) -> Arc<StaffingProvider> {
-        StaffingProvider::new_arc(Arc::clone(&self.database))
+        StaffingProvider::new_arc(Arc::clone(&self.db))
     }
 
     async fn age_session(&self, session_id: Uuid, seconds: f64) -> Result<(), Box<dyn Error>> {
-        let mut transaction = self.database.begin_tenant(self.tenant_id).await?;
+        let mut transaction = self.db.begin_tenant(self.tenant_id).await?;
         sqlx::query!(
             r#"
             UPDATE business_shift_work_sessions
@@ -196,7 +195,7 @@ impl Fixture {
     }
 
     async fn disable_destinations(&self) -> Result<(), Box<dyn Error>> {
-        let mut transaction = self.database.begin_tenant(self.tenant_id).await?;
+        let mut transaction = self.db.begin_tenant(self.tenant_id).await?;
         sqlx::query!(
             "UPDATE notification_destinations SET enabled = FALSE WHERE tenant_id = $1",
             self.tenant_id,
@@ -208,7 +207,7 @@ impl Fixture {
     }
 
     async fn outbox_count(&self) -> Result<i64, Box<dyn Error>> {
-        let mut transaction = self.database.begin_tenant(self.tenant_id).await?;
+        let mut transaction = self.db.begin_tenant(self.tenant_id).await?;
         let count = sqlx::query_scalar!(
             r#"SELECT COUNT(*) AS "count!" FROM notification_outbox WHERE tenant_id = $1"#,
             self.tenant_id,
@@ -220,7 +219,7 @@ impl Fixture {
     }
 
     async fn session_count(&self) -> Result<i64, Box<dyn Error>> {
-        let mut transaction = self.database.begin_tenant(self.tenant_id).await?;
+        let mut transaction = self.db.begin_tenant(self.tenant_id).await?;
         let count = sqlx::query_scalar!(
             r#"SELECT COUNT(*) AS "count!" FROM business_shift_work_sessions WHERE tenant_id = $1"#,
             self.tenant_id,
@@ -232,7 +231,7 @@ impl Fixture {
     }
 
     async fn pending_outbox_count(&self) -> Result<i64, Box<dyn Error>> {
-        let mut transaction = self.database.begin_tenant(self.tenant_id).await?;
+        let mut transaction = self.db.begin_tenant(self.tenant_id).await?;
         let count = sqlx::query_scalar!(
             r#"
             SELECT COUNT(*) AS "count!"
@@ -252,7 +251,7 @@ impl Fixture {
     }
 
     async fn financial_snapshot_is_consistent(&self) -> Result<bool, Box<dyn Error>> {
-        let mut transaction = self.database.begin_tenant(self.tenant_id).await?;
+        let mut transaction = self.db.begin_tenant(self.tenant_id).await?;
         let consistent = sqlx::query_scalar!(
             r#"
             SELECT (
@@ -273,7 +272,7 @@ impl Fixture {
     }
 
     async fn record_matching_customer_evidence(&self) -> Result<(), Box<dyn Error>> {
-        let mut transaction = self.database.begin_tenant(self.tenant_id).await?;
+        let mut transaction: infra_postgres::TenantTransaction = self.db.begin_tenant(self.tenant_id).await?;
         sqlx::query!(
             r#"
             INSERT INTO business_customer_work_records (
@@ -301,7 +300,7 @@ impl Fixture {
     }
 
     async fn cleanup(self) -> Result<(), Box<dyn Error>> {
-        let mut transaction = self.database.begin_tenant(self.tenant_id).await?;
+        let mut transaction = self.db.begin_tenant(self.tenant_id).await?;
         sqlx::query!("DELETE FROM notification_outbox WHERE tenant_id = $1", self.tenant_id)
             .execute(transaction.connection())
             .await?;
@@ -355,7 +354,7 @@ impl Fixture {
             .await?;
         transaction.commit().await?;
         sqlx::query!("DELETE FROM tenants WHERE id = $1", self.tenant_id)
-            .execute(self.database.global_pool())
+            .execute(self.db.global_pool())
             .await?;
         Ok(())
     }

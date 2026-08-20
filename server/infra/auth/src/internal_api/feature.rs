@@ -136,8 +136,8 @@ impl LegacyAuthService {
 
     /// Build the complete auth service from reusable infrastructure adapters.
     #[cfg(feature = "internal-api")]
-    pub async fn from_adapters(database: Arc<DatabaseAdapter>, redis: Arc<RedisAdapter>) -> Arc<Self> {
-        let repository: Arc<AuthProvider> = AuthProvider::new_arc(database);
+    pub async fn from_adapters(db: Arc<DatabaseAdapter>, redis: Arc<RedisAdapter>) -> Arc<Self> {
+        let repository: Arc<AuthProvider> = AuthProvider::new_arc(db);
         let core_entity: Arc<AuthMngtEntity> = AuthMngtEntity::new_arc(repository as DynAccountRepo).await;
         let service: Arc<Self> = Self::new_arc(core_entity, redis);
         service.init().await;
@@ -154,8 +154,8 @@ pub struct AuthFeature {
 
 #[cfg(feature = "internal-api")]
 impl AuthFeature {
-    pub async fn new_arc(database: Arc<DatabaseAdapter>, redis: Arc<RedisAdapter>) -> Arc<Self> {
-        let service: Arc<LegacyAuthService> = LegacyAuthService::from_adapters(database, redis).await;
+    pub async fn new_arc(db: Arc<DatabaseAdapter>, redis: Arc<RedisAdapter>) -> Arc<Self> {
+        let service: Arc<LegacyAuthService> = LegacyAuthService::from_adapters(db, redis).await;
         Arc::new(Self { service })
     }
 }

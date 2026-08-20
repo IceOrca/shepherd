@@ -128,6 +128,16 @@ Supabase Auth (GoTrue) is the external identity provider. It owns credentials, s
 
 Reusable server capabilities live in `server/infra/`. `kernel` owns neutral primitives and debugging; `postgres` and `redis` are thin adapters; `auth` and `authz` own reusable authentication and authorization behavior; `app-sdk`, `jobs`, `notifier`, and `worker` own reusable application-support capabilities; and `host` owns `HostContext`, `AppRoutes`, Axum policies, logging, audit, and rate limiting. `infra-host` enables its Cargo `auth` feature by default; use `default-features = false` only intentionally. The composition root is `server/runtime/`.
 
+Background work must be explicitly bounded according to its lifecycle:
+
+- Finite asynchronous tasks must use `AsyncWorker::spawn_with_timeout` or an async queue configured with `QueueConfig::with_task_timeout`. The application or composition layer must obtain the duration from environment-backed configuration; operational timeout, retry, batch, backoff, lease, and shutdown values must not appear as unexplained literals in business logic. Named hardcoded defaults are allowed.
+- Long-lived listeners and dispatchers must use ordinary `spawn`, observe their cancellation token, and check cancellation between tenants, batches, and individual items. Their finite I/O operations still require their own deadlines.
+- Process shutdown must use the environment-configured `WORKER_SHUTDOWN_TIMEOUT_SECS` deadline. A graceful-shutdown timeout prevents indefinite waiting but does not make synchronous work forcibly cancellable.
+- Tokio cannot forcibly terminate a running `spawn_blocking` closure. Blocking handlers must periodically inspect cancellation when appropriate, and callers must not treat an elapsed async waiting deadline as proof that a blocking side effect stopped.
+- An in-memory worker timeout logs and cancels the current async future but does not invent a retry policy. Durable retries belong to the owning application, must use persisted state, and require idempotent operations because an external side effect can race with timeout or cancellation.
+
+The notification dispatcher is a long-lived cancellation-driven worker backed by `notification_outbox`. Provider HTTP and whole-delivery deadlines, polling, claim size, maximum attempts, exponential retry base/cap, processing-lock recovery, and process shutdown are environment-configured. It checks cancellation during active passes and between deliveries. A timed-out provider delivery is a retryable failure; an interrupted processing record is recovered through its bounded processing-lock lease. The configured processing-lock window must cover the worst-case claimed batch and is raised with a warning when it is too short.
+
 Application code lives in `server/applications/shepherd/` and is divided by business area:
 
 - `hr`: A's employees, departments, jobs, schedules, attendance, compensation, and payroll capabilities.
@@ -205,6 +215,8 @@ The user starts Compose before development. Run language toolchains inside conta
 - `bash scripts/generate-api-types.sh` regenerates TypeScript DTO contracts using Cargo inside `server`.
 - `sh scripts/dev-data-seeding.sh` creates or updates every development GoTrue user listed in `scripts/dev-auth-accounts.tsv` through the admin API, resets the application dev database, and seeds linked tenant accounts and employees. Keep the catalog development-only and update the Rust seed account definitions with it.
 - Development seeding must persist the catalog email in `accounts.email` and clear only the `auth:application-user:v1:*` Redis namespace after a database reset. Do not flush unrelated Redis sessions, rate limits, queues, or caches.
+
+Development Compose exposes worker and notification controls with safe defaults: `WORKER_SHUTDOWN_TIMEOUT_SECS=60`, `NOTIFICATION_PROVIDER_HTTP_TIMEOUT_SECS=10`, `NOTIFICATION_DELIVERY_TIMEOUT_SECS=15`, `NOTIFICATION_POLL_INTERVAL_SECS=2`, `NOTIFICATION_CLAIM_BATCH_SIZE=20`, `NOTIFICATION_MAX_ATTEMPTS=8`, `NOTIFICATION_RETRY_BASE_DELAY_SECS=1`, `NOTIFICATION_RETRY_MAX_DELAY_SECS=300`, and `NOTIFICATION_PROCESSING_LOCK_TIMEOUT_SECS=600`. Values must be positive integers. Invalid or zero values produce a warning and use the named code default.
 
 Use `-it` for an interactive shell and `-T` for non-interactive automation.
 

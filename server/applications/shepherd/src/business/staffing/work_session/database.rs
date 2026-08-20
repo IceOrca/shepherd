@@ -12,12 +12,12 @@ use super::{
 };
 
 pub struct StaffingWorkProvider {
-    database: Arc<DatabaseAdapter>,
+    db: Arc<DatabaseAdapter>,
 }
 
 impl StaffingWorkProvider {
-    pub fn new_arc(database: Arc<DatabaseAdapter>) -> Arc<Self> {
-        Arc::new(Self { database })
+    pub fn new_arc(db: Arc<DatabaseAdapter>) -> Arc<Self> {
+        Arc::new(Self { db })
     }
 
     async fn begin_tenant(&self, tenant_id: Uuid) -> Result<TenantTransaction, StaffingError> {
@@ -26,7 +26,7 @@ impl StaffingWorkProvider {
             tenant_id = %tenant_id,
             "Opening staffing-work RLS-scoped tenant transaction"
         );
-        let result: Result<TenantTransaction, TenantDbErr> = self.database.begin_tenant(tenant_id).await;
+        let result: Result<TenantTransaction, TenantDbErr> = self.db.begin_tenant(tenant_id).await;
         match result {
             Ok(transaction) => {
                 trace!(
@@ -502,7 +502,7 @@ async fn enqueue_notifications(
 
 fn database_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> StaffingError {
     error!(
-        "Staffing work database operation failed: operation={} tenant_id={} error={}",
+        "Staffing work db operation failed: operation={} tenant_id={} error={}",
         operation, tenant_id, error
     );
     StaffingError::BackendUnavailable
@@ -514,12 +514,12 @@ fn mutation_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> Sta
         sqlx::Error::Database(database_error)
             if database_error.is_check_violation() || database_error.is_foreign_key_violation() =>
         {
-            StaffingError::InvalidInput("staffing work data violates a database constraint")
+            StaffingError::InvalidInput("staffing work data violates a db constraint")
         }
         _ => StaffingError::BackendUnavailable,
     };
     error!(
-        "Staffing work database mutation failed: operation={} tenant_id={} error={}",
+        "Staffing work db mutation failed: operation={} tenant_id={} error={}",
         operation, tenant_id, error
     );
     mapped
@@ -540,7 +540,7 @@ mod database_tests {
     #[tokio::test]
     async fn work_session_flow_is_idempotent_and_drives_approval() -> Result<(), Box<dyn Error>> {
         let database_url = std::env::var("DATABASE_URL")?;
-        let database = DatabaseAdapter::connect(&database_url).await?;
+        let db = DatabaseAdapter::connect(&database_url).await?;
         let tenant_id = Uuid::new_v4();
         let account_id = Uuid::new_v4();
         let employee_id = Uuid::new_v4();
@@ -552,10 +552,9 @@ mod database_tests {
         let destination_id = Uuid::new_v4();
         let tenant_slug = format!("staffing-work-{}", tenant_id.simple());
 
-        database
-            .provision_tenant(tenant_id, &tenant_slug, "Staffing work test tenant")
+        db.provision_tenant(tenant_id, &tenant_slug, "Staffing work test tenant")
             .await?;
-        let mut setup = database.begin_tenant(tenant_id).await?;
+        let mut setup = db.begin_tenant(tenant_id).await?;
         sqlx::query!(
             r#"
             INSERT INTO accounts (id, tenant_id, username, primary_role_code)
@@ -678,7 +677,7 @@ mod database_tests {
         .await?;
         setup.commit().await?;
 
-        let provider = StaffingWorkProvider::new_arc(Arc::clone(&database));
+        let provider = StaffingWorkProvider::new_arc(Arc::clone(&db));
         let start_key = Uuid::new_v4();
         let start_input = ShiftWorkActionInput {
             idempotency_key: start_key,
@@ -712,7 +711,7 @@ mod database_tests {
             .await;
         assert!(matches!(conflicting_start, Err(StaffingError::Conflict)));
 
-        let mut adjust_time = database.begin_tenant(tenant_id).await?;
+        let mut adjust_time = db.begin_tenant(tenant_id).await?;
         sqlx::query!(
             r#"
             UPDATE business_shift_work_sessions
@@ -743,7 +742,7 @@ mod database_tests {
         assert_eq!(ended.id, repeated_end.id);
         assert!(ended.worked_seconds.is_some_and(|seconds| seconds >= 3600));
 
-        let mut customer_evidence = database.begin_tenant(tenant_id).await?;
+        let mut customer_evidence = db.begin_tenant(tenant_id).await?;
         sqlx::query!(
             r#"
             INSERT INTO business_customer_work_records (
@@ -768,7 +767,7 @@ mod database_tests {
         .await?;
         customer_evidence.commit().await?;
 
-        let staffing = StaffingProvider::new_arc(Arc::clone(&database));
+        let staffing = StaffingProvider::new_arc(Arc::clone(&db));
         let approved = staffing
             .approve_shift_assignment(tenant_id, assignment_id, None, None, account_id)
             .await
@@ -776,7 +775,7 @@ mod database_tests {
         assert_eq!(approved.status, ShiftAssignmentStatus::Approved);
         assert_eq!(approved.worked_seconds, approved.observed_worked_seconds);
 
-        let mut verify = database.begin_tenant(tenant_id).await?;
+        let mut verify = db.begin_tenant(tenant_id).await?;
         let outbox_count = sqlx::query_scalar!(
             r#"SELECT COUNT(*) AS "count!" FROM notification_outbox WHERE tenant_id = $1"#,
             tenant_id
@@ -829,7 +828,7 @@ mod database_tests {
             .await?;
         verify.commit().await?;
         sqlx::query!("DELETE FROM tenants WHERE id = $1", tenant_id)
-            .execute(database.global_pool())
+            .execute(db.global_pool())
             .await?;
         Ok(())
     }

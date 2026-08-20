@@ -1,8 +1,13 @@
+use std::time::Duration;
+
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info_span};
 
-use crate::{AsyncWorker, QueueConfig, TaskSender, WorkerClosed, blocking_queue, queue::bounded, state::WorkerState};
+use crate::{
+    AsyncWorker, QueueConfig, TaskSender, WorkerClosed, WorkerTimeout, blocking_queue, queue::bounded,
+    state::WorkerState,
+};
 
 /// Supervises CPU-heavy or synchronous functions through Tokio spawn_blocking.
 ///
@@ -75,6 +80,10 @@ impl BlockingWorker {
 
     pub async fn shutdown(&self) {
         self.state.shutdown().await;
+    }
+
+    pub async fn shutdown_with_timeout(&self, timeout: Duration) -> Result<(), WorkerTimeout> {
+        self.state.shutdown_with_timeout(timeout).await
     }
 
     pub async fn wait(&self) {

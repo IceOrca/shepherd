@@ -1,4 +1,4 @@
-use std::{error::Error, fmt};
+use std::{error::Error, fmt, time::Duration};
 
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -16,6 +16,7 @@ pub struct QueueConfig {
     capacity: usize,
     concurrency: usize,
     shutdown_mode: QueueShutdownMode,
+    task_timeout: Option<Duration>,
 }
 
 impl QueueConfig {
@@ -30,11 +31,17 @@ impl QueueConfig {
             capacity,
             concurrency,
             shutdown_mode: QueueShutdownMode::Drain,
+            task_timeout: None,
         })
     }
 
     pub fn with_shutdown_mode(mut self, shutdown_mode: QueueShutdownMode) -> Self {
         self.shutdown_mode = shutdown_mode;
+        self
+    }
+
+    pub fn with_task_timeout(mut self, task_timeout: Duration) -> Self {
+        self.task_timeout = Some(task_timeout);
         self
     }
 
@@ -49,6 +56,10 @@ impl QueueConfig {
     pub fn shutdown_mode(self) -> QueueShutdownMode {
         self.shutdown_mode
     }
+
+    pub fn task_timeout(self) -> Option<Duration> {
+        self.task_timeout
+    }
 }
 
 impl Default for QueueConfig {
@@ -57,6 +68,7 @@ impl Default for QueueConfig {
             capacity: 100,
             concurrency: 1,
             shutdown_mode: QueueShutdownMode::Drain,
+            task_timeout: None,
         }
     }
 }

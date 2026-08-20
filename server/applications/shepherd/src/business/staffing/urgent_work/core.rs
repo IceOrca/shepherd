@@ -201,6 +201,7 @@ pub trait UrgentWorkRepo {
         tenant_id: Uuid,
         actor_account_id: Uuid,
     ) -> Result<Vec<UrgentWorkItem>, UrgentWorkError>;
+    #[allow(clippy::too_many_arguments)]
     async fn start(
         &self,
         tenant_id: Uuid,

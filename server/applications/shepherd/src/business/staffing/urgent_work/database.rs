@@ -15,17 +15,17 @@ use super::core::{
 };
 
 pub struct UrgentWorkProvider {
-    database: Arc<DatabaseAdapter>,
+    db: Arc<DatabaseAdapter>,
 }
 
 impl UrgentWorkProvider {
-    pub fn new_arc(database: Arc<DatabaseAdapter>) -> Arc<Self> {
-        Arc::new(Self { database })
+    pub fn new_arc(db: Arc<DatabaseAdapter>) -> Arc<Self> {
+        Arc::new(Self { db })
     }
 
     async fn begin_tenant(&self, tenant_id: Uuid) -> Result<TenantTransaction, UrgentWorkError> {
         debug!(operation = "urgent_work.begin_tenant", tenant_id = %tenant_id, "Opening urgent-work tenant transaction");
-        let result: Result<TenantTransaction, TenantDbErr> = self.database.begin_tenant(tenant_id).await;
+        let result: Result<TenantTransaction, TenantDbErr> = self.db.begin_tenant(tenant_id).await;
         result.map_err(|database_error: TenantDbErr| {
             error!(operation = "urgent_work.begin_tenant", tenant_id = %tenant_id, reason = %database_error, "Opening urgent-work tenant transaction failed");
             UrgentWorkError::BackendUnavailable
@@ -259,7 +259,7 @@ struct ResolvedRateRow {
 impl UrgentWorkRepo for UrgentWorkProvider {
     async fn list_facilities(&self, tenant_id: Uuid) -> Result<Vec<UrgentWorkFacility>, UrgentWorkError> {
         let rows: Vec<FacilityRow> = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
                 sqlx::query_as!(
                     FacilityRow,
@@ -290,7 +290,7 @@ impl UrgentWorkRepo for UrgentWorkProvider {
         actor_account_id: Uuid,
     ) -> Result<Vec<UrgentWorkEmployee>, UrgentWorkError> {
         let rows: Vec<EmployeeRow> = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
                 sqlx::query_as!(
                     EmployeeRow,
@@ -329,7 +329,7 @@ impl UrgentWorkRepo for UrgentWorkProvider {
         actor_account_id: Uuid,
     ) -> Result<Vec<UrgentWorkItem>, UrgentWorkError> {
         let rows: Vec<WorkItemRow> = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
                 load_work_items(connection, tenant_id, actor_account_id, false).await
             })
@@ -344,7 +344,7 @@ impl UrgentWorkRepo for UrgentWorkProvider {
         actor_account_id: Uuid,
     ) -> Result<Vec<UrgentWorkItem>, UrgentWorkError> {
         let rows: Vec<WorkItemRow> = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
                 load_work_items(connection, tenant_id, actor_account_id, true).await
             })
@@ -705,7 +705,7 @@ impl UrgentWorkRepo for UrgentWorkProvider {
 
     async fn list_reconciliations(&self, tenant_id: Uuid) -> Result<Vec<UrgentWorkReconciliation>, UrgentWorkError> {
         let rows: Vec<ReconciliationRow> = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
                 load_reconciliation_rows(connection, tenant_id, None).await
             })
@@ -1440,7 +1440,7 @@ async fn enqueue_notification(
 }
 
 fn tenant_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> UrgentWorkError {
-    error!(operation, tenant_id = %tenant_id, reason = %error, "Urgent-work tenant database operation failed");
+    error!(operation, tenant_id = %tenant_id, reason = %error, "Urgent-work tenant db operation failed");
     UrgentWorkError::BackendUnavailable
 }
 
@@ -1450,7 +1450,7 @@ fn tenant_runner_failure(operation: &str, tenant_id: Uuid, error: TenantDbErr) -
 }
 
 fn database_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> UrgentWorkError {
-    error!(operation, tenant_id = %tenant_id, reason = %error, "Urgent-work database operation failed");
+    error!(operation, tenant_id = %tenant_id, reason = %error, "Urgent-work db operation failed");
     UrgentWorkError::BackendUnavailable
 }
 
@@ -1460,14 +1460,14 @@ fn mutation_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> Urg
         sqlx::Error::Database(database_error)
             if database_error.is_check_violation() || database_error.is_foreign_key_violation() =>
         {
-            UrgentWorkError::InvalidInput("urgent work violates a database constraint")
+            UrgentWorkError::InvalidInput("urgent work violates a db constraint")
         }
         _ => UrgentWorkError::BackendUnavailable,
     };
     if matches!(mapped, UrgentWorkError::BackendUnavailable) {
         error!(operation, tenant_id = %tenant_id, reason = %error, "Urgent-work mutation failed unexpectedly");
     } else {
-        warn!(operation, tenant_id = %tenant_id, reason = %error, "Urgent-work mutation rejected by database invariant");
+        warn!(operation, tenant_id = %tenant_id, reason = %error, "Urgent-work mutation rejected by db invariant");
     }
     mapped
 }

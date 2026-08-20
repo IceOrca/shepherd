@@ -91,5 +91,41 @@ development seed workflow stores the login catalog emails in `accounts.email`
 and clears only Shepherd's authenticated-user cache namespace after resetting
 the application database.
 
+## Background worker resilience
+
+Finite asynchronous jobs run with explicit execution deadlines. Long-lived
+services such as the notification-outbox dispatcher instead remain active until
+cooperative cancellation, while every provider call and delivery attempt is
+bounded. Server shutdown also has a final deadline, so a non-cooperative async
+task cannot keep graceful shutdown waiting forever. Blocking closures must
+still cooperate with cancellation because Tokio cannot forcibly stop a running
+synchronous closure.
+
+Notification retries remain durable in PostgreSQL rather than in the in-memory
+worker. Timeouts are retryable, exponential backoff is capped, maximum attempts
+are bounded, and interrupted `processing` rows become eligible again after a
+configured lock lease. Cancellation is checked between tenants and individual
+deliveries. This keeps shutdown responsive without losing the durable outbox
+record.
+
+Development Compose exposes the following positive-integer settings:
+
+| Setting | Default | Purpose |
+| --- | ---: | --- |
+| `WORKER_SHUTDOWN_TIMEOUT_SECS` | `60` | Maximum graceful wait for background workers |
+| `NOTIFICATION_PROVIDER_HTTP_TIMEOUT_SECS` | `10` | Provider HTTP request deadline |
+| `NOTIFICATION_DELIVERY_TIMEOUT_SECS` | `15` | Whole provider delivery deadline |
+| `NOTIFICATION_POLL_INTERVAL_SECS` | `2` | Durable outbox polling interval |
+| `NOTIFICATION_CLAIM_BATCH_SIZE` | `20` | Maximum rows claimed per tenant and pass |
+| `NOTIFICATION_MAX_ATTEMPTS` | `8` | Terminal retry-attempt limit |
+| `NOTIFICATION_RETRY_BASE_DELAY_SECS` | `1` | Exponential retry base |
+| `NOTIFICATION_RETRY_MAX_DELAY_SECS` | `300` | Exponential retry cap |
+| `NOTIFICATION_PROCESSING_LOCK_TIMEOUT_SECS` | `600` | Recovery lease for interrupted claims |
+
+Zero or invalid values are rejected with a warning and replaced by the named
+default. The retry cap is never allowed below its base, and the processing-lock
+lease is automatically raised when it cannot cover the configured batch's
+worst-case delivery time.
+
 Detailed product invariants, architecture rules, API boundaries, and development
 commands are maintained in [AGENTS.md](./AGENTS.md).

@@ -13,16 +13,16 @@ use infra_postgres::{DatabaseAdapter, TenantDbErr, TenantTransaction};
 use sqlx::PgConnection;
 
 pub struct PeopleProvider {
-    database: Arc<DatabaseAdapter>,
+    db: Arc<DatabaseAdapter>,
 }
 
 impl PeopleProvider {
-    pub fn new_arc(database: Arc<DatabaseAdapter>) -> Arc<Self> {
-        Arc::new(Self { database })
+    pub fn new_arc(db: Arc<DatabaseAdapter>) -> Arc<Self> {
+        Arc::new(Self { db })
     }
 
     async fn begin_active_tenant(&self, tenant_id: Uuid) -> Result<TenantTransaction, HrError> {
-        self.database.begin_tenant(tenant_id).await.map_err(|error| {
+        self.db.begin_tenant(tenant_id).await.map_err(|error| {
             error!("HR tenant transaction failed: tenant_id={} error={}", tenant_id, error);
             HrError::BackendUnavailable
         })
@@ -186,7 +186,7 @@ impl From<AssignmentRow> for EmployeeAssignment {
 impl PeopleRepo for PeopleProvider {
     async fn list_employees(&self, tenant_id: Uuid) -> Result<Vec<Employee>, HrError> {
         let rows: Vec<EmployeeRow> = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
                 sqlx::query_as!(
                     EmployeeRow,
@@ -214,7 +214,7 @@ impl PeopleRepo for PeopleProvider {
 
     async fn find_employee(&self, tenant_id: Uuid, employee_id: Uuid) -> Result<Option<Employee>, HrError> {
         let row: Option<EmployeeRow> = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
                 sqlx::query_as!(
                     EmployeeRow,
@@ -237,7 +237,7 @@ impl PeopleRepo for PeopleProvider {
 
     async fn find_employee_by_account(&self, tenant_id: Uuid, account_id: Uuid) -> Result<Option<Employee>, HrError> {
         let row: Option<EmployeeRow> = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
                 sqlx::query_as!(
                     EmployeeRow,
@@ -266,7 +266,7 @@ impl PeopleRepo for PeopleProvider {
         audit_account_id: Uuid,
     ) -> Result<Employee, HrError> {
         let row: EmployeeRow = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
                 sqlx::query_as!(
                     EmployeeRow,
@@ -433,7 +433,7 @@ impl PeopleRepo for PeopleProvider {
 
     async fn list_departments(&self, tenant_id: Uuid) -> Result<Vec<Department>, HrError> {
         let rows: Vec<DepartmentRow> = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
                 sqlx::query_as!(
                     DepartmentRow,
@@ -461,7 +461,7 @@ impl PeopleRepo for PeopleProvider {
         audit_account_id: Uuid,
     ) -> Result<Department, HrError> {
         let row: DepartmentRow = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
                 sqlx::query_as!(
                     DepartmentRow,
@@ -571,7 +571,7 @@ impl PeopleRepo for PeopleProvider {
 
     async fn list_jobs(&self, tenant_id: Uuid) -> Result<Vec<JobPosition>, HrError> {
         let rows: Vec<JobRow> = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
                 sqlx::query_as!(
                     JobRow,
@@ -599,7 +599,7 @@ impl PeopleRepo for PeopleProvider {
         audit_account_id: Uuid,
     ) -> Result<JobPosition, HrError> {
         let row: JobRow = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
                 sqlx::query_as!(
                     JobRow,
@@ -638,7 +638,7 @@ impl PeopleRepo for PeopleProvider {
         audit_account_id: Uuid,
     ) -> Result<JobPosition, HrError> {
         let row: Option<JobRow> = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
                 sqlx::query_as!(
                     JobRow,
@@ -679,7 +679,7 @@ impl PeopleRepo for PeopleProvider {
 
     async fn list_assignments(&self, tenant_id: Uuid, employee_id: Uuid) -> Result<Vec<EmployeeAssignment>, HrError> {
         let result: (bool, Vec<AssignmentRow>) = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
                 let employee_exists: bool = sqlx::query_scalar!(
                     r#"SELECT EXISTS (
@@ -835,7 +835,7 @@ impl PeopleRepo for PeopleProvider {
         employee_id: Uuid,
     ) -> Result<Vec<AttendanceSession>, HrError> {
         let result: (bool, Vec<AttendanceSessionRow>) = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
                 let employee_exists: bool = sqlx::query_scalar!(
                     r#"SELECT EXISTS (
@@ -882,7 +882,7 @@ impl PeopleRepo for PeopleProvider {
         facility_id: Uuid,
     ) -> Result<AttendanceSession, HrError> {
         let row: Option<AttendanceSessionRow> = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
                 sqlx::query_as!(
                     AttendanceSessionRow,
@@ -933,7 +933,7 @@ impl PeopleRepo for PeopleProvider {
         account_id: Uuid,
     ) -> Result<AttendanceSession, HrError> {
         let row: Option<AttendanceSessionRow> = self
-            .database
+            .db
             .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
                 sqlx::query_as!(
                     AttendanceSessionRow,
@@ -973,7 +973,7 @@ impl PeopleRepo for PeopleProvider {
 
 fn database_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> HrError {
     error!(
-        "HR database operation failed: operation={} tenant_id={} error={}",
+        "HR db operation failed: operation={} tenant_id={} error={}",
         operation, tenant_id, error
     );
     HrError::BackendUnavailable

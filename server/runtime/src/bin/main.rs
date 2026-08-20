@@ -1,11 +1,12 @@
 #![cfg_attr(debug_assertions, allow(unused))]
 
-use std::net::SocketAddr;
-use std::path::Path;
+use std::{net::SocketAddr, path::Path, time::Duration};
 
-use tracing::{error, warn, info, debug, trace};
 use infra_kernel::debug::Debugging;
 use tokio::signal;
+use tracing::{error, info, warn};
+
+const DEFAULT_WORKER_SHUTDOWN_TIMEOUT_SECS: u64 = 60;
 
 #[tokio::main]
 async fn main() {
@@ -17,6 +18,14 @@ async fn main() {
         router,
         worker,
     } = shepherd_runtime::build().await;
+    let worker_shutdown_timeout: Duration = Duration::from_secs(positive_env_u64(
+        "WORKER_SHUTDOWN_TIMEOUT_SECS",
+        DEFAULT_WORKER_SHUTDOWN_TIMEOUT_SECS,
+    ));
+    info!(
+        worker_shutdown_timeout_secs = worker_shutdown_timeout.as_secs(),
+        "Resolved background worker shutdown timeout"
+    );
     info!("Starting server on {}:{}", context.ip, context.port);
 
     let address: String = format!("{}:{}", context.ip, context.port);
@@ -28,8 +37,49 @@ async fn main() {
     )
     .with_graceful_shutdown(shutdown_signal())
     .await;
-    worker.shutdown().await;
+    if let Err(timeout_error) = worker.shutdown_with_timeout(worker_shutdown_timeout).await {
+        error!(
+            timeout_ms = timeout_error.timeout().as_millis(),
+            error = %timeout_error,
+            "Background worker graceful shutdown timed out; remaining asynchronous tasks will be aborted with the runtime"
+        );
+    } else {
+        info!("Background worker shutdown completed");
+    }
     result.unwrap_or_else(|error| panic!("server failed: {error}"));
+}
+
+fn positive_env_u64(name: &str, default: u64) -> u64 {
+    let raw_value: String = match std::env::var(name) {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => return default,
+        Err(std::env::VarError::NotUnicode(_value)) => {
+            warn!(
+                configuration = name,
+                default, "Configuration is not valid Unicode; using default"
+            );
+            return default;
+        }
+    };
+    match raw_value.parse::<u64>() {
+        Ok(value) if value > 0 => value,
+        Ok(_zero) => {
+            warn!(
+                configuration = name,
+                default, "Configuration must be greater than zero; using default"
+            );
+            default
+        }
+        Err(error) => {
+            warn!(
+                configuration = name,
+                default,
+                error = %error,
+                "Configuration is not an unsigned integer; using default"
+            );
+            default
+        }
+    }
 }
 
 fn load_environment() {
