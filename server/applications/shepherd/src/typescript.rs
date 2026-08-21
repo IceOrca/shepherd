@@ -1,7 +1,10 @@
 use ts_rs::{Config, TS};
 
 use crate::{
-    auth::{AuthUserSummary, CreateAuthUserRequest, CurrentUserProfile, SetAuthUserStatusRequest},
+    auth::{
+        AccountStatus, AuthProviderUserStatus, AuthUserSummary, CreateAuthUserRequest, CurrentUserProfile,
+        PermissionCode, RoleCode, SetAuthUserStatusRequest,
+    },
     business::staffing::{
         core::{
             BusinessRecordStatus, Customer, CustomerFacility, CustomerWorkRecord, RateSource, ReconciliationStatus,
@@ -64,6 +67,10 @@ pub fn contract() -> String {
     let config = Config::new().with_large_int("number");
     let mut output = String::new();
 
+    push::<RoleCode>(&mut output, &config);
+    push::<PermissionCode>(&mut output, &config);
+    push::<AccountStatus>(&mut output, &config);
+    push::<AuthProviderUserStatus>(&mut output, &config);
     push::<CurrentUserProfile>(&mut output, &config);
     push::<AuthUserSummary>(&mut output, &config);
     push::<CreateAuthUserRequest>(&mut output, &config);

@@ -5,6 +5,9 @@ COPY package*.json ./
 RUN npm ci
 
 COPY . .
+ARG VITE_SHEPHERD_AUTH_URL
+ENV VITE_SHEPHERD_AUTH_URL=${VITE_SHEPHERD_AUTH_URL}
+RUN test -n "${VITE_SHEPHERD_AUTH_URL}"
 RUN npm run build
 
 # BuildKit can export this target directly to the host for Caddy to serve:

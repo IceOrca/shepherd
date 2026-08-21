@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { useMemo } from "react";
 import { Link } from "react-router-dom";
-import type { Customer, StaffingShift, UrgentWorkItem } from "../../api/generated/contracts";
+import type { Customer, PermissionCode, StaffingShift, UrgentWorkItem } from "../../api/generated/contracts";
 import { useAuth } from "../auth/AuthProvider";
 import { friendlyApiError } from "../../shared/api/client";
 import { formatDateTime, formatDuration, shiftStatusLabel } from "../../shared/lib/format";
@@ -109,7 +109,7 @@ function statusClass(status: StaffingShift["status"]): string {
 
 export function OperationsOverviewPage(): React.JSX.Element {
   const auth: ReturnType<typeof useAuth> = useAuth();
-  const permissions: string[] = auth.profile?.permissions ?? [];
+  const permissions: PermissionCode[] = auth.profile?.permissions ?? [];
   const canReadShifts: boolean = permissions.includes("business.shifts.read");
   const canReadCustomers: boolean = permissions.includes("business.customers.read");
   const canReadUrgentWork: boolean = permissions.includes("business.urgent_work.read");

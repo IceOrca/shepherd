@@ -102,6 +102,7 @@ services:
     environment:
       VITE_SHEPHERD_DEV_PROXY_TARGET: http://server:${BACKEND_PORT:-8000}
       VITE_SHEPHERD_AUTH_DEV_PROXY_TARGET: http://supabase-auth:9999
+      VITE_SHEPHERD_AUTH_URL: ${AUTH_PUBLIC_URL}
       VITE_STAFFING_GPS_ENABLED: "false"
     volumes:
       - ./client/web:/app/shepherd_client
@@ -162,6 +163,7 @@ services:
     restart: unless-stopped
     environment:
       REMOTE_DEV_DNS_NAME: ${REMOTE_DEV_DNS_NAME}
+      AUTH_DEV_DNS_NAME: ${AUTH_DEV_DNS_NAME}
       SHEPHERD_API_DEV_UPSTREAM: server:${BACKEND_PORT:-8000}
       SHEPHERD_WEB_DEV_UPSTREAM: client:${FRONTEND_DEV_PORT:-5173}
       AUTH_DEV_UPSTREAM: supabase-auth:9999

@@ -437,7 +437,20 @@ impl WorkingScheduleRepo for WorkingScheduleProvider {
         .fetch_optional(transaction.connection())
         .await
         .map_err(|error| database_failure("validate assigned working schedule", tenant_id, error))?;
-        if schedule_status.as_deref() != Some("active") {
+        let schedule_status: HrRecordStatus = match schedule_status {
+            Some(status_code) => HrRecordStatus::from_code(&status_code).ok_or_else(|| {
+                error!(
+                    operation = "assign_employee_working_schedule",
+                    tenant_id = %tenant_id,
+                    schedule_id = %input.schedule_id,
+                    schedule_status = %status_code,
+                    "Working schedule has an unsupported lifecycle status"
+                );
+                HrError::BackendUnavailable
+            })?,
+            None => return Err(HrError::InvalidInput("assigned working schedule is not active")),
+        };
+        if schedule_status != HrRecordStatus::Active {
             return Err(HrError::InvalidInput("assigned working schedule is not active"));
         }
 

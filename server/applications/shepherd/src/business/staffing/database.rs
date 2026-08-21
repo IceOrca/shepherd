@@ -746,10 +746,17 @@ impl StaffingRepo for StaffingProvider {
         .await
         .map_err(|error| database_failure("lock staffing shift", tenant_id, error))?;
         let shift: ShiftRateContext = shift.ok_or(StaffingError::NotFound)?;
-        if !matches!(shift.status.as_str(), "open" | "filled") {
-            return Err(StaffingError::Conflict);
-        }
-        if shift.status == "filled" {
+        let shift_status: StaffingShiftStatus = StaffingShiftStatus::from_code(&shift.status).ok_or_else(|| {
+            error!(
+                operation = "create_staffing_shift_assignment",
+                tenant_id = %tenant_id,
+                shift_id = %shift_id,
+                shift_status = %shift.status,
+                "Staffing shift has an unsupported lifecycle status"
+            );
+            StaffingError::BackendUnavailable
+        })?;
+        if shift_status != StaffingShiftStatus::Open {
             return Err(StaffingError::Conflict);
         }
 

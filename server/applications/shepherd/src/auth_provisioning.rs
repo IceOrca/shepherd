@@ -17,7 +17,7 @@ impl AuthAccountProvisioner for ShepherdAuthAccountProvisioner {
         connection: &mut PgConnection,
         context: &AuthAccountProvisioningContext,
     ) -> Result<(), AuthAccountProvisioningError> {
-        if context.primary_role != EMPLOYEE_ROLE_CODE {
+        if context.primary_role.as_str() != EMPLOYEE_ROLE_CODE {
             trace!(
                 tenant_id = %context.tenant_id,
                 account_id = %context.account_id,

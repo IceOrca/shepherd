@@ -1,4 +1,8 @@
 #![cfg_attr(debug_assertions, allow(unused))]
+
+mod codes;
+pub use codes::{AuthCodeError, PermissionCode, RoleCode};
+
 cfg_if::cfg_if!(
     if #[cfg(feature = "internal-api")] {
         pub mod internal_api;

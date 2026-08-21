@@ -1,7 +1,8 @@
 import type { CurrentUserProfile } from "../../api/generated/contracts";
 import { apiRequest, setApiAccessToken } from "../../shared/api/client";
 
-const AUTH_URL: string = "/auth/v1";
+const configuredAuthUrl: string | undefined = import.meta.env.VITE_SHEPHERD_AUTH_URL;
+const AUTH_URL: string = (configuredAuthUrl ?? "/auth/v1").replace(/\/$/, "");
 const SESSION_STORAGE_KEY: string = "shepherd.auth.session";
 const OAUTH_RETURN_STORAGE_KEY: string = "shepherd.auth.oauth-return";
 const REFRESH_EARLY_SECS: number = 30;

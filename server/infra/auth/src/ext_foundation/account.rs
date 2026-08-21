@@ -17,9 +17,49 @@ use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::{
-    AuthService,
+    AuthService, PermissionCode, RoleCode,
     ext_foundation::{AuthenticatedPrincipal, account_cache::AuthenticatedUserCacheError},
 };
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountStatus {
+    Active,
+    Disabled,
+}
+
+impl AccountStatus {
+    pub fn as_code(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Disabled => "disabled",
+        }
+    }
+
+    pub fn from_code(code: &str) -> Option<Self> {
+        match code {
+            "active" => Some(Self::Active),
+            "disabled" => Some(Self::Disabled),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PermissionEffect {
+    Allow,
+    Deny,
+}
+
+impl PermissionEffect {
+    fn from_code(code: &str) -> Option<Self> {
+        match code {
+            "allow" => Some(Self::Allow),
+            "deny" => Some(Self::Deny),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AuthenticatedUser {
@@ -27,14 +67,16 @@ pub struct AuthenticatedUser {
     pub account_id: Uuid,
     pub username: String,
     pub email: Option<String>,
-    pub primary_role: String,
-    pub roles: Vec<String>,
-    pub permissions: Vec<String>,
+    pub primary_role: RoleCode,
+    pub roles: Vec<RoleCode>,
+    pub permissions: Vec<PermissionCode>,
 }
 
 impl AuthenticatedUser {
     pub fn has_permission(&self, permission: &str) -> bool {
-        self.permissions.iter().any(|current: &String| current == permission)
+        self.permissions
+            .iter()
+            .any(|current: &PermissionCode| current.as_str() == permission)
     }
 
     fn profile(&self) -> CurrentUserProfile {
@@ -59,9 +101,9 @@ pub struct CurrentUserProfile {
     pub account_id: Uuid,
     pub username: String,
     pub email: Option<String>,
-    pub primary_role: String,
-    pub roles: Vec<String>,
-    pub permissions: Vec<String>,
+    pub primary_role: RoleCode,
+    pub roles: Vec<RoleCode>,
+    pub permissions: Vec<PermissionCode>,
 }
 
 pub fn routes(auth: Arc<AuthService>) -> Router {
@@ -298,7 +340,16 @@ async fn load_account(
         StatusCode::SERVICE_UNAVAILABLE
     })?;
 
-    if account.status != "active" {
+    let account_status: AccountStatus = AccountStatus::from_code(&account.status).ok_or_else(|| {
+        error!(
+            tenant_id = %account.tenant_id,
+            account_id = %account.id,
+            account_status = %account.status,
+            "Application account has an unsupported status"
+        );
+        StatusCode::SERVICE_UNAVAILABLE
+    })?;
+    if account_status != AccountStatus::Active {
         warn!(
             tenant_id = %account.tenant_id,
             account_id = %account.id,
@@ -323,16 +374,55 @@ async fn load_account(
         permission_grant_row_count = permission_rows.len(),
         "Loaded application role and permission grants"
     );
-    let roles: Vec<String> = role_rows.into_iter().map(|row: AccountRole| row.role_code).collect();
-    let mut permission_set: BTreeSet<String> = BTreeSet::new();
+    let primary_role: RoleCode = RoleCode::try_from(account.primary_role_code).map_err(|code_error| {
+        error!(
+            tenant_id = %account.tenant_id,
+            account_id = %account.id,
+            reason = %code_error,
+            "Application account primary role code is invalid"
+        );
+        StatusCode::SERVICE_UNAVAILABLE
+    })?;
+    let roles: Vec<RoleCode> = role_rows
+        .into_iter()
+        .map(|row: AccountRole| RoleCode::try_from(row.role_code))
+        .collect::<Result<Vec<RoleCode>, _>>()
+        .map_err(|code_error| {
+            error!(
+                tenant_id = %account.tenant_id,
+                account_id = %account.id,
+                reason = %code_error,
+                "Application account role code is invalid"
+            );
+            StatusCode::SERVICE_UNAVAILABLE
+        })?;
+    let mut permission_set: BTreeSet<PermissionCode> = BTreeSet::new();
     for row in permission_rows {
-        if row.effect == "deny" {
-            permission_set.remove(&row.permission_code);
+        let permission_code: PermissionCode = PermissionCode::try_from(row.permission_code).map_err(|code_error| {
+            error!(
+                tenant_id = %account.tenant_id,
+                account_id = %account.id,
+                reason = %code_error,
+                "Application account permission code is invalid"
+            );
+            StatusCode::SERVICE_UNAVAILABLE
+        })?;
+        let permission_effect: PermissionEffect = PermissionEffect::from_code(&row.effect).ok_or_else(|| {
+            error!(
+                tenant_id = %account.tenant_id,
+                account_id = %account.id,
+                permission_effect = %row.effect,
+                "Application account permission grant has an unsupported effect"
+            );
+            StatusCode::SERVICE_UNAVAILABLE
+        })?;
+        if permission_effect == PermissionEffect::Deny {
+            permission_set.remove(&permission_code);
         } else {
-            permission_set.insert(row.permission_code);
+            permission_set.insert(permission_code);
         }
     }
-    let permissions: Vec<String> = permission_set.into_iter().collect();
+    let permissions: Vec<PermissionCode> = permission_set.into_iter().collect();
     debug!(
         operation = "load_application_account",
         tenant_id = %account.tenant_id,
@@ -347,7 +437,7 @@ async fn load_account(
         account_id: account.id,
         username: account.username,
         email: account.email,
-        primary_role: account.primary_role_code,
+        primary_role,
         roles,
         permissions,
     })

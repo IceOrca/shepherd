@@ -19,18 +19,35 @@ use tracing::{debug, error, info, trace, warn};
 use ts_rs::TS;
 use uuid::Uuid;
 
-use crate::{AuthService, ext_foundation::account::AuthenticatedUser};
+use crate::{
+    AuthCodeError, AuthService, PermissionCode, RoleCode,
+    ext_foundation::account::{AccountStatus, AuthenticatedUser},
+};
 
 const DEFAULT_HTTP_TIMEOUT_SECS: u64 = 5;
 const DISABLED_DURATION: &str = "876000h";
 const IDEMPOTENCY_HEADER: &str = "idempotency-key";
 
 /// Application-owned permission codes required by the reusable account routes.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct AuthAdminPolicy {
-    pub read_permission: &'static str,
-    pub create_permission: &'static str,
-    pub disable_permission: &'static str,
+    pub read_permission: PermissionCode,
+    pub create_permission: PermissionCode,
+    pub disable_permission: PermissionCode,
+}
+
+impl AuthAdminPolicy {
+    pub fn try_new(
+        read_permission: impl Into<String>,
+        create_permission: impl Into<String>,
+        disable_permission: impl Into<String>,
+    ) -> Result<Self, AuthCodeError> {
+        Ok(Self {
+            read_permission: PermissionCode::parse(read_permission)?,
+            create_permission: PermissionCode::parse(create_permission)?,
+            disable_permission: PermissionCode::parse(disable_permission)?,
+        })
+    }
 }
 
 struct AuthAdminContext {
@@ -159,8 +176,53 @@ struct MappedAccount {
     account_id: Uuid,
     username: String,
     email: Option<String>,
+    account_status: AccountStatus,
+    primary_role: RoleCode,
+}
+
+#[derive(Debug)]
+struct MappedAccountRow {
+    subject: String,
+    account_id: Uuid,
+    username: String,
+    email: Option<String>,
     account_status: String,
     primary_role: String,
+}
+
+impl TryFrom<MappedAccountRow> for MappedAccount {
+    type Error = AdminApiError;
+
+    fn try_from(row: MappedAccountRow) -> Result<Self, Self::Error> {
+        let account_status: AccountStatus = match row.account_status.as_str() {
+            "active" => AccountStatus::Active,
+            "disabled" => AccountStatus::Disabled,
+            unsupported_status => {
+                error!(
+                    account_id = %row.account_id,
+                    account_status = unsupported_status,
+                    "Mapped Auth account has an unsupported application status"
+                );
+                return Err(AdminApiError::Internal);
+            }
+        };
+        let primary_role: RoleCode = RoleCode::try_from(row.primary_role).map_err(|code_error| {
+            error!(
+                account_id = %row.account_id,
+                reason = %code_error,
+                "Mapped Auth account has an invalid primary role code"
+            );
+            AdminApiError::Internal
+        })?;
+        Ok(Self {
+            subject: row.subject,
+            account_id: row.account_id,
+            username: row.username,
+            email: row.email,
+            account_status,
+            primary_role,
+        })
+    }
 }
 
 struct ExistsRow {
@@ -174,7 +236,7 @@ pub struct AuthAccountProvisioningContext {
     pub account_id: Uuid,
     pub username: String,
     pub email: String,
-    pub primary_role: String,
+    pub primary_role: RoleCode,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -225,6 +287,24 @@ struct ProvisioningStateRow {
     retry_allowed: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProvisioningRequestStatus {
+    Processing,
+    Completed,
+    Failed,
+}
+
+impl ProvisioningRequestStatus {
+    fn from_code(code: &str) -> Option<Self> {
+        match code {
+            "processing" => Some(Self::Processing),
+            "completed" => Some(Self::Completed),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 enum ProvisioningClaim {
     Proceed { auth_user_id: Option<Uuid> },
@@ -239,9 +319,9 @@ pub struct AuthUserSummary {
     pub account_id: Uuid,
     pub username: String,
     pub email: Option<String>,
-    pub primary_role: String,
-    pub account_status: String,
-    pub provider_status: String,
+    pub primary_role: RoleCode,
+    pub account_status: AccountStatus,
+    pub provider_status: AuthProviderUserStatus,
     pub email_confirmed: bool,
     pub created_at: Option<String>,
     pub last_sign_in_at: Option<String>,
@@ -253,13 +333,21 @@ pub struct CreateAuthUserRequest {
     pub username: String,
     pub email: String,
     pub password: Option<String>,
-    pub primary_role: String,
+    pub primary_role: RoleCode,
 }
 
 #[derive(Clone, Debug, Deserialize, TS)]
 #[ts(export)]
 pub struct SetAuthUserStatusRequest {
     pub disabled: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthProviderUserStatus {
+    Active,
+    Disabled,
+    Missing,
 }
 
 impl AuthAdminService {
@@ -447,9 +535,9 @@ pub fn routes_with_provisioner(
     provisioner: Arc<dyn AuthAccountProvisioner>,
 ) -> Router {
     debug!(
-        read_permission = policy.read_permission,
-        create_permission = policy.create_permission,
-        disable_permission = policy.disable_permission,
+        read_permission = %policy.read_permission,
+        create_permission = %policy.create_permission,
+        disable_permission = %policy.disable_permission,
         "Registering Auth administration routes"
     );
     let state: Arc<AuthAdminContext> = Arc::new(AuthAdminContext {
@@ -468,7 +556,7 @@ async fn list_users(
     Extension(actor): Extension<AuthenticatedUser>,
 ) -> Result<Json<Vec<AuthUserSummary>>, AdminApiError> {
     info!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, "Auth user list request accepted");
-    require_permission(&actor, context.policy.read_permission)?;
+    require_permission(&actor, &context.policy.read_permission)?;
     let accounts: Vec<MappedAccount> = load_mapped_accounts(&context, actor.tenant_id).await?;
     let mut users: Vec<AuthUserSummary> = Vec::with_capacity(accounts.len());
     for account in accounts {
@@ -511,7 +599,7 @@ async fn create_user(
         primary_role = %request.primary_role,
         "Auth user creation request accepted"
     );
-    require_permission(&actor, context.policy.create_permission)?;
+    require_permission(&actor, &context.policy.create_permission)?;
     normalize_create_request(&mut request)?;
     ensure_role_grantable(&context, &actor, &request.primary_role).await?;
     let request_fingerprint: String = provisioning_fingerprint(&request);
@@ -637,7 +725,7 @@ async fn set_user_status(
         disabled = request.disabled,
         "Auth user status request accepted"
     );
-    require_permission(&actor, context.policy.disable_permission)?;
+    require_permission(&actor, &context.policy.disable_permission)?;
     let user_id: Uuid = Uuid::parse_str(&auth_user_id)
         .map_err(|_| AdminApiError::Validation("The identity-provider user ID is invalid.".to_owned()))?;
     let account: MappedAccount = load_mapped_account(&context, &actor, &auth_user_id).await?;
@@ -648,7 +736,7 @@ async fn set_user_status(
     }
 
     invalidate_account_cache(&context, &actor, &auth_user_id, "before_status_change").await;
-    let previously_disabled: bool = account.account_status == "disabled";
+    let previously_disabled: bool = account.account_status == AccountStatus::Disabled;
     let provider_user: ExtProviderUser = context
         .admin
         .set_disabled(user_id, request.disabled)
@@ -678,7 +766,11 @@ async fn set_user_status(
         Some(actor.account_id),
     );
     let mut updated_account: MappedAccount = account;
-    updated_account.account_status = if request.disabled { "disabled" } else { "active" }.to_owned();
+    updated_account.account_status = if request.disabled {
+        AccountStatus::Disabled
+    } else {
+        AccountStatus::Active
+    };
     info!(
         tenant_id = %actor.tenant_id,
         actor_id = %actor.account_id,
@@ -692,11 +784,11 @@ async fn set_user_status(
 
 async fn load_mapped_accounts(context: &AuthService, tenant_id: Uuid) -> Result<Vec<MappedAccount>, AdminApiError> {
     trace!(tenant_id = %tenant_id, "Loading mapped Auth accounts");
-    let rows: Vec<MappedAccount> = context
+    let rows: Vec<MappedAccountRow> = context
         .db
         .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
             sqlx::query_as!(
-                MappedAccount,
+                MappedAccountRow,
                 r#"
                 SELECT identity.subject, account.id AS account_id, account.username, account.email,
                        account.status AS account_status, account.primary_role_code AS primary_role
@@ -717,8 +809,12 @@ async fn load_mapped_accounts(context: &AuthService, tenant_id: Uuid) -> Result<
             AdminApiError::Internal
         })?;
 
-    debug!(tenant_id = %tenant_id, account_count = rows.len(), "Mapped Auth accounts loaded");
-    Ok(rows)
+    let accounts: Vec<MappedAccount> = rows
+        .into_iter()
+        .map(MappedAccount::try_from)
+        .collect::<Result<Vec<MappedAccount>, AdminApiError>>()?;
+    debug!(tenant_id = %tenant_id, account_count = accounts.len(), "Mapped Auth accounts loaded");
+    Ok(accounts)
 }
 
 async fn load_mapped_account(
@@ -761,7 +857,7 @@ fn provisioning_fingerprint(request: &CreateAuthUserRequest) -> String {
     let mut hasher: Sha256 = Sha256::new();
     update_fingerprint_field(&mut hasher, &request.username);
     update_fingerprint_field(&mut hasher, &request.email);
-    update_fingerprint_field(&mut hasher, &request.primary_role);
+    update_fingerprint_field(&mut hasher, request.primary_role.as_str());
     match request.password.as_deref() {
         Some(password) => {
             hasher.update([1_u8]);
@@ -877,7 +973,17 @@ async fn claim_provisioning_request(
         ));
     }
 
-    let claim: ProvisioningClaim = if state.status == "completed" {
+    let provisioning_status: ProvisioningRequestStatus = ProvisioningRequestStatus::from_code(&state.status)
+        .ok_or_else(|| {
+            error!(
+                tenant_id = %actor.tenant_id,
+                idempotency_key = %idempotency_key,
+                provisioning_status = %state.status,
+                "Auth provisioning request has an unsupported status"
+            );
+            AdminApiError::Internal
+        })?;
+    let claim: ProvisioningClaim = if provisioning_status == ProvisioningRequestStatus::Completed {
         let auth_user_id: Uuid = state.auth_user_id.ok_or(AdminApiError::Internal)?;
         let account_id: Uuid = state.account_id.ok_or(AdminApiError::Internal)?;
         ProvisioningClaim::Replay {
@@ -1110,9 +1216,9 @@ async fn ensure_username_available(
 async fn ensure_role_grantable(
     context: &AuthService,
     actor: &AuthenticatedUser,
-    role: &str,
+    role: &RoleCode,
 ) -> Result<(), AdminApiError> {
-    trace!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, role, "Checking Auth role assignment grant");
+    trace!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, role = %role, "Checking Auth role assignment grant");
     let tenant_id: Uuid = actor.tenant_id;
     let actor_account_id: Uuid = actor.account_id;
     let row: ExistsRow = context
@@ -1134,22 +1240,22 @@ async fn ensure_role_grantable(
                 ) AS "exists!""#,
                 tenant_id,
                 actor_account_id,
-                role,
+                role.as_str(),
             )
             .fetch_one(connection)
             .await
         })
         .await
         .map_err(|error: TenantDbErr| {
-            error!(tenant_id = %tenant_id, actor_id = %actor_account_id, role, error = %error, "Auth role assignment tenant operation failed");
+            error!(tenant_id = %tenant_id, actor_id = %actor_account_id, role = %role, error = %error, "Auth role assignment tenant operation failed");
             AdminApiError::Internal
         })?;
 
     if row.exists {
-        debug!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, role, "Auth role assignment grant accepted");
+        debug!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, role = %role, "Auth role assignment grant accepted");
         Ok(())
     } else {
-        warn!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, role, "Auth role assignment grant rejected");
+        warn!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, role = %role, "Auth role assignment grant rejected");
         Err(AdminApiError::Forbidden)
     }
 }
@@ -1189,7 +1295,7 @@ async fn link_created_user(
         actor.tenant_id,
         request.username,
         request.email,
-        request.primary_role,
+        request.primary_role.as_str(),
         actor.account_id,
     )
     .execute(transaction.connection())
@@ -1203,7 +1309,7 @@ async fn link_created_user(
         "#,
         actor.tenant_id,
         account_id,
-        request.primary_role,
+        request.primary_role.as_str(),
         actor.account_id,
     )
     .execute(transaction.connection())
@@ -1299,7 +1405,7 @@ async fn link_created_user(
         subject: auth_user_id.to_string(),
         account_id,
         username: request.username.clone(),
-        account_status: "active".to_owned(),
+        account_status: AccountStatus::Active,
         email: Some(request.email.clone()),
         primary_role: request.primary_role.clone(),
     })
@@ -1328,7 +1434,12 @@ async fn update_account_status(
     account_id: Uuid,
     disabled: bool,
 ) -> Result<(), AdminApiError> {
-    let status: &str = if disabled { "disabled" } else { "active" };
+    let account_status: AccountStatus = if disabled {
+        AccountStatus::Disabled
+    } else {
+        AccountStatus::Active
+    };
+    let status: &str = account_status.as_code();
     debug!(
         tenant_id = %actor.tenant_id,
         actor_id = %actor.account_id,
@@ -1373,7 +1484,6 @@ async fn update_account_status(
 fn normalize_create_request(request: &mut CreateAuthUserRequest) -> Result<(), AdminApiError> {
     request.username = request.username.trim().to_owned();
     request.email = request.email.trim().to_ascii_lowercase();
-    request.primary_role = request.primary_role.trim().to_owned();
     request.password = request.password.take().filter(|password| !password.is_empty());
 
     if !(3..=128).contains(&request.username.chars().count()) {
@@ -1401,24 +1511,27 @@ fn normalize_create_request(request: &mut CreateAuthUserRequest) -> Result<(), A
     Ok(())
 }
 
-fn require_permission(actor: &AuthenticatedUser, permission: &str) -> Result<(), AdminApiError> {
-    if actor.has_permission(permission) {
-        trace!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, permission, "Auth administration permission accepted");
+fn require_permission(actor: &AuthenticatedUser, permission: &PermissionCode) -> Result<(), AdminApiError> {
+    if actor.has_permission(permission.as_str()) {
+        trace!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, permission = %permission, "Auth administration permission accepted");
         Ok(())
     } else {
-        warn!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, permission, "Auth administration permission rejected");
+        warn!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, permission = %permission, "Auth administration permission rejected");
         Err(AdminApiError::Forbidden)
     }
 }
 
 fn summary(account: MappedAccount, provider_user: Option<ExtProviderUser>) -> AuthUserSummary {
-    let provider_status =
-        provider_user.as_ref().map_or(
-            "missing",
-            |user| {
-                if user_is_banned(user) { "disabled" } else { "active" }
-            },
-        );
+    let provider_status: AuthProviderUserStatus =
+        provider_user
+            .as_ref()
+            .map_or(AuthProviderUserStatus::Missing, |user: &ExtProviderUser| {
+                if user_is_banned(user) {
+                    AuthProviderUserStatus::Disabled
+                } else {
+                    AuthProviderUserStatus::Active
+                }
+            });
     AuthUserSummary {
         auth_user_id: account.subject,
         account_id: account.account_id,
@@ -1426,7 +1539,7 @@ fn summary(account: MappedAccount, provider_user: Option<ExtProviderUser>) -> Au
         email: account.email,
         primary_role: account.primary_role,
         account_status: account.account_status,
-        provider_status: provider_status.to_owned(),
+        provider_status,
         email_confirmed: provider_user
             .as_ref()
             .and_then(|user| user.email_confirmed_at.as_ref())
@@ -1547,6 +1660,8 @@ fn required_env(name: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::RoleCode;
+
     use super::{
         CreateAuthUserRequest, ExtProviderUser, normalize_create_request, provider_message, provisioning_fingerprint,
         user_is_banned,
@@ -1559,7 +1674,7 @@ mod tests {
             username: "  Linh Nguyen  ".to_owned(),
             email: " LINH@EXAMPLE.COM ".to_owned(),
             password: Some("correct-horse".to_owned()),
-            primary_role: "custom_role".to_owned(),
+            primary_role: RoleCode::parse("custom_role").expect("valid test role code"),
         };
         assert!(normalize_create_request(&mut request).is_ok());
         assert_eq!(request.username, "Linh Nguyen");
@@ -1572,7 +1687,7 @@ mod tests {
             username: "linh".to_owned(),
             email: "linh@example.com".to_owned(),
             password: Some(String::new()),
-            primary_role: "custom_role".to_owned(),
+            primary_role: RoleCode::parse("custom_role").expect("valid test role code"),
         };
         assert!(normalize_create_request(&mut request).is_ok());
         assert!(request.password.is_none());
@@ -1602,7 +1717,7 @@ mod tests {
             username: "linh".to_owned(),
             email: "linh@example.com".to_owned(),
             password: Some("first-password".to_owned()),
-            primary_role: "employee".to_owned(),
+            primary_role: RoleCode::parse("employee").expect("valid test role code"),
         };
         let same_fingerprint: String = provisioning_fingerprint(&request);
         let mut changed_request: CreateAuthUserRequest = request.clone();

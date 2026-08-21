@@ -15,11 +15,11 @@ The identity provider owns credentials and sessions. The application database ow
 Role and permission codes are data, not Rust enums in the reusable layer. Applications seed their authorization catalog in migrations and supply the permission codes needed by auth administration routes:
 
 ```rust
-pub const ADMIN_POLICY: AuthAdminPolicy = AuthAdminPolicy {
-    read_permission: "auth.accounts.read",
-    create_permission: "auth.accounts.create",
-    disable_permission: "auth.accounts.disable",
-};
+let admin_policy: AuthAdminPolicy = AuthAdminPolicy::try_new(
+    "auth.accounts.read",
+    "auth.accounts.create",
+    "auth.accounts.disable",
+)?;
 ```
 
 Creating an account accepts only a role granted to one of the actor's roles by

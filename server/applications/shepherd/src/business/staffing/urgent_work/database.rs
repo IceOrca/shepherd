@@ -605,7 +605,17 @@ impl UrgentWorkRepo for UrgentWorkProvider {
                 .map_err(|error: sqlx::Error| tenant_failure("commit idempotent urgent end", tenant_id, error))?;
             return UrgentWorkItem::try_from(row);
         }
-        if context.report_status != "active" {
+        let report_status: UrgentWorkStatus = UrgentWorkStatus::from_code(&context.report_status).ok_or_else(|| {
+            error!(
+                operation = "end_urgent_work",
+                tenant_id = %tenant_id,
+                report_id = %report_id,
+                report_status = %context.report_status,
+                "Urgent-work report has an unsupported lifecycle status"
+            );
+            UrgentWorkError::BackendUnavailable
+        })?;
+        if report_status != UrgentWorkStatus::Active {
             return Err(UrgentWorkError::Conflict);
         }
         let actor_employee: Option<IdRow> = sqlx::query_as!(
@@ -1193,7 +1203,17 @@ async fn reconcile_report(
     .await
     .map_err(|error: sqlx::Error| database_failure("lock urgent reconciliation", tenant_id, error))?
     .ok_or(UrgentWorkError::NotFound)?;
-    if context.report_status != "completed" {
+    let report_status: UrgentWorkStatus = UrgentWorkStatus::from_code(&context.report_status).ok_or_else(|| {
+        error!(
+            operation = "reconcile_urgent_work",
+            tenant_id = %tenant_id,
+            report_id = %report_id,
+            report_status = %context.report_status,
+            "Urgent-work report has an unsupported lifecycle status"
+        );
+        UrgentWorkError::BackendUnavailable
+    })?;
+    if report_status != UrgentWorkStatus::Completed {
         return Err(UrgentWorkError::Conflict);
     }
     let _staff_ended_at: DateTime<Utc> = context.staff_ended_at.ok_or(UrgentWorkError::Conflict)?;

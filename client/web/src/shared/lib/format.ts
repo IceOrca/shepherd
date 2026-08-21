@@ -1,4 +1,4 @@
-import type { ShiftAssignmentStatus, StaffingShiftStatus } from "../../api/generated/contracts";
+import type { RoleCode, ShiftAssignmentStatus, StaffingShiftStatus } from "../../api/generated/contracts";
 
 const dateTimeFormatter = new Intl.DateTimeFormat("vi-VN", {
   dateStyle: "medium",
@@ -32,7 +32,7 @@ export function formatDuration(totalSeconds: number): string {
   return `${hours} giờ ${minutes.toString().padStart(2, "0")} phút`;
 }
 
-export function roleLabel(role: string): string {
+export function roleLabel(role: RoleCode): string {
   switch (role) {
     case "tenant_owner":
       return "Chủ doanh nghiệp";

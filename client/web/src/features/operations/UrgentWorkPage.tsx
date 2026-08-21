@@ -19,7 +19,12 @@ import {
   UsersRound,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import type { UrgentWorkEmployee, UrgentWorkFacility, UrgentWorkItem } from "../../api/generated/contracts";
+import type {
+  PermissionCode,
+  UrgentWorkEmployee,
+  UrgentWorkFacility,
+  UrgentWorkItem,
+} from "../../api/generated/contracts";
 import { friendlyApiError, isRetryableApiError } from "../../shared/api/client";
 import { formatDateTime, formatDuration } from "../../shared/lib/format";
 import { useOnlineStatus } from "../../shared/lib/useOnlineStatus";
@@ -56,7 +61,7 @@ export function UrgentWorkPage(): React.JSX.Element {
   const auth: ReturnType<typeof useAuth> = useAuth();
   const queryClient: QueryClient = useQueryClient();
   const isOnline: boolean = useOnlineStatus();
-  const permissions: string[] = auth.profile?.permissions ?? [];
+  const permissions: PermissionCode[] = auth.profile?.permissions ?? [];
   const canRead: boolean = permissions.includes("business.urgent_work.read");
   const canStart: boolean = permissions.includes("business.urgent_work.start");
   const canManagePeers: boolean = permissions.includes("business.urgent_work.peer_manage");

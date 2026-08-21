@@ -1,10 +1,18 @@
 // This file is generated from Rust API DTOs. Do not edit it manually.
 
-export type CurrentUserProfile = { tenant_id: string, account_id: string, username: string, email: string | null, primary_role: string, roles: Array<string>, permissions: Array<string>, };
+export type RoleCode = string;
 
-export type AuthUserSummary = { auth_user_id: string, account_id: string, username: string, email: string | null, primary_role: string, account_status: string, provider_status: string, email_confirmed: boolean, created_at: string | null, last_sign_in_at: string | null, };
+export type PermissionCode = string;
 
-export type CreateAuthUserRequest = { username: string, email: string, password: string | null, primary_role: string, };
+export type AccountStatus = "active" | "disabled";
+
+export type AuthProviderUserStatus = "active" | "disabled" | "missing";
+
+export type CurrentUserProfile = { tenant_id: string, account_id: string, username: string, email: string | null, primary_role: RoleCode, roles: Array<RoleCode>, permissions: Array<PermissionCode>, };
+
+export type AuthUserSummary = { auth_user_id: string, account_id: string, username: string, email: string | null, primary_role: RoleCode, account_status: AccountStatus, provider_status: AuthProviderUserStatus, email_confirmed: boolean, created_at: string | null, last_sign_in_at: string | null, };
+
+export type CreateAuthUserRequest = { username: string, email: string, password: string | null, primary_role: RoleCode, };
 
 export type SetAuthUserStatusRequest = { disabled: boolean, };
 

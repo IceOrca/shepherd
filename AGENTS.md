@@ -106,11 +106,18 @@ Store instants as UTC `TIMESTAMPTZ`. Use the customer facility's IANA time zone 
 
 Supabase Auth (GoTrue) is the external identity provider. It owns credentials, social identities, access/refresh sessions, JWT signing, and recovery. Shepherd owns tenants, `accounts`, account status, account identities, roles, permissions, employee links, and RLS authorization.
 
+- Expose standalone GoTrue on a dedicated Auth origin with the Supabase-compatible public prefix `/auth/v1` in both development and production. The public shape is `https://auth.<domain>/auth/v1/...`; do not put production Auth back under the Shepherd web origin.
+- Production uses one canonical URL chain: `AUTH_DNS_NAME_PROD=auth.<domain>`, `AUTH_ORIGIN_PROD=https://${AUTH_DNS_NAME_PROD}`, and `AUTH_PUBLIC_URL_PROD=${AUTH_ORIGIN_PROD}/auth/v1`. The Vite build, GoTrue `API_EXTERNAL_URL` and JWT issuer, Shepherd `AUTH_ISSUER_URL`, OAuth callbacks, and Caddy host must agree with this chain.
+- DNS is external infrastructure and is never created automatically by Compose or Caddy. Before cutover, create an `A` record from `AUTH_DNS_NAME_PROD` to `PUBLIC_VPS_IPV4_PROD` and an `AAAA` record only when the VPS has working public IPv6. Caddy may obtain public TLS only after the hostname resolves and public ports 80/443 reach the VPS.
+- Production Caddy serves the UI and `/api/*` on `SHEPHERD_WEB_ORIGIN_PROD`, and serves Auth on a separate `https://${AUTH_DNS_NAME_PROD}` site. It strips `/auth/v1` only on the internal reverse-proxy hop. GoTrue remains bound to the configured loopback edge port; never expose port 9999, PostgreSQL, Redis, or the Shepherd server directly.
+- The production frontend must receive `VITE_SHEPHERD_AUTH_URL=${AUTH_PUBLIC_URL_PROD}` at build time. This value is public configuration, not a secret. Production builds must fail when it is empty or still uses the documentation-only `auth.example.com` placeholder.
+- Shepherd APIs remain same-origin with the web UI. Only browser-to-GoTrue calls cross origins; GoTrue owns their CORS and preflight responses. Do not enable broad CORS on the Shepherd API merely because Auth has a separate hostname. Re-evaluate CORS and cookie attributes before adopting cross-origin cookie-based sessions.
+- Social identity providers must register `${AUTH_PUBLIC_URL_PROD}/callback` exactly. Changing the configured JWT issuer is a coordinated cutover and normally invalidates existing browser sessions; expect users to sign in again and do not run frontend, GoTrue, and Shepherd with mixed old/new issuer values.
 - Public signup is disabled. A Google or other social identity must not create an application user merely because the provider authenticated it.
 - Every accepted JWT `issuer + subject` must map to an active Shepherd account and tenant before application access is granted.
 - Keep the application account database separate from the Supabase Auth database; this is required for business authorization and tenant membership.
 - Reusable auth/account primitives, current-user profile, role and permission handling, auth administration, and auth routes belong in reusable infra. Application crates must not be dependencies of infra crates.
-- Role codes and permission codes are data-driven. Define them in migrations or application specifications; do not hardcode role-to-permission policy in Rust.
+- Role codes and permission codes are data-driven. Define them in migrations or application specifications; do not hardcode role-to-permission policy in Rust. Represent them with the validated string-backed `RoleCode` and `PermissionCode` newtypes, not closed enums, because tenants and future applications may add codes without recompiling reusable auth infrastructure.
 - `accounts` stores both `username` and an optional normalized `email`. The application database is authoritative for the email exposed by `AuthenticatedUser`; do not treat a JWT email claim as the current Shepherd account email. Account provisioning must persist the normalized provider email in both systems, and future email-change workflows must update Shepherd explicitly.
 - `AuthenticatedUser` remains the request identity boundary and includes tenant/account IDs, username, optional application-owned email, primary role, roles, and permissions.
 - After local JWT signature, issuer, audience, expiry, and subject validation, resolve `issuer + subject` to an active `AuthenticatedUser`. Cache only successful active resolutions in Redis under a deterministic one-way-hashed identity key. Never accept a client-supplied tenant/account header as a substitute for this resolution.
@@ -203,6 +210,16 @@ GPS is controlled by both `STAFFING_GPS_ENABLED` and `VITE_STAFFING_GPS_ENABLED`
 
 Migrations remain in `server/migrations`. Deployment configuration is in `deploy/` and the root Compose files. Treat `server/target` and `client/web/dist` as disposable build outputs. Generated API contracts are tracked outputs: regenerate and commit them when Rust DTOs change, but never edit them manually. Current work is development-focused: do not modify production deployment configuration unless the user explicitly requests it.
 
+For a production Auth-origin deployment:
+
+1. Copy the production environment example to the operator-owned environment file and replace every documentation-only domain, address, secret, and password.
+2. Create the public Auth DNS record and wait until it resolves to the declared VPS address.
+3. Validate the merged Compose configuration and the host Caddyfile before starting the cutover.
+4. Build the frontend through `scripts/build-production-web.sh`; deploy the returned staging directory atomically to `SHEPHERD_WEB_DIST_ROOT`.
+5. Start or recreate GoTrue and Shepherd with the same `AUTH_PUBLIC_URL_PROD`, then load the production Caddy configuration.
+6. Run `scripts/check-production-auth-edge.sh` to verify DNS, public TLS, `disable_signup=true`, the GoTrue settings endpoint, and browser CORS preflight.
+7. Verify password login, application-account mapping through `/api/me`, logout, refresh, and each enabled social-provider callback. Existing sessions from a previous issuer are not expected to survive.
+
 
 ## Build, Test, and Development Commands
 
@@ -214,6 +231,8 @@ The user starts Compose before development. Run language toolchains inside conta
 - `docker compose exec -T client sh -c 'npm run lint'` checks TypeScript; replace `lint` with `build` or `dev` as needed. The Alpine client image does not contain Bash.
 - `bash scripts/generate-api-types.sh` regenerates TypeScript DTO contracts using Cargo inside `server`.
 - `sh scripts/dev-data-seeding.sh` creates or updates every development GoTrue user listed in `scripts/dev-auth-accounts.tsv` through the admin API, resets the application dev database, and seeds linked tenant accounts and employees. Keep the catalog development-only and update the Rust seed account definitions with it.
+- `sh scripts/build-production-web.sh /etc/shepherd/shepherd.env` builds a staged production frontend artifact with `AUTH_PUBLIC_URL_PROD` embedded by Vite.
+- `sh scripts/check-production-auth-edge.sh /etc/shepherd/shepherd.env` verifies production Auth DNS, public TLS, disabled signup, and browser CORS after deployment.
 - Development seeding must persist the catalog email in `accounts.email` and clear only the `auth:application-user:v1:*` Redis namespace after a database reset. Do not flush unrelated Redis sessions, rate limits, queues, or caches.
 
 Development Compose exposes worker and notification controls with safe defaults: `WORKER_SHUTDOWN_TIMEOUT_SECS=60`, `NOTIFICATION_PROVIDER_HTTP_TIMEOUT_SECS=10`, `NOTIFICATION_DELIVERY_TIMEOUT_SECS=15`, `NOTIFICATION_POLL_INTERVAL_SECS=2`, `NOTIFICATION_CLAIM_BATCH_SIZE=20`, `NOTIFICATION_MAX_ATTEMPTS=8`, `NOTIFICATION_RETRY_BASE_DELAY_SECS=1`, `NOTIFICATION_RETRY_MAX_DELAY_SECS=300`, and `NOTIFICATION_PROCESSING_LOCK_TIMEOUT_SECS=600`. Values must be positive integers. Invalid or zero values produce a warning and use the named code default.
@@ -235,6 +254,10 @@ Format Rust inside the server container with `cargo fmt --all`; it uses 120-colu
 ### Type, SQLx, and Logging Policies
 
 Use explicit data types in Rust and TypeScript. Every non-destructured local binding, constant, collection, callback return, and intermediate query result must have an explicit type where the language permits it. Do not rely on inferred numeric, collection, optional, or result types. Public Rust and TypeScript APIs must always state their parameter and return types. This applies to all new code and every file or line edited during refactoring.
+
+Represent finite domain lifecycle values, such as account, shift, assignment, urgent-report, reconciliation, and payroll statuses, with domain-specific Rust enums and generated TypeScript unions. Do not create one universal status enum. PostgreSQL may store these values as `TEXT` with `CHECK` constraints; raw database strings are allowed only in private SQLx row types and must be converted once at the repository boundary. Unknown persisted values must be logged and rejected rather than propagated or treated as a default. Adding a lifecycle value requires updating the database constraint, domain enum and transition logic, tests, and regenerated TypeScript contracts together.
+
+Roles and permissions are open-ended authorization codes rather than finite lifecycle state. Use validated `RoleCode` and `PermissionCode` newtypes in Rust boundaries and their generated TypeScript aliases in browser code. Keep role-to-permission grants in database data. Application-owned permission checks may use named string literals, but reusable infrastructure must not encode a closed role enum or hardcoded role hierarchy. The isolated legacy internal-auth compatibility implementation is not a pattern for new code.
 
 For SQLx, prefer the most strongly checked compatible API in this exact order: `query_as!` first for typed mapped rows, then `query!`, then runtime `query_as`, and finally runtime `query`. Use a lower-priority API only when the higher-priority API cannot express the required query; document the reason in a nearby comment. Give every query result an explicit Rust type.
 

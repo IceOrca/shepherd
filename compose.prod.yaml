@@ -70,6 +70,8 @@ services:
       context: ./client/web
       dockerfile: Dockerfile.prod
       target: builder
+      args:
+        VITE_SHEPHERD_AUTH_URL: ${AUTH_PUBLIC_URL_PROD:?required}
     image: iceorca/shepherd-cli-builder:0.1.0
     restart: "no"
     command: !reset null

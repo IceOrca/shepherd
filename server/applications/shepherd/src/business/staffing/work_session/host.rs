@@ -244,6 +244,8 @@ fn staffing_work_status(operation: &str, user: &AuthenticatedUser, error: Staffi
 
 #[cfg(test)]
 mod tests {
+    use infra_auth::RoleCode;
+
     use super::{AuthenticatedUser, HeaderMap, StatusCode, idempotency_key};
 
     fn user() -> AuthenticatedUser {
@@ -252,8 +254,8 @@ mod tests {
             account_id: uuid::Uuid::new_v4(),
             username: "staff-test".to_owned(),
             email: None,
-            primary_role: "staff".to_owned(),
-            roles: vec!["staff".to_owned()],
+            primary_role: RoleCode::parse("staff").expect("valid test role code"),
+            roles: vec![RoleCode::parse("staff").expect("valid test role code")],
             permissions: vec![],
         }
     }

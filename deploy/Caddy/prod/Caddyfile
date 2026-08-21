@@ -8,14 +8,10 @@
 	}
 }
 
-# Public Shepherd application and authentication endpoints.
+# Public Shepherd application and API endpoints.
 {$SHEPHERD_WEB_ORIGIN_PROD:https://erp.example.com} {
 	import common
 	root * {$SHEPHERD_WEB_DIST_ROOT:/var/www/shepherd/dist}
-
-	handle_path /auth/v1/* {
-		reverse_proxy {$AUTH_PROD_UPSTREAM:127.0.0.1:9999}
-	}
 
 	@api path /api/* /hr/* /business/*
 	handle @api {
@@ -38,5 +34,19 @@
 	handle {
 		try_files {path} /index.html
 		file_server
+	}
+}
+
+# Standalone Supabase Auth boundary. Keep /auth/v1 public and strip it only on
+# the loopback hop to GoTrue's root routes.
+https://{$AUTH_DNS_NAME_PROD:auth.example.com} {
+	import common
+
+	handle_path /auth/v1/* {
+		reverse_proxy {$AUTH_PROD_UPSTREAM:127.0.0.1:9999}
+	}
+
+	handle {
+		respond "Not Found" 404
 	}
 }

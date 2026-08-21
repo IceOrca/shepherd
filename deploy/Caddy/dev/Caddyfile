@@ -13,10 +13,6 @@ https://{$REMOTE_DEV_DNS_NAME} {
 	import common
 	tls internal
 
-	handle_path /auth/v1/* {
-		reverse_proxy {$AUTH_DEV_UPSTREAM:supabase-auth:9999}
-	}
-
 	@api path /api/*
 	handle @api {
 		reverse_proxy {$SHEPHERD_API_DEV_UPSTREAM:server:8000}
@@ -24,5 +20,20 @@ https://{$REMOTE_DEV_DNS_NAME} {
 
 	handle {
 		reverse_proxy {$SHEPHERD_WEB_DEV_UPSTREAM:client:5173}
+	}
+}
+
+# Keep the standalone GoTrue service on the Supabase-compatible public URL
+# while stripping /auth/v1 before forwarding to GoTrue's root HTTP routes.
+https://{$AUTH_DEV_DNS_NAME} {
+	import common
+	tls internal
+
+	handle_path /auth/v1/* {
+		reverse_proxy {$AUTH_DEV_UPSTREAM:supabase-auth:9999}
+	}
+
+	handle {
+		respond "Not Found" 404
 	}
 }

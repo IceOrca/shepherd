@@ -7,7 +7,7 @@ use infra_postgres::{DatabaseAdapter, TenantDbErr, TenantTransaction};
 use uuid::Uuid;
 
 use super::{
-    super::core::{ShiftAssignmentStatus, StaffingError},
+    super::core::{ShiftAssignmentStatus, StaffingError, StaffingShiftStatus},
     core::{OwnStaffingAssignment, ShiftWorkActionInput, ShiftWorkSession, StaffingWorkRepo},
 };
 
@@ -133,6 +133,38 @@ struct WorkContextRow {
     shift_status: String,
 }
 
+impl WorkContextRow {
+    fn lifecycle_statuses(
+        &self,
+        tenant_id: Uuid,
+        assignment_id: Uuid,
+    ) -> Result<(ShiftAssignmentStatus, StaffingShiftStatus), StaffingError> {
+        let assignment_status: ShiftAssignmentStatus = ShiftAssignmentStatus::from_code(&self.assignment_status)
+            .ok_or_else(|| {
+                error!(
+                    operation = "resolve_staffing_work_context_status",
+                    tenant_id = %tenant_id,
+                    assignment_id = %assignment_id,
+                    assignment_status = %self.assignment_status,
+                    "Staffing assignment has an unsupported lifecycle status"
+                );
+                StaffingError::BackendUnavailable
+            })?;
+        let shift_status: StaffingShiftStatus =
+            StaffingShiftStatus::from_code(&self.shift_status).ok_or_else(|| {
+                error!(
+                    operation = "resolve_staffing_work_context_status",
+                    tenant_id = %tenant_id,
+                    assignment_id = %assignment_id,
+                    shift_status = %self.shift_status,
+                    "Staffing shift has an unsupported lifecycle status"
+                );
+                StaffingError::BackendUnavailable
+            })?;
+        Ok((assignment_status, shift_status))
+    }
+}
+
 #[async_trait]
 impl StaffingWorkRepo for StaffingWorkProvider {
     async fn list_own_assignments(
@@ -225,7 +257,13 @@ impl StaffingWorkRepo for StaffingWorkProvider {
         }
 
         let context: WorkContextRow = lock_work_context(&mut transaction, tenant_id, assignment_id, account_id).await?;
-        if context.assignment_status != "assigned" || matches!(context.shift_status.as_str(), "cancelled" | "completed")
+        let (assignment_status, shift_status): (ShiftAssignmentStatus, StaffingShiftStatus) =
+            context.lifecycle_statuses(tenant_id, assignment_id)?;
+        if assignment_status != ShiftAssignmentStatus::Assigned
+            || matches!(
+                shift_status,
+                StaffingShiftStatus::Cancelled | StaffingShiftStatus::Completed
+            )
         {
             return Err(StaffingError::Conflict);
         }
@@ -303,7 +341,9 @@ impl StaffingWorkRepo for StaffingWorkProvider {
         }
 
         let context: WorkContextRow = lock_work_context(&mut transaction, tenant_id, assignment_id, account_id).await?;
-        if context.assignment_status != "assigned" || context.shift_status == "cancelled" {
+        let (assignment_status, shift_status): (ShiftAssignmentStatus, StaffingShiftStatus) =
+            context.lifecycle_statuses(tenant_id, assignment_id)?;
+        if assignment_status != ShiftAssignmentStatus::Assigned || shift_status == StaffingShiftStatus::Cancelled {
             return Err(StaffingError::Conflict);
         }
 

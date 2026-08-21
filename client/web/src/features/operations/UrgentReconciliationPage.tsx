@@ -12,6 +12,7 @@ import { Link } from "react-router-dom";
 import type {
   JobPosition,
   ManualRateOverrideRequest,
+  PermissionCode,
   ReconciliationStatus,
   UrgentCustomerWorkRecord,
   UrgentWorkFacility,
@@ -110,7 +111,7 @@ function initialFinal(item: UrgentWorkReconciliation): FinalDraft {
 export function UrgentReconciliationPage(): React.JSX.Element {
   const auth: ReturnType<typeof useAuth> = useAuth();
   const queryClient: QueryClient = useQueryClient();
-  const permissions: string[] = auth.profile?.permissions ?? [];
+  const permissions: PermissionCode[] = auth.profile?.permissions ?? [];
   const canRead: boolean = permissions.includes("business.reconciliation.read");
   const canManage: boolean = permissions.includes("business.urgent_work.reconcile");
   const [selectedId, setSelectedId] = useState<string | null>(null);
