@@ -2,24 +2,14 @@
 
 # Bootstrap the Shepherd application and Auth roles in one PostgreSQL database.
 #
-# Run this file from the repository root to update an existing Compose volume.
-# The PostgreSQL container also executes this same file automatically when it
-# initializes a fresh volume.
+# This script is the command of the one-shot `postgres-bootstrap` Compose
+# service. Do not run it directly on the host.
 
 set -eu
 
-set -a
-if [ -e ./.env ]; then
-    . ./.env
-fi
-if [ -e /etc/shepherd/secrets/.env ]; then
-    . /etc/shepherd/secrets/.env
-fi
-set +a
-
-if [ "${SHEPHERD_POSTGRES_BOOTSTRAP_IN_CONTAINER:-}" != "1" ]; then
-    exec docker compose exec -T postgres-db \
-        sh /docker-entrypoint-initdb.d/10-bootstrap-postgres.sh
+if [ "${SHEPHERD_POSTGRES_BOOTSTRAP_JOB:-}" != "1" ]; then
+    echo >&2 "bootstrap-postgres.sh must run through the postgres-bootstrap Compose service"
+    exit 2
 fi
 
 read_password() {
@@ -39,11 +29,16 @@ read_password() {
 }
 
 admin_user="${POSTGRES_USER:?POSTGRES_USER_must_be_set}"
+admin_password="$(read_password "${POSTGRES_PASSWORD:-}" "${POSTGRES_PASSWORD_FILE:-}" POSTGRES_PASSWORD)"
 shepherd_db="${POSTGRES_DB:?POSTGRES_DB_must_be_set}"
 shepherd_user="${PG_APP_USER:?PG_APP_USER_must_be_set}"
 shepherd_password="$(read_password "${PG_APP_PASSWORD:-}" "${PG_APP_PASSWORD_FILE:-}" PG_APP_PASSWORD)"
 auth_user="${AUTH_DB_USER:-supabase_auth_admin}"
 auth_password="$(read_password "${AUTH_DB_PASSWORD:-}" "${AUTH_DB_PASSWORD_FILE:-}" AUTH_DB_PASSWORD)"
+postgres_host="${POSTGRES_HOST:-postgres-db}"
+postgres_port="${POSTGRES_PORT:-5432}"
+
+export PGPASSWORD="${admin_password}"
 
 if [ "${shepherd_user}" = "${admin_user}" ] || [ "${auth_user}" = "${admin_user}" ]; then
     echo >&2 "application roles must differ from the bootstrap PostgreSQL administrator"
@@ -58,7 +53,8 @@ if [ "${auth_user}" != "supabase_auth_admin" ]; then
     exit 2
 fi
 
-psql --username "${admin_user}" --dbname postgres --set ON_ERROR_STOP=1 \
+psql --host "${postgres_host}" --port "${postgres_port}" --username "${admin_user}" --dbname postgres \
+    --set ON_ERROR_STOP=1 \
     --set shepherd_user="${shepherd_user}" \
     --set shepherd_password="${shepherd_password}" \
     --set auth_user="${auth_user}" \
@@ -92,7 +88,8 @@ SELECT format(
 \gexec
 EOSQL
 
-psql --username "${admin_user}" --dbname postgres --set ON_ERROR_STOP=1 \
+psql --host "${postgres_host}" --port "${postgres_port}" --username "${admin_user}" --dbname postgres \
+    --set ON_ERROR_STOP=1 \
     --set shepherd_db="${shepherd_db}" \
     --set shepherd_user="${shepherd_user}" <<-'EOSQL'
 SELECT format('CREATE DATABASE %I OWNER %I', :'shepherd_db', :'shepherd_user')
@@ -103,7 +100,8 @@ SELECT format('ALTER DATABASE %I OWNER TO %I', :'shepherd_db', :'shepherd_user')
 \gexec
 EOSQL
 
-psql --username "${admin_user}" --dbname "${shepherd_db}" --set ON_ERROR_STOP=1 \
+psql --host "${postgres_host}" --port "${postgres_port}" --username "${admin_user}" --dbname "${shepherd_db}" \
+    --set ON_ERROR_STOP=1 \
     --set auth_user="${auth_user}" <<-'EOSQL'
 SELECT format('CREATE SCHEMA IF NOT EXISTS auth AUTHORIZATION %I', :'auth_user')
 \gexec
@@ -115,4 +113,4 @@ SELECT format('GRANT CONNECT ON DATABASE %I TO %I', current_database(), :'auth_u
 \gexec
 EOSQL
 
-unset shepherd_password auth_password password
+unset PGPASSWORD admin_password shepherd_password auth_password password

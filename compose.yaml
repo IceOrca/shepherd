@@ -7,21 +7,37 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_PORT: ${POSTGRES_PORT:-5432}
-      PG_APP_USER: ${PG_APP_USER}
-      PG_APP_PASSWORD: ${PG_APP_PASSWORD}
-      AUTH_DB_USER: ${AUTH_DB_USER}
-      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD}
-      SHEPHERD_POSTGRES_BOOTSTRAP_IN_CONTAINER: "1"
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:${POSTGRES_PORT:-5432}"
     volumes:
       - pg_data:/var/lib/postgresql
-      - ./scripts/bootstrap-postgres.sh:/docker-entrypoint-initdb.d/10-bootstrap-postgres.sh:ro
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
       interval: 10s
       timeout: 5s
       retries: 20
+
+  postgres-bootstrap:
+    image: postgres:18-alpine
+    container_name: shepherd-pg-bootstrap
+    restart: "no"
+    environment:
+      POSTGRES_HOST: postgres-db
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      PG_APP_USER: ${PG_APP_USER}
+      PG_APP_PASSWORD: ${PG_APP_PASSWORD}
+      AUTH_DB_USER: ${AUTH_DB_USER}
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD}
+      SHEPHERD_POSTGRES_BOOTSTRAP_JOB: "1"
+    volumes:
+      - ./scripts/bootstrap-postgres.sh:/usr/local/bin/bootstrap-postgres.sh:ro
+    command: ["sh", "/usr/local/bin/bootstrap-postgres.sh"]
+    depends_on:
+      postgres-db:
+        condition: service_healthy
 
   redis-cache:
     image: redis:8-alpine
@@ -79,8 +95,8 @@ services:
       - server_target:/app/shepherd_server/target
     command: sleep infinity
     depends_on:
-      postgres-db:
-        condition: service_healthy
+      postgres-bootstrap:
+        condition: service_completed_successfully
       redis-cache:
         condition: service_healthy
       supabase-auth:
@@ -155,8 +171,8 @@ services:
       retries: 12
       start_period: 10s
     depends_on:
-      postgres-db:
-        condition: service_healthy
+      postgres-bootstrap:
+        condition: service_completed_successfully
 
   caddy:
     image: caddy:2.11-alpine

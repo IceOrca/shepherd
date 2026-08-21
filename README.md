@@ -83,6 +83,27 @@ subject through `account_identities` and adds the active tenant UUID as the
 signed `tid` claim. Unmapped identities receive no `tid` and still cannot enter
 the application.
 
+### Automatic database bootstrap
+
+Normal startup requires only:
+
+```sh
+docker compose up -d --wait
+```
+
+Compose first waits for PostgreSQL to become healthy and then runs the
+idempotent `postgres-bootstrap` one-shot service. That job provisions the
+separate Shepherd and `supabase_auth_admin` roles, applies database ownership,
+and creates the Auth-owned `auth` schema. GoTrue and Shepherd cannot start until
+the job exits successfully. Seeing `postgres-bootstrap` as `Exited (0)` in
+`docker compose ps -a` is expected; it is a completed setup job, not a failed
+long-running service.
+
+Do not run `scripts/bootstrap-postgres.sh` directly and do not install a
+PostgreSQL client on the host or server image for bootstrap. The job uses
+`psql` from the PostgreSQL image over the private Compose network and works for
+both a fresh volume and an existing database.
+
 In development, GoTrue is exposed through Caddy at the Supabase-compatible
 `https://${AUTH_DEV_DNS_NAME}/auth/v1/...` boundary, separately from the
 Shepherd web origin. The configured auth hostname must resolve to the same
@@ -208,8 +229,9 @@ development seed workflow stores the login catalog emails in `accounts.email`
 and clears only Shepherd's authenticated-user cache namespace after resetting
 the unified database. Because that reset also removes `auth`, use
 `sh scripts/dev-data-seeding.sh`; it coordinates stopping GoTrue, SQLx reset,
-schema bootstrap, GoTrue migrations, API-based Auth provisioning, and Shepherd
-data seeding. Never run that destructive development workflow in production.
+rerunning the same one-shot bootstrap job, GoTrue migrations, API-based Auth
+provisioning, and Shepherd data seeding. Never run that destructive development
+workflow in production.
 
 ## Background worker resilience
 

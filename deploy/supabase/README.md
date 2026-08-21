@@ -23,13 +23,18 @@ Generate the gitignored Ed25519 signing configuration and the separate server-on
 sh scripts/generate-auth-dev-env.sh
 ```
 
-Then update an existing PostgreSQL volume and start Auth without reconciling
-the Zed devcontainers:
+Start the development stack normally:
 
 ```sh
-sh scripts/bootstrap-postgres.sh
-docker compose up -d --no-deps supabase-auth
+docker compose up -d --wait
 ```
+
+Compose waits for PostgreSQL health, runs the idempotent `postgres-bootstrap`
+one-shot service, and starts GoTrue only after that job exits successfully. The
+job provisions database roles and owns the `auth` schema; it uses `psql` from
+the PostgreSQL image and requires no host PostgreSQL client. `Exited (0)` is the
+expected terminal state for this job. Never run `scripts/bootstrap-postgres.sh`
+directly or use `/docker-entrypoint-initdb.d` as a second bootstrap path.
 
 Public signup is disabled, including first-time social-provider signup. An
 administrator must pre-provision every user through Shepherd. A social-only
@@ -59,7 +64,8 @@ sh scripts/dev-data-seeding.sh
 ```
 
 The helper resets the unified development database, recreates schema ownership,
-lets GoTrue apply its `auth` migrations, creates every user in
+reruns the same bootstrap service through Compose, lets GoTrue apply its `auth`
+migrations, creates every user in
 [`scripts/dev-auth-accounts.tsv`](../../scripts/dev-auth-accounts.tsv) through
 GoTrue's admin API, and links every new `sub` to its seeded tenant account. The
 catalog contains one owner/director, two managers, and four staff for each
@@ -80,6 +86,10 @@ the custom access-token hook and its least-privilege grant exist.
 Production disables public signup and requires SMTP for invitations and
 recovery. Google and Facebook remain opt-in through the corresponding
 `AUTH_*_PROD` variables.
+
+Production Compose uses the same startup dependency: PostgreSQL health,
+successful one-shot bootstrap, then GoTrue and Shepherd. Bootstrap credentials
+come from Compose secrets, and the job retains no persistent state.
 
 Keep the Auth image pinned, monitor upstream security releases, and back up its
 shared PostgreSQL database as one consistent unit. A restore must preserve both

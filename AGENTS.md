@@ -218,7 +218,7 @@ For a production Auth-origin deployment:
 
 1. Copy the production environment example to the operator-owned environment file and replace every documentation-only domain, address, secret, and password.
 2. Create the public Auth DNS record and wait until it resolves to the declared VPS address.
-3. Validate the merged Compose configuration and the host Caddyfile before starting the cutover.
+3. Validate the merged Compose configuration and the host Caddyfile before starting the cutover. Normal Compose startup runs the one-shot `postgres-bootstrap` service after PostgreSQL becomes healthy and blocks GoTrue and Shepherd until bootstrap exits successfully.
 4. Build the frontend through `scripts/build-production-web.sh`; deploy the returned staging directory atomically to `SHEPHERD_WEB_DIST_ROOT`.
 5. Start or recreate GoTrue and Shepherd with the same `AUTH_PUBLIC_URL_PROD`, then load the production Caddy configuration.
 6. Run `scripts/check-production-auth-edge.sh` to verify DNS, public TLS, `disable_signup=true`, the GoTrue settings endpoint, and browser CORS preflight.
@@ -230,6 +230,7 @@ For a production Auth-origin deployment:
 The user starts Compose before development. Run language toolchains inside containers; never use host `cargo` or `npm`. Run repository orchestration scripts from the repository root when instructed below.
 
 
+- `docker compose up -d --wait` is the normal development startup. It automatically runs the idempotent `postgres-bootstrap` one-shot service after PostgreSQL is healthy; users must not run `scripts/bootstrap-postgres.sh` directly or initialize roles and schemas manually.
 - `docker compose exec -T server bash -c 'cargo test --workspace'` runs server tests.
 - `docker compose exec -T server bash -c 'cargo clippy --workspace && cargo check --workspace'` validates Rust.
 - `docker compose exec -T client sh -c 'npm run lint'` checks TypeScript; replace `lint` with `build` or `dev` as needed. The Alpine client image does not contain Bash.
@@ -247,7 +248,9 @@ Use `-it` for an interactive shell and `-T` for non-interactive automation.
 
 Keep images minimal. The server uses Rust Bookworm: do not add `build-essential`, `libpq-dev`, or `postgresql-client`; access and migrations use SQLx, not Diesel. Add OS packages only for demonstrated needs. Run manual `psql` only in `postgres-db` (PostgreSQL Alpine), never the server image.
 
-The current phase is development. Supabase Auth and Shepherd share the development database, so do not run a bare SQLx reset while GoTrue is connected. Use `scripts/dev-data-seeding.sh`: it stops GoTrue, resets the one development database, recreates schema ownership, restarts GoTrue so it applies its `auth` migrations, provisions users through the admin API, seeds Shepherd's `public` data, and clears only the authenticated-user Redis namespace. Never use this destructive workflow in production. Apply all durable Shepherd schema, hook, and permission changes through ordered migrations even when the development database was manually inspected.
+PostgreSQL role and schema initialization belongs to the idempotent `postgres-bootstrap` one-shot Compose service. Its lifecycle is `postgres-db healthy -> postgres-bootstrap completed successfully -> supabase-auth -> server`. It uses the PostgreSQL image's existing `psql`, connects over the private Compose network, provisions or updates the separate Shepherd and `supabase_auth_admin` roles, assigns database ownership, and creates the Auth-owned `auth` schema. The job stores no data and `Exited (0)` is its expected healthy terminal state. Do not mount bootstrap logic into `/docker-entrypoint-initdb.d`, depend on a fresh volume, run the script directly on the host, or let GoTrue/server race role creation.
+
+The current phase is development. Supabase Auth and Shepherd share the development database, so do not run a bare SQLx reset while GoTrue is connected. Use `scripts/dev-data-seeding.sh`: it stops GoTrue, resets the one development database, reruns `postgres-bootstrap` through `docker compose run --rm`, restarts GoTrue so it applies its `auth` migrations, provisions users through the admin API, seeds Shepherd's `public` data, and clears only the authenticated-user Redis namespace. Never use this destructive workflow in production. Apply all durable Shepherd schema, hook, and permission changes through ordered migrations even when the development database was manually inspected.
 
 The application connection URL must explicitly select `public`, for example `?options=-csearch_path%3Dpublic`; the GoTrue connection URL must explicitly select `auth`, for example `?search_path=auth`. Keep the Shepherd and `supabase_auth_admin` PostgreSQL roles separate and least-privileged even though they connect to the same database.
 

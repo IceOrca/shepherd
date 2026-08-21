@@ -8,6 +8,20 @@ services:
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_DB: ${POSTGRES_DB_PROD:?required}
       POSTGRES_PORT: ${POSTGRES_PORT_PROD:?required}
+    secrets:
+      - source: postgres_password
+        target: postgres_password
+    mem_limit: ${POSTGRES_MEMORY_LIMIT:-1g}
+    cpus: ${POSTGRES_CPU_LIMIT:-1.5}
+    pids_limit: ${POSTGRES_PIDS_LIMIT:-128}
+
+  postgres-bootstrap:
+    environment:
+      POSTGRES_PORT: ${POSTGRES_PORT_PROD:?required}
+      POSTGRES_USER: ${POSTGRES_USER_PROD:?required}
+      POSTGRES_PASSWORD: !reset null
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_DB: ${POSTGRES_DB_PROD:?required}
       AUTH_DB_PASSWORD: !reset null
       AUTH_DB_PASSWORD_FILE: /run/secrets/auth_db_password
     secrets:
@@ -15,9 +29,9 @@ services:
         target: postgres_password
       - source: auth_db_password
         target: auth_db_password
-    mem_limit: ${POSTGRES_MEMORY_LIMIT:-1g}
-    cpus: ${POSTGRES_CPU_LIMIT:-1.5}
-    pids_limit: ${POSTGRES_PIDS_LIMIT:-128}
+    mem_limit: ${POSTGRES_BOOTSTRAP_MEMORY_LIMIT:-128m}
+    cpus: ${POSTGRES_BOOTSTRAP_CPU_LIMIT:-0.25}
+    pids_limit: ${POSTGRES_BOOTSTRAP_PIDS_LIMIT:-32}
 
   redis-cache:
     restart: unless-stopped
