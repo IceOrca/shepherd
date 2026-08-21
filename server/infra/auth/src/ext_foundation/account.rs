@@ -181,23 +181,59 @@ pub async fn resolve_application_account(
             None
         }
     };
-    let user: AuthenticatedUser = if let Some(user) = cached_user {
-        user
-    } else {
-        let loaded_user: AuthenticatedUser = load_account(&ctx.db, &principal).await?;
-        let cache_write_result: Result<(), AuthenticatedUserCacheError> =
-            ctx.account_cache.put(&principal, &loaded_user).await;
-        if let Err(cache_error) = cache_write_result {
-            warn!(
+    let user: AuthenticatedUser = match cached_user {
+        Some(cached_user) if principal.tenant_id == Some(cached_user.tenant_id) => {
+            trace!(
                 operation = "resolve_application_account",
-                tenant_id = %loaded_user.tenant_id,
-                account_id = %loaded_user.account_id,
-                reason = %cache_error,
-                "Authenticated-user cache write failed; request will continue"
+                tenant_id = %cached_user.tenant_id,
+                account_id = %cached_user.account_id,
+                "Verified JWT tenant claim against cached application account"
             );
+            cached_user
         }
-        loaded_user
+        cached_user => {
+            if let Some(cached_user) = cached_user {
+                warn!(
+                    operation = "resolve_application_account",
+                    claimed_tenant_id = ?principal.tenant_id,
+                    cached_tenant_id = %cached_user.tenant_id,
+                    account_id = %cached_user.account_id,
+                    "JWT tenant claim does not match cached account; reloading PostgreSQL authority"
+                );
+            } else {
+                debug!(
+                    operation = "resolve_application_account",
+                    claimed_tenant_id = ?principal.tenant_id,
+                    "Authenticated-user cache missed; loading PostgreSQL authority"
+                );
+            }
+            let loaded_user: AuthenticatedUser = load_account(&ctx.db, &principal).await?;
+            let cache_write_result: Result<(), AuthenticatedUserCacheError> =
+                ctx.account_cache.put(&principal, &loaded_user).await;
+            if let Err(cache_error) = cache_write_result {
+                warn!(
+                    operation = "resolve_application_account",
+                    tenant_id = %loaded_user.tenant_id,
+                    account_id = %loaded_user.account_id,
+                    reason = %cache_error,
+                    "Authenticated-user cache write failed; request will continue"
+                );
+            }
+            loaded_user
+        }
     };
+    if principal.tenant_id != Some(user.tenant_id) {
+        warn!(
+            operation = "resolve_application_account",
+            issuer = %issuer,
+            subject = %subject,
+            claimed_tenant_id = ?principal.tenant_id,
+            authoritative_tenant_id = %user.tenant_id,
+            account_id = %user.account_id,
+            "JWT tenant claim is missing or stale; requesting a signed token refresh"
+        );
+        return Err(StatusCode::UNAUTHORIZED);
+    }
     let tenant_id: Uuid = user.tenant_id;
     let account_id: Uuid = user.account_id;
     debug!(

@@ -257,6 +257,7 @@ mod tests {
         exp: u64,
         iat: u64,
         preferred_username: &'a str,
+        tid: Option<uuid::Uuid>,
     }
 
     fn config() -> ExtProviderConfig {
@@ -294,6 +295,7 @@ mod tests {
                 exp: now + 300,
                 iat: now,
                 preferred_username: "alice",
+                tid: Some(uuid::uuid!("018f4c6d-7e41-7b89-a4fd-0f8efcc57e31")),
             },
             &EncodingKey::from_ed_pem(include_bytes!("../../../../security/jwtkey_dev/jwt_private.pem"))
                 .expect("test private key"),
@@ -311,6 +313,10 @@ mod tests {
         assert_eq!(principal.issuer, ISSUER);
         assert_eq!(principal.subject, "provider-subject");
         assert_eq!(principal.username.as_deref(), Some("alice"));
+        assert_eq!(
+            principal.tenant_id,
+            Some(uuid::uuid!("018f4c6d-7e41-7b89-a4fd-0f8efcc57e31"))
+        );
     }
 
     #[tokio::test]

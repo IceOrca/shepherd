@@ -70,6 +70,19 @@ accounts, tenant membership, account status, email, roles, permissions, and
 employee links. A valid GoTrue login therefore does not by itself grant access:
 the JWT issuer and subject must map to an active Shepherd account.
 
+Both services use one PostgreSQL database, following Supabase's native schema
+layout while keeping separate ownership boundaries. GoTrue connects as
+`supabase_auth_admin` with `search_path=auth`; Shepherd connects as its
+application role with an explicit `search_path=public`. Sharing the database
+does not merge the two user models: application code never reads or writes
+`auth.users`, and user administration still goes through GoTrue's admin API.
+
+Before signing an access token, GoTrue calls
+`public.shepherd_custom_access_token_hook`. The hook maps the token issuer and
+subject through `account_identities` and adds the active tenant UUID as the
+signed `tid` claim. Unmapped identities receive no `tid` and still cannot enter
+the application.
+
 In development, GoTrue is exposed through Caddy at the Supabase-compatible
 `https://${AUTH_DEV_DNS_NAME}/auth/v1/...` boundary, separately from the
 Shepherd web origin. The configured auth hostname must resolve to the same
@@ -163,6 +176,14 @@ uses a deterministic hashed identity key and a mandatory 60-second expiry by
 default, so repeated requests avoid querying account and authorization tables
 without allowing Redis keys to grow indefinitely.
 
+The signed `tid` is a routing and consistency hint, not the authorization
+source of truth. Middleware compares it with the tenant resolved from the
+active Shepherd account. A matching cache entry avoids the global account
+lookup. If `tid` is absent or stale, middleware reloads PostgreSQL authority
+and returns `401`; the existing browser API client refreshes the GoTrue session
+once and retries with the newly signed claim. Shepherd cannot update an
+already-signed JWT in place and never signs a replacement itself.
+
 PostgreSQL remains authoritative. Cache misses and Redis outages fall back to
 the application database, while missing or disabled accounts remain rejected.
 Account status and future identity, email, role, or permission changes must
@@ -185,7 +206,10 @@ Development cache lifetime is configured with
 `AUTH_ACCOUNT_CACHE_TTL_SECS` (default `60`, allowed range `1..=3600`). The
 development seed workflow stores the login catalog emails in `accounts.email`
 and clears only Shepherd's authenticated-user cache namespace after resetting
-the application database.
+the unified database. Because that reset also removes `auth`, use
+`sh scripts/dev-data-seeding.sh`; it coordinates stopping GoTrue, SQLx reset,
+schema bootstrap, GoTrue migrations, API-based Auth provisioning, and Shepherd
+data seeding. Never run that destructive development workflow in production.
 
 ## Background worker resilience
 

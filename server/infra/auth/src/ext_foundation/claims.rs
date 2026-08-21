@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use serde::Deserialize;
+use uuid::Uuid;
 
 use super::AccessTokenError;
 
@@ -44,6 +45,8 @@ pub struct AccessTokenClaims {
     pub email_verified: Option<bool>,
     #[serde(default)]
     pub scope: Option<String>,
+    #[serde(default)]
+    pub tid: Option<Uuid>,
 }
 
 /// A signature-verified external identity. It is not an application account or
@@ -61,6 +64,9 @@ pub struct AuthenticatedPrincipal {
     pub token_id: Option<String>,
     pub issued_at: Option<u64>,
     pub expires_at: u64,
+    /// Tenant hint issued by the Shepherd custom access-token hook. The
+    /// application account mapping remains authoritative.
+    pub tenant_id: Option<Uuid>,
 }
 
 impl TryFrom<AccessTokenClaims> for AuthenticatedPrincipal {
@@ -97,6 +103,7 @@ impl TryFrom<AccessTokenClaims> for AuthenticatedPrincipal {
             token_id: claims.jti,
             issued_at: claims.iat,
             expires_at: claims.exp,
+            tenant_id: claims.tid,
         })
     }
 }
@@ -139,6 +146,7 @@ mod tests {
             email: Some("alice@example.com".to_owned()),
             email_verified: Some(true),
             scope: Some("profile openid profile email".to_owned()),
+            tid: Some(uuid::uuid!("018f4c6d-7e41-7b89-a4fd-0f8efcc57e31")),
         }
     }
 
@@ -149,6 +157,10 @@ mod tests {
         assert_eq!(principal.subject, "external-user-id");
         assert_eq!(principal.scopes, vec!["email", "openid", "profile"]);
         assert_eq!(principal.session_id.as_deref(), Some("session-id"));
+        assert_eq!(
+            principal.tenant_id,
+            Some(uuid::uuid!("018f4c6d-7e41-7b89-a4fd-0f8efcc57e31"))
+        );
     }
 
     #[test]

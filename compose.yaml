@@ -9,7 +9,6 @@ services:
       POSTGRES_PORT: ${POSTGRES_PORT:-5432}
       PG_APP_USER: ${PG_APP_USER}
       PG_APP_PASSWORD: ${PG_APP_PASSWORD}
-      AUTH_DB: ${AUTH_DB}
       AUTH_DB_USER: ${AUTH_DB_USER}
       AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD}
       SHEPHERD_POSTGRES_BOOTSTRAP_IN_CONTAINER: "1"
@@ -125,9 +124,11 @@ services:
       GOTRUE_SITE_URL: ${SHEPHERD_PUBLIC_URL}
       GOTRUE_URI_ALLOW_LIST: ${SHEPHERD_PUBLIC_URL}/**,http://localhost:${FRONTEND_DEV_PORT:-5173}/**
       GOTRUE_DB_DRIVER: postgres
-      GOTRUE_DB_DATABASE_URL: postgres://${AUTH_DB_USER}:${AUTH_DB_PASSWORD}@postgres-db:${POSTGRES_PORT:-5432}/${AUTH_DB}?search_path=auth
+      GOTRUE_DB_DATABASE_URL: postgres://${AUTH_DB_USER}:${AUTH_DB_PASSWORD}@postgres-db:${POSTGRES_PORT:-5432}/${POSTGRES_DB}?search_path=auth
       DB_NAMESPACE: auth
       GOTRUE_DB_MAX_POOL_SIZE: 10
+      GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_ENABLED: "true"
+      GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_URI: pg-functions://${POSTGRES_DB}/public/shepherd_custom_access_token_hook
       GOTRUE_JWT_ISSUER: ${AUTH_ISSUER_URL}
       GOTRUE_JWT_AUD: ${AUTH_AUDIENCE:-authenticated}
       GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated

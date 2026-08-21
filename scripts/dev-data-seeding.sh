@@ -1,8 +1,7 @@
 #!/bin/sh
 
-# Rebuild the development application database and link every account from the
-# dev-only login catalog to a real Supabase Auth identity. Auth lives in a
-# separate database and is not reset.
+# Rebuild the unified development database, let GoTrue migrate its owned auth
+# schema, and link every catalog account to a newly created Auth identity.
 set -eu
 
 if [ ! -f compose.yaml ]; then
@@ -27,6 +26,8 @@ fi
 auth_admin_token="${AUTH_ADMIN_TOKEN:-}"
 auth_admin_url="http://127.0.0.1:${AUTH_PORT:-9999}"
 dev_accounts_file="scripts/dev-auth-accounts.tsv"
+auth_health_max_attempts="${AUTH_DEV_HEALTH_MAX_ATTEMPTS:-30}"
+auth_health_interval_secs="${AUTH_DEV_HEALTH_INTERVAL_SECS:-1}"
 
 if [ ! -f "${dev_accounts_file}" ]; then
     echo >&2 "Development Auth account catalog is missing: ${dev_accounts_file}"
@@ -37,6 +38,45 @@ if [ -z "${auth_admin_token}" ]; then
     echo >&2 "AUTH_ADMIN_TOKEN is required to seed development Auth users"
     exit 2
 fi
+
+case "${auth_health_max_attempts}" in
+    ''|*[!0-9]*|0)
+        echo >&2 "AUTH_DEV_HEALTH_MAX_ATTEMPTS must be a positive integer"
+        exit 2
+        ;;
+esac
+case "${auth_health_interval_secs}" in
+    ''|*[!0-9]*|0)
+        echo >&2 "AUTH_DEV_HEALTH_INTERVAL_SECS must be a positive integer"
+        exit 2
+        ;;
+esac
+
+# SQLx resets the one shared database, so GoTrue must release its connections
+# first. PostgreSQL roles survive the reset; bootstrap then recreates the
+# Auth-owned schema before GoTrue applies its own migrations.
+sh scripts/bootstrap-postgres.sh
+
+docker compose stop supabase-auth
+
+docker compose exec -T postgres-db sh -c \
+    'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '\''$POSTGRES_DB'\'' AND pid <> pg_backend_pid();"'
+
+docker compose exec -T server bash -c 'cargo sqlx database reset -y'
+
+sh scripts/bootstrap-postgres.sh
+
+docker compose up -d --no-deps --force-recreate supabase-auth
+
+auth_health_attempt=1
+while ! curl --fail --silent --show-error --output /dev/null "${auth_admin_url}/health"; do
+    if [ "${auth_health_attempt}" -ge "${auth_health_max_attempts}" ]; then
+        echo >&2 "Supabase Auth did not become healthy after ${auth_health_max_attempts} attempts"
+        exit 1
+    fi
+    auth_health_attempt=$((auth_health_attempt + 1))
+    sleep "${auth_health_interval_secs}"
+done
 
 users_json="$(curl --fail --silent --show-error \
     --header "Authorization: Bearer ${auth_admin_token}" \
@@ -105,15 +145,11 @@ if [ "${seeded_auth_account_count}" -ne 21 ]; then
     exit 2
 fi
 
-# SQLx cannot drop the dev database while old test or compile connections remain.
-docker compose exec -T postgres-db sh -c \
-    'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '\''$POSTGRES_DB'\'' AND pid <> pg_backend_pid();"'
-
 docker compose exec -T -e AUTH_DEV_IDENTITIES_JSON="${auth_identities_json}" server bash -c \
-    'cargo sqlx database reset -y && RUST_LOG=debug SQLX_OFFLINE=false cargo run -p shepherd --bin shepherd-dev-db-seeding'
+    'RUST_LOG=debug SQLX_OFFLINE=false cargo run -p shepherd --bin shepherd-dev-db-seeding'
 
-# A database reset may relink the same external subject to a new development
-# account UUID. Remove only the bounded application-principal cache namespace;
+# A unified database reset recreates external subjects and application account
+# UUIDs. Remove only the bounded application-principal cache namespace;
 # unrelated Redis sessions, rate limits, and queues remain untouched.
 docker compose exec -T redis-cache sh -c \
     'redis-cli --scan --pattern "auth:application-user:v1:*" |

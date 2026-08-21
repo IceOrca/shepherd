@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Bootstrap the Shepherd application and authentication roles and databases.
+# Bootstrap the Shepherd application and Auth roles in one PostgreSQL database.
 #
 # Run this file from the repository root to update an existing Compose volume.
 # The PostgreSQL container also executes this same file automatically when it
@@ -42,8 +42,7 @@ admin_user="${POSTGRES_USER:?POSTGRES_USER_must_be_set}"
 shepherd_db="${POSTGRES_DB:?POSTGRES_DB_must_be_set}"
 shepherd_user="${PG_APP_USER:?PG_APP_USER_must_be_set}"
 shepherd_password="$(read_password "${PG_APP_PASSWORD:-}" "${PG_APP_PASSWORD_FILE:-}" PG_APP_PASSWORD)"
-auth_db="${AUTH_DB:-shepherd_auth}"
-auth_user="${AUTH_DB_USER:-shepherd_auth}"
+auth_user="${AUTH_DB_USER:-supabase_auth_admin}"
 auth_password="$(read_password "${AUTH_DB_PASSWORD:-}" "${AUTH_DB_PASSWORD_FILE:-}" AUTH_DB_PASSWORD)"
 
 if [ "${shepherd_user}" = "${admin_user}" ] || [ "${auth_user}" = "${admin_user}" ]; then
@@ -52,6 +51,10 @@ if [ "${shepherd_user}" = "${admin_user}" ] || [ "${auth_user}" = "${admin_user}
 fi
 if [ "${shepherd_user}" = "${auth_user}" ]; then
     echo >&2 "Shepherd and Auth must use separate PostgreSQL roles"
+    exit 2
+fi
+if [ "${auth_user}" != "supabase_auth_admin" ]; then
+    echo >&2 "AUTH_DB_USER must be supabase_auth_admin for PostgreSQL Auth hooks"
     exit 2
 fi
 
@@ -91,30 +94,24 @@ EOSQL
 
 psql --username "${admin_user}" --dbname postgres --set ON_ERROR_STOP=1 \
     --set shepherd_db="${shepherd_db}" \
-    --set shepherd_user="${shepherd_user}" \
-    --set auth_db="${auth_db}" \
-    --set auth_user="${auth_user}" <<-'EOSQL'
+    --set shepherd_user="${shepherd_user}" <<-'EOSQL'
 SELECT format('CREATE DATABASE %I OWNER %I', :'shepherd_db', :'shepherd_user')
 WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = :'shepherd_db')
 \gexec
 
 SELECT format('ALTER DATABASE %I OWNER TO %I', :'shepherd_db', :'shepherd_user')
 \gexec
-
-SELECT format('CREATE DATABASE %I OWNER %I', :'auth_db', :'auth_user')
-WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = :'auth_db')
-\gexec
-
-SELECT format('ALTER DATABASE %I OWNER TO %I', :'auth_db', :'auth_user')
-\gexec
 EOSQL
 
-psql --username "${admin_user}" --dbname "${auth_db}" --set ON_ERROR_STOP=1 \
+psql --username "${admin_user}" --dbname "${shepherd_db}" --set ON_ERROR_STOP=1 \
     --set auth_user="${auth_user}" <<-'EOSQL'
 SELECT format('CREATE SCHEMA IF NOT EXISTS auth AUTHORIZATION %I', :'auth_user')
 \gexec
 
 SELECT format('ALTER SCHEMA auth OWNER TO %I', :'auth_user')
+\gexec
+
+SELECT format('GRANT CONNECT ON DATABASE %I TO %I', current_database(), :'auth_user')
 \gexec
 EOSQL
 
