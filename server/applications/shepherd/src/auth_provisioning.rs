@@ -5,7 +5,7 @@ use infra_auth::ext_foundation::auth_admin::{
 use sqlx::{PgConnection, postgres::PgQueryResult};
 use tracing::{debug, error, trace};
 
-const EMPLOYEE_ROLE_CODE: &str = "employee";
+const STAFF_ROLE_CODE: &str = "staff";
 
 #[derive(Debug)]
 pub struct ShepherdAuthAccountProvisioner;
@@ -17,12 +17,12 @@ impl AuthAccountProvisioner for ShepherdAuthAccountProvisioner {
         connection: &mut PgConnection,
         context: &AuthAccountProvisioningContext,
     ) -> Result<(), AuthAccountProvisioningError> {
-        if context.primary_role.as_str() != EMPLOYEE_ROLE_CODE {
+        if context.primary_role.as_str() != STAFF_ROLE_CODE {
             trace!(
                 tenant_id = %context.tenant_id,
                 account_id = %context.account_id,
                 primary_role = %context.primary_role,
-                "Skipped HR employee provisioning for a non-employee account"
+                "Skipped HR employee provisioning for a non-staff account"
             );
             return Ok(());
         }

@@ -8,7 +8,7 @@ use tokio::{
     time::{MissedTickBehavior, error::Elapsed},
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
+use tracing::{error, warn, info, debug, trace};
 use uuid::Uuid;
 
 const WAKE_BUFFER_SIZE: usize = 1;
@@ -241,7 +241,7 @@ impl NotificationDispatcher {
             })
             .await
             .map_err(|error: TenantDbErr| format!("claim notification outbox: {error}"))?;
-        debug!(tenant_id = %tenant_id, delivery_count = rows.len(), "Notification outbox claim completed");
+        trace!(tenant_id = %tenant_id, delivery_count = rows.len(), "Notification outbox claim completed");
         Ok(rows)
     }
 

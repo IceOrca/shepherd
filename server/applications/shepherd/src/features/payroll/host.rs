@@ -366,7 +366,7 @@ fn payroll_status(operation: &str, user: &AuthenticatedUser, error: PayrollError
         PayrollError::NotFound => StatusCode::NOT_FOUND,
         PayrollError::Conflict => StatusCode::CONFLICT,
         PayrollError::InvalidInput(_) => StatusCode::BAD_REQUEST,
-        PayrollError::MissingCompensation => StatusCode::UNPROCESSABLE_ENTITY,
+        PayrollError::MissingCompensation | PayrollError::OverlappingWorkSources => StatusCode::UNPROCESSABLE_ENTITY,
         PayrollError::BackendUnavailable => StatusCode::SERVICE_UNAVAILABLE,
     };
     error!(

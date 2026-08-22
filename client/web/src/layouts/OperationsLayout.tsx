@@ -9,6 +9,7 @@ import {
   Menu,
   PanelLeftClose,
   RefreshCw,
+  Settings2,
   GitCompareArrows,
   UsersRound,
   UserRoundCog,
@@ -61,9 +62,15 @@ const navigation: NavigationItem[] = [
   },
   {
     label: "Khách hàng",
+    to: "/operations/customers",
     icon: Building2,
     permission: "business.customers.read",
-    soon: true,
+  },
+  {
+    label: "Giá và năng lực",
+    to: "/operations/staffing-configuration",
+    icon: Settings2,
+    permission: "business.staffing_rates.read",
   },
   {
     label: "Nhân sự",
@@ -105,6 +112,20 @@ function pageTitle(pathname: string): { title: string; description: string } {
     return {
       title: "Điều phối ca",
       description: "Tạo yêu cầu khách hàng và phân công nhân viên phù hợp, không trùng lịch.",
+    };
+  }
+
+  if (pathname === "/operations/staffing-configuration") {
+    return {
+      title: "Giá và năng lực dịch vụ",
+      description: "Cấu hình độc lập giá thu khách hàng, tiền công nhân viên và năng lực làm dịch vụ.",
+    };
+  }
+
+  if (pathname === "/operations/customers") {
+    return {
+      title: "Khách hàng",
+      description: "Quản lý doanh nghiệp mua dịch vụ nhân sự và trạng thái hợp tác.",
     };
   }
 

@@ -55,17 +55,17 @@ struct DevAccount {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DevRole {
-    TenantOwner,
-    Supervisor,
-    Employee,
+    Owner,
+    Manager,
+    Staff,
 }
 
 impl DevRole {
     const fn as_code(self) -> &'static str {
         match self {
-            Self::TenantOwner => "tenant_owner",
-            Self::Supervisor => "supervisor",
-            Self::Employee => "employee",
+            Self::Owner => "owner",
+            Self::Manager => "manager",
+            Self::Staff => "staff",
         }
     }
 }
@@ -128,93 +128,93 @@ const DEV_BRANCHES: &[DevBranch] = &[
 const ACME_ACCOUNTS: &[DevAccount] = &[
     DevAccount {
         username: "iceorca",
-        role: DevRole::TenantOwner,
+        role: DevRole::Owner,
     },
     DevAccount {
         username: "acme_manager_1",
-        role: DevRole::Supervisor,
+        role: DevRole::Manager,
     },
     DevAccount {
         username: "acme_manager_2",
-        role: DevRole::Supervisor,
+        role: DevRole::Manager,
     },
     DevAccount {
         username: "acme_staff_1",
-        role: DevRole::Employee,
+        role: DevRole::Staff,
     },
     DevAccount {
         username: "acme_staff_2",
-        role: DevRole::Employee,
+        role: DevRole::Staff,
     },
     DevAccount {
         username: "acme_staff_3",
-        role: DevRole::Employee,
+        role: DevRole::Staff,
     },
     DevAccount {
         username: "acme_staff_4",
-        role: DevRole::Employee,
+        role: DevRole::Staff,
     },
 ];
 
 const ACME1_ACCOUNTS: &[DevAccount] = &[
     DevAccount {
         username: "acme1_owner",
-        role: DevRole::TenantOwner,
+        role: DevRole::Owner,
     },
     DevAccount {
         username: "acme1_manager_1",
-        role: DevRole::Supervisor,
+        role: DevRole::Manager,
     },
     DevAccount {
         username: "acme1_manager_2",
-        role: DevRole::Supervisor,
+        role: DevRole::Manager,
     },
     DevAccount {
         username: "acme1_staff_1",
-        role: DevRole::Employee,
+        role: DevRole::Staff,
     },
     DevAccount {
         username: "acme1_staff_2",
-        role: DevRole::Employee,
+        role: DevRole::Staff,
     },
     DevAccount {
         username: "acme1_staff_3",
-        role: DevRole::Employee,
+        role: DevRole::Staff,
     },
     DevAccount {
         username: "acme1_staff_4",
-        role: DevRole::Employee,
+        role: DevRole::Staff,
     },
 ];
 
 const ACME2_ACCOUNTS: &[DevAccount] = &[
     DevAccount {
         username: "acme2_owner",
-        role: DevRole::TenantOwner,
+        role: DevRole::Owner,
     },
     DevAccount {
         username: "acme2_manager_1",
-        role: DevRole::Supervisor,
+        role: DevRole::Manager,
     },
     DevAccount {
         username: "acme2_manager_2",
-        role: DevRole::Supervisor,
+        role: DevRole::Manager,
     },
     DevAccount {
         username: "acme2_staff_1",
-        role: DevRole::Employee,
+        role: DevRole::Staff,
     },
     DevAccount {
         username: "acme2_staff_2",
-        role: DevRole::Employee,
+        role: DevRole::Staff,
     },
     DevAccount {
         username: "acme2_staff_3",
-        role: DevRole::Employee,
+        role: DevRole::Staff,
     },
     DevAccount {
         username: "acme2_staff_4",
-        role: DevRole::Employee,
+        role: DevRole::Staff,
     },
 ];
 
@@ -314,7 +314,7 @@ async fn seed_tenant(
     let owner_definition: &DevAccount = tenant
         .accounts
         .iter()
-        .find(|account: &&DevAccount| account.role == DevRole::TenantOwner)
+        .find(|account: &&DevAccount| account.role == DevRole::Owner)
         .ok_or_else(|| io::Error::other(format!("tenant '{}' has no owner seed definition", tenant.slug)))?;
     let owner_email: String = dev_auth_email(tenant.slug, owner_definition.username);
     let owner: SeedAccount = ensure_account(
@@ -341,7 +341,7 @@ async fn seed_tenant(
     for account_definition in tenant
         .accounts
         .iter()
-        .filter(|account: &&DevAccount| account.role != DevRole::TenantOwner)
+        .filter(|account: &&DevAccount| account.role != DevRole::Owner)
     {
         let account_email: String = dev_auth_email(tenant.slug, account_definition.username);
         let account: SeedAccount = ensure_account(
@@ -442,7 +442,7 @@ async fn seed_staffing_business(
         INNER JOIN accounts AS account
             ON account.tenant_id = employee.tenant_id
            AND account.id = employee.account_id
-           AND account.primary_role_code = 'employee'
+           AND account.primary_role_code = 'staff'
            AND assignment.job_id = $2
            AND assignment.date_end IS NULL
         WHERE employee.tenant_id = $1 AND employee.status = 'active'
@@ -456,16 +456,16 @@ async fn seed_staffing_business(
     .await
     .map_err(io::Error::other)?;
     let employee_id: Uuid = employee.id;
-    let owner_employee: SeedIdRow = sqlx::query_as!(
+    let staff_account: SeedIdRow = sqlx::query_as!(
         SeedIdRow,
-        "SELECT id FROM hr_employees WHERE tenant_id = $1 AND account_id = $2 AND status = 'active'",
+        r#"SELECT account_id AS "id!" FROM hr_employees WHERE tenant_id = $1 AND id = $2 AND status = 'active'"#,
         tenant_id,
-        owner_account_id,
+        employee_id,
     )
     .fetch_one(transaction.connection())
     .await
     .map_err(io::Error::other)?;
-    let owner_employee_id: Uuid = owner_employee.id;
+    let staff_account_id: Uuid = staff_account.id;
 
     let karaoke_a_id =
         ensure_staffing_customer(&mut transaction, tenant_id, "karaoke-a", "Karaoke A", owner_account_id).await?;
@@ -522,7 +522,7 @@ async fn seed_staffing_business(
         owner_account_id,
     )
     .await?;
-    let rate_agreement_id = ensure_staffing_rate(
+    let (customer_bill_rate_id, worker_pay_rate_id) = ensure_staffing_rate(
         &mut transaction,
         tenant_id,
         "karaoke-b-worker-special",
@@ -538,6 +538,37 @@ async fn seed_staffing_business(
         owner_account_id,
     )
     .await?;
+    sqlx::query!(
+        r#"
+        INSERT INTO business_staffing_employee_eligibilities (
+            id, tenant_id, employee_id, job_id, effective_from, notes, created_by_account_id
+        )
+        SELECT
+            MD5($1::UUID::TEXT || ':' || employee.id::TEXT || ':' || $2::UUID::TEXT)::UUID,
+            $1,
+            employee.id,
+            $2,
+            $3,
+            'Development staffing eligibility',
+            $4
+        FROM hr_employees AS employee
+        INNER JOIN account_roles AS account_role
+            ON account_role.tenant_id = employee.tenant_id
+           AND account_role.account_id = employee.account_id
+           AND account_role.role_code = 'staff'
+        WHERE employee.tenant_id = $1
+          AND employee.status = 'active'
+        ON CONFLICT (tenant_id, employee_id, job_id, effective_from) DO NOTHING
+        "#,
+        tenant_id,
+        job_id,
+        effective_date,
+        owner_account_id,
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+
     let shift_id = Uuid::from_u128(tenant_id.as_u128() ^ DEV_STAFFING_SHIFT_ID_NAMESPACE);
     let assignment_id = Uuid::from_u128(tenant_id.as_u128() ^ DEV_STAFFING_ASSIGNMENT_ID_NAMESPACE);
     sqlx::query!(
@@ -566,17 +597,19 @@ async fn seed_staffing_business(
     sqlx::query!(
         r#"
         INSERT INTO business_shift_assignments (
-            id, tenant_id, shift_id, employee_id, rate_agreement_id, rate_source, currency,
-            bill_hourly_rate_snapshot, worker_hourly_rate_snapshot, created_by_account_id
+            id, tenant_id, shift_id, employee_id, customer_bill_rate_id, worker_pay_rate_id,
+            rate_source, currency, bill_hourly_rate_snapshot, worker_hourly_rate_snapshot,
+            created_by_account_id
         )
-        VALUES ($1, $2, $3, $4, $5, 'agreement', 'VND', 180000, 145000, $6)
+        VALUES ($1, $2, $3, $4, $5, $6, 'configured', 'VND', 180000, 145000, $7)
         ON CONFLICT (id) DO NOTHING
         "#,
         assignment_id,
         tenant_id,
         shift_id,
         employee_id,
-        rate_agreement_id,
+        customer_bill_rate_id,
+        worker_pay_rate_id,
         owner_account_id,
     )
     .execute(transaction.connection())
@@ -597,7 +630,7 @@ async fn seed_staffing_business(
         "#,
         urgent_batch_id,
         tenant_id,
-        owner_account_id,
+        staff_account_id,
         karaoke_a_facility_id,
     )
     .execute(transaction.connection())
@@ -614,9 +647,9 @@ async fn seed_staffing_business(
         urgent_report_id,
         tenant_id,
         urgent_batch_id,
-        owner_employee_id,
+        employee_id,
         karaoke_a_facility_id,
-        owner_account_id,
+        staff_account_id,
     )
     .execute(transaction.connection())
     .await
@@ -636,8 +669,8 @@ async fn seed_staffing_business(
         urgent_session_id,
         tenant_id,
         urgent_report_id,
-        owner_employee_id,
-        owner_account_id,
+        employee_id,
+        staff_account_id,
     )
     .execute(transaction.connection())
     .await
@@ -763,27 +796,77 @@ async fn ensure_staffing_rate(
     priority: i16,
     effective_from: NaiveDate,
     owner_account_id: Uuid,
+) -> Result<(Uuid, Uuid), io::Error> {
+    let customer_bill_rate_id: Uuid = ensure_staffing_hourly_rate(
+        transaction,
+        tenant_id,
+        "customer_bill",
+        &format!("{code}-bill"),
+        &format!("{name} - customer bill"),
+        Some(customer_id),
+        customer_facility_id,
+        employee_id,
+        job_id,
+        bill_hourly_rate,
+        priority,
+        effective_from,
+        owner_account_id,
+    )
+    .await?;
+    let worker_pay_rate_id: Uuid = ensure_staffing_hourly_rate(
+        transaction,
+        tenant_id,
+        "worker_pay",
+        &format!("{code}-pay"),
+        &format!("{name} - worker pay"),
+        Some(customer_id),
+        customer_facility_id,
+        employee_id,
+        job_id,
+        worker_hourly_rate,
+        priority,
+        effective_from,
+        owner_account_id,
+    )
+    .await?;
+    Ok((customer_bill_rate_id, worker_pay_rate_id))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn ensure_staffing_hourly_rate(
+    transaction: &mut infra_postgres::TenantTransaction,
+    tenant_id: Uuid,
+    rate_kind: &str,
+    code: &str,
+    name: &str,
+    customer_id: Option<Uuid>,
+    customer_facility_id: Option<Uuid>,
+    employee_id: Option<Uuid>,
+    job_id: Uuid,
+    hourly_rate: &str,
+    priority: i16,
+    effective_from: NaiveDate,
+    owner_account_id: Uuid,
 ) -> Result<Uuid, io::Error> {
     sqlx::query_scalar!(
         r#"
-        INSERT INTO business_staffing_rate_agreements (
-            id, tenant_id, code, name, customer_id, customer_facility_id, employee_id, job_id,
-            currency, bill_hourly_rate, worker_hourly_rate, priority, effective_from,
+        INSERT INTO business_staffing_rates (
+            id, tenant_id, rate_kind, code, name, customer_id, customer_facility_id,
+            employee_id, job_id, currency, hourly_rate, priority, effective_from,
             is_active, created_by_account_id
         )
         VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, 'VND',
-            $9::TEXT::NUMERIC, $10::TEXT::NUMERIC, $11, $12, TRUE, $13
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, 'VND',
+            $10::TEXT::NUMERIC, $11, $12, TRUE, $13
         )
-        ON CONFLICT (tenant_id, code, effective_from) DO UPDATE
+        ON CONFLICT (tenant_id, rate_kind, code, effective_from) DO UPDATE
         SET name = EXCLUDED.name,
             customer_id = EXCLUDED.customer_id,
             customer_facility_id = EXCLUDED.customer_facility_id,
             employee_id = EXCLUDED.employee_id,
             job_id = EXCLUDED.job_id,
             currency = EXCLUDED.currency,
-            bill_hourly_rate = EXCLUDED.bill_hourly_rate,
-            worker_hourly_rate = EXCLUDED.worker_hourly_rate,
+            hourly_rate = EXCLUDED.hourly_rate,
             priority = EXCLUDED.priority,
             effective_to = NULL,
             is_active = TRUE
@@ -791,14 +874,14 @@ async fn ensure_staffing_rate(
         "#,
         Uuid::new_v4(),
         tenant_id,
+        rate_kind,
         code,
         name,
         customer_id,
         customer_facility_id,
         employee_id,
         job_id,
-        bill_hourly_rate,
-        worker_hourly_rate,
+        hourly_rate,
         priority,
         effective_from,
         owner_account_id,
@@ -944,7 +1027,7 @@ async fn seed_hr_infra(
         .ok_or_else(|| io::Error::other("seeded owner employee was not found"))?;
     let supervisor_employee_ids: Vec<Uuid> = accounts
         .iter()
-        .filter(|account: &&SeedAccount| account.role == DevRole::Supervisor)
+        .filter(|account: &&SeedAccount| account.role == DevRole::Manager)
         .filter_map(|account: &SeedAccount| employee_ids.get(&account.id).copied())
         .collect();
     let operations_manager_id: Uuid = supervisor_employee_ids.first().copied().unwrap_or(owner_employee_id);
@@ -1026,14 +1109,14 @@ async fn seed_hr_infra(
             .get(&account.id)
             .ok_or_else(|| io::Error::other("seeded employee account mapping was not found"))?;
         let (branch_id, facility_id, department_id, job_id, manager_employee_id) = match account.role {
-            DevRole::TenantOwner => (
+            DevRole::Owner => (
                 head_office_branch_id,
                 head_office_facility_id,
                 administration_department_id,
                 owner_job_id,
                 None,
             ),
-            DevRole::Supervisor => {
+            DevRole::Manager => {
                 let use_north_branch: bool = supervisor_index % 2 == 1;
                 supervisor_index += 1;
                 (
@@ -1052,7 +1135,7 @@ async fn seed_hr_infra(
                     Some(owner_employee_id),
                 )
             }
-            DevRole::Employee => {
+            DevRole::Staff => {
                 let use_north_branch: bool = employee_index % 2 == 1;
                 let manager_employee_id: Uuid = supervisor_employee_ids
                     .get(employee_index % supervisor_employee_ids.len().max(1))
@@ -1243,7 +1326,7 @@ async fn seed_payroll_configuration(
             .copied()
             .ok_or_else(|| io::Error::other("seeded payroll employee mapping was not found"))?;
         match account.role {
-            DevRole::Employee => {
+            DevRole::Staff => {
                 sqlx::query!(
                     r#"
                     INSERT INTO hr_employee_compensations (
@@ -1270,8 +1353,8 @@ async fn seed_payroll_configuration(
                 .await
                 .map_err(io::Error::other)?;
             }
-            DevRole::Supervisor | DevRole::TenantOwner => {
-                let monthly_rate: &str = if account.role == DevRole::TenantOwner {
+            DevRole::Manager | DevRole::Owner => {
+                let monthly_rate: &str = if account.role == DevRole::Owner {
                     "50000000"
                 } else {
                     "30000000"
@@ -1465,7 +1548,7 @@ async fn seed_attendance_sessions(
 
     for account in accounts
         .iter()
-        .filter(|account: &&SeedAccount| account.role == DevRole::Employee)
+        .filter(|account: &&SeedAccount| account.role == DevRole::Staff)
     {
         let employee_id: Uuid = employee_ids
             .get(&account.id)

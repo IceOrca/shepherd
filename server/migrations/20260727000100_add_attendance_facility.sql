@@ -59,6 +59,6 @@ CREATE INDEX hr_attendance_sessions_tenant_facility_checkin_idx
 -- before checking in.
 INSERT INTO role_permissions (role_code, permission_code)
 VALUES
-    ('employee', 'business.branches.read'),
-    ('employee', 'business.facilities.read')
+    ('staff', 'business.branches.read'),
+    ('staff', 'business.facilities.read')
 ON CONFLICT DO NOTHING;

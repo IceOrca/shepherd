@@ -54,6 +54,7 @@ pub struct UrgentWorkReconcileRequest {
     pub job_id: Uuid,
     pub worked_seconds: i64,
     pub adjustment_reason: Option<String>,
+    pub eligibility_exception_reason: Option<String>,
     pub manual_rate: Option<ManualRateOverrideRequest>,
 }
 
@@ -78,7 +79,7 @@ async fn list_facilities(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
 ) -> Result<Json<Vec<UrgentWorkFacility>>, StatusCode> {
-    require_permission(&user, "business.urgent_work.read")?;
+    require_any_permission(&user, &["business.urgent_work.read", "business.reconciliation.read"])?;
     let facilities: Vec<UrgentWorkFacility> = context
         .core
         .urgent_work
@@ -238,6 +239,7 @@ async fn reconcile(
         job_id: request.job_id,
         worked_seconds: request.worked_seconds,
         adjustment_reason: normalize_optional(request.adjustment_reason),
+        eligibility_exception_reason: normalize_optional(request.eligibility_exception_reason),
         manual_rate,
     };
     let result: UrgentWorkReconciliation = context
@@ -309,13 +311,36 @@ fn require_permission(user: &AuthenticatedUser, permission: &str) -> Result<(), 
     }
 }
 
+fn require_any_permission(user: &AuthenticatedUser, permissions: &[&str]) -> Result<(), StatusCode> {
+    if permissions
+        .iter()
+        .any(|permission: &&str| user.has_permission(permission))
+    {
+        trace!(
+            tenant_id = %user.tenant_id,
+            account_id = %user.account_id,
+            permission_count = permissions.len(),
+            "Urgent-work alternative permission set accepted"
+        );
+        Ok(())
+    } else {
+        warn!(
+            tenant_id = %user.tenant_id,
+            account_id = %user.account_id,
+            permission_count = permissions.len(),
+            "Urgent-work alternative permission set rejected"
+        );
+        Err(StatusCode::FORBIDDEN)
+    }
+}
+
 fn status(operation: &str, user: &AuthenticatedUser, operation_error: UrgentWorkError) -> StatusCode {
     let response_status: StatusCode = match operation_error {
         UrgentWorkError::NotFound => StatusCode::NOT_FOUND,
         UrgentWorkError::Forbidden => StatusCode::FORBIDDEN,
         UrgentWorkError::Conflict => StatusCode::CONFLICT,
         UrgentWorkError::InvalidInput(_) => StatusCode::UNPROCESSABLE_ENTITY,
-        UrgentWorkError::MissingRateAgreement => StatusCode::UNPROCESSABLE_ENTITY,
+        UrgentWorkError::MissingStaffingRate => StatusCode::UNPROCESSABLE_ENTITY,
         UrgentWorkError::BackendUnavailable => StatusCode::SERVICE_UNAVAILABLE,
     };
     if response_status.is_server_error() {

@@ -109,13 +109,17 @@ VALUES
     ('hr.working_schedules.manage', 'Create and update working schedules and employee assignments');
 
 INSERT INTO role_permissions (role_code, permission_code)
-SELECT 'tenant_owner', code
-FROM permissions
-WHERE code LIKE 'hr.working_schedules.%';
+SELECT role.code, permission.code
+FROM roles AS role
+CROSS JOIN permissions AS permission
+WHERE role.code IN ('owner', 'director')
+  AND permission.code LIKE 'hr.working_schedules.%'
+  AND permission.code <> 'hr.working_schedules.self.read';
 
 INSERT INTO role_permissions (role_code, permission_code)
 VALUES
+    ('manager', 'hr.working_schedules.read'),
+    ('manager', 'hr.working_schedules.manage'),
     ('supervisor', 'hr.working_schedules.read'),
-    ('supervisor', 'hr.working_schedules.self.read'),
     ('supervisor', 'hr.working_schedules.manage'),
-    ('employee', 'hr.working_schedules.self.read');
+    ('staff', 'hr.working_schedules.self.read');

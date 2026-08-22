@@ -651,6 +651,19 @@ impl PayrollRepo for PayrollProvider {
     ) -> Result<PayrollRun, PayrollError> {
         let mut transaction: TenantTransaction = begin_tenant(self, tenant_id).await?;
         validate_time_zone(&mut transaction, tenant_id, &input.time_zone).await?;
+        let overlapping_work_sources: bool =
+            has_overlapping_staffing_attendance(&mut transaction, tenant_id, input).await?;
+        if overlapping_work_sources {
+            error!(
+                operation = "calculate_payroll_run",
+                tenant_id = %tenant_id,
+                payroll_run_id = %payroll_run_id,
+                period_start = %input.period_start,
+                period_end = %input.period_end,
+                "Payroll calculation rejected because HR attendance overlaps approved customer staffing work"
+            );
+            return Err(PayrollError::OverlappingWorkSources);
+        }
         let missing_compensation: bool = has_missing_compensation(&mut transaction, tenant_id, input).await?;
         if missing_compensation {
             return Err(PayrollError::MissingCompensation);
@@ -788,6 +801,62 @@ async fn validate_time_zone(
     } else {
         Err(PayrollError::InvalidInput("payroll time zone is unknown"))
     }
+}
+
+async fn has_overlapping_staffing_attendance(
+    transaction: &mut TenantTransaction,
+    tenant_id: Uuid,
+    input: &PayrollRunInput,
+) -> Result<bool, PayrollError> {
+    let overlaps: bool = sqlx::query_scalar!(
+        r#"
+        WITH bounds AS (
+            SELECT
+                ($2::DATE::TIMESTAMP AT TIME ZONE $4) AS start_at,
+                ($3::DATE::TIMESTAMP AT TIME ZONE $4) AS end_at
+        )
+        SELECT EXISTS (
+            SELECT 1
+            FROM hr_attendance_sessions AS attendance
+            CROSS JOIN bounds
+            INNER JOIN business_shift_assignments AS assignment
+                ON assignment.tenant_id = attendance.tenant_id
+               AND assignment.employee_id = attendance.employee_id
+               AND assignment.status = 'approved'
+            INNER JOIN business_customer_work_records AS customer_record
+                ON customer_record.tenant_id = assignment.tenant_id
+               AND customer_record.assignment_id = assignment.id
+               AND customer_record.confirmed_started_at < attendance.check_out_at
+               AND customer_record.confirmed_ended_at > attendance.check_in_at
+            WHERE attendance.tenant_id = $1
+              AND attendance.check_out_at IS NOT NULL
+              AND attendance.check_in_at < bounds.end_at
+              AND attendance.check_out_at > bounds.start_at
+        ) AS "exists!"
+        "#,
+        tenant_id,
+        input.period_start,
+        input.period_end,
+        input.time_zone,
+    )
+    .fetch_one(transaction.connection())
+    .await
+    .map_err(|error: sqlx::Error| {
+        database_failure(
+            "check overlapping staffing and attendance payroll sources",
+            tenant_id,
+            error,
+        )
+    })?;
+    debug!(
+        operation = "check_overlapping_staffing_attendance",
+        tenant_id = %tenant_id,
+        period_start = %input.period_start,
+        period_end = %input.period_end,
+        overlaps,
+        "Checked payroll work-source overlap"
+    );
+    Ok(overlaps)
 }
 
 async fn has_missing_compensation(
@@ -1029,9 +1098,9 @@ async fn insert_staffing_assignment_lines(
             NULL,
             assignment.id,
             NULL,
-            (shift.starts_at AT TIME ZONE $5)::DATE,
+            (customer_record.confirmed_started_at AT TIME ZONE $5)::DATE,
             'staffing',
-            agreement.code,
+            worker_pay_rate.code,
             assignment.worked_seconds,
             assignment.worker_hourly_rate_snapshot,
             0,
@@ -1039,17 +1108,17 @@ async fn insert_staffing_assignment_lines(
             assignment.worker_amount,
             'Approved customer staffing assignment'
         FROM business_shift_assignments AS assignment
-        INNER JOIN business_staffing_shifts AS shift
-            ON shift.tenant_id = assignment.tenant_id
-           AND shift.id = assignment.shift_id
-        LEFT JOIN business_staffing_rate_agreements AS agreement
-            ON agreement.tenant_id = assignment.tenant_id
-           AND agreement.id = assignment.rate_agreement_id
+        INNER JOIN business_customer_work_records AS customer_record
+            ON customer_record.tenant_id = assignment.tenant_id
+           AND customer_record.assignment_id = assignment.id
+        LEFT JOIN business_staffing_rates AS worker_pay_rate
+            ON worker_pay_rate.tenant_id = assignment.tenant_id
+           AND worker_pay_rate.id = assignment.worker_pay_rate_id
         WHERE assignment.tenant_id = $1
           AND assignment.status = 'approved'
           AND assignment.currency = $6
-          AND (shift.starts_at AT TIME ZONE $5)::DATE >= $3
-          AND (shift.starts_at AT TIME ZONE $5)::DATE < $4
+          AND (customer_record.confirmed_started_at AT TIME ZONE $5)::DATE >= $3
+          AND (customer_record.confirmed_started_at AT TIME ZONE $5)::DATE < $4
         "#,
         tenant_id,
         payroll_run_id,

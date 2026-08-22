@@ -209,6 +209,7 @@ struct ReconciliationRow {
     final_job_id: Option<Uuid>,
     final_worked_seconds: Option<i64>,
     adjustment_reason: Option<String>,
+    eligibility_exception_reason: Option<String>,
     customer_record_id: Option<Uuid>,
     confirmed_customer_facility_id: Option<Uuid>,
     confirmed_customer_name: Option<String>,
@@ -251,8 +252,7 @@ struct ReconcileContextRow {
 struct ResolvedRateRow {
     id: Uuid,
     currency: String,
-    bill_hourly_rate: String,
-    worker_hourly_rate: String,
+    hourly_rate: String,
 }
 
 #[async_trait]
@@ -1023,6 +1023,7 @@ async fn load_reconciliation_rows(
                final_shift.job_id AS "final_job_id?",
                assignment.worked_seconds AS final_worked_seconds,
                assignment.approval_adjustment_reason AS adjustment_reason,
+               assignment.eligibility_exception_reason,
                customer_record.id AS "customer_record_id?",
                customer_record.confirmed_customer_facility_id AS "confirmed_customer_facility_id?",
                confirmed_customer.name AS "confirmed_customer_name?",
@@ -1159,6 +1160,7 @@ fn reconciliation_from_row(row: ReconciliationRow) -> Result<UrgentWorkReconcili
         final_job_id: row.final_job_id,
         final_worked_seconds: row.final_worked_seconds,
         adjustment_reason: row.adjustment_reason,
+        eligibility_exception_reason: row.eligibility_exception_reason,
     })
 }
 
@@ -1268,62 +1270,166 @@ async fn reconcile_report(
     .map_err(|error: sqlx::Error| database_failure("derive urgent local work date", tenant_id, error))?;
     let work_date: NaiveDate = work_date_row.work_date;
 
-    let (rate_agreement_id, rate_source, currency, bill_rate, worker_rate): (
-        Option<Uuid>,
-        &str,
-        String,
-        String,
-        String,
-    ) = match input.manual_rate.as_ref() {
-        Some(ManualRateOverride {
-            currency,
-            bill_hourly_rate,
-            worker_hourly_rate,
-        }) => (
-            None,
-            "manual",
-            currency.clone(),
-            bill_hourly_rate.clone(),
-            worker_hourly_rate.clone(),
-        ),
-        None => {
-            let rate: ResolvedRateRow = sqlx::query_as!(
-                ResolvedRateRow,
-                r#"
-                SELECT id, currency,
-                       bill_hourly_rate::TEXT AS "bill_hourly_rate!",
-                       worker_hourly_rate::TEXT AS "worker_hourly_rate!"
-                FROM business_staffing_rate_agreements
-                WHERE tenant_id = $1 AND customer_id = $2 AND job_id = $3
-                  AND (customer_facility_id IS NULL OR customer_facility_id = $4)
-                  AND (employee_id IS NULL OR employee_id = $5)
-                  AND effective_from <= $6 AND (effective_to IS NULL OR effective_to >= $6)
-                  AND is_active
-                ORDER BY (employee_id IS NOT NULL) DESC,
-                         (customer_facility_id IS NOT NULL) DESC,
-                         priority DESC, effective_from DESC, id
-                LIMIT 1
-                "#,
-                tenant_id,
-                customer_id,
-                input.job_id,
-                input.final_customer_facility_id,
-                context.employee_id,
-                work_date,
-            )
-            .fetch_optional(transaction.connection())
-            .await
-            .map_err(|error: sqlx::Error| database_failure("resolve urgent staffing rate", tenant_id, error))?
-            .ok_or(UrgentWorkError::MissingRateAgreement)?;
-            (
-                Some(rate.id),
-                "agreement",
-                rate.currency,
-                rate.bill_hourly_rate,
-                rate.worker_hourly_rate,
-            )
-        }
+    let employee_is_eligible: bool = sqlx::query_scalar!(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM business_staffing_employee_eligibilities
+            WHERE tenant_id = $1
+              AND employee_id = $2
+              AND job_id = $3
+              AND effective_from <= $4
+              AND (effective_to IS NULL OR effective_to >= $4)
+        ) AS "exists!"
+        "#,
+        tenant_id,
+        context.employee_id,
+        input.job_id,
+        work_date,
+    )
+    .fetch_one(transaction.connection())
+    .await
+    .map_err(|error: sqlx::Error| database_failure("validate urgent staffing eligibility", tenant_id, error))?;
+    let eligibility_exception_reason: Option<&str> = if employee_is_eligible {
+        None
+    } else {
+        input
+            .eligibility_exception_reason
+            .as_deref()
+            .ok_or(UrgentWorkError::InvalidInput(
+                "urgent work outside staffing eligibility requires an exception reason",
+            ))?
+            .into()
     };
+    if let Some(reason) = eligibility_exception_reason {
+        warn!(
+            operation = "urgent_work.reconcile",
+            tenant_id = %tenant_id,
+            report_id = %report_id,
+            employee_id = %context.employee_id,
+            job_id = %input.job_id,
+            work_date = %work_date,
+            reason,
+            "Reconciling urgent work with an explicit staffing eligibility exception"
+        );
+    }
+
+    let (
+        customer_bill_rate_id,
+        worker_pay_rate_id,
+        rate_source,
+        manual_rate_reason,
+        currency,
+        bill_rate,
+        worker_rate,
+    ): (Option<Uuid>, Option<Uuid>, &str, Option<&str>, String, String, String) =
+        match input.manual_rate.as_ref() {
+            Some(ManualRateOverride {
+                reason,
+                currency,
+                bill_hourly_rate,
+                worker_hourly_rate,
+            }) => (
+                None,
+                None,
+                "manual",
+                Some(reason.as_str()),
+                currency.clone(),
+                bill_hourly_rate.clone(),
+                worker_hourly_rate.clone(),
+            ),
+            None => {
+                let customer_bill_rate: ResolvedRateRow = sqlx::query_as!(
+                    ResolvedRateRow,
+                    r#"
+                    SELECT id, currency, hourly_rate::TEXT AS "hourly_rate!"
+                    FROM business_staffing_rates
+                    WHERE tenant_id = $1
+                      AND rate_kind = 'customer_bill'
+                      AND customer_id = $2
+                      AND job_id = $3
+                      AND (customer_facility_id IS NULL OR customer_facility_id = $4)
+                      AND (employee_id IS NULL OR employee_id = $5)
+                      AND effective_from <= $6
+                      AND (effective_to IS NULL OR effective_to >= $6)
+                      AND is_active
+                    ORDER BY
+                        (employee_id IS NOT NULL) DESC,
+                        (customer_facility_id IS NOT NULL) DESC,
+                        priority DESC,
+                        effective_from DESC,
+                        id
+                    LIMIT 1
+                    "#,
+                    tenant_id,
+                    customer_id,
+                    input.job_id,
+                    input.final_customer_facility_id,
+                    context.employee_id,
+                    work_date,
+                )
+                .fetch_optional(transaction.connection())
+                .await
+                .map_err(|error: sqlx::Error| database_failure("resolve urgent customer bill rate", tenant_id, error))?
+                .ok_or(UrgentWorkError::MissingStaffingRate)?;
+                let worker_pay_rate: ResolvedRateRow = sqlx::query_as!(
+                    ResolvedRateRow,
+                    r#"
+                    SELECT id, currency, hourly_rate::TEXT AS "hourly_rate!"
+                    FROM business_staffing_rates
+                    WHERE tenant_id = $1
+                      AND rate_kind = 'worker_pay'
+                      AND (customer_id IS NULL OR customer_id = $2)
+                      AND job_id = $3
+                      AND (customer_facility_id IS NULL OR customer_facility_id = $4)
+                      AND (employee_id IS NULL OR employee_id = $5)
+                      AND effective_from <= $6
+                      AND (effective_to IS NULL OR effective_to >= $6)
+                      AND is_active
+                    ORDER BY
+                        (employee_id IS NOT NULL) DESC,
+                        (customer_facility_id IS NOT NULL) DESC,
+                        (customer_id IS NOT NULL) DESC,
+                        priority DESC,
+                        effective_from DESC,
+                        id
+                    LIMIT 1
+                    "#,
+                    tenant_id,
+                    customer_id,
+                    input.job_id,
+                    input.final_customer_facility_id,
+                    context.employee_id,
+                    work_date,
+                )
+                .fetch_optional(transaction.connection())
+                .await
+                .map_err(|error: sqlx::Error| database_failure("resolve urgent worker pay rate", tenant_id, error))?
+                .ok_or(UrgentWorkError::MissingStaffingRate)?;
+                if customer_bill_rate.currency != worker_pay_rate.currency {
+                    warn!(
+                        operation = "urgent_work.reconcile",
+                        tenant_id = %tenant_id,
+                        report_id = %report_id,
+                        customer_bill_currency = %customer_bill_rate.currency,
+                        worker_pay_currency = %worker_pay_rate.currency,
+                        "Urgent customer bill and worker pay rates use different currencies"
+                    );
+                    return Err(UrgentWorkError::InvalidInput(
+                        "customer bill and worker pay rates must use the same currency",
+                    ));
+                }
+                (
+                    Some(customer_bill_rate.id),
+                    Some(worker_pay_rate.id),
+                    "configured",
+                    None,
+                    customer_bill_rate.currency,
+                    customer_bill_rate.hourly_rate,
+                    worker_pay_rate.hourly_rate,
+                )
+            }
+        };
 
     let shift_insert: PgQueryResult = sqlx::query!(
         r#"
@@ -1352,18 +1458,18 @@ async fn reconcile_report(
         r#"
         INSERT INTO business_shift_assignments (
             id, tenant_id, shift_id, employee_id, urgent_work_report_id,
-            rate_agreement_id, rate_source, currency,
+            customer_bill_rate_id, worker_pay_rate_id, rate_source, manual_rate_reason, currency,
             bill_hourly_rate_snapshot, worker_hourly_rate_snapshot,
-            status, worked_seconds, observed_worked_seconds, approval_adjustment_reason,
+            eligibility_exception_reason, status, worked_seconds, observed_worked_seconds, approval_adjustment_reason,
             customer_amount, worker_amount, margin_amount,
             approved_at, approved_by_account_id, created_by_account_id
         ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9::TEXT::NUMERIC, $10::TEXT::NUMERIC,
-            'approved', $11::BIGINT, $12::BIGINT, $13,
-            ROUND($9::TEXT::NUMERIC * $11::BIGINT::NUMERIC / 3600, 4),
-            ROUND($10::TEXT::NUMERIC * $11::BIGINT::NUMERIC / 3600, 4),
-            ROUND(($9::TEXT::NUMERIC - $10::TEXT::NUMERIC) * $11::BIGINT::NUMERIC / 3600, 4),
-            CURRENT_TIMESTAMP, $14, $14
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::TEXT::NUMERIC, $12::TEXT::NUMERIC,
+            $13, 'approved', $14::BIGINT, $15::BIGINT, $16,
+            ROUND($11::TEXT::NUMERIC * $14::BIGINT::NUMERIC / 3600, 4),
+            ROUND($12::TEXT::NUMERIC * $14::BIGINT::NUMERIC / 3600, 4),
+            ROUND(($11::TEXT::NUMERIC - $12::TEXT::NUMERIC) * $14::BIGINT::NUMERIC / 3600, 4),
+            CURRENT_TIMESTAMP, $17, $17
         )
         "#,
         assignment_id,
@@ -1371,11 +1477,14 @@ async fn reconcile_report(
         shift_id,
         context.employee_id,
         report_id,
-        rate_agreement_id,
+        customer_bill_rate_id,
+        worker_pay_rate_id,
         rate_source,
+        manual_rate_reason,
         currency,
         bill_rate,
         worker_rate,
+        eligibility_exception_reason,
         input.worked_seconds,
         staff_worked_seconds,
         input.adjustment_reason,
@@ -1388,13 +1497,15 @@ async fn reconcile_report(
     let customer_copy: PgQueryResult = sqlx::query!(
         r#"
         INSERT INTO business_customer_work_records (
-            id, tenant_id, assignment_id, confirmed_started_at, confirmed_ended_at,
-            customer_reference, notes, recorded_by_account_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            id, tenant_id, assignment_id, confirmed_customer_facility_id,
+            confirmed_started_at, confirmed_ended_at, customer_reference, notes,
+            recorded_by_account_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         "#,
         copied_record_id,
         tenant_id,
         assignment_id,
+        input.final_customer_facility_id,
         confirmed_started_at,
         confirmed_ended_at,
         context.customer_reference,

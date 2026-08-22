@@ -33,7 +33,7 @@ const emptyCreateRequest: CreateAuthUserRequest = {
   username: "",
   email: "",
   password: "",
-  primary_role: "employee",
+  primary_role: "staff",
 };
 
 type CreateAuthUserVariables = {
@@ -72,7 +72,8 @@ export function AuthUsersPage() {
   const canRead = permissions.includes("auth.accounts.read");
   const canCreate = permissions.includes("auth.accounts.create");
   const canDisable = permissions.includes("auth.accounts.disable");
-  const canGrantElevatedRoles: boolean = profile?.roles.includes("tenant_owner") ?? false;
+  const canGrantElevatedRoles: boolean =
+    profile?.roles.some((role: string): boolean => role === "owner" || role === "director") ?? false;
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -566,11 +567,13 @@ export function AuthUsersPage() {
                   }
                   value={createRequest.primary_role}
                 >
-                  <option value="employee">Nhân viên</option>
+                  <option value="staff">Nhân viên</option>
                   {canGrantElevatedRoles ? (
                     <>
-                      <option value="supervisor">Điều phối viên</option>
-                      <option value="tenant_owner">Chủ doanh nghiệp</option>
+                      <option value="supervisor">Giám sát</option>
+                      <option value="manager">Quản lý</option>
+                      <option value="director">Giám đốc</option>
+                      <option value="owner">Chủ doanh nghiệp</option>
                     </>
                   ) : null}
                 </select>

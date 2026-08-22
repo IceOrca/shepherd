@@ -28,6 +28,13 @@ customer may request workers immediately while a supervisor is already
 transporting them. Planned shifts remain an optional workflow when sufficient
 lead time exists.
 
+“Urgent” describes only how the work starts: no supervisor-created planned
+shift or assignment is required first. It does not create a separate class of
+tenant, account, employee, job, customer, or facility. Staff select the same
+manager-maintained customer facilities and coworkers used by planned staffing;
+after reconciliation, Shepherd creates the formal shift and assignment snapshot
+from that evidence.
+
 ## Mandatory reconciliation
 
 Staffing company records and customer records are deliberately independent.
@@ -43,11 +50,60 @@ time against the customer's confirmation, bill, or time record:
 - If they differ, the supervisor contacts the customer, agrees on the true
   result, and records the conclusion with an audit reason.
 - Only an explicit supervisor reconciliation locks the final facility, job,
-  duration, billing rate, worker pay, margin, and payroll snapshot.
+  duration, billing rate, worker pay, company profit, and payroll snapshot.
 
 This separation of evidence and mandatory human conclusion is the heart of the
 product. Scheduling, HR, payroll, authentication, and administration support
 that workflow; they are not the product's primary purpose.
+
+
+### Customer-dependent pay, service eligibility, and company profit
+
+Temporary staffing pay is not derived from the employee's normal HR position
+alone. Shepherd keeps an effective-dated staffing eligibility directory so one
+employee may be suitable for several customer services even when their primary
+HR job is different. Planned assignment requires current eligibility. Urgent
+work is allowed to exist first because the service has already happened, but a
+supervisor must record an explicit eligibility-exception reason before
+reconciling an ineligible report.
+
+Customer billing and worker pay are independent hourly rate catalogs:
+
+- A customer-bill rate always belongs to a customer and may be specialized by
+  facility, employee, job, priority, and effective date.
+- A worker-pay rate may be a tenant default or vary by customer, facility,
+  employee, job, priority, and effective date.
+- Shepherd resolves both rates separately, requires the same currency, and
+  snapshots both selected rate IDs and decimal values on the assignment.
+  Effective-date changes never rewrite approved historical work.
+- An urgent report resolves its rates at reconciliation. A manual rate override
+  stores no configured rate IDs and requires its own audit reason.
+
+The current client pays the worker a gross amount and leaves personal tax and
+insurance to the worker. Therefore the application intentionally keeps the
+simple company-profit result:
+
+```text
+customer_amount = customer hourly rate × reconciled seconds / 3600
+worker_amount   = worker hourly rate × reconciled seconds / 3600
+company profit  = customer_amount - worker_amount
+```
+
+Shepherd does not currently add employer tax, insurance, overhead allocation,
+a salary-rule engine, or generic ERP accounting. Those are out of scope unless
+the client's real staffing contract changes.
+
+Customer evidence remains independently editable only until reconciliation.
+Every replacement archives the superseded facility, exact interval, notes,
+original recorder, and superseding actor. Planned and urgent records are
+classified as matched only when facility, exact start, exact end, and duration
+all agree; human reconciliation remains mandatory.
+
+Payroll consumes only the locked worker-pay snapshot. It dates the staffing
+line from the customer-confirmed interval and rejects the payroll run when an
+approved staffing interval overlaps internal HR attendance for the same
+employee. This makes duplicate sources visible instead of silently paying the
+same work twice.
 
 ## Core product principles
 
@@ -223,6 +279,50 @@ PostgreSQL continues to store those values as constrained text; repository
 boundaries reject and log unknown persisted values instead of allowing raw
 status strings into domain logic.
 
+### Staffing roles and current SME responsibility bands
+
+Shepherd defines five distinct organizational role codes:
+`owner -> director -> manager -> supervisor -> staff`. The arrow describes
+business rank only; it is not automatic permission inheritance. The current
+client configuration deliberately groups them into three equivalent
+responsibility bands:
+
+- `owner` and `director`: tenant administration, customer management,
+  staffing coordination, customer-evidence entry, and final reconciliation.
+- `manager` and `supervisor`: day-to-day customer management, dispatch,
+  optional planned shifts, evidence review, and reconciliation. They may
+  provision only `staff` accounts.
+- `staff`: urgent self/peer Start and Finish plus planned **My shifts**
+  self-service.
+
+Higher-ranked coordination roles do not receive staff-only clocking
+permissions. Consequently, an owner or director does not see **Ca kế hoạch của
+tôi** or the staff recording page by default, but does see and operate **Đối
+soát công việc phát sinh**. The owner/director and manager/supervisor pairs use
+the same permission grants today while remaining separate database role codes
+so a future client can split their responsibilities without renaming accounts.
+
+Navigation and backend authorization are permission-driven. The
+`/operations/customers` page lists customers for
+`business.customers.read` and exposes create/edit controls only for
+`business.customers.manage`. Those controls use:
+
+- `GET/POST /api/business/customers`
+- `PUT /api/business/customers/{customer_id}`
+
+Customer updates are tenant-scoped, audited with the acting account, and can
+change the normalized code, name, optional billing email, and active/disabled
+status. Reconciliation-only users may load the active customer-facility
+directory without receiving staff Start, Finish, or peer-clocking permission.
+
+The permission-driven `/operations/staffing-configuration` page manages the
+two staffing rate catalogs and effective employee service eligibility. Its API
+boundaries are `GET/POST /api/business/staffing/rates` and
+`GET/POST /api/business/staffing/eligibilities`. Use a new effective-dated
+row when pricing or suitability changes; historical assignment snapshots remain
+unchanged. Exact-scope active rate rows with the same priority may not have
+overlapping effective ranges.
+
 Development cache lifetime is configured with
 `AUTH_ACCOUNT_CACHE_TTL_SECS` (default `60`, allowed range `1..=3600`). The
 development seed workflow stores the login catalog emails in `accounts.email`
@@ -232,6 +332,21 @@ the unified database. Because that reset also removes `auth`, use
 rerunning the same one-shot bootstrap job, GoTrue migrations, API-based Auth
 provisioning, and Shepherd data seeding. Never run that destructive development
 workflow in production.
+
+The development catalog uses one representative role from each current band:
+`iceorca` is `owner`, each `*_manager_1/2` account is `manager`, and
+each `*_staff_1..4` account is `staff`. Each tenant also receives customer-
+and employee-specific rate examples, staffing eligibility for its four staff
+accounts, a planned assignment, and a completed urgent report whose staff-side
+actor is a staff account. The full copy/paste login list remains in
+`scripts/dev-auth-accounts.tsv`. After changing the role catalog or
+grants, rerun `sh scripts/dev-data-seeding.sh`; the reset recreates Auth users,
+so sign in again afterward.
+
+Database integration tests create isolated temporary tenants and must remove
+all of their transactional and master data when they finish. Passing tests must
+not leave `urgent-*` or other test tenants, accounts, customers, jobs, or
+facilities mixed into the development seed data.
 
 ## Background worker resilience
 

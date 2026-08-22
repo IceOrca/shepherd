@@ -41,7 +41,7 @@ impl Fixture {
         sqlx::query!(
             r#"
             INSERT INTO accounts (id, tenant_id, username, primary_role_code)
-            VALUES ($1, $2, 'staffing-work-cases', 'employee')
+            VALUES ($1, $2, 'staffing-work-cases', 'staff')
             "#,
             account_id,
             tenant_id,
@@ -51,7 +51,7 @@ impl Fixture {
         sqlx::query!(
             r#"
             INSERT INTO account_roles (tenant_id, account_id, role_code)
-            VALUES ($1, $2, 'employee')
+            VALUES ($1, $2, 'staff')
             "#,
             tenant_id,
             account_id,
@@ -135,10 +135,10 @@ impl Fixture {
         sqlx::query!(
             r#"
             INSERT INTO business_shift_assignments (
-                id, tenant_id, shift_id, employee_id, rate_source, currency,
+                id, tenant_id, shift_id, employee_id, rate_source, manual_rate_reason, currency,
                 bill_hourly_rate_snapshot, worker_hourly_rate_snapshot, created_by_account_id
             )
-            VALUES ($1, $2, $3, $4, 'manual', 'VND', 150000, 120000, $5)
+            VALUES ($1, $2, $3, $4, 'manual', 'isolated staffing test rate', 'VND', 150000, 120000, $5)
             "#,
             assignment_id,
             tenant_id,
@@ -276,17 +276,27 @@ impl Fixture {
         sqlx::query!(
             r#"
             INSERT INTO business_customer_work_records (
-                id, tenant_id, assignment_id, confirmed_started_at, confirmed_ended_at,
-                customer_reference, recorded_by_account_id
+                id, tenant_id, assignment_id, confirmed_customer_facility_id,
+                confirmed_started_at, confirmed_ended_at, customer_reference,
+                recorded_by_account_id
             )
-            SELECT $1, $2, $3, CURRENT_TIMESTAMP - make_interval(secs => observed.total),
-                   CURRENT_TIMESTAMP, 'test-customer-record', $4
-            FROM (
-                SELECT COALESCE(SUM(worked_seconds), 0)::BIGINT AS total
+            SELECT $1, $2, $3, shift.customer_facility_id,
+                   observed.started_at, observed.ended_at,
+                   'test-customer-record', $4
+            FROM business_shift_assignments AS assignment
+            INNER JOIN business_staffing_shifts AS shift
+                ON shift.tenant_id = assignment.tenant_id
+               AND shift.id = assignment.shift_id
+            CROSS JOIN LATERAL (
+                SELECT MIN(started_at) FILTER (WHERE ended_at IS NOT NULL) AS started_at,
+                       MAX(ended_at) AS ended_at,
+                       COALESCE(SUM(worked_seconds), 0)::BIGINT AS total
                 FROM business_shift_work_sessions
                 WHERE tenant_id = $2 AND assignment_id = $3 AND ended_at IS NOT NULL
             ) AS observed
-            WHERE observed.total > 0
+            WHERE assignment.tenant_id = $2
+              AND assignment.id = $3
+              AND observed.total > 0
             "#,
             Uuid::new_v4(),
             self.tenant_id,
@@ -494,7 +504,13 @@ async fn regular_flow_supports_multiple_sessions_and_durable_outbox_events() -> 
     fixture.record_matching_customer_evidence().await?;
 
     let approved = staffing
-        .approve_shift_assignment(fixture.tenant_id, fixture.assignment_id, None, None, fixture.account_id)
+        .approve_shift_assignment(
+            fixture.tenant_id,
+            fixture.assignment_id,
+            None,
+            Some("multiple staff sessions reconciled to one customer interval".to_owned()),
+            fixture.account_id,
+        )
         .await
         .map_err(staffing_error)?;
     assert_eq!(approved.status, ShiftAssignmentStatus::Approved);

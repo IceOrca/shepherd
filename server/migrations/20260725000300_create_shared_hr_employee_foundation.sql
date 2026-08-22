@@ -228,17 +228,25 @@ VALUES
     ('hr.assignments.manage', 'Create dated employee organization assignments');
 
 INSERT INTO role_permissions (role_code, permission_code)
-SELECT 'tenant_owner', code
-FROM permissions
-WHERE code LIKE 'hr.%';
+SELECT role.code, permission.code
+FROM roles AS role
+CROSS JOIN permissions AS permission
+WHERE role.code IN ('owner', 'director')
+  AND permission.code LIKE 'hr.%'
+  AND permission.code NOT LIKE '%.self.%';
 
 INSERT INTO role_permissions (role_code, permission_code)
 VALUES
+    ('manager', 'hr.employees.read'),
+    ('manager', 'hr.employees.manage'),
+    ('manager', 'hr.departments.read'),
+    ('manager', 'hr.jobs.read'),
+    ('manager', 'hr.assignments.read'),
+    ('manager', 'hr.assignments.manage'),
     ('supervisor', 'hr.employees.read'),
-    ('supervisor', 'hr.employees.self.read'),
     ('supervisor', 'hr.employees.manage'),
     ('supervisor', 'hr.departments.read'),
     ('supervisor', 'hr.jobs.read'),
     ('supervisor', 'hr.assignments.read'),
     ('supervisor', 'hr.assignments.manage'),
-    ('employee', 'hr.employees.self.read');
+    ('staff', 'hr.employees.self.read');

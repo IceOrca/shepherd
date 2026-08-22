@@ -143,7 +143,7 @@ pub async fn require_tenant_owner(
     request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    if user.role == Role::TenantOwner {
+    if matches!(user.role, Role::Owner | Role::Director) {
         Ok(next.run(request).await)
     } else {
         info!(

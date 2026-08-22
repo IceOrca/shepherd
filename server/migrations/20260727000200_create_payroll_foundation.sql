@@ -435,6 +435,8 @@ VALUES
     ('payroll.runs.approve', 'Approve calculated payroll runs');
 
 INSERT INTO role_permissions (role_code, permission_code)
-SELECT 'tenant_owner', code
-FROM permissions
-WHERE code LIKE 'payroll.%';
+SELECT role.code, permission.code
+FROM roles AS role
+CROSS JOIN permissions AS permission
+WHERE role.code IN ('owner', 'director')
+  AND permission.code LIKE 'payroll.%';

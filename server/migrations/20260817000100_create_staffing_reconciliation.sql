@@ -4,6 +4,7 @@ CREATE TABLE business_customer_work_records (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
     assignment_id UUID NOT NULL,
+    confirmed_customer_facility_id UUID NOT NULL,
     confirmed_started_at TIMESTAMPTZ NOT NULL,
     confirmed_ended_at TIMESTAMPTZ NOT NULL,
     confirmed_worked_seconds BIGINT GENERATED ALWAYS AS (
@@ -18,6 +19,9 @@ CREATE TABLE business_customer_work_records (
     CONSTRAINT business_customer_work_records_assignment_tenant_fk
         FOREIGN KEY (tenant_id, assignment_id)
         REFERENCES business_shift_assignments (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_customer_work_records_facility_tenant_fk
+        FOREIGN KEY (tenant_id, confirmed_customer_facility_id)
+        REFERENCES business_customer_facilities (tenant_id, id) ON DELETE RESTRICT,
     CONSTRAINT business_customer_work_records_recorded_by_tenant_fk
         FOREIGN KEY (tenant_id, recorded_by_account_id)
         REFERENCES accounts (tenant_id, id) ON DELETE RESTRICT,
@@ -82,6 +86,126 @@ CREATE TABLE business_urgent_customer_work_records (
 CREATE INDEX business_urgent_customer_work_records_tenant_updated_idx
     ON business_urgent_customer_work_records (tenant_id, updated_at DESC);
 
+-- Current customer evidence remains convenient to query, while every
+-- superseded version is retained for the mandatory customer-conversation audit.
+CREATE TABLE business_customer_work_record_history (
+    history_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
+    record_id UUID NOT NULL,
+    assignment_id UUID NOT NULL,
+    confirmed_customer_facility_id UUID NOT NULL,
+    confirmed_started_at TIMESTAMPTZ NOT NULL,
+    confirmed_ended_at TIMESTAMPTZ NOT NULL,
+    confirmed_worked_seconds BIGINT NOT NULL,
+    customer_reference TEXT,
+    notes TEXT,
+    recorded_by_account_id UUID NOT NULL,
+    recorded_at TIMESTAMPTZ NOT NULL,
+    superseded_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    superseded_by_account_id UUID NOT NULL,
+    CONSTRAINT business_customer_work_record_history_assignment_tenant_fk
+        FOREIGN KEY (tenant_id, assignment_id)
+        REFERENCES business_shift_assignments (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_customer_work_record_history_facility_tenant_fk
+        FOREIGN KEY (tenant_id, confirmed_customer_facility_id)
+        REFERENCES business_customer_facilities (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_customer_work_record_history_recorded_by_tenant_fk
+        FOREIGN KEY (tenant_id, recorded_by_account_id)
+        REFERENCES accounts (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_customer_work_record_history_superseded_by_tenant_fk
+        FOREIGN KEY (tenant_id, superseded_by_account_id)
+        REFERENCES accounts (tenant_id, id) ON DELETE RESTRICT
+);
+
+CREATE INDEX business_customer_work_record_history_assignment_idx
+    ON business_customer_work_record_history (tenant_id, assignment_id, superseded_at DESC);
+
+CREATE TABLE business_urgent_customer_work_record_history (
+    history_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
+    record_id UUID NOT NULL,
+    report_id UUID NOT NULL,
+    confirmed_customer_facility_id UUID NOT NULL,
+    confirmed_started_at TIMESTAMPTZ NOT NULL,
+    confirmed_ended_at TIMESTAMPTZ NOT NULL,
+    confirmed_worked_seconds BIGINT NOT NULL,
+    customer_reference TEXT,
+    notes TEXT,
+    recorded_by_account_id UUID NOT NULL,
+    recorded_at TIMESTAMPTZ NOT NULL,
+    superseded_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    superseded_by_account_id UUID NOT NULL,
+    CONSTRAINT business_urgent_customer_work_record_history_report_tenant_fk
+        FOREIGN KEY (tenant_id, report_id)
+        REFERENCES business_urgent_work_reports (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_urgent_customer_work_record_history_facility_tenant_fk
+        FOREIGN KEY (tenant_id, confirmed_customer_facility_id)
+        REFERENCES business_customer_facilities (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_urgent_customer_work_record_history_recorded_by_tenant_fk
+        FOREIGN KEY (tenant_id, recorded_by_account_id)
+        REFERENCES accounts (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_urgent_customer_work_record_history_superseded_by_tenant_fk
+        FOREIGN KEY (tenant_id, superseded_by_account_id)
+        REFERENCES accounts (tenant_id, id) ON DELETE RESTRICT
+);
+
+CREATE INDEX business_urgent_customer_work_record_history_report_idx
+    ON business_urgent_customer_work_record_history (tenant_id, report_id, superseded_at DESC);
+
+CREATE FUNCTION business_archive_customer_work_record()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF OLD IS DISTINCT FROM NEW THEN
+        INSERT INTO business_customer_work_record_history (
+            tenant_id, record_id, assignment_id, confirmed_customer_facility_id,
+            confirmed_started_at, confirmed_ended_at, confirmed_worked_seconds,
+            customer_reference, notes, recorded_by_account_id, recorded_at,
+            superseded_by_account_id
+        ) VALUES (
+            OLD.tenant_id, OLD.id, OLD.assignment_id, OLD.confirmed_customer_facility_id,
+            OLD.confirmed_started_at, OLD.confirmed_ended_at, OLD.confirmed_worked_seconds,
+            OLD.customer_reference, OLD.notes, OLD.recorded_by_account_id, OLD.updated_at,
+            NEW.recorded_by_account_id
+        );
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER business_customer_work_records_archive_before_update
+BEFORE UPDATE ON business_customer_work_records
+FOR EACH ROW
+EXECUTE FUNCTION business_archive_customer_work_record();
+
+CREATE FUNCTION business_archive_urgent_customer_work_record()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF OLD IS DISTINCT FROM NEW THEN
+        INSERT INTO business_urgent_customer_work_record_history (
+            tenant_id, record_id, report_id, confirmed_customer_facility_id,
+            confirmed_started_at, confirmed_ended_at, confirmed_worked_seconds,
+            customer_reference, notes, recorded_by_account_id, recorded_at,
+            superseded_by_account_id
+        ) VALUES (
+            OLD.tenant_id, OLD.id, OLD.report_id, OLD.confirmed_customer_facility_id,
+            OLD.confirmed_started_at, OLD.confirmed_ended_at, OLD.confirmed_worked_seconds,
+            OLD.customer_reference, OLD.notes, OLD.recorded_by_account_id, OLD.updated_at,
+            NEW.recorded_by_account_id
+        );
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER business_urgent_customer_work_records_archive_before_update
+BEFORE UPDATE ON business_urgent_customer_work_records
+FOR EACH ROW
+EXECUTE FUNCTION business_archive_urgent_customer_work_record();
+
 ALTER TABLE business_customer_work_records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE business_customer_work_records FORCE ROW LEVEL SECURITY;
 CREATE POLICY business_customer_work_records_tenant_isolation ON business_customer_work_records
@@ -94,6 +218,20 @@ CREATE POLICY business_urgent_customer_work_records_tenant_isolation ON business
     USING (tenant_id = shepherd_current_tenant_id())
     WITH CHECK (tenant_id = shepherd_current_tenant_id());
 
+ALTER TABLE business_customer_work_record_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE business_customer_work_record_history FORCE ROW LEVEL SECURITY;
+CREATE POLICY business_customer_work_record_history_tenant_isolation
+    ON business_customer_work_record_history
+    USING (tenant_id = shepherd_current_tenant_id())
+    WITH CHECK (tenant_id = shepherd_current_tenant_id());
+
+ALTER TABLE business_urgent_customer_work_record_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE business_urgent_customer_work_record_history FORCE ROW LEVEL SECURITY;
+CREATE POLICY business_urgent_customer_work_record_history_tenant_isolation
+    ON business_urgent_customer_work_record_history
+    USING (tenant_id = shepherd_current_tenant_id())
+    WITH CHECK (tenant_id = shepherd_current_tenant_id());
+
 INSERT INTO permissions (code, description)
 VALUES
     ('business.reconciliation.read', 'View staff and customer staffing evidence'),
@@ -101,12 +239,17 @@ VALUES
     ('business.urgent_work.reconcile', 'Record customer evidence and reconcile urgent staffing work');
 
 INSERT INTO role_permissions (role_code, permission_code)
-SELECT 'tenant_owner', code
-FROM permissions
-WHERE code LIKE 'business.reconciliation.%' OR code = 'business.urgent_work.reconcile';
+SELECT role.code, permission.code
+FROM roles AS role
+CROSS JOIN permissions AS permission
+WHERE role.code IN ('owner', 'director')
+  AND (permission.code LIKE 'business.reconciliation.%' OR permission.code = 'business.urgent_work.reconcile');
 
 INSERT INTO role_permissions (role_code, permission_code)
 VALUES
+    ('manager', 'business.reconciliation.read'),
+    ('manager', 'business.reconciliation.manage'),
+    ('manager', 'business.urgent_work.reconcile'),
     ('supervisor', 'business.reconciliation.read'),
     ('supervisor', 'business.reconciliation.manage'),
     ('supervisor', 'business.urgent_work.reconcile');

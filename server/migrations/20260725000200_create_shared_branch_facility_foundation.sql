@@ -86,11 +86,15 @@ VALUES
     ('business.facilities.manage', 'Create and update tenant facilities');
 
 INSERT INTO role_permissions (role_code, permission_code)
-SELECT 'tenant_owner', code
-FROM permissions
-WHERE code LIKE 'business.%';
+SELECT role.code, permission.code
+FROM roles AS role
+CROSS JOIN permissions AS permission
+WHERE role.code IN ('owner', 'director')
+  AND permission.code LIKE 'business.%';
 
 INSERT INTO role_permissions (role_code, permission_code)
 VALUES
+    ('manager', 'business.branches.read'),
+    ('manager', 'business.facilities.read'),
     ('supervisor', 'business.branches.read'),
     ('supervisor', 'business.facilities.read');

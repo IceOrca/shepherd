@@ -185,7 +185,7 @@ mod tests {
 
     #[test]
     fn role_codes_follow_database_catalog_format() {
-        assert!(RoleCode::parse("tenant_owner").is_ok());
+        assert!(RoleCode::parse("owner").is_ok());
         assert!(RoleCode::parse("employee2").is_ok());
         assert!(RoleCode::parse("x").is_err());
         assert!(RoleCode::parse("TenantOwner").is_err());

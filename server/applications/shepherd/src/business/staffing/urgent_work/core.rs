@@ -112,6 +112,7 @@ pub struct UrgentWorkReconciliation {
     pub final_job_id: Option<Uuid>,
     pub final_worked_seconds: Option<i64>,
     pub adjustment_reason: Option<String>,
+    pub eligibility_exception_reason: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -170,6 +171,7 @@ pub struct UrgentWorkReconcileInput {
     pub job_id: Uuid,
     pub worked_seconds: i64,
     pub adjustment_reason: Option<String>,
+    pub eligibility_exception_reason: Option<String>,
     pub manual_rate: Option<ManualRateOverride>,
 }
 
@@ -179,7 +181,7 @@ pub enum UrgentWorkError {
     Forbidden,
     Conflict,
     InvalidInput(&'static str),
-    MissingRateAgreement,
+    MissingStaffingRate,
     BackendUnavailable,
 }
 
@@ -444,7 +446,22 @@ impl UrgentWorkService {
         {
             return Err(UrgentWorkError::InvalidInput("urgent reconciliation reason is invalid"));
         }
-        if let Some(manual_rate) = input.manual_rate.as_ref() {
+        input.eligibility_exception_reason = input
+            .eligibility_exception_reason
+            .take()
+            .map(|reason: String| reason.trim().to_owned())
+            .filter(|reason: &String| !reason.is_empty());
+        if input
+            .eligibility_exception_reason
+            .as_deref()
+            .is_some_and(|reason: &str| !(3..=500).contains(&reason.len()))
+        {
+            return Err(UrgentWorkError::InvalidInput(
+                "urgent eligibility exception reason is invalid",
+            ));
+        }
+        if let Some(manual_rate) = input.manual_rate.as_mut() {
+            manual_rate.reason = manual_rate.reason.trim().to_owned();
             validate_manual_rate(manual_rate)?;
         }
         let shift_id: Uuid = Uuid::new_v4();
@@ -465,11 +482,12 @@ impl UrgentWorkService {
 }
 
 fn validate_manual_rate(rate: &ManualRateOverride) -> Result<(), UrgentWorkError> {
+    let reason_valid: bool = (3..=500).contains(&rate.reason.len()) && rate.reason == rate.reason.trim();
     let currency_valid: bool =
         rate.currency.len() == 3 && rate.currency.bytes().all(|byte: u8| byte.is_ascii_uppercase());
     let bill_rate_valid: bool = is_positive_decimal(&rate.bill_hourly_rate);
     let worker_rate_valid: bool = is_positive_decimal(&rate.worker_hourly_rate);
-    if currency_valid && bill_rate_valid && worker_rate_valid {
+    if reason_valid && currency_valid && bill_rate_valid && worker_rate_valid {
         Ok(())
     } else {
         Err(UrgentWorkError::InvalidInput("urgent manual rate is invalid"))

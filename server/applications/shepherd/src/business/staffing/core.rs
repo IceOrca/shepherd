@@ -76,15 +76,39 @@ impl ShiftAssignmentStatus {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum RateSource {
-    Agreement,
+    Configured,
     Manual,
 }
 
 impl RateSource {
     pub fn from_code(code: &str) -> Option<Self> {
         match code {
-            "agreement" => Some(Self::Agreement),
+            "configured" => Some(Self::Configured),
             "manual" => Some(Self::Manual),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum StaffingRateKind {
+    CustomerBill,
+    WorkerPay,
+}
+
+impl StaffingRateKind {
+    pub fn as_code(self) -> &'static str {
+        match self {
+            Self::CustomerBill => "customer_bill",
+            Self::WorkerPay => "worker_pay",
+        }
+    }
+
+    pub fn from_code(code: &str) -> Option<Self> {
+        match code {
+            "customer_bill" => Some(Self::CustomerBill),
+            "worker_pay" => Some(Self::WorkerPay),
             _ => None,
         }
     }
@@ -115,17 +139,17 @@ pub struct CustomerFacility {
 }
 
 #[derive(Clone, Debug, Serialize, TS)]
-pub struct StaffingRateAgreement {
+pub struct StaffingRate {
     pub id: Uuid,
+    pub rate_kind: StaffingRateKind,
     pub code: String,
     pub name: String,
-    pub customer_id: Uuid,
+    pub customer_id: Option<Uuid>,
     pub customer_facility_id: Option<Uuid>,
     pub employee_id: Option<Uuid>,
     pub job_id: Uuid,
     pub currency: String,
-    pub bill_hourly_rate: String,
-    pub worker_hourly_rate: String,
+    pub hourly_rate: String,
     pub priority: i16,
     pub effective_from: NaiveDate,
     pub effective_to: Option<NaiveDate>,
@@ -153,11 +177,14 @@ pub struct ShiftAssignment {
     pub id: Uuid,
     pub shift_id: Uuid,
     pub employee_id: Uuid,
-    pub rate_agreement_id: Option<Uuid>,
+    pub customer_bill_rate_id: Option<Uuid>,
+    pub worker_pay_rate_id: Option<Uuid>,
     pub rate_source: RateSource,
+    pub manual_rate_reason: Option<String>,
     pub currency: String,
     pub bill_hourly_rate_snapshot: String,
     pub worker_hourly_rate_snapshot: String,
+    pub eligibility_exception_reason: Option<String>,
     pub status: ShiftAssignmentStatus,
     pub worked_seconds: Option<i64>,
     pub observed_worked_seconds: Option<i64>,
@@ -180,6 +207,17 @@ pub struct StaffingCandidate {
     pub conflict_shift_id: Option<Uuid>,
 }
 
+#[derive(Clone, Debug, Serialize, TS)]
+pub struct StaffingEligibility {
+    pub id: Uuid,
+    pub employee_id: Uuid,
+    pub job_id: Uuid,
+    pub effective_from: NaiveDate,
+    pub effective_to: Option<NaiveDate>,
+    pub notes: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ReconciliationStatus {
@@ -194,6 +232,7 @@ pub enum ReconciliationStatus {
 pub struct CustomerWorkRecord {
     pub id: Uuid,
     pub assignment_id: Uuid,
+    pub confirmed_customer_facility_id: Uuid,
     pub confirmed_started_at: DateTime<Utc>,
     pub confirmed_ended_at: DateTime<Utc>,
     pub confirmed_worked_seconds: i64,
@@ -206,6 +245,8 @@ pub struct CustomerWorkRecord {
 pub struct StaffingReconciliation {
     pub assignment_id: Uuid,
     pub shift_id: Uuid,
+    pub customer_id: Uuid,
+    pub customer_facility_id: Uuid,
     pub employee_id: Uuid,
     pub employee_code: String,
     pub employee_name: String,
@@ -241,20 +282,29 @@ pub struct CustomerFacilityInput {
 }
 
 #[derive(Clone, Debug)]
-pub struct StaffingRateAgreementInput {
+pub struct StaffingRateInput {
+    pub rate_kind: StaffingRateKind,
     pub code: String,
     pub name: String,
-    pub customer_id: Uuid,
+    pub customer_id: Option<Uuid>,
     pub customer_facility_id: Option<Uuid>,
     pub employee_id: Option<Uuid>,
     pub job_id: Uuid,
     pub currency: String,
-    pub bill_hourly_rate: String,
-    pub worker_hourly_rate: String,
+    pub hourly_rate: String,
     pub priority: i16,
     pub effective_from: NaiveDate,
     pub effective_to: Option<NaiveDate>,
     pub is_active: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct StaffingEligibilityInput {
+    pub employee_id: Uuid,
+    pub job_id: Uuid,
+    pub effective_from: NaiveDate,
+    pub effective_to: Option<NaiveDate>,
+    pub notes: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -270,6 +320,7 @@ pub struct StaffingShiftInput {
 
 #[derive(Clone, Debug)]
 pub struct ManualRateOverride {
+    pub reason: String,
     pub currency: String,
     pub bill_hourly_rate: String,
     pub worker_hourly_rate: String,
@@ -283,6 +334,7 @@ pub struct ShiftAssignmentInput {
 
 #[derive(Clone, Debug)]
 pub struct CustomerWorkRecordInput {
+    pub confirmed_customer_facility_id: Uuid,
     pub confirmed_started_at: DateTime<Utc>,
     pub confirmed_ended_at: DateTime<Utc>,
     pub customer_reference: Option<String>,
@@ -294,7 +346,7 @@ pub enum StaffingError {
     NotFound,
     Conflict,
     InvalidInput(&'static str),
-    MissingRateAgreement,
+    MissingStaffingRate,
     BackendUnavailable,
 }
 
@@ -302,6 +354,13 @@ pub enum StaffingError {
 pub trait StaffingRepo {
     async fn list_customers(&self, tenant_id: Uuid) -> Result<Vec<Customer>, StaffingError>;
     async fn create_customer(
+        &self,
+        tenant_id: Uuid,
+        customer_id: Uuid,
+        input: &CustomerInput,
+        audit_account_id: Uuid,
+    ) -> Result<Customer, StaffingError>;
+    async fn update_customer(
         &self,
         tenant_id: Uuid,
         customer_id: Uuid,
@@ -321,14 +380,22 @@ pub trait StaffingRepo {
         input: &CustomerFacilityInput,
         audit_account_id: Uuid,
     ) -> Result<CustomerFacility, StaffingError>;
-    async fn list_rate_agreements(&self, tenant_id: Uuid) -> Result<Vec<StaffingRateAgreement>, StaffingError>;
-    async fn create_rate_agreement(
+    async fn list_rates(&self, tenant_id: Uuid) -> Result<Vec<StaffingRate>, StaffingError>;
+    async fn create_rate(
         &self,
         tenant_id: Uuid,
-        agreement_id: Uuid,
-        input: &StaffingRateAgreementInput,
+        rate_id: Uuid,
+        input: &StaffingRateInput,
         audit_account_id: Uuid,
-    ) -> Result<StaffingRateAgreement, StaffingError>;
+    ) -> Result<StaffingRate, StaffingError>;
+    async fn list_eligibilities(&self, tenant_id: Uuid) -> Result<Vec<StaffingEligibility>, StaffingError>;
+    async fn create_eligibility(
+        &self,
+        tenant_id: Uuid,
+        eligibility_id: Uuid,
+        input: &StaffingEligibilityInput,
+        audit_account_id: Uuid,
+    ) -> Result<StaffingEligibility, StaffingError>;
     async fn list_shifts(&self, tenant_id: Uuid) -> Result<Vec<StaffingShift>, StaffingError>;
     async fn create_shift(
         &self,
@@ -420,6 +487,44 @@ impl StaffingService {
         result
     }
 
+    pub async fn update_customer(
+        &self,
+        tenant_id: Uuid,
+        customer_id: Uuid,
+        input: CustomerInput,
+        audit_account_id: Uuid,
+    ) -> Result<Customer, StaffingError> {
+        trace!(
+            operation = "update_customer",
+            tenant_id = %tenant_id,
+            audit_account_id = %audit_account_id,
+            customer_id = %customer_id,
+            "Validating staffing customer update"
+        );
+        if customer_id.is_nil() {
+            warn!(
+                operation = "update_customer",
+                tenant_id = %tenant_id,
+                audit_account_id = %audit_account_id,
+                "Rejected staffing customer update with a nil customer id"
+            );
+            return Err(StaffingError::InvalidInput("customer id is invalid"));
+        }
+        validate_identity(&input.code, &input.name)?;
+        let result: Result<Customer, StaffingError> = self
+            .repo
+            .update_customer(tenant_id, customer_id, &input, audit_account_id)
+            .await;
+        log_staffing_operation(
+            "update_customer",
+            tenant_id,
+            Some(audit_account_id),
+            Some(customer_id),
+            &result,
+        );
+        result
+    }
+
     pub async fn list_customer_facilities(
         &self,
         tenant_id: Uuid,
@@ -471,50 +576,115 @@ impl StaffingService {
         result
     }
 
-    pub async fn list_rate_agreements(&self, tenant_id: Uuid) -> Result<Vec<StaffingRateAgreement>, StaffingError> {
-        debug!(operation = "list_rate_agreements", tenant_id = %tenant_id, "Staffing service operation accepted");
-        let result: Result<Vec<StaffingRateAgreement>, StaffingError> = self.repo.list_rate_agreements(tenant_id).await;
-        log_staffing_operation("list_rate_agreements", tenant_id, None, None, &result);
+    pub async fn list_rates(&self, tenant_id: Uuid) -> Result<Vec<StaffingRate>, StaffingError> {
+        debug!(operation = "list_rates", tenant_id = %tenant_id, "Staffing service operation accepted");
+        let result: Result<Vec<StaffingRate>, StaffingError> = self.repo.list_rates(tenant_id).await;
+        log_staffing_operation("list_rates", tenant_id, None, None, &result);
         result
     }
 
-    pub async fn create_rate_agreement(
+    pub async fn create_rate(
         &self,
         tenant_id: Uuid,
-        input: StaffingRateAgreementInput,
+        input: StaffingRateInput,
         audit_account_id: Uuid,
-    ) -> Result<StaffingRateAgreement, StaffingError> {
-        let agreement_id: Uuid = Uuid::new_v4();
+    ) -> Result<StaffingRate, StaffingError> {
+        let rate_id: Uuid = Uuid::new_v4();
         trace!(
-            operation = "create_rate_agreement",
+            operation = "create_rate",
             tenant_id = %tenant_id,
             audit_account_id = %audit_account_id,
-            agreement_id = %agreement_id,
-            customer_id = %input.customer_id,
+            rate_id = %rate_id,
+            customer_id = ?input.customer_id,
             customer_facility_id = ?input.customer_facility_id,
             employee_id = ?input.employee_id,
             job_id = %input.job_id,
-            "Validating staffing rate agreement creation"
+            "Validating staffing hourly rate creation"
         );
         validate_identity(&input.code, &input.name)?;
         validate_currency(&input.currency)?;
-        validate_positive_decimal(&input.bill_hourly_rate)?;
-        validate_positive_decimal(&input.worker_hourly_rate)?;
+        validate_positive_decimal(&input.hourly_rate)?;
+        if input.rate_kind == StaffingRateKind::CustomerBill && input.customer_id.is_none() {
+            return Err(StaffingError::InvalidInput("customer bill rate requires a customer"));
+        }
+        if input.customer_facility_id.is_some() && input.customer_id.is_none() {
+            return Err(StaffingError::InvalidInput(
+                "facility-specific rate requires a customer",
+            ));
+        }
         if input
             .effective_to
             .is_some_and(|date: NaiveDate| date < input.effective_from)
         {
-            return Err(StaffingError::InvalidInput("rate agreement date range is invalid"));
+            return Err(StaffingError::InvalidInput("staffing rate date range is invalid"));
         }
-        let result: Result<StaffingRateAgreement, StaffingError> = self
+        let result: Result<StaffingRate, StaffingError> = self
             .repo
-            .create_rate_agreement(tenant_id, agreement_id, &input, audit_account_id)
+            .create_rate(tenant_id, rate_id, &input, audit_account_id)
+            .await;
+        log_staffing_operation("create_rate", tenant_id, Some(audit_account_id), Some(rate_id), &result);
+        result
+    }
+
+    pub async fn list_eligibilities(&self, tenant_id: Uuid) -> Result<Vec<StaffingEligibility>, StaffingError> {
+        debug!(
+            operation = "list_staffing_eligibilities",
+            tenant_id = %tenant_id,
+            "Staffing service operation accepted"
+        );
+        let result: Result<Vec<StaffingEligibility>, StaffingError> = self.repo.list_eligibilities(tenant_id).await;
+        log_staffing_operation("list_staffing_eligibilities", tenant_id, None, None, &result);
+        result
+    }
+
+    pub async fn create_eligibility(
+        &self,
+        tenant_id: Uuid,
+        mut input: StaffingEligibilityInput,
+        audit_account_id: Uuid,
+    ) -> Result<StaffingEligibility, StaffingError> {
+        let eligibility_id: Uuid = Uuid::new_v4();
+        input.notes = input
+            .notes
+            .take()
+            .map(|notes: String| notes.trim().to_owned())
+            .filter(|notes: &String| !notes.is_empty());
+        if input.employee_id.is_nil() || input.job_id.is_nil() {
+            return Err(StaffingError::InvalidInput(
+                "staffing eligibility employee and job are required",
+            ));
+        }
+        if input
+            .effective_to
+            .is_some_and(|date: NaiveDate| date < input.effective_from)
+        {
+            return Err(StaffingError::InvalidInput(
+                "staffing eligibility date range is invalid",
+            ));
+        }
+        if input.notes.as_deref().is_some_and(|notes: &str| notes.len() > 1000) {
+            return Err(StaffingError::InvalidInput("staffing eligibility notes are invalid"));
+        }
+        debug!(
+            operation = "create_staffing_eligibility",
+            tenant_id = %tenant_id,
+            eligibility_id = %eligibility_id,
+            employee_id = %input.employee_id,
+            job_id = %input.job_id,
+            effective_from = %input.effective_from,
+            effective_to = ?input.effective_to,
+            audit_account_id = %audit_account_id,
+            "Creating effective-dated staffing eligibility"
+        );
+        let result: Result<StaffingEligibility, StaffingError> = self
+            .repo
+            .create_eligibility(tenant_id, eligibility_id, &input, audit_account_id)
             .await;
         log_staffing_operation(
-            "create_rate_agreement",
+            "create_staffing_eligibility",
             tenant_id,
             Some(audit_account_id),
-            Some(agreement_id),
+            Some(eligibility_id),
             &result,
         );
         result
@@ -539,7 +709,7 @@ impl StaffingService {
             tenant_id = %tenant_id,
             audit_account_id = %audit_account_id,
             shift_id = %shift_id,
-            customer_id = %input.customer_id,
+            customer_id = ?input.customer_id,
             customer_facility_id = %input.customer_facility_id,
             job_id = %input.job_id,
             required_workers = input.required_workers,
@@ -600,7 +770,7 @@ impl StaffingService {
         &self,
         tenant_id: Uuid,
         shift_id: Uuid,
-        input: ShiftAssignmentInput,
+        mut input: ShiftAssignmentInput,
         audit_account_id: Uuid,
     ) -> Result<ShiftAssignment, StaffingError> {
         let assignment_id: Uuid = Uuid::new_v4();
@@ -614,7 +784,11 @@ impl StaffingService {
             has_manual_rate = input.manual_rate.is_some(),
             "Validating staffing shift assignment"
         );
-        if let Some(manual_rate) = &input.manual_rate {
+        if let Some(manual_rate) = input.manual_rate.as_mut() {
+            manual_rate.reason = manual_rate.reason.trim().to_owned();
+            if !(3..=500).contains(&manual_rate.reason.len()) {
+                return Err(StaffingError::InvalidInput("manual staffing rate reason is invalid"));
+            }
             validate_currency(&manual_rate.currency)?;
             validate_positive_decimal(&manual_rate.bill_hourly_rate)?;
             validate_positive_decimal(&manual_rate.worker_hourly_rate)?;

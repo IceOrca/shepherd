@@ -98,9 +98,9 @@ impl BruteForceConfig {
 
     fn for_role(&self, role: Option<&Role>) -> &BruteForcePolicy {
         match role {
-            Some(Role::TenantOwner) => &self.tenant_owner,
-            Some(Role::Supervisor) => &self.supervisor,
-            Some(Role::Employee) | None => &self.employee,
+            Some(Role::Owner | Role::Director) => &self.tenant_owner,
+            Some(Role::Manager | Role::Supervisor) => &self.supervisor,
+            Some(Role::Staff) | None => &self.employee,
         }
     }
 }
@@ -907,7 +907,7 @@ mod tests {
             },
         };
 
-        assert_eq!(config.for_role(Some(&Role::TenantOwner)).max_failures, 2);
+        assert_eq!(config.for_role(Some(&Role::Owner)).max_failures, 2);
         assert_eq!(config.for_role(Some(&Role::Supervisor)).max_failures, 3);
         assert_eq!(config.for_role(Some(&Role::Employee)).max_failures, 4);
         assert_eq!(config.for_role(None).lockout_duration, Duration::from_secs(400));

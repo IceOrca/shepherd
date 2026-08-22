@@ -43,10 +43,12 @@ interface FinalDraft {
   jobId: string;
   hours: string;
   reason: string;
+  eligibilityExceptionReason: string;
   useManualRate: boolean;
   currency: string;
   billRate: string;
   workerRate: string;
+  manualRateReason: string;
 }
 
 function localDateTime(value: string | null | undefined): string {
@@ -101,10 +103,12 @@ function initialFinal(item: UrgentWorkReconciliation): FinalDraft {
     jobId: item.final_job_id ?? "",
     hours: seconds > 0 ? (seconds / 3600).toFixed(2) : "",
     reason: item.adjustment_reason ?? "",
+    eligibilityExceptionReason: item.eligibility_exception_reason ?? "",
     useManualRate: false,
     currency: "VND",
     billRate: "",
     workerRate: "",
+    manualRateReason: "",
   };
 }
 
@@ -127,10 +131,12 @@ export function UrgentReconciliationPage(): React.JSX.Element {
     jobId: "",
     hours: "",
     reason: "",
+    eligibilityExceptionReason: "",
     useManualRate: false,
     currency: "VND",
     billRate: "",
     workerRate: "",
+    manualRateReason: "",
   });
   const [message, setMessage] = useState<string | null>(null);
 
@@ -215,6 +221,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
       }
       const manualRate: ManualRateOverrideRequest | null = finalDraft.useManualRate
         ? {
+            reason: finalDraft.manualRateReason.trim(),
             currency: finalDraft.currency.trim().toUpperCase(),
             bill_hourly_rate: finalDraft.billRate.trim(),
             worker_hourly_rate: finalDraft.workerRate.trim(),
@@ -225,6 +232,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
         job_id: finalDraft.jobId,
         worked_seconds: Math.round(Number(finalDraft.hours) * 3600),
         adjustment_reason: finalDraft.reason.trim() || null,
+        eligibility_exception_reason: finalDraft.eligibilityExceptionReason.trim() || null,
         manual_rate: manualRate,
       });
     },
@@ -516,6 +524,22 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                 </label>
               </div>
 
+              <label className="mt-4 block text-sm font-semibold text-slate-700">
+                Lý do ngoại lệ năng lực
+                <input
+                  className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5"
+                  disabled={selected.reconciliation_status === "reconciled"}
+                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void =>
+                    setFinalDraft((current: FinalDraft): FinalDraft => ({
+                      ...current,
+                      eligibilityExceptionReason: event.target.value,
+                    }))
+                  }
+                  placeholder="Bắt buộc nếu nhân viên chưa được cấu hình năng lực cho công việc này"
+                  value={finalDraft.eligibilityExceptionReason}
+                />
+              </label>
+
               <label className="mt-4 flex items-center gap-3 text-sm font-semibold text-slate-700">
                 <input
                   checked={finalDraft.useManualRate}
@@ -529,6 +553,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
               </label>
               {finalDraft.useManualRate ? (
                 <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                  <label className="text-sm font-semibold text-slate-700 sm:col-span-3">Lý do dùng giá thủ công<input className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5" onChange={(event: React.ChangeEvent<HTMLInputElement>): void => setFinalDraft((current: FinalDraft): FinalDraft => ({ ...current, manualRateReason: event.target.value }))} placeholder="Ví dụ: khách hàng xác nhận đơn giá ngoài bảng giá hiện hành" value={finalDraft.manualRateReason} /></label>
                   <label className="text-sm font-semibold text-slate-700">Tiền tệ<input className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 uppercase" maxLength={3} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => setFinalDraft((current: FinalDraft): FinalDraft => ({ ...current, currency: event.target.value }))} value={finalDraft.currency} /></label>
                   <label className="text-sm font-semibold text-slate-700">Đơn giá khách hàng<input className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5" inputMode="decimal" onChange={(event: React.ChangeEvent<HTMLInputElement>): void => setFinalDraft((current: FinalDraft): FinalDraft => ({ ...current, billRate: event.target.value }))} value={finalDraft.billRate} /></label>
                   <label className="text-sm font-semibold text-slate-700">Đơn giá trả nhân viên<input className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5" inputMode="decimal" onChange={(event: React.ChangeEvent<HTMLInputElement>): void => setFinalDraft((current: FinalDraft): FinalDraft => ({ ...current, workerRate: event.target.value }))} value={finalDraft.workerRate} /></label>

@@ -216,7 +216,7 @@ fn staffing_work_status(operation: &str, user: &AuthenticatedUser, error: Staffi
         StaffingError::NotFound => StatusCode::NOT_FOUND,
         StaffingError::Conflict => StatusCode::CONFLICT,
         StaffingError::InvalidInput(_) => StatusCode::BAD_REQUEST,
-        StaffingError::MissingRateAgreement => StatusCode::UNPROCESSABLE_ENTITY,
+        StaffingError::MissingStaffingRate => StatusCode::UNPROCESSABLE_ENTITY,
         StaffingError::BackendUnavailable => StatusCode::SERVICE_UNAVAILABLE,
     };
 

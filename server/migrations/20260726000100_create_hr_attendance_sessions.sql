@@ -58,12 +58,15 @@ VALUES
     ('hr.attendance.self.manage', 'Check in and check out own attendance sessions');
 
 INSERT INTO role_permissions (role_code, permission_code)
-SELECT 'tenant_owner', code
-FROM permissions
-WHERE code LIKE 'hr.attendance.%';
+SELECT role.code, permission.code
+FROM roles AS role
+CROSS JOIN permissions AS permission
+WHERE role.code IN ('owner', 'director')
+  AND permission.code = 'hr.attendance.read';
 
 INSERT INTO role_permissions (role_code, permission_code)
 VALUES
+    ('manager', 'hr.attendance.read'),
     ('supervisor', 'hr.attendance.read'),
-    ('employee', 'hr.attendance.self.read'),
-    ('employee', 'hr.attendance.self.manage');
+    ('staff', 'hr.attendance.self.read'),
+    ('staff', 'hr.attendance.self.manage');

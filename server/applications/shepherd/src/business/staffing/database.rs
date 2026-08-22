@@ -9,9 +9,9 @@ use uuid::Uuid;
 use super::core::{
     BusinessRecordStatus, Customer, CustomerFacility, CustomerFacilityInput, CustomerInput, CustomerWorkRecord,
     CustomerWorkRecordInput, ManualRateOverride, RateSource, ReconciliationStatus, ShiftAssignment,
-    ShiftAssignmentInput, ShiftAssignmentStatus, StaffingCandidate, StaffingError, StaffingRateAgreement,
-    StaffingRateAgreementInput, StaffingReconciliation, StaffingRepo, StaffingShift, StaffingShiftInput,
-    StaffingShiftStatus,
+    ShiftAssignmentInput, ShiftAssignmentStatus, StaffingCandidate, StaffingEligibility, StaffingEligibilityInput,
+    StaffingError, StaffingRate, StaffingRateInput, StaffingRateKind, StaffingReconciliation, StaffingRepo,
+    StaffingShift, StaffingShiftInput, StaffingShiftStatus,
 };
 
 pub struct StaffingProvider {
@@ -111,17 +111,17 @@ impl TryFrom<CustomerFacilityRow> for CustomerFacility {
 }
 
 #[derive(Debug)]
-struct RateAgreementRow {
+struct StaffingRateRow {
     id: Uuid,
+    rate_kind: String,
     code: String,
     name: String,
-    customer_id: Uuid,
+    customer_id: Option<Uuid>,
     customer_facility_id: Option<Uuid>,
     employee_id: Option<Uuid>,
     job_id: Uuid,
     currency: String,
-    bill_hourly_rate: String,
-    worker_hourly_rate: String,
+    hourly_rate: String,
     priority: i16,
     effective_from: NaiveDate,
     effective_to: Option<NaiveDate>,
@@ -129,10 +129,12 @@ struct RateAgreementRow {
     created_at: DateTime<Utc>,
 }
 
-impl From<RateAgreementRow> for StaffingRateAgreement {
-    fn from(row: RateAgreementRow) -> Self {
+impl From<StaffingRateRow> for StaffingRate {
+    fn from(row: StaffingRateRow) -> Self {
         Self {
             id: row.id,
+            rate_kind: StaffingRateKind::from_code(&row.rate_kind)
+                .expect("database staffing rate kind must satisfy its check constraint"),
             code: row.code,
             name: row.name,
             customer_id: row.customer_id,
@@ -140,12 +142,36 @@ impl From<RateAgreementRow> for StaffingRateAgreement {
             employee_id: row.employee_id,
             job_id: row.job_id,
             currency: row.currency,
-            bill_hourly_rate: row.bill_hourly_rate,
-            worker_hourly_rate: row.worker_hourly_rate,
+            hourly_rate: row.hourly_rate,
             priority: row.priority,
             effective_from: row.effective_from,
             effective_to: row.effective_to,
             is_active: row.is_active,
+            created_at: row.created_at,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct StaffingEligibilityRow {
+    id: Uuid,
+    employee_id: Uuid,
+    job_id: Uuid,
+    effective_from: NaiveDate,
+    effective_to: Option<NaiveDate>,
+    notes: Option<String>,
+    created_at: DateTime<Utc>,
+}
+
+impl From<StaffingEligibilityRow> for StaffingEligibility {
+    fn from(row: StaffingEligibilityRow) -> Self {
+        Self {
+            id: row.id,
+            employee_id: row.employee_id,
+            job_id: row.job_id,
+            effective_from: row.effective_from,
+            effective_to: row.effective_to,
+            notes: row.notes,
             created_at: row.created_at,
         }
     }
@@ -191,11 +217,14 @@ struct AssignmentRow {
     id: Uuid,
     shift_id: Uuid,
     employee_id: Uuid,
-    rate_agreement_id: Option<Uuid>,
+    customer_bill_rate_id: Option<Uuid>,
+    worker_pay_rate_id: Option<Uuid>,
     rate_source: String,
+    manual_rate_reason: Option<String>,
     currency: String,
     bill_hourly_rate_snapshot: String,
     worker_hourly_rate_snapshot: String,
+    eligibility_exception_reason: Option<String>,
     status: String,
     worked_seconds: Option<i64>,
     observed_worked_seconds: Option<i64>,
@@ -215,11 +244,14 @@ impl TryFrom<AssignmentRow> for ShiftAssignment {
             id: row.id,
             shift_id: row.shift_id,
             employee_id: row.employee_id,
-            rate_agreement_id: row.rate_agreement_id,
+            customer_bill_rate_id: row.customer_bill_rate_id,
+            worker_pay_rate_id: row.worker_pay_rate_id,
             rate_source: RateSource::from_code(&row.rate_source).ok_or(StaffingError::BackendUnavailable)?,
+            manual_rate_reason: row.manual_rate_reason,
             currency: row.currency,
             bill_hourly_rate_snapshot: row.bill_hourly_rate_snapshot,
             worker_hourly_rate_snapshot: row.worker_hourly_rate_snapshot,
+            eligibility_exception_reason: row.eligibility_exception_reason,
             observed_worked_seconds: row.observed_worked_seconds,
             approval_adjustment_reason: row.approval_adjustment_reason,
             status: ShiftAssignmentStatus::from_code(&row.status).ok_or(StaffingError::BackendUnavailable)?,
@@ -273,6 +305,7 @@ impl From<CandidateRow> for StaffingCandidate {
 struct CustomerWorkRecordRow {
     id: Uuid,
     assignment_id: Uuid,
+    confirmed_customer_facility_id: Uuid,
     confirmed_started_at: DateTime<Utc>,
     confirmed_ended_at: DateTime<Utc>,
     confirmed_worked_seconds: i64,
@@ -286,6 +319,7 @@ impl From<CustomerWorkRecordRow> for CustomerWorkRecord {
         Self {
             id: row.id,
             assignment_id: row.assignment_id,
+            confirmed_customer_facility_id: row.confirmed_customer_facility_id,
             confirmed_started_at: row.confirmed_started_at,
             confirmed_ended_at: row.confirmed_ended_at,
             confirmed_worked_seconds: row.confirmed_worked_seconds,
@@ -300,6 +334,8 @@ impl From<CustomerWorkRecordRow> for CustomerWorkRecord {
 struct ReconciliationRow {
     assignment_id: Uuid,
     shift_id: Uuid,
+    customer_id: Uuid,
+    customer_facility_id: Uuid,
     employee_id: Uuid,
     employee_code: String,
     employee_name: String,
@@ -312,6 +348,7 @@ struct ReconciliationRow {
     staff_ended_at: Option<DateTime<Utc>>,
     staff_worked_seconds: i64,
     customer_record_id: Option<Uuid>,
+    confirmed_customer_facility_id: Option<Uuid>,
     customer_started_at: Option<DateTime<Utc>>,
     customer_ended_at: Option<DateTime<Utc>>,
     customer_worked_seconds: Option<i64>,
@@ -326,8 +363,7 @@ struct ReconciliationRow {
 struct ResolvedRateRow {
     id: Uuid,
     currency: String,
-    bill_hourly_rate: String,
-    worker_hourly_rate: String,
+    hourly_rate: String,
 }
 
 #[async_trait]
@@ -390,6 +426,51 @@ impl StaffingRepo for StaffingProvider {
         info!(
             "Staffing customer created: tenant_id={} customer_id={} audit_account_id={}",
             tenant_id, customer_id, audit_account_id
+        );
+        Customer::try_from(row)
+    }
+
+    async fn update_customer(
+        &self,
+        tenant_id: Uuid,
+        customer_id: Uuid,
+        input: &CustomerInput,
+        audit_account_id: Uuid,
+    ) -> Result<Customer, StaffingError> {
+        let row: CustomerRow = self
+            .db
+            .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
+                sqlx::query_as!(
+                    CustomerRow,
+                    r#"
+                    UPDATE business_customers
+                    SET code = $3,
+                        name = $4,
+                        billing_email = $5,
+                        status = $6,
+                        updated_at = CURRENT_TIMESTAMP,
+                        updated_by_account_id = $7
+                    WHERE tenant_id = $1 AND id = $2
+                    RETURNING id, code, name, billing_email, status, created_at, updated_at
+                    "#,
+                    tenant_id,
+                    customer_id,
+                    input.code,
+                    input.name,
+                    input.billing_email,
+                    input.status.as_code(),
+                    audit_account_id,
+                )
+                .fetch_one(connection)
+                .await
+            })
+            .await
+            .map_err(|error: TenantDbErr| tenant_mutation_failure("update customer", tenant_id, error))?;
+        info!(
+            tenant_id = %tenant_id,
+            customer_id = %customer_id,
+            audit_account_id = %audit_account_id,
+            "Staffing customer updated"
         );
         Customer::try_from(row)
     }
@@ -460,20 +541,20 @@ impl StaffingRepo for StaffingProvider {
         CustomerFacility::try_from(row)
     }
 
-    async fn list_rate_agreements(&self, tenant_id: Uuid) -> Result<Vec<StaffingRateAgreement>, StaffingError> {
-        let rows: Vec<RateAgreementRow> = self
+    async fn list_rates(&self, tenant_id: Uuid) -> Result<Vec<StaffingRate>, StaffingError> {
+        let rows: Vec<StaffingRateRow> = self
             .db
             .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
                 sqlx::query_as!(
-                    RateAgreementRow,
+                    StaffingRateRow,
                     r#"
-                    SELECT id, code, name, customer_id, customer_facility_id, employee_id, job_id, currency,
-                           bill_hourly_rate::TEXT AS "bill_hourly_rate!",
-                           worker_hourly_rate::TEXT AS "worker_hourly_rate!",
+                    SELECT id, rate_kind, code, name, customer_id, customer_facility_id,
+                           employee_id, job_id, currency,
+                           hourly_rate::TEXT AS "hourly_rate!",
                            priority, effective_from, effective_to, is_active, created_at
-                    FROM business_staffing_rate_agreements
+                    FROM business_staffing_rates
                     WHERE tenant_id = $1
-                    ORDER BY lower(name), effective_from DESC, priority DESC
+                    ORDER BY rate_kind, lower(name), effective_from DESC, priority DESC
                     "#,
                     tenant_id,
                 )
@@ -481,39 +562,40 @@ impl StaffingRepo for StaffingProvider {
                 .await
             })
             .await
-            .map_err(|error: TenantDbErr| tenant_database_failure("list staffing rate agreements", tenant_id, error))?;
-        Ok(rows.into_iter().map(StaffingRateAgreement::from).collect())
+            .map_err(|error: TenantDbErr| tenant_database_failure("list staffing rates", tenant_id, error))?;
+        Ok(rows.into_iter().map(StaffingRate::from).collect())
     }
 
-    async fn create_rate_agreement(
+    async fn create_rate(
         &self,
         tenant_id: Uuid,
-        agreement_id: Uuid,
-        input: &StaffingRateAgreementInput,
+        rate_id: Uuid,
+        input: &StaffingRateInput,
         audit_account_id: Uuid,
-    ) -> Result<StaffingRateAgreement, StaffingError> {
-        let row: RateAgreementRow = self
+    ) -> Result<StaffingRate, StaffingError> {
+        let row: StaffingRateRow = self
             .db
             .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
                 sqlx::query_as!(
-                    RateAgreementRow,
+                    StaffingRateRow,
                     r#"
-                    INSERT INTO business_staffing_rate_agreements (
-                        id, tenant_id, code, name, customer_id, customer_facility_id, employee_id, job_id,
-                        currency, bill_hourly_rate, worker_hourly_rate, priority, effective_from, effective_to,
-                        is_active, created_by_account_id
+                    INSERT INTO business_staffing_rates (
+                        id, tenant_id, rate_kind, code, name, customer_id, customer_facility_id,
+                        employee_id, job_id, currency, hourly_rate, priority, effective_from,
+                        effective_to, is_active, created_by_account_id
                     )
                     VALUES (
-                        $1, $2, $3, $4, $5, $6, $7, $8, $9,
-                        $10::TEXT::NUMERIC, $11::TEXT::NUMERIC, $12, $13, $14, $15, $16
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                        $11::TEXT::NUMERIC, $12, $13, $14, $15, $16
                     )
-                    RETURNING id, code, name, customer_id, customer_facility_id, employee_id, job_id, currency,
-                              bill_hourly_rate::TEXT AS "bill_hourly_rate!",
-                              worker_hourly_rate::TEXT AS "worker_hourly_rate!",
+                    RETURNING id, rate_kind, code, name, customer_id, customer_facility_id,
+                              employee_id, job_id, currency,
+                              hourly_rate::TEXT AS "hourly_rate!",
                               priority, effective_from, effective_to, is_active, created_at
                     "#,
-                    agreement_id,
+                    rate_id,
                     tenant_id,
+                    input.rate_kind.as_code(),
                     input.code,
                     input.name,
                     input.customer_id,
@@ -521,8 +603,7 @@ impl StaffingRepo for StaffingProvider {
                     input.employee_id,
                     input.job_id,
                     input.currency,
-                    input.bill_hourly_rate,
-                    input.worker_hourly_rate,
+                    input.hourly_rate,
                     input.priority,
                     input.effective_from,
                     input.effective_to,
@@ -533,10 +614,75 @@ impl StaffingRepo for StaffingProvider {
                 .await
             })
             .await
-            .map_err(|error: TenantDbErr| {
-                tenant_mutation_failure("create staffing rate agreement", tenant_id, error)
-            })?;
+            .map_err(|error: TenantDbErr| tenant_mutation_failure("create staffing rate", tenant_id, error))?;
         Ok(row.into())
+    }
+
+    async fn list_eligibilities(&self, tenant_id: Uuid) -> Result<Vec<StaffingEligibility>, StaffingError> {
+        let rows: Vec<StaffingEligibilityRow> = self
+            .db
+            .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
+                sqlx::query_as!(
+                    StaffingEligibilityRow,
+                    r#"
+                    SELECT id, employee_id, job_id, effective_from, effective_to, notes, created_at
+                    FROM business_staffing_employee_eligibilities
+                    WHERE tenant_id = $1
+                    ORDER BY effective_from DESC, employee_id, job_id, id
+                    "#,
+                    tenant_id,
+                )
+                .fetch_all(connection)
+                .await
+            })
+            .await
+            .map_err(|error: TenantDbErr| tenant_database_failure("list staffing eligibilities", tenant_id, error))?;
+        Ok(rows.into_iter().map(StaffingEligibility::from).collect())
+    }
+
+    async fn create_eligibility(
+        &self,
+        tenant_id: Uuid,
+        eligibility_id: Uuid,
+        input: &StaffingEligibilityInput,
+        audit_account_id: Uuid,
+    ) -> Result<StaffingEligibility, StaffingError> {
+        let row: Option<StaffingEligibilityRow> = self
+            .db
+            .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
+                sqlx::query_as!(
+                    StaffingEligibilityRow,
+                    r#"
+                    INSERT INTO business_staffing_employee_eligibilities (
+                        id, tenant_id, employee_id, job_id, effective_from, effective_to,
+                        notes, created_by_account_id
+                    )
+                    SELECT $1, $2, employee.id, job.id, $5, $6, $7, $8
+                    FROM hr_employees AS employee
+                    INNER JOIN hr_jobs AS job
+                        ON job.tenant_id = employee.tenant_id
+                       AND job.id = $4
+                       AND job.status = 'active'
+                    WHERE employee.tenant_id = $2
+                      AND employee.id = $3
+                      AND employee.status = 'active'
+                    RETURNING id, employee_id, job_id, effective_from, effective_to, notes, created_at
+                    "#,
+                    eligibility_id,
+                    tenant_id,
+                    input.employee_id,
+                    input.job_id,
+                    input.effective_from,
+                    input.effective_to,
+                    input.notes,
+                    audit_account_id,
+                )
+                .fetch_optional(connection)
+                .await
+            })
+            .await
+            .map_err(|error: TenantDbErr| tenant_mutation_failure("create staffing eligibility", tenant_id, error))?;
+        row.map(StaffingEligibility::from).ok_or(StaffingError::NotFound)
     }
 
     async fn list_shifts(&self, tenant_id: Uuid) -> Result<Vec<StaffingShift>, StaffingError> {
@@ -650,14 +796,13 @@ impl StaffingRepo for StaffingProvider {
             )
             SELECT employee.id AS employee_id, employee.employee_code, employee.display_name,
                    EXISTS (
-                       SELECT 1 FROM hr_employee_assignments AS employee_assignment
+                       SELECT 1 FROM business_staffing_employee_eligibilities AS employee_assignment
                        WHERE employee_assignment.tenant_id = employee.tenant_id
                          AND employee_assignment.employee_id = employee.id
                          AND employee_assignment.job_id = target.job_id
-                         AND employee_assignment.is_primary
-                         AND employee_assignment.date_start <= target.work_date
-                         AND (employee_assignment.date_end IS NULL
-                              OR employee_assignment.date_end >= target.work_date)
+                         AND employee_assignment.effective_from <= target.work_date
+                         AND (employee_assignment.effective_to IS NULL
+                              OR employee_assignment.effective_to >= target.work_date)
                    ) AS "suitable!",
                    NOT EXISTS (
                        SELECT 1
@@ -780,13 +925,12 @@ impl StaffingRepo for StaffingProvider {
         let employee_is_suitable: bool = sqlx::query_scalar!(
             r#"
             SELECT EXISTS (
-                SELECT 1 FROM hr_employee_assignments
+                SELECT 1 FROM business_staffing_employee_eligibilities
                 WHERE tenant_id = $1
                   AND employee_id = $2
                   AND job_id = $3
-                  AND is_primary
-                  AND date_start <= $4
-                  AND (date_end IS NULL OR date_end >= $4)
+                  AND effective_from <= $4
+                  AND (effective_to IS NULL OR effective_to >= $4)
             ) AS "exists!"
             "#,
             tenant_id,
@@ -832,42 +976,52 @@ impl StaffingRepo for StaffingProvider {
             return Err(StaffingError::Conflict);
         }
 
-        let (rate_agreement_id, rate_source, currency, bill_rate, worker_rate) = match &input.manual_rate {
+        let (
+            customer_bill_rate_id,
+            worker_pay_rate_id,
+            rate_source,
+            manual_rate_reason,
+            currency,
+            bill_rate,
+            worker_rate,
+        ): (Option<Uuid>, Option<Uuid>, &str, Option<&str>, String, String, String) = match &input.manual_rate {
             Some(ManualRateOverride {
+                reason,
                 currency,
                 bill_hourly_rate,
                 worker_hourly_rate,
             }) => (
                 None,
+                None,
                 "manual",
+                Some(reason.as_str()),
                 currency.clone(),
                 bill_hourly_rate.clone(),
                 worker_hourly_rate.clone(),
             ),
             None => {
-                let rate: ResolvedRateRow = sqlx::query_as!(
+                let customer_bill_rate: ResolvedRateRow = sqlx::query_as!(
                     ResolvedRateRow,
                     r#"
-                    SELECT id, currency,
-                           bill_hourly_rate::TEXT AS "bill_hourly_rate!",
-                           worker_hourly_rate::TEXT AS "worker_hourly_rate!"
-                    FROM business_staffing_rate_agreements
-                    WHERE tenant_id = $1
-                      AND customer_id = $2
-                      AND job_id = $3
-                      AND (customer_facility_id IS NULL OR customer_facility_id = $4)
-                      AND (employee_id IS NULL OR employee_id = $5)
-                      AND effective_from <= $6
-                      AND (effective_to IS NULL OR effective_to >= $6)
-                      AND is_active
-                    ORDER BY
-                        (employee_id IS NOT NULL) DESC,
-                        (customer_facility_id IS NOT NULL) DESC,
-                        priority DESC,
-                        effective_from DESC,
-                        id
-                    LIMIT 1
-                    "#,
+                        SELECT id, currency, hourly_rate::TEXT AS "hourly_rate!"
+                        FROM business_staffing_rates
+                        WHERE tenant_id = $1
+                          AND rate_kind = 'customer_bill'
+                          AND customer_id = $2
+                          AND job_id = $3
+                          AND (customer_facility_id IS NULL OR customer_facility_id = $4)
+                          AND (employee_id IS NULL OR employee_id = $5)
+                          AND effective_from <= $6
+                          AND (effective_to IS NULL OR effective_to >= $6)
+                          AND is_active
+                        ORDER BY
+                            (employee_id IS NOT NULL) DESC,
+                            (customer_facility_id IS NOT NULL) DESC,
+                            priority DESC,
+                            effective_from DESC,
+                            id
+                        LIMIT 1
+                        "#,
                     tenant_id,
                     shift.customer_id,
                     shift.job_id,
@@ -877,14 +1031,64 @@ impl StaffingRepo for StaffingProvider {
                 )
                 .fetch_optional(transaction.connection())
                 .await
-                .map_err(|error| database_failure("resolve staffing rate", tenant_id, error))?
-                .ok_or(StaffingError::MissingRateAgreement)?;
+                .map_err(|error| database_failure("resolve customer bill rate", tenant_id, error))?
+                .ok_or(StaffingError::MissingStaffingRate)?;
+                let worker_pay_rate: ResolvedRateRow = sqlx::query_as!(
+                    ResolvedRateRow,
+                    r#"
+                        SELECT id, currency, hourly_rate::TEXT AS "hourly_rate!"
+                        FROM business_staffing_rates
+                        WHERE tenant_id = $1
+                          AND rate_kind = 'worker_pay'
+                          AND (customer_id IS NULL OR customer_id = $2)
+                          AND job_id = $3
+                          AND (customer_facility_id IS NULL OR customer_facility_id = $4)
+                          AND (employee_id IS NULL OR employee_id = $5)
+                          AND effective_from <= $6
+                          AND (effective_to IS NULL OR effective_to >= $6)
+                          AND is_active
+                        ORDER BY
+                            (employee_id IS NOT NULL) DESC,
+                            (customer_facility_id IS NOT NULL) DESC,
+                            (customer_id IS NOT NULL) DESC,
+                            priority DESC,
+                            effective_from DESC,
+                            id
+                        LIMIT 1
+                        "#,
+                    tenant_id,
+                    shift.customer_id,
+                    shift.job_id,
+                    shift.customer_facility_id,
+                    input.employee_id,
+                    shift.work_date,
+                )
+                .fetch_optional(transaction.connection())
+                .await
+                .map_err(|error| database_failure("resolve worker pay rate", tenant_id, error))?
+                .ok_or(StaffingError::MissingStaffingRate)?;
+                if customer_bill_rate.currency != worker_pay_rate.currency {
+                    warn!(
+                        operation = "create_staffing_shift_assignment",
+                        tenant_id = %tenant_id,
+                        shift_id = %shift_id,
+                        employee_id = %input.employee_id,
+                        customer_bill_currency = %customer_bill_rate.currency,
+                        worker_pay_currency = %worker_pay_rate.currency,
+                        "Staffing customer bill and worker pay rates use different currencies"
+                    );
+                    return Err(StaffingError::InvalidInput(
+                        "customer bill and worker pay rates must use the same currency",
+                    ));
+                }
                 (
-                    Some(rate.id),
-                    "agreement",
-                    rate.currency,
-                    rate.bill_hourly_rate,
-                    rate.worker_hourly_rate,
+                    Some(customer_bill_rate.id),
+                    Some(worker_pay_rate.id),
+                    "configured",
+                    None,
+                    customer_bill_rate.currency,
+                    customer_bill_rate.hourly_rate,
+                    worker_pay_rate.hourly_rate,
                 )
             }
         };
@@ -893,14 +1097,17 @@ impl StaffingRepo for StaffingProvider {
             AssignmentRow,
             r#"
             INSERT INTO business_shift_assignments (
-                id, tenant_id, shift_id, employee_id, rate_agreement_id, rate_source, currency,
+                id, tenant_id, shift_id, employee_id, customer_bill_rate_id, worker_pay_rate_id, rate_source, manual_rate_reason, currency,
                 bill_hourly_rate_snapshot, worker_hourly_rate_snapshot, created_by_account_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::TEXT::NUMERIC, $9::TEXT::NUMERIC, $10)
-            RETURNING id, shift_id, employee_id, rate_agreement_id, rate_source, currency,
+            VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9,
+                $10::TEXT::NUMERIC, $11::TEXT::NUMERIC, $12
+            )
+            RETURNING id, shift_id, employee_id, customer_bill_rate_id, worker_pay_rate_id, rate_source, manual_rate_reason, currency,
                       bill_hourly_rate_snapshot::TEXT AS "bill_hourly_rate_snapshot!",
                       worker_hourly_rate_snapshot::TEXT AS "worker_hourly_rate_snapshot!",
-                      status, worked_seconds,
+                      eligibility_exception_reason, status, worked_seconds,
                       observed_worked_seconds, approval_adjustment_reason,
                       customer_amount::TEXT AS customer_amount,
                       worker_amount::TEXT AS worker_amount,
@@ -911,8 +1118,10 @@ impl StaffingRepo for StaffingProvider {
             tenant_id,
             shift_id,
             input.employee_id,
-            rate_agreement_id,
+            customer_bill_rate_id,
+            worker_pay_rate_id,
             rate_source,
+            manual_rate_reason,
             currency,
             bill_rate,
             worker_rate,
@@ -968,11 +1177,14 @@ impl StaffingRepo for StaffingProvider {
             AssignmentRow,
             r#"
             WITH observed AS (
-                SELECT COALESCE(SUM(worked_seconds), 0)::BIGINT AS total
+                SELECT MIN(started_at) FILTER (WHERE ended_at IS NOT NULL) AS started_at,
+                       MAX(ended_at) AS ended_at,
+                       COALESCE(SUM(worked_seconds), 0)::BIGINT AS total
                 FROM business_shift_work_sessions
                 WHERE tenant_id = $1 AND assignment_id = $2 AND ended_at IS NOT NULL
             ), customer AS (
-                SELECT confirmed_worked_seconds AS total
+                SELECT confirmed_customer_facility_id, confirmed_started_at,
+                       confirmed_ended_at, confirmed_worked_seconds AS total
                 FROM business_customer_work_records
                 WHERE tenant_id = $1 AND assignment_id = $2
             )
@@ -1011,14 +1223,23 @@ impl StaffingRepo for StaffingProvider {
               )
               AND (
                   (COALESCE($3::BIGINT, observed.total) = observed.total
-                      AND observed.total = customer.total)
+                      AND observed.total = customer.total
+                      AND observed.started_at = customer.confirmed_started_at
+                      AND observed.ended_at = customer.confirmed_ended_at
+                      AND customer.confirmed_customer_facility_id = (
+                          SELECT shift.customer_facility_id
+                          FROM business_staffing_shifts AS shift
+                          WHERE shift.tenant_id = assignment.tenant_id
+                            AND shift.id = assignment.shift_id
+                      ))
                   OR $4::TEXT IS NOT NULL
               )
             RETURNING assignment.id, assignment.shift_id, assignment.employee_id,
-                      assignment.rate_agreement_id, assignment.rate_source, assignment.currency,
+                      assignment.customer_bill_rate_id, assignment.worker_pay_rate_id, assignment.rate_source,
+                      assignment.manual_rate_reason, assignment.currency,
                       assignment.bill_hourly_rate_snapshot::TEXT AS "bill_hourly_rate_snapshot!",
                       assignment.worker_hourly_rate_snapshot::TEXT AS "worker_hourly_rate_snapshot!",
-                      assignment.status, assignment.worked_seconds, assignment.observed_worked_seconds,
+                      assignment.eligibility_exception_reason, assignment.status, assignment.worked_seconds, assignment.observed_worked_seconds,
                       assignment.approval_adjustment_reason,
                       assignment.customer_amount::TEXT AS customer_amount,
                       assignment.worker_amount::TEXT AS worker_amount,
@@ -1090,7 +1311,8 @@ impl StaffingRepo for StaffingProvider {
                 sqlx::query_as!(
                     ReconciliationRow,
                     r#"
-            SELECT assignment.id AS assignment_id, assignment.shift_id, assignment.employee_id,
+            SELECT assignment.id AS assignment_id, assignment.shift_id,
+                   shift.customer_id, shift.customer_facility_id, assignment.employee_id,
                    employee.employee_code, employee.display_name AS employee_name,
                    customer.name AS customer_name, facility.name AS customer_facility_name,
                    shift.starts_at AS scheduled_starts_at, shift.ends_at AS scheduled_ends_at,
@@ -1098,6 +1320,7 @@ impl StaffingRepo for StaffingProvider {
                    work.staff_started_at, work.staff_ended_at,
                    work.staff_worked_seconds AS "staff_worked_seconds!",
                    customer_record.id AS "customer_record_id?",
+                   customer_record.confirmed_customer_facility_id AS "confirmed_customer_facility_id?",
                    customer_record.confirmed_started_at AS "customer_started_at?",
                    customer_record.confirmed_ended_at AS "customer_ended_at?",
                    customer_record.confirmed_worked_seconds AS "customer_worked_seconds?",
@@ -1145,24 +1368,31 @@ impl StaffingRepo for StaffingProvider {
                     .ok_or(StaffingError::BackendUnavailable)?;
                 let customer_record: Option<CustomerWorkRecord> = match (
                     row.customer_record_id,
+                    row.confirmed_customer_facility_id,
                     row.customer_started_at,
                     row.customer_ended_at,
                     row.customer_worked_seconds,
                     row.customer_updated_at,
                 ) {
-                    (Some(id), Some(started_at), Some(ended_at), Some(worked_seconds), Some(updated_at)) => {
-                        Some(CustomerWorkRecord {
-                            id,
-                            assignment_id: row.assignment_id,
-                            confirmed_started_at: started_at,
-                            confirmed_ended_at: ended_at,
-                            confirmed_worked_seconds: worked_seconds,
-                            customer_reference: row.customer_reference,
-                            notes: row.customer_notes,
-                            updated_at,
-                        })
-                    }
-                    (None, None, None, None, None) => None,
+                    (
+                        Some(id),
+                        Some(confirmed_customer_facility_id),
+                        Some(started_at),
+                        Some(ended_at),
+                        Some(worked_seconds),
+                        Some(updated_at),
+                    ) => Some(CustomerWorkRecord {
+                        id,
+                        assignment_id: row.assignment_id,
+                        confirmed_customer_facility_id,
+                        confirmed_started_at: started_at,
+                        confirmed_ended_at: ended_at,
+                        confirmed_worked_seconds: worked_seconds,
+                        customer_reference: row.customer_reference,
+                        notes: row.customer_notes,
+                        updated_at,
+                    }),
+                    (None, None, None, None, None, None) => None,
                     _ => return Err(StaffingError::BackendUnavailable),
                 };
                 let reconciliation_status: ReconciliationStatus =
@@ -1172,10 +1402,16 @@ impl StaffingRepo for StaffingProvider {
                         ReconciliationStatus::PendingStaff
                     } else if customer_record.is_none() {
                         ReconciliationStatus::PendingCustomer
-                    } else if customer_record
-                        .as_ref()
-                        .is_some_and(|record| record.confirmed_worked_seconds == row.staff_worked_seconds)
-                    {
+                    } else if customer_record.as_ref().is_some_and(|record: &CustomerWorkRecord| {
+                        record.confirmed_customer_facility_id == row.customer_facility_id
+                            && row
+                                .staff_started_at
+                                .is_some_and(|started_at: DateTime<Utc>| record.confirmed_started_at == started_at)
+                            && row
+                                .staff_ended_at
+                                .is_some_and(|ended_at: DateTime<Utc>| record.confirmed_ended_at == ended_at)
+                            && record.confirmed_worked_seconds == row.staff_worked_seconds
+                    }) {
                         ReconciliationStatus::Matched
                     } else {
                         ReconciliationStatus::Discrepancy
@@ -1183,6 +1419,8 @@ impl StaffingRepo for StaffingProvider {
                 Ok(StaffingReconciliation {
                     assignment_id: row.assignment_id,
                     shift_id: row.shift_id,
+                    customer_id: row.customer_id,
+                    customer_facility_id: row.customer_facility_id,
                     employee_id: row.employee_id,
                     employee_code: row.employee_code,
                     employee_name: row.employee_name,
@@ -1218,28 +1456,32 @@ impl StaffingRepo for StaffingProvider {
                     CustomerWorkRecordRow,
                     r#"
                     INSERT INTO business_customer_work_records (
-                        id, tenant_id, assignment_id, confirmed_started_at, confirmed_ended_at,
+                        id, tenant_id, assignment_id, confirmed_customer_facility_id,
+                        confirmed_started_at, confirmed_ended_at,
                         customer_reference, notes, recorded_by_account_id
                     )
-                    SELECT $1, $2, assignment.id, $4, $5, $6, $7, $8
+                    SELECT $1, $2, assignment.id, $4, $5, $6, $7, $8, $9
                     FROM business_shift_assignments AS assignment
                     WHERE assignment.tenant_id = $2
                       AND assignment.id = $3
                       AND assignment.status = 'assigned'
                     ON CONFLICT (tenant_id, assignment_id) DO UPDATE
-                    SET confirmed_started_at = EXCLUDED.confirmed_started_at,
+                    SET confirmed_customer_facility_id = EXCLUDED.confirmed_customer_facility_id,
+                        confirmed_started_at = EXCLUDED.confirmed_started_at,
                         confirmed_ended_at = EXCLUDED.confirmed_ended_at,
                         customer_reference = EXCLUDED.customer_reference,
                         notes = EXCLUDED.notes,
                         recorded_by_account_id = EXCLUDED.recorded_by_account_id,
                         updated_at = CURRENT_TIMESTAMP
-                    RETURNING id, assignment_id, confirmed_started_at, confirmed_ended_at,
+                    RETURNING id, assignment_id, confirmed_customer_facility_id,
+                              confirmed_started_at, confirmed_ended_at,
                               confirmed_worked_seconds AS "confirmed_worked_seconds!",
                               customer_reference, notes, updated_at
                     "#,
                     record_id,
                     tenant_id,
                     assignment_id,
+                    input.confirmed_customer_facility_id,
                     input.confirmed_started_at,
                     input.confirmed_ended_at,
                     input.customer_reference,
@@ -1266,10 +1508,10 @@ async fn list_assignments(
     sqlx::query_as!(
         AssignmentRow,
         r#"
-        SELECT id, shift_id, employee_id, rate_agreement_id, rate_source, currency,
+        SELECT id, shift_id, employee_id, customer_bill_rate_id, worker_pay_rate_id, rate_source, manual_rate_reason, currency,
                bill_hourly_rate_snapshot::TEXT AS "bill_hourly_rate_snapshot!",
                worker_hourly_rate_snapshot::TEXT AS "worker_hourly_rate_snapshot!",
-               status, worked_seconds,
+               eligibility_exception_reason, status, worked_seconds,
                observed_worked_seconds, approval_adjustment_reason,
                customer_amount::TEXT AS customer_amount,
                worker_amount::TEXT AS worker_amount,
@@ -1313,6 +1555,7 @@ fn tenant_mutation_failure(operation: &str, tenant_id: Uuid, error: TenantDbErr)
 
 fn mutation_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> StaffingError {
     let mapped: StaffingError = match &error {
+        sqlx::Error::RowNotFound => StaffingError::NotFound,
         sqlx::Error::Database(database_error) if database_error.is_unique_violation() => StaffingError::Conflict,
         sqlx::Error::Database(database_error)
             if database_error.is_check_violation() || database_error.is_foreign_key_violation() =>

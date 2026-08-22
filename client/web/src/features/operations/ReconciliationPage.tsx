@@ -5,7 +5,13 @@ import type { ReconciliationStatus, StaffingReconciliation } from "../../api/gen
 import { friendlyApiError } from "../../shared/api/client";
 import { formatDateTime, formatDuration } from "../../shared/lib/format";
 import { useAuth } from "../auth/AuthProvider";
-import { listReconciliations, operationsQueryKeys, reconcileAssignment, saveCustomerWorkRecord } from "./api";
+import {
+  listCustomerFacilities,
+  listReconciliations,
+  operationsQueryKeys,
+  reconcileAssignment,
+  saveCustomerWorkRecord,
+} from "./api";
 
 function localDateTime(value: string | null | undefined): string {
   if (!value) return "";
@@ -32,6 +38,7 @@ function statusTone(status: ReconciliationStatus): string {
 }
 
 interface EvidenceDraft {
+  facilityId: string;
   startedAt: string;
   endedAt: string;
   reference: string;
@@ -45,7 +52,13 @@ export function ReconciliationPage() {
   const canRead = permissions.includes("business.reconciliation.read");
   const canManage = permissions.includes("business.reconciliation.manage");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [evidence, setEvidence] = useState<EvidenceDraft>({ startedAt: "", endedAt: "", reference: "", notes: "" });
+  const [evidence, setEvidence] = useState<EvidenceDraft>({
+    facilityId: "",
+    startedAt: "",
+    endedAt: "",
+    reference: "",
+    notes: "",
+  });
   const [finalHours, setFinalHours] = useState("");
   const [resolution, setResolution] = useState("");
   const [message, setMessage] = useState<string | null>(null);
@@ -58,6 +71,15 @@ export function ReconciliationPage() {
   const items = useMemo(() => query.data ?? [], [query.data]);
   const selected = items.find((item) => item.assignment_id === selectedId) ?? null;
 
+  const facilityQuery = useQuery({
+    queryKey: selected
+      ? operationsQueryKeys.facilities(selected.customer_id)
+      : ["operations", "customers", "none", "facilities"],
+    queryFn: () => listCustomerFacilities(selected?.customer_id ?? ""),
+    enabled: canRead && Boolean(selected?.customer_id),
+  });
+  const customerFacilities = facilityQuery.data ?? [];
+
   useEffect(() => {
     if (!selectedId && items.length > 0) setSelectedId(items[0].assignment_id);
   }, [items, selectedId]);
@@ -65,6 +87,7 @@ export function ReconciliationPage() {
   useEffect(() => {
     if (!selected) return;
     setEvidence({
+      facilityId: selected.customer_record?.confirmed_customer_facility_id ?? "",
       startedAt: localDateTime(selected.customer_record?.confirmed_started_at),
       endedAt: localDateTime(selected.customer_record?.confirmed_ended_at),
       reference: selected.customer_record?.customer_reference ?? "",
@@ -78,6 +101,7 @@ export function ReconciliationPage() {
   const refresh = () => queryClient.invalidateQueries({ queryKey: operationsQueryKeys.reconciliations });
   const evidenceMutation = useMutation({
     mutationFn: () => saveCustomerWorkRecord(selectedId ?? "", {
+      confirmed_customer_facility_id: evidence.facilityId,
       confirmed_started_at: new Date(evidence.startedAt).toISOString(),
       confirmed_ended_at: new Date(evidence.endedAt).toISOString(),
       customer_reference: evidence.reference.trim() || null,
@@ -128,6 +152,20 @@ export function ReconciliationPage() {
 
         <form className="panel p-5 sm:p-6" onSubmit={saveEvidence}>
           <h3 className="font-bold text-slate-950">Xác nhận / bill từ khách hàng</h3><p className="mt-1 text-sm text-slate-500">Nhập đúng dữ liệu khách hàng cung cấp, không sửa dữ liệu nhân viên.</p>
+          <label className="mt-4 block text-sm font-semibold text-slate-700">Cơ sở khách hàng xác nhận
+            <select
+              className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5"
+              disabled={!canManage || selected.assignment_status === "approved" || facilityQuery.isPending}
+              required
+              value={evidence.facilityId}
+              onChange={(event) => setEvidence({ ...evidence, facilityId: event.target.value })}
+            >
+              <option value="">Chọn đúng cơ sở trên dữ liệu khách hàng</option>
+              {customerFacilities.map((facility) => (
+                <option key={facility.id} value={facility.id}>{facility.name}</option>
+              ))}
+            </select>
+          </label>
           <div className="mt-4 grid gap-3 sm:grid-cols-2"><label className="text-sm font-semibold text-slate-700">Bắt đầu xác nhận<input className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5" disabled={!canManage || selected.assignment_status === "approved"} required type="datetime-local" value={evidence.startedAt} onChange={(event) => setEvidence({ ...evidence, startedAt: event.target.value })} /></label><label className="text-sm font-semibold text-slate-700">Kết thúc xác nhận<input className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5" disabled={!canManage || selected.assignment_status === "approved"} required type="datetime-local" value={evidence.endedAt} onChange={(event) => setEvidence({ ...evidence, endedAt: event.target.value })} /></label></div>
           <label className="mt-3 block text-sm font-semibold text-slate-700">Mã bill / tham chiếu<input className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5" disabled={!canManage || selected.assignment_status === "approved"} value={evidence.reference} onChange={(event) => setEvidence({ ...evidence, reference: event.target.value })} /></label>
           <label className="mt-3 block text-sm font-semibold text-slate-700">Ghi chú<textarea className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5" disabled={!canManage || selected.assignment_status === "approved"} rows={2} value={evidence.notes} onChange={(event) => setEvidence({ ...evidence, notes: event.target.value })} /></label>

@@ -181,7 +181,7 @@ mod tests {
             sid: Uuid::new_v4().simple().to_string(),
             username: "alice".to_owned(),
             role: Role::Employee,
-            roles: vec!["employee".to_owned()],
+            roles: vec!["staff".to_owned()],
             ver: 1,
             permissions: vec!["auth.accounts.read".to_owned()],
         }

@@ -17,21 +17,21 @@ use crate::{AppContext, auth::AuthenticatedUser};
 use super::core::{
     BusinessRecordStatus, Customer, CustomerFacility, CustomerFacilityInput, CustomerInput, CustomerWorkRecord,
     CustomerWorkRecordInput, ManualRateOverride, ShiftAssignment, ShiftAssignmentInput, StaffingCandidate,
-    StaffingError, StaffingRateAgreement, StaffingRateAgreementInput, StaffingReconciliation, StaffingShift,
-    StaffingShiftInput,
+    StaffingEligibility, StaffingEligibilityInput, StaffingError, StaffingRate, StaffingRateInput, StaffingRateKind,
+    StaffingReconciliation, StaffingShift, StaffingShiftInput,
 };
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(optional_fields = nullable)]
-pub struct CustomerCreateRequest {
+pub struct CustomerUpsertRequest {
     pub code: String,
     pub name: String,
     pub billing_email: Option<String>,
     pub status: BusinessRecordStatus,
 }
 
-impl From<CustomerCreateRequest> for CustomerInput {
-    fn from(value: CustomerCreateRequest) -> Self {
+impl From<CustomerUpsertRequest> for CustomerInput {
+    fn from(value: CustomerUpsertRequest) -> Self {
         Self {
             code: value.code.trim().to_ascii_lowercase(),
             name: value.name.trim().to_owned(),
@@ -65,25 +65,26 @@ impl From<CustomerFacilityCreateRequest> for CustomerFacilityInput {
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(optional_fields = nullable)]
-pub struct StaffingRateAgreementCreateRequest {
+pub struct StaffingRateCreateRequest {
+    pub rate_kind: StaffingRateKind,
     pub code: String,
     pub name: String,
-    pub customer_id: Uuid,
+    pub customer_id: Option<Uuid>,
     pub customer_facility_id: Option<Uuid>,
     pub employee_id: Option<Uuid>,
     pub job_id: Uuid,
     pub currency: String,
-    pub bill_hourly_rate: String,
-    pub worker_hourly_rate: String,
+    pub hourly_rate: String,
     pub priority: i16,
     pub effective_from: NaiveDate,
     pub effective_to: Option<NaiveDate>,
     pub is_active: bool,
 }
 
-impl From<StaffingRateAgreementCreateRequest> for StaffingRateAgreementInput {
-    fn from(value: StaffingRateAgreementCreateRequest) -> Self {
+impl From<StaffingRateCreateRequest> for StaffingRateInput {
+    fn from(value: StaffingRateCreateRequest) -> Self {
         Self {
+            rate_kind: value.rate_kind,
             code: value.code.trim().to_ascii_lowercase(),
             name: value.name.trim().to_owned(),
             customer_id: value.customer_id,
@@ -91,12 +92,33 @@ impl From<StaffingRateAgreementCreateRequest> for StaffingRateAgreementInput {
             employee_id: value.employee_id,
             job_id: value.job_id,
             currency: value.currency.trim().to_ascii_uppercase(),
-            bill_hourly_rate: value.bill_hourly_rate.trim().to_owned(),
-            worker_hourly_rate: value.worker_hourly_rate.trim().to_owned(),
+            hourly_rate: value.hourly_rate.trim().to_owned(),
             priority: value.priority,
             effective_from: value.effective_from,
             effective_to: value.effective_to,
             is_active: value.is_active,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(optional_fields = nullable)]
+pub struct StaffingEligibilityCreateRequest {
+    pub employee_id: Uuid,
+    pub job_id: Uuid,
+    pub effective_from: NaiveDate,
+    pub effective_to: Option<NaiveDate>,
+    pub notes: Option<String>,
+}
+
+impl From<StaffingEligibilityCreateRequest> for StaffingEligibilityInput {
+    fn from(value: StaffingEligibilityCreateRequest) -> Self {
+        Self {
+            employee_id: value.employee_id,
+            job_id: value.job_id,
+            effective_from: value.effective_from,
+            effective_to: value.effective_to,
+            notes: normalize_optional(value.notes),
         }
     }
 }
@@ -129,6 +151,7 @@ impl From<StaffingShiftCreateRequest> for StaffingShiftInput {
 
 #[derive(Debug, Deserialize, TS)]
 pub struct ManualRateOverrideRequest {
+    pub reason: String,
     pub currency: String,
     pub bill_hourly_rate: String,
     pub worker_hourly_rate: String,
@@ -137,6 +160,7 @@ pub struct ManualRateOverrideRequest {
 impl From<ManualRateOverrideRequest> for ManualRateOverride {
     fn from(value: ManualRateOverrideRequest) -> Self {
         Self {
+            reason: value.reason.trim().to_owned(),
             currency: value.currency.trim().to_ascii_uppercase(),
             bill_hourly_rate: value.bill_hourly_rate.trim().to_owned(),
             worker_hourly_rate: value.worker_hourly_rate.trim().to_owned(),
@@ -170,6 +194,7 @@ pub struct ShiftAssignmentApproveRequest {
 #[derive(Debug, Deserialize, TS)]
 #[ts(optional_fields = nullable)]
 pub struct CustomerWorkRecordUpsertRequest {
+    pub confirmed_customer_facility_id: Uuid,
     pub confirmed_started_at: DateTime<Utc>,
     pub confirmed_ended_at: DateTime<Utc>,
     pub customer_reference: Option<String>,
@@ -179,6 +204,7 @@ pub struct CustomerWorkRecordUpsertRequest {
 impl From<CustomerWorkRecordUpsertRequest> for CustomerWorkRecordInput {
     fn from(value: CustomerWorkRecordUpsertRequest) -> Self {
         Self {
+            confirmed_customer_facility_id: value.confirmed_customer_facility_id,
             confirmed_started_at: value.confirmed_started_at,
             confirmed_ended_at: value.confirmed_ended_at,
             customer_reference: normalize_optional(value.customer_reference),
@@ -190,13 +216,15 @@ impl From<CustomerWorkRecordUpsertRequest> for CustomerWorkRecordInput {
 pub fn routes() -> Router<Arc<AppContext>> {
     Router::new()
         .route("/customers", get(list_customers).post(create_customer))
+        .route("/customers/{customer_id}", put(update_customer))
         .route(
             "/customers/{customer_id}/facilities",
             get(list_customer_facilities).post(create_customer_facility),
         )
+        .route("/staffing/rates", get(list_rates).post(create_rate))
         .route(
-            "/staffing/rate-agreements",
-            get(list_rate_agreements).post(create_rate_agreement),
+            "/staffing/eligibilities",
+            get(list_eligibilities).post(create_eligibility),
         )
         .route("/staffing/shifts", get(list_shifts).post(create_shift))
         .route(
@@ -236,7 +264,7 @@ pub async fn list_customers(
 pub async fn create_customer(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
-    Json(payload): Json<CustomerCreateRequest>,
+    Json(payload): Json<CustomerUpsertRequest>,
 ) -> Result<(StatusCode, Json<Customer>), StatusCode> {
     require_permission(&user, "business.customers.manage")?;
     let customer: Customer = context
@@ -246,6 +274,22 @@ pub async fn create_customer(
         .await
         .map_err(|error| staffing_status("create customer", &user, error))?;
     Ok((StatusCode::CREATED, Json(customer)))
+}
+
+pub async fn update_customer(
+    State(context): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(customer_id): Path<Uuid>,
+    Json(payload): Json<CustomerUpsertRequest>,
+) -> Result<Json<Customer>, StatusCode> {
+    require_permission(&user, "business.customers.manage")?;
+    let customer: Customer = context
+        .core
+        .staffing
+        .update_customer(user.tenant_id, customer_id, payload.into(), user.account_id)
+        .await
+        .map_err(|error: StaffingError| staffing_status("update customer", &user, error))?;
+    Ok(Json(customer))
 }
 
 pub async fn list_customer_facilities(
@@ -279,33 +323,62 @@ pub async fn create_customer_facility(
     Ok((StatusCode::CREATED, Json(facility)))
 }
 
-pub async fn list_rate_agreements(
+pub async fn list_rates(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
-) -> Result<Json<Vec<StaffingRateAgreement>>, StatusCode> {
+) -> Result<Json<Vec<StaffingRate>>, StatusCode> {
     require_permission(&user, "business.staffing_rates.read")?;
     context
         .core
         .staffing
-        .list_rate_agreements(user.tenant_id)
+        .list_rates(user.tenant_id)
         .await
         .map(Json)
-        .map_err(|error| staffing_status("list rate agreements", &user, error))
+        .map_err(|error| staffing_status("list staffing rates", &user, error))
 }
 
-pub async fn create_rate_agreement(
+pub async fn create_rate(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
-    Json(payload): Json<StaffingRateAgreementCreateRequest>,
-) -> Result<(StatusCode, Json<StaffingRateAgreement>), StatusCode> {
+    Json(payload): Json<StaffingRateCreateRequest>,
+) -> Result<(StatusCode, Json<StaffingRate>), StatusCode> {
     require_permission(&user, "business.staffing_rates.manage")?;
-    let agreement: StaffingRateAgreement = context
+    let rate: StaffingRate = context
         .core
         .staffing
-        .create_rate_agreement(user.tenant_id, payload.into(), user.account_id)
+        .create_rate(user.tenant_id, payload.into(), user.account_id)
         .await
-        .map_err(|error| staffing_status("create rate agreement", &user, error))?;
-    Ok((StatusCode::CREATED, Json(agreement)))
+        .map_err(|error| staffing_status("create staffing rate", &user, error))?;
+    Ok((StatusCode::CREATED, Json(rate)))
+}
+
+pub async fn list_eligibilities(
+    State(context): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> Result<Json<Vec<StaffingEligibility>>, StatusCode> {
+    require_permission(&user, "business.staffing_eligibility.read")?;
+    context
+        .core
+        .staffing
+        .list_eligibilities(user.tenant_id)
+        .await
+        .map(Json)
+        .map_err(|error: StaffingError| staffing_status("list staffing eligibilities", &user, error))
+}
+
+pub async fn create_eligibility(
+    State(context): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(payload): Json<StaffingEligibilityCreateRequest>,
+) -> Result<(StatusCode, Json<StaffingEligibility>), StatusCode> {
+    require_permission(&user, "business.staffing_eligibility.manage")?;
+    let eligibility: StaffingEligibility = context
+        .core
+        .staffing
+        .create_eligibility(user.tenant_id, payload.into(), user.account_id)
+        .await
+        .map_err(|error: StaffingError| staffing_status("create staffing eligibility", &user, error))?;
+    Ok((StatusCode::CREATED, Json(eligibility)))
 }
 
 pub async fn list_shifts(
@@ -485,7 +558,7 @@ fn staffing_status(operation: &str, user: &AuthenticatedUser, error: StaffingErr
             );
             StatusCode::BAD_REQUEST
         }
-        StaffingError::MissingRateAgreement => StatusCode::UNPROCESSABLE_ENTITY,
+        StaffingError::MissingStaffingRate => StatusCode::UNPROCESSABLE_ENTITY,
         StaffingError::BackendUnavailable => StatusCode::SERVICE_UNAVAILABLE,
     };
     if status.is_server_error() {

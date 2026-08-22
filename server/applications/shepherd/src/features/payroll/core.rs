@@ -226,6 +226,7 @@ pub enum PayrollError {
     Conflict,
     InvalidInput(&'static str),
     MissingCompensation,
+    OverlappingWorkSources,
     BackendUnavailable,
 }
 

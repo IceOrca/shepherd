@@ -345,16 +345,16 @@ VALUES
     ('business.urgent_work.peer_manage', 'Start and finish urgent work for coworkers');
 
 INSERT INTO role_permissions (role_code, permission_code)
-SELECT 'tenant_owner', code
-FROM permissions
-WHERE code LIKE 'business.staffing_work.%';
+SELECT role.code, 'business.staffing_work.read'
+FROM roles AS role
+WHERE role.code IN ('owner', 'director');
 
 INSERT INTO role_permissions (role_code, permission_code)
 VALUES
+    ('manager', 'business.staffing_work.read'),
     ('supervisor', 'business.staffing_work.read'),
-    ('supervisor', 'business.urgent_work.read'),
-    ('employee', 'business.staffing_work.self.read'),
-    ('employee', 'business.staffing_work.self.manage'),
-    ('employee', 'business.urgent_work.read'),
-    ('employee', 'business.urgent_work.start'),
-    ('employee', 'business.urgent_work.peer_manage');
+    ('staff', 'business.staffing_work.self.read'),
+    ('staff', 'business.staffing_work.self.manage'),
+    ('staff', 'business.urgent_work.read'),
+    ('staff', 'business.urgent_work.start'),
+    ('staff', 'business.urgent_work.peer_manage');

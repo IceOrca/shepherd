@@ -168,7 +168,7 @@ impl PostgresCli {
                     );
                     TenantDbErr::Sqlx(commit_error)
                 })?;
-                debug!(
+                trace!(
                     operation = "postgres.run_with_tenant",
                     tenant_id = %tenant_id,
                     "Tenant-scoped SQL operation committed"
@@ -338,7 +338,7 @@ mod tests {
                     TestIdRow,
                     r#"
                         INSERT INTO accounts (id, tenant_id, username, primary_role_code)
-                        VALUES ($1, $2, 'tenant-runner-committed', 'employee')
+                        VALUES ($1, $2, 'tenant-runner-committed', 'staff')
                         RETURNING id
                         "#,
                     committed_account_id,
@@ -349,7 +349,7 @@ mod tests {
                 sqlx::query!(
                     r#"
                     INSERT INTO account_roles (tenant_id, account_id, role_code)
-                    VALUES ($1, $2, 'employee')
+                    VALUES ($1, $2, 'staff')
                     "#,
                     tenant_id,
                     committed_account_id,
@@ -366,7 +366,7 @@ mod tests {
                 sqlx::query!(
                     r#"
                         INSERT INTO accounts (id, tenant_id, username, primary_role_code)
-                        VALUES ($1, $2, 'tenant-runner-rolled-back', 'employee')
+                        VALUES ($1, $2, 'tenant-runner-rolled-back', 'staff')
                         "#,
                     rolled_back_account_id,
                     tenant_id,
@@ -441,7 +441,7 @@ mod tests {
         sqlx::query!(
             r#"
             INSERT INTO accounts (id, tenant_id, username, primary_role_code)
-            VALUES ($1, $2, 'rls-test-user', 'employee')
+            VALUES ($1, $2, 'rls-test-user', 'staff')
             "#,
             account_a,
             tenant_a,
@@ -451,7 +451,7 @@ mod tests {
         sqlx::query!(
             r#"
             INSERT INTO account_roles (tenant_id, account_id, role_code)
-            VALUES ($1, $2, 'employee')
+            VALUES ($1, $2, 'staff')
             "#,
             tenant_a,
             account_a,
@@ -469,7 +469,7 @@ mod tests {
         let cross_tenant_insert: Result<PgQueryResult, sqlx::Error> = sqlx::query!(
             r#"
             INSERT INTO accounts (id, tenant_id, username, primary_role_code)
-            VALUES ($1, $2, 'rls-cross-tenant', 'employee')
+            VALUES ($1, $2, 'rls-cross-tenant', 'staff')
             "#,
             Uuid::new_v4(),
             tenant_a,
@@ -511,7 +511,7 @@ mod tests {
         sqlx::query!(
             r#"
             INSERT INTO accounts (id, tenant_id, username, primary_role_code)
-            VALUES ($1, $2, 'attendance-test-user', 'employee')
+            VALUES ($1, $2, 'attendance-test-user', 'staff')
             "#,
             account_id,
             tenant_id,
@@ -542,7 +542,7 @@ mod tests {
         sqlx::query!(
             r#"
             INSERT INTO account_roles (tenant_id, account_id, role_code)
-            VALUES ($1, $2, 'employee')
+            VALUES ($1, $2, 'staff')
             "#,
             tenant_id,
             account_id,

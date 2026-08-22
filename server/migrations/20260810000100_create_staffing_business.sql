@@ -1,6 +1,6 @@
 -- Customer-facing staffing is separate from the tenant's own branches and facilities.
 -- Commercial and worker rates are resolved when an employee is assigned, then
--- copied to the assignment so later agreement changes cannot rewrite history.
+-- copied to the assignment so later rate changes cannot rewrite history.
 CREATE TABLE business_customers (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
@@ -87,66 +87,140 @@ CREATE UNIQUE INDEX business_customer_facilities_tenant_customer_code_uq
 CREATE INDEX business_customer_facilities_tenant_customer_status_idx
     ON business_customer_facilities (tenant_id, customer_id, status, lower(name));
 
-CREATE TABLE business_staffing_rate_agreements (
+CREATE TABLE business_staffing_rates (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
+    rate_kind TEXT NOT NULL,
     code TEXT NOT NULL,
     name TEXT NOT NULL,
-    customer_id UUID NOT NULL,
+    customer_id UUID,
     customer_facility_id UUID,
     employee_id UUID,
     job_id UUID NOT NULL,
     currency TEXT NOT NULL,
-    bill_hourly_rate NUMERIC(19, 4) NOT NULL,
-    worker_hourly_rate NUMERIC(19, 4) NOT NULL,
+    hourly_rate NUMERIC(19, 4) NOT NULL,
     priority SMALLINT NOT NULL DEFAULT 0,
     effective_from DATE NOT NULL,
     effective_to DATE,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_by_account_id UUID NOT NULL,
-    CONSTRAINT business_staffing_rate_agreements_tenant_id_id_uq UNIQUE (tenant_id, id),
-    CONSTRAINT business_staffing_rate_agreements_customer_tenant_fk
+    CONSTRAINT business_staffing_rates_tenant_id_id_uq UNIQUE (tenant_id, id),
+    CONSTRAINT business_staffing_rates_customer_tenant_fk
         FOREIGN KEY (tenant_id, customer_id)
         REFERENCES business_customers (tenant_id, id) ON DELETE RESTRICT,
-    CONSTRAINT business_staffing_rate_agreements_facility_customer_tenant_fk
+    CONSTRAINT business_staffing_rates_facility_customer_tenant_fk
         FOREIGN KEY (tenant_id, customer_id, customer_facility_id)
         REFERENCES business_customer_facilities (tenant_id, customer_id, id) ON DELETE RESTRICT,
-    CONSTRAINT business_staffing_rate_agreements_employee_tenant_fk
+    CONSTRAINT business_staffing_rates_employee_tenant_fk
         FOREIGN KEY (tenant_id, employee_id)
         REFERENCES hr_employees (tenant_id, id) ON DELETE RESTRICT,
-    CONSTRAINT business_staffing_rate_agreements_job_tenant_fk
+    CONSTRAINT business_staffing_rates_job_tenant_fk
         FOREIGN KEY (tenant_id, job_id)
         REFERENCES hr_jobs (tenant_id, id) ON DELETE RESTRICT,
-    CONSTRAINT business_staffing_rate_agreements_created_by_tenant_fk
+    CONSTRAINT business_staffing_rates_created_by_tenant_fk
         FOREIGN KEY (tenant_id, created_by_account_id)
         REFERENCES accounts (tenant_id, id) ON DELETE RESTRICT,
-    CONSTRAINT business_staffing_rate_agreements_code_valid CHECK (
+    CONSTRAINT business_staffing_rates_kind_valid CHECK (
+        rate_kind IN ('customer_bill', 'worker_pay')
+    ),
+    CONSTRAINT business_staffing_rates_scope_valid CHECK (
+        (rate_kind = 'customer_bill' AND customer_id IS NOT NULL)
+        OR rate_kind = 'worker_pay'
+    ),
+    CONSTRAINT business_staffing_rates_facility_scope_valid CHECK (
+        customer_facility_id IS NULL OR customer_id IS NOT NULL
+    ),
+    CONSTRAINT business_staffing_rates_code_valid CHECK (
         code = lower(btrim(code))
         AND char_length(code) BETWEEN 2 AND 63
         AND code ~ '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
     ),
-    CONSTRAINT business_staffing_rate_agreements_name_valid CHECK (
+    CONSTRAINT business_staffing_rates_name_valid CHECK (
         name = btrim(name) AND char_length(name) BETWEEN 1 AND 200
     ),
-    CONSTRAINT business_staffing_rate_agreements_currency_valid CHECK (
+    CONSTRAINT business_staffing_rates_currency_valid CHECK (
         currency = upper(currency) AND currency ~ '^[A-Z]{3}$'
     ),
-    CONSTRAINT business_staffing_rate_agreements_rates_valid CHECK (
-        bill_hourly_rate > 0 AND worker_hourly_rate > 0
-    ),
-    CONSTRAINT business_staffing_rate_agreements_dates_valid CHECK (
+    CONSTRAINT business_staffing_rates_rate_valid CHECK (hourly_rate > 0),
+    CONSTRAINT business_staffing_rates_dates_valid CHECK (
         effective_to IS NULL OR effective_to >= effective_from
     ),
-    UNIQUE (tenant_id, code, effective_from)
+    UNIQUE (tenant_id, rate_kind, code, effective_from)
 );
 
-CREATE INDEX business_staffing_rate_agreements_resolution_idx
-    ON business_staffing_rate_agreements (
-        tenant_id, customer_id, job_id, employee_id, customer_facility_id,
+CREATE INDEX business_staffing_rates_resolution_idx
+    ON business_staffing_rates (
+        tenant_id, rate_kind, customer_id, job_id, employee_id, customer_facility_id,
         effective_from DESC, effective_to, priority DESC
     )
     WHERE is_active;
+
+CREATE FUNCTION business_reject_ambiguous_staffing_rate()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW.is_active AND EXISTS (
+        SELECT 1
+        FROM business_staffing_rates AS existing
+        WHERE existing.tenant_id = NEW.tenant_id
+          AND existing.id <> NEW.id
+          AND existing.is_active
+          AND existing.rate_kind = NEW.rate_kind
+          AND existing.customer_id IS NOT DISTINCT FROM NEW.customer_id
+          AND existing.customer_facility_id IS NOT DISTINCT FROM NEW.customer_facility_id
+          AND existing.employee_id IS NOT DISTINCT FROM NEW.employee_id
+          AND existing.job_id = NEW.job_id
+          AND existing.priority = NEW.priority
+          AND daterange(existing.effective_from, existing.effective_to, '[]')
+              && daterange(NEW.effective_from, NEW.effective_to, '[]')
+    ) THEN
+        RAISE EXCEPTION 'ambiguous overlapping staffing rate'
+            USING ERRCODE = '23505';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER business_staffing_rates_reject_ambiguity
+BEFORE INSERT OR UPDATE ON business_staffing_rates
+FOR EACH ROW
+EXECUTE FUNCTION business_reject_ambiguous_staffing_rate();
+
+CREATE TABLE business_staffing_employee_eligibilities (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
+    employee_id UUID NOT NULL,
+    job_id UUID NOT NULL,
+    effective_from DATE NOT NULL,
+    effective_to DATE,
+    notes TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_by_account_id UUID NOT NULL,
+    CONSTRAINT business_staffing_employee_eligibilities_tenant_id_id_uq UNIQUE (tenant_id, id),
+    CONSTRAINT business_staffing_employee_eligibilities_employee_tenant_fk
+        FOREIGN KEY (tenant_id, employee_id)
+        REFERENCES hr_employees (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_staffing_employee_eligibilities_job_tenant_fk
+        FOREIGN KEY (tenant_id, job_id)
+        REFERENCES hr_jobs (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_staffing_employee_eligibilities_created_by_tenant_fk
+        FOREIGN KEY (tenant_id, created_by_account_id)
+        REFERENCES accounts (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_staffing_employee_eligibilities_dates_valid CHECK (
+        effective_to IS NULL OR effective_to >= effective_from
+    ),
+    CONSTRAINT business_staffing_employee_eligibilities_notes_valid CHECK (
+        notes IS NULL OR (notes = btrim(notes) AND char_length(notes) BETWEEN 1 AND 1000)
+    ),
+    UNIQUE (tenant_id, employee_id, job_id, effective_from)
+);
+
+CREATE INDEX business_staffing_employee_eligibilities_resolution_idx
+    ON business_staffing_employee_eligibilities (
+        tenant_id, employee_id, job_id, effective_from DESC, effective_to
+    );
 
 CREATE TABLE business_staffing_shifts (
     id UUID PRIMARY KEY,
@@ -257,11 +331,14 @@ CREATE TABLE business_shift_assignments (
     shift_id UUID NOT NULL,
     employee_id UUID NOT NULL,
     urgent_work_report_id UUID,
-    rate_agreement_id UUID,
+    customer_bill_rate_id UUID,
+    worker_pay_rate_id UUID,
     rate_source TEXT NOT NULL,
+    manual_rate_reason TEXT,
     currency TEXT NOT NULL,
     bill_hourly_rate_snapshot NUMERIC(19, 4) NOT NULL,
     worker_hourly_rate_snapshot NUMERIC(19, 4) NOT NULL,
+    eligibility_exception_reason TEXT,
     status TEXT NOT NULL DEFAULT 'assigned',
     worked_seconds BIGINT,
     customer_amount NUMERIC(19, 4),
@@ -281,9 +358,12 @@ CREATE TABLE business_shift_assignments (
     CONSTRAINT business_shift_assignments_urgent_report_tenant_fk
         FOREIGN KEY (tenant_id, urgent_work_report_id)
         REFERENCES business_urgent_work_reports (tenant_id, id) ON DELETE RESTRICT,
-    CONSTRAINT business_shift_assignments_rate_agreement_tenant_fk
-        FOREIGN KEY (tenant_id, rate_agreement_id)
-        REFERENCES business_staffing_rate_agreements (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_shift_assignments_customer_bill_rate_tenant_fk
+        FOREIGN KEY (tenant_id, customer_bill_rate_id)
+        REFERENCES business_staffing_rates (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_shift_assignments_worker_pay_rate_tenant_fk
+        FOREIGN KEY (tenant_id, worker_pay_rate_id)
+        REFERENCES business_staffing_rates (tenant_id, id) ON DELETE RESTRICT,
     CONSTRAINT business_shift_assignments_approved_by_tenant_fk
         FOREIGN KEY (tenant_id, approved_by_account_id)
         REFERENCES accounts (tenant_id, id) ON DELETE RESTRICT,
@@ -291,14 +371,26 @@ CREATE TABLE business_shift_assignments (
         FOREIGN KEY (tenant_id, created_by_account_id)
         REFERENCES accounts (tenant_id, id) ON DELETE RESTRICT,
     CONSTRAINT business_shift_assignments_source_valid CHECK (
-        (rate_source = 'agreement' AND rate_agreement_id IS NOT NULL)
-        OR (rate_source = 'manual' AND rate_agreement_id IS NULL)
+        (rate_source = 'configured' AND customer_bill_rate_id IS NOT NULL
+            AND worker_pay_rate_id IS NOT NULL AND manual_rate_reason IS NULL)
+        OR (rate_source = 'manual' AND customer_bill_rate_id IS NULL
+            AND worker_pay_rate_id IS NULL AND manual_rate_reason IS NOT NULL)
+    ),
+    CONSTRAINT business_shift_assignments_manual_rate_reason_valid CHECK (
+        manual_rate_reason IS NULL
+        OR (manual_rate_reason = btrim(manual_rate_reason)
+            AND char_length(manual_rate_reason) BETWEEN 3 AND 500)
     ),
     CONSTRAINT business_shift_assignments_currency_valid CHECK (
         currency = upper(currency) AND currency ~ '^[A-Z]{3}$'
     ),
     CONSTRAINT business_shift_assignments_rates_valid CHECK (
         bill_hourly_rate_snapshot > 0 AND worker_hourly_rate_snapshot > 0
+    ),
+    CONSTRAINT business_shift_assignments_eligibility_exception_reason_valid CHECK (
+        eligibility_exception_reason IS NULL
+        OR (eligibility_exception_reason = btrim(eligibility_exception_reason)
+            AND char_length(eligibility_exception_reason) BETWEEN 3 AND 500)
     ),
     CONSTRAINT business_shift_assignments_status_valid CHECK (
         status IN ('assigned', 'approved', 'cancelled')
@@ -366,8 +458,10 @@ BEGIN
     IF OLD.employee_id IS DISTINCT FROM NEW.employee_id
         OR OLD.shift_id IS DISTINCT FROM NEW.shift_id
         OR OLD.urgent_work_report_id IS DISTINCT FROM NEW.urgent_work_report_id
-        OR OLD.rate_agreement_id IS DISTINCT FROM NEW.rate_agreement_id
+        OR OLD.customer_bill_rate_id IS DISTINCT FROM NEW.customer_bill_rate_id
+        OR OLD.worker_pay_rate_id IS DISTINCT FROM NEW.worker_pay_rate_id
         OR OLD.rate_source IS DISTINCT FROM NEW.rate_source
+        OR OLD.manual_rate_reason IS DISTINCT FROM NEW.manual_rate_reason
         OR OLD.currency IS DISTINCT FROM NEW.currency
         OR OLD.bill_hourly_rate_snapshot IS DISTINCT FROM NEW.bill_hourly_rate_snapshot
         OR OLD.worker_hourly_rate_snapshot IS DISTINCT FROM NEW.worker_hourly_rate_snapshot
@@ -400,9 +494,16 @@ CREATE POLICY business_customer_facilities_tenant_isolation ON business_customer
     USING (tenant_id = shepherd_current_tenant_id())
     WITH CHECK (tenant_id = shepherd_current_tenant_id());
 
-ALTER TABLE business_staffing_rate_agreements ENABLE ROW LEVEL SECURITY;
-ALTER TABLE business_staffing_rate_agreements FORCE ROW LEVEL SECURITY;
-CREATE POLICY business_staffing_rate_agreements_tenant_isolation ON business_staffing_rate_agreements
+ALTER TABLE business_staffing_rates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE business_staffing_rates FORCE ROW LEVEL SECURITY;
+CREATE POLICY business_staffing_rates_tenant_isolation ON business_staffing_rates
+    USING (tenant_id = shepherd_current_tenant_id())
+    WITH CHECK (tenant_id = shepherd_current_tenant_id());
+
+ALTER TABLE business_staffing_employee_eligibilities ENABLE ROW LEVEL SECURITY;
+ALTER TABLE business_staffing_employee_eligibilities FORCE ROW LEVEL SECURITY;
+CREATE POLICY business_staffing_employee_eligibilities_tenant_isolation
+    ON business_staffing_employee_eligibilities
     USING (tenant_id = shepherd_current_tenant_id())
     WITH CHECK (tenant_id = shepherd_current_tenant_id());
 
@@ -436,18 +537,24 @@ VALUES
     ('business.customers.manage', 'Create and update staffing customers and workplaces'),
     ('business.staffing_rates.read', 'View customer and worker staffing rates'),
     ('business.staffing_rates.manage', 'Create customer and worker staffing rates'),
+    ('business.staffing_eligibility.read', 'View effective staffing job eligibility'),
+    ('business.staffing_eligibility.manage', 'Create effective staffing job eligibility'),
     ('business.shifts.read', 'View customer staffing shifts and assignments'),
     ('business.shifts.manage', 'Create staffing shifts and assign workers'),
     ('business.shifts.approve', 'Approve worked time and staffing financial snapshots');
 
 INSERT INTO role_permissions (role_code, permission_code)
-SELECT 'tenant_owner', code
-FROM permissions
-WHERE code IN (
+SELECT role.code, permission.code
+FROM roles AS role
+CROSS JOIN permissions AS permission
+WHERE role.code IN ('owner', 'director')
+  AND permission.code IN (
     'business.customers.read',
     'business.customers.manage',
     'business.staffing_rates.read',
     'business.staffing_rates.manage',
+    'business.staffing_eligibility.read',
+    'business.staffing_eligibility.manage',
     'business.shifts.read',
     'business.shifts.manage',
     'business.shifts.approve'
@@ -455,10 +562,21 @@ WHERE code IN (
 
 INSERT INTO role_permissions (role_code, permission_code)
 VALUES
+    ('manager', 'business.customers.read'),
+    ('manager', 'business.customers.manage'),
+    ('manager', 'business.staffing_rates.read'),
+    ('manager', 'business.staffing_rates.manage'),
+    ('manager', 'business.staffing_eligibility.read'),
+    ('manager', 'business.staffing_eligibility.manage'),
+    ('manager', 'business.shifts.read'),
+    ('manager', 'business.shifts.manage'),
+    ('manager', 'business.shifts.approve'),
     ('supervisor', 'business.customers.read'),
     ('supervisor', 'business.customers.manage'),
     ('supervisor', 'business.staffing_rates.read'),
     ('supervisor', 'business.staffing_rates.manage'),
+    ('supervisor', 'business.staffing_eligibility.read'),
+    ('supervisor', 'business.staffing_eligibility.manage'),
     ('supervisor', 'business.shifts.read'),
     ('supervisor', 'business.shifts.manage'),
     ('supervisor', 'business.shifts.approve');

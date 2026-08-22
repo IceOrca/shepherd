@@ -1717,7 +1717,7 @@ mod tests {
             username: "linh".to_owned(),
             email: "linh@example.com".to_owned(),
             password: Some("first-password".to_owned()),
-            primary_role: RoleCode::parse("employee").expect("valid test role code"),
+            primary_role: RoleCode::parse("staff").expect("valid test role code"),
         };
         let same_fingerprint: String = provisioning_fingerprint(&request);
         let mut changed_request: CreateAuthUserRequest = request.clone();

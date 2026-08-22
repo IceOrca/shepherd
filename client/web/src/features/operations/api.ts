@@ -1,8 +1,10 @@
 import type {
   Customer,
   CustomerFacility,
+  CustomerUpsertRequest,
   CustomerWorkRecord,
   CustomerWorkRecordUpsertRequest,
+  Employee,
   JobPosition,
   OwnStaffingAssignment,
   ShiftAssignment,
@@ -11,6 +13,10 @@ import type {
   ShiftWorkActionRequest,
   ShiftWorkSession,
   StaffingCandidate,
+  StaffingEligibility,
+  StaffingEligibilityCreateRequest,
+  StaffingRate,
+  StaffingRateCreateRequest,
   StaffingReconciliation,
   StaffingShift,
   StaffingShiftCreateRequest,
@@ -30,6 +36,9 @@ export const operationsQueryKeys = {
   all: ["operations"] as const,
   customers: ["operations", "customers"] as const,
   jobs: ["operations", "jobs"] as const,
+  employees: ["operations", "employees"] as const,
+  staffingRates: ["operations", "staffing-rates"] as const,
+  staffingEligibilities: ["operations", "staffing-eligibilities"] as const,
   ownAssignments: ["operations", "own-assignments"] as const,
   reconciliations: ["operations", "reconciliations"] as const,
   urgentEmployees: ["operations", "urgent-work", "employees"] as const,
@@ -64,12 +73,54 @@ export function listCustomers(): Promise<Customer[]> {
   return apiRequest<Customer[]>("/api/business/customers");
 }
 
+export function createCustomer(payload: CustomerUpsertRequest): Promise<Customer> {
+  return apiRequest<Customer>("/api/business/customers", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateCustomer(customerId: string, payload: CustomerUpsertRequest): Promise<Customer> {
+  return apiRequest<Customer>(`/api/business/customers/${customerId}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function listCustomerFacilities(customerId: string): Promise<CustomerFacility[]> {
   return apiRequest<CustomerFacility[]>(`/api/business/customers/${customerId}/facilities`);
 }
 
 export function listJobs(): Promise<JobPosition[]> {
   return apiRequest<JobPosition[]>("/api/hr/jobs");
+}
+
+export function listEmployees(): Promise<Employee[]> {
+  return apiRequest<Employee[]>("/api/hr/employees");
+}
+
+export function listStaffingRates(): Promise<StaffingRate[]> {
+  return apiRequest<StaffingRate[]>("/api/business/staffing/rates");
+}
+
+export function createStaffingRate(payload: StaffingRateCreateRequest): Promise<StaffingRate> {
+  return apiRequest<StaffingRate>("/api/business/staffing/rates", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function listStaffingEligibilities(): Promise<StaffingEligibility[]> {
+  return apiRequest<StaffingEligibility[]>("/api/business/staffing/eligibilities");
+}
+
+export function createStaffingEligibility(
+  payload: StaffingEligibilityCreateRequest,
+): Promise<StaffingEligibility> {
+  return apiRequest<StaffingEligibility>("/api/business/staffing/eligibilities", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function listStaffingShifts(): Promise<StaffingShift[]> {

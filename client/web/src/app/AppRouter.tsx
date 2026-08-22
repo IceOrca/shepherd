@@ -4,9 +4,11 @@ import { AuthUsersPage } from "../features/admin/AuthUsersPage";
 import { LoginPage } from "../features/auth/LoginPage";
 import { useAuth } from "../features/auth/AuthProvider";
 import { MyAssignmentsPage } from "../features/operations/MyAssignmentsPage";
+import { CustomersPage } from "../features/operations/CustomersPage";
 import { OperationsOverviewPage } from "../features/operations/OperationsOverviewPage";
 import { ReconciliationPage } from "../features/operations/ReconciliationPage";
 import { ShiftCoordinationPage } from "../features/operations/ShiftCoordinationPage";
+import { StaffingConfigurationPage } from "../features/operations/StaffingConfigurationPage";
 import { UrgentReconciliationPage } from "../features/operations/UrgentReconciliationPage";
 import { UrgentWorkPage } from "../features/operations/UrgentWorkPage";
 import { OperationsLayout } from "../layouts/OperationsLayout";
@@ -57,6 +59,8 @@ export function AppRouter() {
           <Route path="/operations/work" element={<UrgentWorkPage />} />
           <Route path="/operations/my-shifts" element={<MyAssignmentsPage />} />
           <Route path="/operations/shifts" element={<ShiftCoordinationPage />} />
+          <Route path="/operations/customers" element={<CustomersPage />} />
+          <Route path="/operations/staffing-configuration" element={<StaffingConfigurationPage />} />
           <Route path="/operations/reconciliation" element={<UrgentReconciliationPage />} />
           <Route path="/operations/reconciliation/planned" element={<ReconciliationPage />} />
           <Route path="/admin/auth-users" element={<AuthUsersPage />} />

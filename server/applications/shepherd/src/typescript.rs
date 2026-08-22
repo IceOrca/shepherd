@@ -8,13 +8,13 @@ use crate::{
     business::staffing::{
         core::{
             BusinessRecordStatus, Customer, CustomerFacility, CustomerWorkRecord, RateSource, ReconciliationStatus,
-            ShiftAssignment, ShiftAssignmentStatus, StaffingCandidate, StaffingRateAgreement, StaffingReconciliation,
-            StaffingShift, StaffingShiftStatus,
+            ShiftAssignment, ShiftAssignmentStatus, StaffingCandidate, StaffingEligibility, StaffingRate,
+            StaffingRateKind, StaffingReconciliation, StaffingShift, StaffingShiftStatus,
         },
         host::{
-            CustomerCreateRequest, CustomerFacilityCreateRequest, CustomerWorkRecordUpsertRequest,
+            CustomerFacilityCreateRequest, CustomerUpsertRequest, CustomerWorkRecordUpsertRequest,
             ManualRateOverrideRequest, ShiftAssignmentApproveRequest, ShiftAssignmentCreateRequest,
-            StaffingRateAgreementCreateRequest, StaffingShiftCreateRequest,
+            StaffingEligibilityCreateRequest, StaffingRateCreateRequest, StaffingShiftCreateRequest,
         },
         urgent_work::{
             core::{
@@ -82,19 +82,22 @@ pub fn contract() -> String {
     push::<StaffingShiftStatus>(&mut output, &config);
     push::<ShiftAssignmentStatus>(&mut output, &config);
     push::<RateSource>(&mut output, &config);
+    push::<StaffingRateKind>(&mut output, &config);
     push::<Customer>(&mut output, &config);
     push::<CustomerFacility>(&mut output, &config);
-    push::<StaffingRateAgreement>(&mut output, &config);
+    push::<StaffingRate>(&mut output, &config);
     push::<StaffingShift>(&mut output, &config);
     push::<ShiftAssignment>(&mut output, &config);
     push::<StaffingCandidate>(&mut output, &config);
+    push::<StaffingEligibility>(&mut output, &config);
     push::<ReconciliationStatus>(&mut output, &config);
     push::<CustomerWorkRecord>(&mut output, &config);
     push::<StaffingReconciliation>(&mut output, &config);
     push::<CustomerWorkRecordUpsertRequest>(&mut output, &config);
-    push::<CustomerCreateRequest>(&mut output, &config);
+    push::<CustomerUpsertRequest>(&mut output, &config);
     push::<CustomerFacilityCreateRequest>(&mut output, &config);
-    push::<StaffingRateAgreementCreateRequest>(&mut output, &config);
+    push::<StaffingRateCreateRequest>(&mut output, &config);
+    push::<StaffingEligibilityCreateRequest>(&mut output, &config);
     push::<StaffingShiftCreateRequest>(&mut output, &config);
     push::<ManualRateOverrideRequest>(&mut output, &config);
     push::<ShiftAssignmentCreateRequest>(&mut output, &config);
