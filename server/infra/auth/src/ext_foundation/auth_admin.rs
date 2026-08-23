@@ -178,6 +178,7 @@ struct MappedAccount {
     email: Option<String>,
     account_status: AccountStatus,
     primary_role: RoleCode,
+    branch_ids: Vec<Uuid>,
 }
 
 #[derive(Debug)]
@@ -188,6 +189,7 @@ struct MappedAccountRow {
     email: Option<String>,
     account_status: String,
     primary_role: String,
+    branch_ids: Vec<Uuid>,
 }
 
 impl TryFrom<MappedAccountRow> for MappedAccount {
@@ -221,12 +223,19 @@ impl TryFrom<MappedAccountRow> for MappedAccount {
             email: row.email,
             account_status,
             primary_role,
+            branch_ids: row.branch_ids,
         })
     }
 }
 
 struct ExistsRow {
     exists: bool,
+}
+
+struct BranchAssignmentRuleRow {
+    min_assignments: i16,
+    max_assignments: Option<i16>,
+    valid_branch_count: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -237,6 +246,7 @@ pub struct AuthAccountProvisioningContext {
     pub username: String,
     pub email: String,
     pub primary_role: RoleCode,
+    pub branch_ids: Vec<Uuid>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -320,6 +330,8 @@ pub struct AuthUserSummary {
     pub username: String,
     pub email: Option<String>,
     pub primary_role: RoleCode,
+    #[ts(type = "Array<string>")]
+    pub branch_ids: Vec<Uuid>,
     pub account_status: AccountStatus,
     pub provider_status: AuthProviderUserStatus,
     pub email_confirmed: bool,
@@ -334,6 +346,8 @@ pub struct CreateAuthUserRequest {
     pub email: String,
     pub password: Option<String>,
     pub primary_role: RoleCode,
+    #[ts(type = "Array<string>")]
+    pub branch_ids: Vec<Uuid>,
 }
 
 #[derive(Clone, Debug, Deserialize, TS)]
@@ -557,7 +571,7 @@ async fn list_users(
 ) -> Result<Json<Vec<AuthUserSummary>>, AdminApiError> {
     info!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, "Auth user list request accepted");
     require_permission(&actor, &context.policy.read_permission)?;
-    let accounts: Vec<MappedAccount> = load_mapped_accounts(&context, actor.tenant_id).await?;
+    let accounts: Vec<MappedAccount> = load_mapped_accounts(&context, &actor).await?;
     let mut users: Vec<AuthUserSummary> = Vec::with_capacity(accounts.len());
     for account in accounts {
         let provider_user: Option<ExtProviderUser> = match Uuid::parse_str(&account.subject) {
@@ -602,6 +616,7 @@ async fn create_user(
     require_permission(&actor, &context.policy.create_permission)?;
     normalize_create_request(&mut request)?;
     ensure_role_grantable(&context, &actor, &request.primary_role).await?;
+    ensure_branch_assignments_valid(&context, &actor, &request.primary_role, &request.branch_ids).await?;
     let request_fingerprint: String = provisioning_fingerprint(&request);
     let claim: ProvisioningClaim =
         claim_provisioning_request(&context, &actor, idempotency_key, &request_fingerprint).await?;
@@ -782,8 +797,19 @@ async fn set_user_status(
     Ok(Json(summary(updated_account, Some(provider_user))))
 }
 
-async fn load_mapped_accounts(context: &AuthService, tenant_id: Uuid) -> Result<Vec<MappedAccount>, AdminApiError> {
-    trace!(tenant_id = %tenant_id, "Loading mapped Auth accounts");
+async fn load_mapped_accounts(
+    context: &AuthService,
+    actor: &AuthenticatedUser,
+) -> Result<Vec<MappedAccount>, AdminApiError> {
+    let tenant_id: Uuid = actor.tenant_id;
+    let actor_account_id: Uuid = actor.account_id;
+    let actor_branch_ids: Vec<Uuid> = actor.branch_ids.clone();
+    trace!(
+        tenant_id = %tenant_id,
+        actor_id = %actor_account_id,
+        accessible_branch_count = actor_branch_ids.len(),
+        "Loading branch-authorized mapped Auth accounts"
+    );
     let rows: Vec<MappedAccountRow> = context
         .db
         .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
@@ -791,14 +817,53 @@ async fn load_mapped_accounts(context: &AuthService, tenant_id: Uuid) -> Result<
                 MappedAccountRow,
                 r#"
                 SELECT identity.subject, account.id AS account_id, account.username, account.email,
-                       account.status AS account_status, account.primary_role_code AS primary_role
+                       account.status AS account_status, account.primary_role_code AS primary_role,
+                       COALESCE(
+                           array_agg(DISTINCT assignment.branch_id ORDER BY assignment.branch_id)
+                               FILTER (WHERE assignment.branch_id IS NOT NULL),
+                           ARRAY[]::UUID[]
+                       ) AS "branch_ids!"
                 FROM account_identities AS identity
                 INNER JOIN accounts AS account
                     ON account.tenant_id = identity.tenant_id AND account.id = identity.account_id
+                LEFT JOIN account_branch_assignments AS assignment
+                    ON assignment.tenant_id = account.tenant_id
+                   AND assignment.account_id = account.id
                 WHERE identity.tenant_id = $1
+                  AND EXISTS (
+                      SELECT 1
+                      FROM account_roles AS actor_role
+                      INNER JOIN auth_role_assignment_grants AS role_grant
+                          ON role_grant.grantor_role_code = actor_role.role_code
+                      WHERE actor_role.tenant_id = $1
+                        AND actor_role.account_id = $2
+                        AND role_grant.target_role_code = account.primary_role_code
+                  )
+                  AND (
+                      EXISTS (
+                          SELECT 1
+                          FROM account_roles AS tenant_wide_actor_role
+                          INNER JOIN auth_role_branch_assignment_rules AS tenant_wide_rule
+                              ON tenant_wide_rule.role_code = tenant_wide_actor_role.role_code
+                          WHERE tenant_wide_actor_role.tenant_id = $1
+                            AND tenant_wide_actor_role.account_id = $2
+                            AND tenant_wide_rule.max_assignments = 0
+                      )
+                      OR EXISTS (
+                          SELECT 1
+                          FROM account_branch_assignments AS visible_assignment
+                          WHERE visible_assignment.tenant_id = account.tenant_id
+                            AND visible_assignment.account_id = account.id
+                            AND visible_assignment.branch_id = ANY($3)
+                      )
+                  )
+                GROUP BY identity.subject, account.id, account.username, account.email,
+                         account.status, account.primary_role_code
                 ORDER BY lower(account.username), account.id
                 "#,
                 tenant_id,
+                actor_account_id,
+                &actor_branch_ids,
             )
             .fetch_all(connection)
             .await
@@ -822,7 +887,7 @@ async fn load_mapped_account(
     actor: &AuthenticatedUser,
     subject: &str,
 ) -> Result<MappedAccount, AdminApiError> {
-    load_mapped_accounts(context, actor.tenant_id)
+    load_mapped_accounts(context, actor)
         .await?
         .into_iter()
         .find(|account| account.subject == subject)
@@ -834,7 +899,7 @@ async fn load_mapped_account_by_id(
     actor: &AuthenticatedUser,
     account_id: Uuid,
 ) -> Result<MappedAccount, AdminApiError> {
-    let accounts: Vec<MappedAccount> = load_mapped_accounts(context, actor.tenant_id).await?;
+    let accounts: Vec<MappedAccount> = load_mapped_accounts(context, actor).await?;
     accounts
         .into_iter()
         .find(|account: &MappedAccount| account.account_id == account_id)
@@ -858,6 +923,9 @@ fn provisioning_fingerprint(request: &CreateAuthUserRequest) -> String {
     update_fingerprint_field(&mut hasher, &request.username);
     update_fingerprint_field(&mut hasher, &request.email);
     update_fingerprint_field(&mut hasher, request.primary_role.as_str());
+    for branch_id in &request.branch_ids {
+        update_fingerprint_field(&mut hasher, &branch_id.to_string());
+    }
     match request.password.as_deref() {
         Some(password) => {
             hasher.update([1_u8]);
@@ -1260,6 +1328,111 @@ async fn ensure_role_grantable(
     }
 }
 
+async fn ensure_branch_assignments_valid(
+    context: &AuthService,
+    actor: &AuthenticatedUser,
+    role: &RoleCode,
+    branch_ids: &[Uuid],
+) -> Result<(), AdminApiError> {
+    let requested_count: i16 = i16::try_from(branch_ids.len()).map_err(|_error: std::num::TryFromIntError| {
+        AdminApiError::Validation("Too many branch assignments were requested.".to_owned())
+    })?;
+    let tenant_id: Uuid = actor.tenant_id;
+    let requested_branch_ids: Vec<Uuid> = branch_ids.to_vec();
+    let actor_branch_ids: Vec<Uuid> = actor.branch_ids.clone();
+    let role_code: String = role.as_str().to_owned();
+    trace!(
+        tenant_id = %tenant_id,
+        actor_id = %actor.account_id,
+        role = %role,
+        requested_branch_count = requested_count,
+        "Checking branch assignments for Auth account provisioning"
+    );
+    let rule: Option<BranchAssignmentRuleRow> = context
+        .db
+        .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            sqlx::query_as!(
+                BranchAssignmentRuleRow,
+                r#"
+                SELECT rule.min_assignments,
+                       rule.max_assignments,
+                       COUNT(branch.id)::BIGINT AS "valid_branch_count!"
+                FROM auth_role_branch_assignment_rules AS rule
+                LEFT JOIN branches AS branch
+                    ON branch.tenant_id = $1
+                   AND branch.id = ANY($2)
+                   AND branch.status = 'active'
+                   AND branch.id = ANY($3)
+                WHERE rule.role_code = $4
+                GROUP BY rule.role_code, rule.min_assignments, rule.max_assignments
+                "#,
+                tenant_id,
+                &requested_branch_ids,
+                &actor_branch_ids,
+                role_code,
+            )
+            .fetch_optional(connection)
+            .await
+        })
+        .await
+        .map_err(|error: TenantDbErr| {
+            error!(
+                tenant_id = %actor.tenant_id,
+                actor_id = %actor.account_id,
+                role = %role,
+                error = %error,
+                "Auth branch-assignment validation tenant operation failed"
+            );
+            AdminApiError::Internal
+        })?;
+    let rule: BranchAssignmentRuleRow = rule.ok_or_else(|| {
+        warn!(
+            tenant_id = %actor.tenant_id,
+            actor_id = %actor.account_id,
+            role = %role,
+            "Auth role has no configured branch-assignment rule"
+        );
+        AdminApiError::Validation("The selected role has no branch-assignment policy.".to_owned())
+    })?;
+    if requested_count < rule.min_assignments
+        || rule
+            .max_assignments
+            .is_some_and(|maximum_assignments: i16| requested_count > maximum_assignments)
+    {
+        warn!(
+            tenant_id = %actor.tenant_id,
+            actor_id = %actor.account_id,
+            role = %role,
+            requested_branch_count = requested_count,
+            minimum_branch_count = rule.min_assignments,
+            maximum_branch_count = ?rule.max_assignments,
+            "Auth branch-assignment cardinality rejected"
+        );
+        return Err(AdminApiError::Validation(
+            "The selected branches do not satisfy the selected role's branch policy.".to_owned(),
+        ));
+    }
+    if rule.valid_branch_count != i64::from(requested_count) {
+        warn!(
+            tenant_id = %actor.tenant_id,
+            actor_id = %actor.account_id,
+            role = %role,
+            requested_branch_count = requested_count,
+            valid_branch_count = rule.valid_branch_count,
+            "Auth branch assignment includes an inactive or unauthorized branch"
+        );
+        return Err(AdminApiError::Forbidden);
+    }
+    debug!(
+        tenant_id = %actor.tenant_id,
+        actor_id = %actor.account_id,
+        role = %role,
+        requested_branch_count = requested_count,
+        "Auth branch assignments accepted"
+    );
+    Ok(())
+}
+
 async fn link_created_user(
     context: &AuthAdminContext,
     actor: &AuthenticatedUser,
@@ -1316,6 +1489,29 @@ async fn link_created_user(
     .await
     .map_err(|error: sqlx::Error| account_create_error("assign primary role", actor, error))?;
     trace!(rows_affected = role_insert.rows_affected(), account_id = %account_id, "Primary Auth role assigned");
+    for branch_id in &request.branch_ids {
+        let assignment_insert: PgQueryResult = sqlx::query!(
+            r#"
+            INSERT INTO account_branch_assignments (
+                tenant_id, account_id, branch_id, assigned_by_account_id
+            )
+            VALUES ($1, $2, $3, $4)
+            "#,
+            actor.tenant_id,
+            account_id,
+            branch_id,
+            actor.account_id,
+        )
+        .execute(transaction.connection())
+        .await
+        .map_err(|error: sqlx::Error| account_create_error("assign account branch", actor, error))?;
+        trace!(
+            rows_affected = assignment_insert.rows_affected(),
+            account_id = %account_id,
+            branch_id = %branch_id,
+            "Auth account branch assigned"
+        );
+    }
     let identity_insert: PgQueryResult = sqlx::query!(
         r#"
         INSERT INTO account_identities (issuer, subject, tenant_id, account_id)
@@ -1337,6 +1533,7 @@ async fn link_created_user(
         username: request.username.clone(),
         email: request.email.clone(),
         primary_role: request.primary_role.clone(),
+        branch_ids: request.branch_ids.clone(),
     };
     context
         .provisioner
@@ -1408,6 +1605,7 @@ async fn link_created_user(
         account_status: AccountStatus::Active,
         email: Some(request.email.clone()),
         primary_role: request.primary_role.clone(),
+        branch_ids: request.branch_ids.clone(),
     })
 }
 
@@ -1485,6 +1683,8 @@ fn normalize_create_request(request: &mut CreateAuthUserRequest) -> Result<(), A
     request.username = request.username.trim().to_owned();
     request.email = request.email.trim().to_ascii_lowercase();
     request.password = request.password.take().filter(|password| !password.is_empty());
+    request.branch_ids.sort_unstable();
+    request.branch_ids.dedup();
 
     if !(3..=128).contains(&request.username.chars().count()) {
         return Err(AdminApiError::Validation(
@@ -1538,6 +1738,7 @@ fn summary(account: MappedAccount, provider_user: Option<ExtProviderUser>) -> Au
         username: account.username,
         email: account.email,
         primary_role: account.primary_role,
+        branch_ids: account.branch_ids,
         account_status: account.account_status,
         provider_status,
         email_confirmed: provider_user
@@ -1675,10 +1876,17 @@ mod tests {
             email: " LINH@EXAMPLE.COM ".to_owned(),
             password: Some("correct-horse".to_owned()),
             primary_role: RoleCode::parse("custom_role").expect("valid test role code"),
+            branch_ids: vec![
+                Uuid::parse_str("00000000-0000-4000-8000-000000000002").expect("valid branch ID"),
+                Uuid::parse_str("00000000-0000-4000-8000-000000000001").expect("valid branch ID"),
+                Uuid::parse_str("00000000-0000-4000-8000-000000000001").expect("valid branch ID"),
+            ],
         };
         assert!(normalize_create_request(&mut request).is_ok());
         assert_eq!(request.username, "Linh Nguyen");
         assert_eq!(request.email, "linh@example.com");
+        assert_eq!(request.branch_ids.len(), 2);
+        assert!(request.branch_ids[0] < request.branch_ids[1]);
     }
 
     #[test]
@@ -1688,6 +1896,7 @@ mod tests {
             email: "linh@example.com".to_owned(),
             password: Some(String::new()),
             primary_role: RoleCode::parse("custom_role").expect("valid test role code"),
+            branch_ids: Vec::new(),
         };
         assert!(normalize_create_request(&mut request).is_ok());
         assert!(request.password.is_none());
@@ -1718,13 +1927,18 @@ mod tests {
             email: "linh@example.com".to_owned(),
             password: Some("first-password".to_owned()),
             primary_role: RoleCode::parse("staff").expect("valid test role code"),
+            branch_ids: vec![Uuid::parse_str("00000000-0000-4000-8000-000000000001").expect("valid branch ID")],
         };
         let same_fingerprint: String = provisioning_fingerprint(&request);
         let mut changed_request: CreateAuthUserRequest = request.clone();
         changed_request.password = Some("second-password".to_owned());
         let changed_fingerprint: String = provisioning_fingerprint(&changed_request);
+        let mut changed_branch_request: CreateAuthUserRequest = request.clone();
+        changed_branch_request.branch_ids =
+            vec![Uuid::parse_str("00000000-0000-4000-8000-000000000002").expect("valid branch ID")];
 
         assert_eq!(same_fingerprint, provisioning_fingerprint(&request));
         assert_ne!(same_fingerprint, changed_fingerprint);
+        assert_ne!(same_fingerprint, provisioning_fingerprint(&changed_branch_request));
     }
 }

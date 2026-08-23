@@ -207,7 +207,7 @@ impl ClientTokenHandle {
             return Err(ClientTokenError::InvalidFormat);
         }
 
-        let header_b64: &str = parts.get(0).expect("get token[0] error after checked len");
+        let header_b64: &str = parts.first().expect("get token[0] error after checked len");
         let payload_b64: &str = parts.get(1).expect("get token[1] error after checked len");
         let sig_b64: &str = parts.get(2).expect("get token[2] error after checked len");
 

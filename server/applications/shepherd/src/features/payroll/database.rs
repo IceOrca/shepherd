@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use tracing::{error, warn, info, debug, trace};
 use crate::features::payroll::core::{
-    EmployeeCompensation, EmployeeCompensationInput, FacilityRateRule, FacilityRateRuleInput, OvertimeRule,
+    BranchRateRule, BranchRateRuleInput, EmployeeCompensation, EmployeeCompensationInput, OvertimeRule,
     OvertimeRuleInput, PayBasis, PayrollEmployeeResult, PayrollError, PayrollLine, PayrollRepo, PayrollRun,
     PayrollRunInput, PayrollRunStatus, TimeBandRule, TimeBandRuleInput,
 };
@@ -13,11 +13,11 @@ use uuid::Uuid;
 use infra_postgres::{DatabaseAdapter, TenantDbErr, TenantTransaction};
 use sqlx::PgConnection;
 
-pub struct PayrollProvider {
+pub struct PayrollDb {
     db: Arc<DatabaseAdapter>,
 }
 
-impl PayrollProvider {
+impl PayrollDb {
     pub fn new_arc(db: Arc<DatabaseAdapter>) -> Arc<Self> {
         Arc::new(Self { db })
     }
@@ -57,11 +57,11 @@ impl TryFrom<CompensationRow> for EmployeeCompensation {
 }
 
 #[derive(Debug)]
-struct FacilityRuleRow {
+struct BranchRuleRow {
     id: Uuid,
     code: String,
     name: String,
-    facility_id: Uuid,
+    branch_id: Uuid,
     employee_id: Option<Uuid>,
     base_multiplier: String,
     hourly_adjustment: String,
@@ -71,13 +71,13 @@ struct FacilityRuleRow {
     is_active: bool,
 }
 
-impl From<FacilityRuleRow> for FacilityRateRule {
-    fn from(row: FacilityRuleRow) -> Self {
+impl From<BranchRuleRow> for BranchRateRule {
+    fn from(row: BranchRuleRow) -> Self {
         Self {
             id: row.id,
             code: row.code,
             name: row.name,
-            facility_id: row.facility_id,
+            branch_id: row.branch_id,
             employee_id: row.employee_id,
             base_multiplier: row.base_multiplier,
             hourly_adjustment: row.hourly_adjustment,
@@ -175,7 +175,7 @@ struct PayrollResultRow {
     employee_id: Uuid,
     worked_seconds: i64,
     base_amount: String,
-    facility_amount: String,
+    branch_amount: String,
     time_amount: String,
     overtime_amount: String,
     gross_amount: String,
@@ -188,7 +188,7 @@ impl From<PayrollResultRow> for PayrollEmployeeResult {
             employee_id: row.employee_id,
             worked_seconds: row.worked_seconds,
             base_amount: row.base_amount,
-            facility_amount: row.facility_amount,
+            branch_amount: row.branch_amount,
             time_amount: row.time_amount,
             overtime_amount: row.overtime_amount,
             gross_amount: row.gross_amount,
@@ -203,7 +203,7 @@ struct PayrollLineRow {
     employee_id: Uuid,
     attendance_session_id: Option<Uuid>,
     staffing_assignment_id: Option<Uuid>,
-    facility_id: Option<Uuid>,
+    branch_id: Uuid,
     work_date: NaiveDate,
     component: String,
     rule_code: Option<String>,
@@ -228,7 +228,7 @@ impl From<PayrollLineRow> for PayrollLine {
             employee_id: row.employee_id,
             attendance_session_id: row.attendance_session_id,
             staffing_assignment_id: row.staffing_assignment_id,
-            facility_id: row.facility_id,
+            branch_id: row.branch_id,
             work_date: row.work_date,
             component: row.component,
             rule_code: row.rule_code,
@@ -243,7 +243,7 @@ impl From<PayrollLineRow> for PayrollLine {
 }
 
 #[async_trait]
-impl PayrollRepo for PayrollProvider {
+impl PayrollRepo for PayrollDb {
     async fn list_compensations(
         &self,
         tenant_id: Uuid,
@@ -379,18 +379,18 @@ impl PayrollRepo for PayrollProvider {
         EmployeeCompensation::try_from(row)
     }
 
-    async fn list_facility_rules(&self, tenant_id: Uuid) -> Result<Vec<FacilityRateRule>, PayrollError> {
-        let rows: Vec<FacilityRuleRow> = self
+    async fn list_branch_rules(&self, tenant_id: Uuid) -> Result<Vec<BranchRateRule>, PayrollError> {
+        let rows: Vec<BranchRuleRow> = self
             .db
             .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
                 sqlx::query_as!(
-                    FacilityRuleRow,
+                    BranchRuleRow,
                     r#"
-                    SELECT id, code, name, facility_id, employee_id,
+                    SELECT id, code, name, branch_id, employee_id,
                            base_multiplier::TEXT AS "base_multiplier!",
                            hourly_adjustment::TEXT AS "hourly_adjustment!",
                            priority, effective_from, effective_to, is_active
-                    FROM payroll_facility_rate_rules
+                    FROM payroll_branch_rate_rules
                     WHERE tenant_id = $1
                     ORDER BY lower(name), effective_from DESC, priority DESC
                     "#,
@@ -400,37 +400,37 @@ impl PayrollRepo for PayrollProvider {
                 .await
             })
             .await
-            .map_err(|error: TenantDbErr| tenant_database_failure("list facility payroll rules", tenant_id, error))?;
-        Ok(rows.into_iter().map(FacilityRateRule::from).collect())
+            .map_err(|error: TenantDbErr| tenant_database_failure("list branch payroll rules", tenant_id, error))?;
+        Ok(rows.into_iter().map(BranchRateRule::from).collect())
     }
 
-    async fn create_facility_rule(
+    async fn create_branch_rule(
         &self,
         tenant_id: Uuid,
         rule_id: Uuid,
-        input: &FacilityRateRuleInput,
+        input: &BranchRateRuleInput,
         audit_account_id: Uuid,
-    ) -> Result<FacilityRateRule, PayrollError> {
-        let row: Option<FacilityRuleRow> = self
+    ) -> Result<BranchRateRule, PayrollError> {
+        let row: Option<BranchRuleRow> = self
             .db
             .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
                 sqlx::query_as!(
-                    FacilityRuleRow,
+                    BranchRuleRow,
                     r#"
-                    INSERT INTO payroll_facility_rate_rules (
-                        id, tenant_id, code, name, facility_id, employee_id, base_multiplier,
+                    INSERT INTO payroll_branch_rate_rules (
+                        id, tenant_id, code, name, branch_id, employee_id, base_multiplier,
                         hourly_adjustment, priority, effective_from, effective_to, is_active, created_by_account_id
                     )
                     SELECT
-                        $1, $2, $3, $4, facility.id, employee.id,
+                        $1, $2, $3, $4, branch.id, employee.id,
                         $7::TEXT::NUMERIC, $8::TEXT::NUMERIC, $9, $10, $11, $12, $13
-                    FROM facilities AS facility
+                    FROM branches AS branch
                     LEFT JOIN hr_employees AS employee
-                        ON employee.tenant_id = facility.tenant_id AND employee.id = $6
-                    WHERE facility.tenant_id = $2
-                      AND facility.id = $5
+                        ON employee.tenant_id = branch.tenant_id AND employee.id = $6
+                    WHERE branch.tenant_id = $2
+                      AND branch.id = $5
                       AND ($6::UUID IS NULL OR employee.id IS NOT NULL)
-                    RETURNING id, code, name, facility_id, employee_id,
+                    RETURNING id, code, name, branch_id, employee_id,
                               base_multiplier::TEXT AS "base_multiplier!",
                               hourly_adjustment::TEXT AS "hourly_adjustment!",
                               priority, effective_from, effective_to, is_active
@@ -439,7 +439,7 @@ impl PayrollRepo for PayrollProvider {
                     tenant_id,
                     input.code,
                     input.name,
-                    input.facility_id,
+                    input.branch_id,
                     input.employee_id,
                     input.base_multiplier,
                     input.hourly_adjustment,
@@ -453,8 +453,8 @@ impl PayrollRepo for PayrollProvider {
                 .await
             })
             .await
-            .map_err(|error: TenantDbErr| tenant_mutation_failure("create facility payroll rule", tenant_id, error))?;
-        let row: FacilityRuleRow = row.ok_or(PayrollError::NotFound)?;
+            .map_err(|error: TenantDbErr| tenant_mutation_failure("create branch payroll rule", tenant_id, error))?;
+        let row: BranchRuleRow = row.ok_or(PayrollError::NotFound)?;
         Ok(row.into())
     }
 
@@ -687,7 +687,7 @@ impl PayrollRepo for PayrollProvider {
         .await
         .map_err(|error| mutation_failure("create payroll run", tenant_id, error))?;
 
-        insert_base_and_facility_lines(&mut transaction, tenant_id, payroll_run_id, input).await?;
+        insert_base_and_branch_lines(&mut transaction, tenant_id, payroll_run_id, input).await?;
         insert_staffing_assignment_lines(&mut transaction, tenant_id, payroll_run_id, input).await?;
         insert_time_band_lines(&mut transaction, tenant_id, payroll_run_id, input).await?;
         insert_overtime_lines(&mut transaction, tenant_id, payroll_run_id, input).await?;
@@ -774,7 +774,7 @@ impl PayrollRepo for PayrollProvider {
     }
 }
 
-async fn begin_tenant(provider: &PayrollProvider, tenant_id: Uuid) -> Result<TenantTransaction, PayrollError> {
+async fn begin_tenant(provider: &PayrollDb, tenant_id: Uuid) -> Result<TenantTransaction, PayrollError> {
     provider.db.begin_tenant(tenant_id).await.map_err(|error| {
         error!(
             "Payroll tenant transaction failed: tenant_id={} error={}",
@@ -916,7 +916,7 @@ async fn has_missing_compensation(
     .map_err(|error| database_failure("check payroll compensation coverage", tenant_id, error))
 }
 
-async fn insert_base_and_facility_lines(
+async fn insert_base_and_branch_lines(
     transaction: &mut TenantTransaction,
     tenant_id: Uuid,
     payroll_run_id: Uuid,
@@ -933,7 +933,7 @@ async fn insert_base_and_facility_lines(
             SELECT
                 attendance.id AS attendance_session_id,
                 attendance.employee_id,
-                attendance.facility_id,
+                attendance.branch_id,
                 local_day::DATE AS work_date,
                 GREATEST(
                     attendance.check_in_at,
@@ -964,9 +964,9 @@ async fn insert_base_and_facility_lines(
                 FLOOR(EXTRACT(EPOCH FROM fragment.fragment_end - fragment.fragment_start))::BIGINT
                     AS worked_seconds,
                 compensation.base_hourly_rate,
-                COALESCE(facility_rule.code, 'standard-facility') AS facility_rule_code,
-                COALESCE(facility_rule.base_multiplier, 1::NUMERIC) AS facility_multiplier,
-                COALESCE(facility_rule.hourly_adjustment, 0::NUMERIC) AS facility_adjustment
+                COALESCE(branch_rule.code, 'standard-branch') AS branch_rule_code,
+                COALESCE(branch_rule.base_multiplier, 1::NUMERIC) AS branch_multiplier,
+                COALESCE(branch_rule.hourly_adjustment, 0::NUMERIC) AS branch_adjustment
             FROM daily_fragments AS fragment
             INNER JOIN LATERAL (
                 SELECT CASE compensation.pay_basis
@@ -987,9 +987,9 @@ async fn insert_base_and_facility_lines(
             ) AS compensation ON TRUE
             LEFT JOIN LATERAL (
                 SELECT rule.code, rule.base_multiplier, rule.hourly_adjustment
-                FROM payroll_facility_rate_rules AS rule
+                FROM payroll_branch_rate_rules AS rule
                 WHERE rule.tenant_id = $1
-                  AND rule.facility_id = fragment.facility_id
+                  AND rule.branch_id = fragment.branch_id
                   AND (rule.employee_id IS NULL OR rule.employee_id = fragment.employee_id)
                   AND rule.is_active
                   AND rule.effective_from <= fragment.work_date
@@ -1000,7 +1000,7 @@ async fn insert_base_and_facility_lines(
                     rule.effective_from DESC,
                     rule.id
                 LIMIT 1
-            ) AS facility_rule ON TRUE
+            ) AS branch_rule ON TRUE
             WHERE fragment.fragment_end > fragment.fragment_start
         ),
         components AS (
@@ -1019,27 +1019,27 @@ async fn insert_base_and_facility_lines(
 
             SELECT
                 rated.*,
-                'facility'::TEXT AS component,
-                rated.facility_rule_code AS rule_code,
-                rated.facility_multiplier - 1 AS multiplier,
-                rated.facility_adjustment AS hourly_adjustment,
+                'branch'::TEXT AS component,
+                rated.branch_rule_code AS rule_code,
+                rated.branch_multiplier - 1 AS multiplier,
+                rated.branch_adjustment AS hourly_adjustment,
                 ROUND(
                     (
-                        rated.base_hourly_rate * (rated.facility_multiplier - 1)
-                        + rated.facility_adjustment
+                        rated.base_hourly_rate * (rated.branch_multiplier - 1)
+                        + rated.branch_adjustment
                     ) * rated.worked_seconds / 3600,
                     4
                 ) AS amount,
-                'Facility wage adjustment'::TEXT AS description
+                'Branch wage adjustment'::TEXT AS description
             FROM rated_fragments AS rated
             WHERE rated.worked_seconds > 0
               AND (
-                  rated.facility_multiplier <> 1
-                  OR rated.facility_adjustment <> 0
+                  rated.branch_multiplier <> 1
+                  OR rated.branch_adjustment <> 0
               )
         )
         INSERT INTO payroll_run_lines (
-            id, tenant_id, payroll_run_id, employee_id, attendance_session_id, facility_id,
+            id, tenant_id, payroll_run_id, employee_id, attendance_session_id, branch_id,
             work_date, component, rule_code, worked_seconds, base_hourly_rate, multiplier,
             hourly_adjustment, amount, description
         )
@@ -1052,7 +1052,7 @@ async fn insert_base_and_facility_lines(
             $2,
             component.employee_id,
             component.attendance_session_id,
-            component.facility_id,
+            component.branch_id,
             component.work_date,
             component.component,
             component.rule_code,
@@ -1073,7 +1073,7 @@ async fn insert_base_and_facility_lines(
     )
     .execute(transaction.connection())
     .await
-    .map_err(|error| database_failure("insert base and facility payroll lines", tenant_id, error))?;
+    .map_err(|error| database_failure("insert base and branch payroll lines", tenant_id, error))?;
     Ok(())
 }
 
@@ -1087,7 +1087,7 @@ async fn insert_staffing_assignment_lines(
         r#"
         INSERT INTO payroll_run_lines (
             id, tenant_id, payroll_run_id, employee_id, attendance_session_id,
-            staffing_assignment_id, facility_id, work_date, component, rule_code,
+            staffing_assignment_id, branch_id, work_date, component, rule_code,
             worked_seconds, base_hourly_rate, multiplier, hourly_adjustment, amount, description
         )
         SELECT
@@ -1095,7 +1095,7 @@ async fn insert_staffing_assignment_lines(
             $1,
             $2,
             assignment.employee_id,
-            NULL,
+            assignment.branch_id,
             assignment.id,
             NULL,
             (customer_record.confirmed_started_at AT TIME ZONE $5)::DATE,
@@ -1175,7 +1175,7 @@ async fn insert_time_band_lines(
             SELECT
                 attendance.id AS attendance_session_id,
                 attendance.employee_id,
-                attendance.facility_id,
+                attendance.branch_id,
                 rule_window.rule_id,
                 rule_window.code,
                 rule_window.name,
@@ -1221,7 +1221,7 @@ async fn insert_time_band_lines(
             WHERE overlap.overlap_end > overlap.overlap_start
         )
         INSERT INTO payroll_run_lines (
-            id, tenant_id, payroll_run_id, employee_id, attendance_session_id, facility_id,
+            id, tenant_id, payroll_run_id, employee_id, attendance_session_id, branch_id,
             work_date, component, rule_code, worked_seconds, base_hourly_rate, multiplier,
             hourly_adjustment, amount, description
         )
@@ -1234,7 +1234,7 @@ async fn insert_time_band_lines(
             $2,
             rated.employee_id,
             rated.attendance_session_id,
-            rated.facility_id,
+            rated.branch_id,
             rated.work_date,
             'time_band',
             rated.code,
@@ -1283,7 +1283,7 @@ async fn insert_overtime_lines(
             SELECT
                 attendance.id AS attendance_session_id,
                 attendance.employee_id,
-                attendance.facility_id,
+                attendance.branch_id,
                 local_day::DATE AS work_date,
                 GREATEST(
                     attendance.check_in_at,
@@ -1371,7 +1371,7 @@ async fn insert_overtime_lines(
             ) AS compensation ON TRUE
         )
         INSERT INTO payroll_run_lines (
-            id, tenant_id, payroll_run_id, employee_id, attendance_session_id, facility_id,
+            id, tenant_id, payroll_run_id, employee_id, attendance_session_id, branch_id,
             work_date, component, rule_code, worked_seconds, base_hourly_rate, multiplier,
             hourly_adjustment, amount, description
         )
@@ -1384,7 +1384,7 @@ async fn insert_overtime_lines(
             $2,
             rated.employee_id,
             rated.attendance_session_id,
-            rated.facility_id,
+            rated.branch_id,
             rated.work_date,
             'overtime',
             rated.code,
@@ -1426,7 +1426,7 @@ async fn aggregate_employee_results(
         r#"
         INSERT INTO payroll_employee_results (
             id, tenant_id, payroll_run_id, employee_id, worked_seconds,
-            base_amount, facility_amount, time_amount, overtime_amount, gross_amount, currency
+            base_amount, branch_amount, time_amount, overtime_amount, gross_amount, currency
         )
         SELECT
             MD5($2::UUID::TEXT || ':' || line.employee_id::TEXT || ':result')::UUID,
@@ -1435,7 +1435,7 @@ async fn aggregate_employee_results(
             line.employee_id,
             SUM(line.worked_seconds) FILTER (WHERE line.component IN ('base', 'staffing'))::BIGINT,
             COALESCE(SUM(line.amount) FILTER (WHERE line.component IN ('base', 'staffing')), 0),
-            COALESCE(SUM(line.amount) FILTER (WHERE line.component = 'facility'), 0),
+            COALESCE(SUM(line.amount) FILTER (WHERE line.component = 'branch'), 0),
             COALESCE(SUM(line.amount) FILTER (WHERE line.component = 'time_band'), 0),
             COALESCE(SUM(line.amount) FILTER (WHERE line.component = 'overtime'), 0),
             SUM(line.amount),
@@ -1492,7 +1492,7 @@ async fn load_run_data(
         r#"
         SELECT employee_id, worked_seconds,
                base_amount::TEXT AS "base_amount!",
-               facility_amount::TEXT AS "facility_amount!",
+               branch_amount::TEXT AS "branch_amount!",
                time_amount::TEXT AS "time_amount!",
                overtime_amount::TEXT AS "overtime_amount!",
                gross_amount::TEXT AS "gross_amount!",
@@ -1509,7 +1509,7 @@ async fn load_run_data(
     let lines: Vec<PayrollLineRow> = sqlx::query_as!(
         PayrollLineRow,
         r#"
-        SELECT id, employee_id, attendance_session_id, staffing_assignment_id, facility_id, work_date,
+        SELECT id, employee_id, attendance_session_id, staffing_assignment_id, branch_id, work_date,
                component, rule_code, worked_seconds,
                base_hourly_rate::TEXT AS "base_hourly_rate!",
                multiplier::TEXT AS "multiplier!",

@@ -15,10 +15,10 @@ use uuid::Uuid;
 use crate::{AppContext, auth::AuthenticatedUser};
 
 use super::core::{
-    BusinessRecordStatus, Customer, CustomerFacility, CustomerFacilityInput, CustomerInput, CustomerWorkRecord,
-    CustomerWorkRecordInput, ManualRateOverride, ShiftAssignment, ShiftAssignmentInput, StaffingCandidate,
-    StaffingEligibility, StaffingEligibilityInput, StaffingError, StaffingRate, StaffingRateInput, StaffingRateKind,
-    StaffingReconciliation, StaffingShift, StaffingShiftInput,
+    BusinessRecordStatus, Customer, CustomerInput, CustomerWorkRecord, CustomerWorkRecordInput, ManualRateOverride,
+    ShiftAssignment, ShiftAssignmentInput, StaffingCandidate, StaffingEligibility, StaffingEligibilityInput,
+    StaffingError, StaffingRate, StaffingRateInput, StaffingRateKind, StaffingReconciliation, StaffingShift,
+    StaffingShiftInput,
 };
 
 #[derive(Debug, Deserialize, TS)]
@@ -26,6 +26,8 @@ use super::core::{
 pub struct CustomerUpsertRequest {
     pub code: String,
     pub name: String,
+    pub address: Option<String>,
+    pub time_zone: String,
     pub billing_email: Option<String>,
     pub status: BusinessRecordStatus,
 }
@@ -35,29 +37,9 @@ impl From<CustomerUpsertRequest> for CustomerInput {
         Self {
             code: value.code.trim().to_ascii_lowercase(),
             name: value.name.trim().to_owned(),
-            billing_email: normalize_optional(value.billing_email),
-            status: value.status,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(optional_fields = nullable)]
-pub struct CustomerFacilityCreateRequest {
-    pub code: String,
-    pub name: String,
-    pub address: Option<String>,
-    pub time_zone: String,
-    pub status: BusinessRecordStatus,
-}
-
-impl From<CustomerFacilityCreateRequest> for CustomerFacilityInput {
-    fn from(value: CustomerFacilityCreateRequest) -> Self {
-        Self {
-            code: value.code.trim().to_ascii_lowercase(),
-            name: value.name.trim().to_owned(),
             address: normalize_optional(value.address),
             time_zone: value.time_zone.trim().to_owned(),
+            billing_email: normalize_optional(value.billing_email),
             status: value.status,
         }
     }
@@ -70,7 +52,6 @@ pub struct StaffingRateCreateRequest {
     pub code: String,
     pub name: String,
     pub customer_id: Option<Uuid>,
-    pub customer_facility_id: Option<Uuid>,
     pub employee_id: Option<Uuid>,
     pub job_id: Uuid,
     pub currency: String,
@@ -88,7 +69,6 @@ impl From<StaffingRateCreateRequest> for StaffingRateInput {
             code: value.code.trim().to_ascii_lowercase(),
             name: value.name.trim().to_owned(),
             customer_id: value.customer_id,
-            customer_facility_id: value.customer_facility_id,
             employee_id: value.employee_id,
             job_id: value.job_id,
             currency: value.currency.trim().to_ascii_uppercase(),
@@ -127,7 +107,6 @@ impl From<StaffingEligibilityCreateRequest> for StaffingEligibilityInput {
 #[ts(optional_fields = nullable)]
 pub struct StaffingShiftCreateRequest {
     pub customer_id: Uuid,
-    pub customer_facility_id: Uuid,
     pub job_id: Uuid,
     pub starts_at: DateTime<Utc>,
     pub ends_at: DateTime<Utc>,
@@ -139,7 +118,6 @@ impl From<StaffingShiftCreateRequest> for StaffingShiftInput {
     fn from(value: StaffingShiftCreateRequest) -> Self {
         Self {
             customer_id: value.customer_id,
-            customer_facility_id: value.customer_facility_id,
             job_id: value.job_id,
             starts_at: value.starts_at,
             ends_at: value.ends_at,
@@ -194,7 +172,7 @@ pub struct ShiftAssignmentApproveRequest {
 #[derive(Debug, Deserialize, TS)]
 #[ts(optional_fields = nullable)]
 pub struct CustomerWorkRecordUpsertRequest {
-    pub confirmed_customer_facility_id: Uuid,
+    pub confirmed_customer_id: Uuid,
     pub confirmed_started_at: DateTime<Utc>,
     pub confirmed_ended_at: DateTime<Utc>,
     pub customer_reference: Option<String>,
@@ -204,7 +182,7 @@ pub struct CustomerWorkRecordUpsertRequest {
 impl From<CustomerWorkRecordUpsertRequest> for CustomerWorkRecordInput {
     fn from(value: CustomerWorkRecordUpsertRequest) -> Self {
         Self {
-            confirmed_customer_facility_id: value.confirmed_customer_facility_id,
+            confirmed_customer_id: value.confirmed_customer_id,
             confirmed_started_at: value.confirmed_started_at,
             confirmed_ended_at: value.confirmed_ended_at,
             customer_reference: normalize_optional(value.customer_reference),
@@ -217,10 +195,6 @@ pub fn routes() -> Router<Arc<AppContext>> {
     Router::new()
         .route("/customers", get(list_customers).post(create_customer))
         .route("/customers/{customer_id}", put(update_customer))
-        .route(
-            "/customers/{customer_id}/facilities",
-            get(list_customer_facilities).post(create_customer_facility),
-        )
         .route("/staffing/rates", get(list_rates).post(create_rate))
         .route(
             "/staffing/eligibilities",
@@ -290,37 +264,6 @@ pub async fn update_customer(
         .await
         .map_err(|error: StaffingError| staffing_status("update customer", &user, error))?;
     Ok(Json(customer))
-}
-
-pub async fn list_customer_facilities(
-    State(context): State<Arc<AppContext>>,
-    Extension(user): Extension<AuthenticatedUser>,
-    Path(customer_id): Path<Uuid>,
-) -> Result<Json<Vec<CustomerFacility>>, StatusCode> {
-    require_permission(&user, "business.customers.read")?;
-    context
-        .core
-        .staffing
-        .list_customer_facilities(user.tenant_id, customer_id)
-        .await
-        .map(Json)
-        .map_err(|error| staffing_status("list customer facilities", &user, error))
-}
-
-pub async fn create_customer_facility(
-    State(context): State<Arc<AppContext>>,
-    Extension(user): Extension<AuthenticatedUser>,
-    Path(customer_id): Path<Uuid>,
-    Json(payload): Json<CustomerFacilityCreateRequest>,
-) -> Result<(StatusCode, Json<CustomerFacility>), StatusCode> {
-    require_permission(&user, "business.customers.manage")?;
-    let facility: CustomerFacility = context
-        .core
-        .staffing
-        .create_customer_facility(user.tenant_id, customer_id, payload.into(), user.account_id)
-        .await
-        .map_err(|error| staffing_status("create customer facility", &user, error))?;
-    Ok((StatusCode::CREATED, Json(facility)))
 }
 
 pub async fn list_rates(

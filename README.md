@@ -15,13 +15,17 @@ into multi-sheet Excel workbooks.
 The responsibility for producing staff-side work evidence moves to the staff:
 
 1. At a customer workplace, a staff member selects the manager-maintained
-   customer facility and presses **Start** for themselves and, when necessary,
-   coworkers who cannot use a phone.
+   customer and presses **Start** for themselves and, when necessary,
+   coworkers who cannot use a phone. The coworker picker contains only active
+   employees whose active Shepherd account has effective staff-clocking
+   authorization in the same branch. Coordination accounts are excluded by
+   default; a deliberately dual-role worker may be included through an explicit
+   staff role or permission.
 2. Staff press **Finish** after work. Shepherd records server-owned timestamps,
    the subject employee, and the acting account. It never trusts device time or
    silently infers attendance.
 3. Supervisors no longer perform routine transcription of start, finish, and
-   facility messages. They continue to dispatch workers and handle exceptions.
+   customer-workplace messages. They continue to dispatch workers and handle exceptions.
 
 Urgent work without a pre-created shift is the default workflow because a
 customer may request workers immediately while a supervisor is already
@@ -30,10 +34,16 @@ lead time exists.
 
 “Urgent” describes only how the work starts: no supervisor-created planned
 shift or assignment is required first. It does not create a separate class of
-tenant, account, employee, job, customer, or facility. Staff select the same
-manager-maintained customer facilities and coworkers used by planned staffing;
+tenant, branch, account, employee, job, or customer. Staff select the same
+manager-maintained branch-owned customers and coworkers used by planned staffing;
 after reconciliation, Shepherd creates the formal shift and assignment snapshot
 from that evidence.
+
+The server applies the same effective-permission rule when it loads urgent-work
+employees and again while locking targets in the Start transaction. Hiding a
+coordination-role employee in the browser is therefore a usability behavior,
+not the authorization boundary; a stale or crafted request cannot create urgent
+work for an unauthorized target.
 
 ## Mandatory reconciliation
 
@@ -42,14 +52,14 @@ Shepherd does not assume that staff evidence is correct merely because it was
 recorded in the application, and customer systems do not currently synchronize
 with Shepherd.
 
-At the end of the day, a supervisor must compare staff-reported facility and
+At the end of the day, a supervisor must compare the staff-reported customer and
 time against the customer's confirmation, bill, or time record:
 
 - If both sources match, the result is ready for human review but is not
   automatically approved.
 - If they differ, the supervisor contacts the customer, agrees on the true
   result, and records the conclusion with an audit reason.
-- Only an explicit supervisor reconciliation locks the final facility, job,
+- Only an explicit supervisor reconciliation locks the final customer, job,
   duration, billing rate, worker pay, company profit, and payroll snapshot.
 
 This separation of evidence and mandatory human conclusion is the heart of the
@@ -69,9 +79,9 @@ reconciling an ineligible report.
 
 Customer billing and worker pay are independent hourly rate catalogs:
 
-- A customer-bill rate always belongs to a customer and may be specialized by
-  facility, employee, job, priority, and effective date.
-- A worker-pay rate may be a tenant default or vary by customer, facility,
+- A customer-bill rate always belongs to a branch-owned customer and may be specialized by
+  employee, job, priority, and effective date.
+- A worker-pay rate may be a branch default or vary by customer,
   employee, job, priority, and effective date.
 - Shepherd resolves both rates separately, requires the same currency, and
   snapshots both selected rate IDs and decimal values on the assignment.
@@ -94,9 +104,9 @@ a salary-rule engine, or generic ERP accounting. Those are out of scope unless
 the client's real staffing contract changes.
 
 Customer evidence remains independently editable only until reconciliation.
-Every replacement archives the superseded facility, exact interval, notes,
+Every replacement archives the superseded customer, exact interval, notes,
 original recorder, and superseding actor. Planned and urgent records are
-classified as matched only when facility, exact start, exact end, and duration
+classified as matched only when customer, exact start, exact end, and duration
 all agree; human reconciliation remains mandatory.
 
 Payroll consumes only the locked worker-pay snapshot. It dates the staffing
@@ -154,6 +164,22 @@ and creates the Auth-owned `auth` schema. GoTrue and Shepherd cannot start until
 the job exits successfully. Seeing `postgres-bootstrap` as `Exited (0)` in
 `docker compose ps -a` is expected; it is a completed setup job, not a failed
 long-running service.
+
+All long-lived development containers use `restart: unless-stopped`, so they
+recover consistently after Docker restarts. GoTrue also depends directly on
+healthy PostgreSQL, not only on the completed bootstrap job. Its entrypoint
+waits for the private `postgres-db` DNS name and TCP listener before starting
+GoTrue, which prevents a transient Docker DNS race from putting GoTrue into
+exponential restart backoff. The bounded wait is configured with
+`AUTH_DB_STARTUP_TIMEOUT_SECS`, `AUTH_DB_STARTUP_RETRY_INTERVAL_SECS`, and
+`AUTH_DB_STARTUP_PROBE_TIMEOUT_SECS` (development defaults: 240, 2, and 2
+seconds). Each must be a positive integer.
+
+One `docker compose up -d --wait` must converge; repeatedly running `up`
+should not be necessary. If it does not, inspect the actual failing dependency
+with `docker compose ps -a` and
+`docker compose logs postgres-db postgres-bootstrap supabase-auth` rather than
+restarting the graph blindly.
 
 Do not run `scripts/bootstrap-postgres.sh` directly and do not install a
 PostgreSQL client on the host or server image for bootstrap. The job uses
@@ -248,7 +274,8 @@ no longer match the configured issuer, so users should expect to sign in again.
 
 The API validates signed access tokens locally and caches each successfully
 resolved `AuthenticatedUser` in Redis. The cache contains the Shepherd tenant
-and account IDs, username, application-owned email, roles, and permissions. It
+and account IDs, username, application-owned email, roles, permissions, and
+PostgreSQL-authoritative accessible branch IDs. It
 uses a deterministic hashed identity key and a mandatory 60-second expiry by
 default, so repeated requests avoid querying account and authorization tables
 without allowing Redis keys to grow indefinitely.
@@ -260,6 +287,26 @@ lookup. If `tid` is absent or stale, middleware reloads PostgreSQL authority
 and returns `401`; the existing browser API client refreshes the GoTrue session
 once and retries with the newly signed claim. Shepherd cannot update an
 already-signed JWT in place and never signs a replacement itself.
+
+### Branch-aware account provisioning
+
+The frontend never calls the GoTrue admin API. It sends a persistent UUID
+`Idempotency-Key` plus username, normalized email, optional initial password,
+primary role, and explicit `branch_ids` to
+`POST /api/admin/auth-users`. The backend validates data-driven role delegation,
+branch cardinality, active branch status, and actor branch authority before
+creating the provider user. The password is neither logged nor included in a
+recoverable ledger; only a SHA-256 request fingerprint is persisted, and that
+fingerprint covers the selected branches.
+
+After GoTrue accepts the identity, Shepherd commits the application account,
+primary role, branch assignments, issuer/subject mapping, provisioning ledger,
+and application-specific records in one tenant transaction. A new `staff`
+account receives its active HR employee row in its single selected branch.
+Failure compensates the provider user when possible, while a retry with the
+same idempotency key recovers or returns the original result. Branch managers
+and supervisors cannot use a crafted request to provision accounts outside
+their authorized branches or above their database grant.
 
 PostgreSQL remains authoritative. Cache misses and Redis outages fall back to
 the application database, while missing or disabled accounts remain rejected.
@@ -279,28 +326,43 @@ PostgreSQL continues to store those values as constrained text; repository
 boundaries reject and log unknown persisted values instead of allowing raw
 status strings into domain logic.
 
-### Staffing roles and current SME responsibility bands
+### Branch organization and staffing roles
 
-Shepherd defines five distinct organizational role codes:
-`owner -> director -> manager -> supervisor -> staff`. The arrow describes
-business rank only; it is not automatic permission inheritance. The current
-client configuration deliberately groups them into three equivalent
-responsibility bands:
+Each tenant is one staffing company with independent internal branches. Each
+customer belongs to exactly one branch and is itself the staffed workplace;
+Shepherd does not model customer facilities. HR employees, payroll inputs,
+staffing configuration, customers, work evidence, and financial results carry
+the owning branch and are protected by tenant plus active-branch RLS.
 
-- `owner` and `director`: tenant administration, customer management,
-  staffing coordination, customer-evidence entry, and final reconciliation.
-- `manager` and `supervisor`: day-to-day customer management, dispatch,
-  optional planned shifts, evidence review, and reconciliation. They may
-  provision only `staff` accounts.
-- `staff`: urgent self/peer Start and Finish plus planned **My shifts**
-  self-service.
+Shepherd defines five organizational role codes:
+`tenant_owner -> executive_manager -> branch_manager -> supervisor -> staff`.
+The arrow describes business reporting rank, not automatic permission
+inheritance:
 
-Higher-ranked coordination roles do not receive staff-only clocking
-permissions. Consequently, an owner or director does not see **Ca kế hoạch của
-tôi** or the staff recording page by default, but does see and operate **Đối
-soát công việc phát sinh**. The owner/director and manager/supervisor pairs use
-the same permission grants today while remaining separate database role codes
-so a future client can split their responsibilities without renaming accounts.
+- `tenant_owner` is tenant-wide and has no branch-assignment rows.
+- `executive_manager` receives one or more branches selected by the owner.
+- `branch_manager`, `supervisor`, and `staff` each belong to exactly one branch.
+- Coordination roles do not receive staff-only clocking permissions. `staff`
+  owns urgent self/peer Start and Finish plus planned **My shifts** self-service.
+
+Role delegation and branch cardinality are database-driven. Tenant owners may
+create any catalog role; executive managers may create branch managers,
+supervisors, and staff; branch managers may create supervisors and staff; and
+supervisors may create staff. Non-tenant-wide actors can assign only branches
+already in their authoritative access set.
+
+The browser stores one active branch per tenant and sends
+`X-Shepherd-Branch-Id` on Shepherd API calls. Multi-branch users switch branches
+from the application header; switching invalidates cached queries. Middleware
+validates the requested branch against the PostgreSQL-resolved
+`AuthenticatedUser`, and tenant transactions set `app.branch_id` for RLS. JWTs
+continue to carry only the `tid` tenant hint—roles and branch access are never
+trusted from JWT claims or browser headers.
+
+Notification destinations are configured per branch. Accepted work actions
+write branch-owned outbox rows in the same transaction, and delivery
+idempotency includes tenant, branch, event, aggregate, channel, and destination
+so one branch cannot suppress or receive another branch's notification.
 
 Navigation and backend authorization are permission-driven. The
 `/operations/customers` page lists customers for
@@ -312,7 +374,7 @@ Navigation and backend authorization are permission-driven. The
 
 Customer updates are tenant-scoped, audited with the acting account, and can
 change the normalized code, name, optional billing email, and active/disabled
-status. Reconciliation-only users may load the active customer-facility
+status, workplace address, IANA time zone, and owning branch. Reconciliation-only users may load the active customer
 directory without receiving staff Start, Finish, or peer-clocking permission.
 
 The permission-driven `/operations/staffing-configuration` page manages the
@@ -333,20 +395,23 @@ rerunning the same one-shot bootstrap job, GoTrue migrations, API-based Auth
 provisioning, and Shepherd data seeding. Never run that destructive development
 workflow in production.
 
-The development catalog uses one representative role from each current band:
-`iceorca` is `owner`, each `*_manager_1/2` account is `manager`, and
-each `*_staff_1..4` account is `staff`. Each tenant also receives customer-
-and employee-specific rate examples, staffing eligibility for its four staff
-accounts, a planned assignment, and a completed urgent report whose staff-side
-actor is a staff account. The full copy/paste login list remains in
-`scripts/dev-auth-accounts.tsv`. After changing the role catalog or
+Each development tenant receives two branches: `head-office` and
+`north-branch`. Above them are one `tenant_owner` and one
+`executive_manager`; the executive manager is assigned to both branches. Each
+branch has exactly one `branch_manager`, two `supervisor` accounts, and four
+`staff` accounts, for 16 accounts per tenant and 48 GoTrue/application accounts
+in total. The full six-column copy/paste catalog—tenant, role, username, email,
+password, and branch code—is `scripts/dev-auth-accounts.tsv`. The seeding script
+parses all six columns, provisions credentials through the GoTrue admin API,
+and passes identity subjects to the Rust application seeder; it never writes
+GoTrue tables directly. After changing the role catalog or
 grants, rerun `sh scripts/dev-data-seeding.sh`; the reset recreates Auth users,
 so sign in again afterward.
 
 Database integration tests create isolated temporary tenants and must remove
 all of their transactional and master data when they finish. Passing tests must
-not leave `urgent-*` or other test tenants, accounts, customers, jobs, or
-facilities mixed into the development seed data.
+not leave `urgent-*` or other test tenants, branches, accounts, customers, or
+jobs mixed into the development seed data.
 
 ## Background worker resilience
 

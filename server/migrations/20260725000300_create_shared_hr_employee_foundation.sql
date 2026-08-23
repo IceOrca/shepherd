@@ -1,6 +1,7 @@
 CREATE TABLE hr_departments (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
+    branch_id UUID NOT NULL,
     code TEXT NOT NULL,
     name TEXT NOT NULL,
     parent_department_id UUID,
@@ -11,9 +12,14 @@ CREATE TABLE hr_departments (
     created_by_account_id UUID,
     updated_by_account_id UUID,
     CONSTRAINT hr_departments_tenant_id_id_uq UNIQUE (tenant_id, id),
-    CONSTRAINT hr_departments_parent_tenant_fk
-        FOREIGN KEY (tenant_id, parent_department_id)
-        REFERENCES hr_departments (tenant_id, id)
+    CONSTRAINT hr_departments_tenant_branch_id_id_uq UNIQUE (tenant_id, branch_id, id),
+    CONSTRAINT hr_departments_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id)
+        REFERENCES branches (tenant_id, id)
+        ON DELETE RESTRICT,
+    CONSTRAINT hr_departments_parent_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id, parent_department_id)
+        REFERENCES hr_departments (tenant_id, branch_id, id)
         ON DELETE RESTRICT,
     CONSTRAINT hr_departments_created_by_tenant_fk
         FOREIGN KEY (tenant_id, created_by_account_id)
@@ -36,14 +42,15 @@ CREATE TABLE hr_departments (
     CONSTRAINT hr_departments_updated_after_created CHECK (updated_at >= created_at)
 );
 
-CREATE UNIQUE INDEX hr_departments_tenant_code_normalized_uq
-    ON hr_departments (tenant_id, lower(code));
-CREATE INDEX hr_departments_tenant_parent_idx ON hr_departments (tenant_id, parent_department_id);
-CREATE INDEX hr_departments_tenant_status_idx ON hr_departments (tenant_id, status);
+CREATE UNIQUE INDEX hr_departments_branch_code_normalized_uq
+    ON hr_departments (tenant_id, branch_id, lower(code));
+CREATE INDEX hr_departments_branch_parent_idx ON hr_departments (tenant_id, branch_id, parent_department_id);
+CREATE INDEX hr_departments_branch_status_idx ON hr_departments (tenant_id, branch_id, status);
 
 CREATE TABLE hr_jobs (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
+    branch_id UUID NOT NULL,
     code TEXT NOT NULL,
     name TEXT NOT NULL,
     department_id UUID,
@@ -53,9 +60,14 @@ CREATE TABLE hr_jobs (
     created_by_account_id UUID,
     updated_by_account_id UUID,
     CONSTRAINT hr_jobs_tenant_id_id_uq UNIQUE (tenant_id, id),
-    CONSTRAINT hr_jobs_department_tenant_fk
-        FOREIGN KEY (tenant_id, department_id)
-        REFERENCES hr_departments (tenant_id, id)
+    CONSTRAINT hr_jobs_tenant_branch_id_id_uq UNIQUE (tenant_id, branch_id, id),
+    CONSTRAINT hr_jobs_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id)
+        REFERENCES branches (tenant_id, id)
+        ON DELETE RESTRICT,
+    CONSTRAINT hr_jobs_department_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id, department_id)
+        REFERENCES hr_departments (tenant_id, branch_id, id)
         ON DELETE RESTRICT,
     CONSTRAINT hr_jobs_created_by_tenant_fk
         FOREIGN KEY (tenant_id, created_by_account_id)
@@ -77,13 +89,14 @@ CREATE TABLE hr_jobs (
     CONSTRAINT hr_jobs_updated_after_created CHECK (updated_at >= created_at)
 );
 
-CREATE UNIQUE INDEX hr_jobs_tenant_code_normalized_uq ON hr_jobs (tenant_id, lower(code));
-CREATE INDEX hr_jobs_tenant_department_idx ON hr_jobs (tenant_id, department_id);
-CREATE INDEX hr_jobs_tenant_status_idx ON hr_jobs (tenant_id, status);
+CREATE UNIQUE INDEX hr_jobs_branch_code_normalized_uq ON hr_jobs (tenant_id, branch_id, lower(code));
+CREATE INDEX hr_jobs_branch_department_idx ON hr_jobs (tenant_id, branch_id, department_id);
+CREATE INDEX hr_jobs_branch_status_idx ON hr_jobs (tenant_id, branch_id, status);
 
 CREATE TABLE hr_employees (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
+    branch_id UUID NOT NULL,
     account_id UUID,
     employee_code TEXT NOT NULL,
     display_name TEXT NOT NULL,
@@ -98,11 +111,16 @@ CREATE TABLE hr_employees (
     created_by_account_id UUID,
     updated_by_account_id UUID,
     CONSTRAINT hr_employees_tenant_id_id_uq UNIQUE (tenant_id, id),
+    CONSTRAINT hr_employees_tenant_branch_id_id_uq UNIQUE (tenant_id, branch_id, id),
     CONSTRAINT hr_employees_tenant_account_uq UNIQUE (tenant_id, account_id),
     CONSTRAINT hr_employees_account_tenant_fk
         FOREIGN KEY (tenant_id, account_id)
         REFERENCES accounts (tenant_id, id)
         ON DELETE SET NULL (account_id),
+    CONSTRAINT hr_employees_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id)
+        REFERENCES branches (tenant_id, id)
+        ON DELETE RESTRICT,
     CONSTRAINT hr_employees_created_by_tenant_fk
         FOREIGN KEY (tenant_id, created_by_account_id)
         REFERENCES accounts (tenant_id, id)
@@ -136,18 +154,18 @@ CREATE TABLE hr_employees (
     CONSTRAINT hr_employees_updated_after_created CHECK (updated_at >= created_at)
 );
 
-CREATE UNIQUE INDEX hr_employees_tenant_code_normalized_uq
-    ON hr_employees (tenant_id, lower(employee_code));
-CREATE UNIQUE INDEX hr_employees_tenant_badge_normalized_uq
-    ON hr_employees (tenant_id, lower(badge_id))
+CREATE UNIQUE INDEX hr_employees_branch_code_normalized_uq
+    ON hr_employees (tenant_id, branch_id, lower(employee_code));
+CREATE UNIQUE INDEX hr_employees_branch_badge_normalized_uq
+    ON hr_employees (tenant_id, branch_id, lower(badge_id))
     WHERE badge_id IS NOT NULL;
-CREATE INDEX hr_employees_tenant_status_idx ON hr_employees (tenant_id, status);
-CREATE INDEX hr_employees_tenant_display_name_idx ON hr_employees (tenant_id, lower(display_name));
+CREATE INDEX hr_employees_branch_status_idx ON hr_employees (tenant_id, branch_id, status);
+CREATE INDEX hr_employees_branch_display_name_idx ON hr_employees (tenant_id, branch_id, lower(display_name));
 
 ALTER TABLE hr_departments
-    ADD CONSTRAINT hr_departments_manager_tenant_fk
-    FOREIGN KEY (tenant_id, manager_employee_id)
-    REFERENCES hr_employees (tenant_id, id)
+    ADD CONSTRAINT hr_departments_manager_branch_tenant_fk
+    FOREIGN KEY (tenant_id, branch_id, manager_employee_id)
+    REFERENCES hr_employees (tenant_id, branch_id, id)
     ON DELETE SET NULL (manager_employee_id);
 
 CREATE TABLE hr_employee_assignments (
@@ -155,7 +173,6 @@ CREATE TABLE hr_employee_assignments (
     tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
     employee_id UUID NOT NULL,
     branch_id UUID NOT NULL,
-    facility_id UUID,
     department_id UUID,
     job_id UUID,
     manager_employee_id UUID,
@@ -165,25 +182,21 @@ CREATE TABLE hr_employee_assignments (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_by_account_id UUID,
     CONSTRAINT hr_employee_assignments_tenant_id_id_uq UNIQUE (tenant_id, id),
-    CONSTRAINT hr_employee_assignments_employee_tenant_fk
-        FOREIGN KEY (tenant_id, employee_id)
-        REFERENCES hr_employees (tenant_id, id)
+    CONSTRAINT hr_employee_assignments_employee_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id, employee_id)
+        REFERENCES hr_employees (tenant_id, branch_id, id)
         ON DELETE RESTRICT,
     CONSTRAINT hr_employee_assignments_branch_tenant_fk
         FOREIGN KEY (tenant_id, branch_id)
         REFERENCES branches (tenant_id, id)
         ON DELETE RESTRICT,
-    CONSTRAINT hr_employee_assignments_facility_branch_tenant_fk
-        FOREIGN KEY (tenant_id, branch_id, facility_id)
-        REFERENCES facilities (tenant_id, branch_id, id)
+    CONSTRAINT hr_employee_assignments_department_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id, department_id)
+        REFERENCES hr_departments (tenant_id, branch_id, id)
         ON DELETE RESTRICT,
-    CONSTRAINT hr_employee_assignments_department_tenant_fk
-        FOREIGN KEY (tenant_id, department_id)
-        REFERENCES hr_departments (tenant_id, id)
-        ON DELETE RESTRICT,
-    CONSTRAINT hr_employee_assignments_job_tenant_fk
-        FOREIGN KEY (tenant_id, job_id)
-        REFERENCES hr_jobs (tenant_id, id)
+    CONSTRAINT hr_employee_assignments_job_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id, job_id)
+        REFERENCES hr_jobs (tenant_id, branch_id, id)
         ON DELETE RESTRICT,
     CONSTRAINT hr_employee_assignments_manager_tenant_fk
         FOREIGN KEY (tenant_id, manager_employee_id)
@@ -205,8 +218,6 @@ CREATE INDEX hr_employee_assignments_tenant_employee_dates_idx
     ON hr_employee_assignments (tenant_id, employee_id, date_start DESC, date_end);
 CREATE INDEX hr_employee_assignments_tenant_branch_idx
     ON hr_employee_assignments (tenant_id, branch_id);
-CREATE INDEX hr_employee_assignments_tenant_facility_idx
-    ON hr_employee_assignments (tenant_id, facility_id);
 CREATE INDEX hr_employee_assignments_tenant_department_idx
     ON hr_employee_assignments (tenant_id, department_id);
 CREATE INDEX hr_employee_assignments_tenant_manager_idx
@@ -231,18 +242,24 @@ INSERT INTO role_permissions (role_code, permission_code)
 SELECT role.code, permission.code
 FROM roles AS role
 CROSS JOIN permissions AS permission
-WHERE role.code IN ('owner', 'director')
+WHERE role.code = 'tenant_owner'
   AND permission.code LIKE 'hr.%'
   AND permission.code NOT LIKE '%.self.%';
 
 INSERT INTO role_permissions (role_code, permission_code)
 VALUES
-    ('manager', 'hr.employees.read'),
-    ('manager', 'hr.employees.manage'),
-    ('manager', 'hr.departments.read'),
-    ('manager', 'hr.jobs.read'),
-    ('manager', 'hr.assignments.read'),
-    ('manager', 'hr.assignments.manage'),
+    ('executive_manager', 'hr.employees.read'),
+    ('executive_manager', 'hr.employees.manage'),
+    ('executive_manager', 'hr.departments.read'),
+    ('executive_manager', 'hr.jobs.read'),
+    ('executive_manager', 'hr.assignments.read'),
+    ('executive_manager', 'hr.assignments.manage'),
+    ('branch_manager', 'hr.employees.read'),
+    ('branch_manager', 'hr.employees.manage'),
+    ('branch_manager', 'hr.departments.read'),
+    ('branch_manager', 'hr.jobs.read'),
+    ('branch_manager', 'hr.assignments.read'),
+    ('branch_manager', 'hr.assignments.manage'),
     ('supervisor', 'hr.employees.read'),
     ('supervisor', 'hr.employees.manage'),
     ('supervisor', 'hr.departments.read'),

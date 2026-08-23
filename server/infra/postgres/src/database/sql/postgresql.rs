@@ -17,6 +17,8 @@ pub enum TenantDbErr {
     TenantInactive(Uuid),
     #[error("tenant row-level-security context mismatch: expected {expected}, actual {actual:?}")]
     TenantContextMismatch { expected: Uuid, actual: Option<Uuid> },
+    #[error("branch row-level-security context mismatch: expected {expected}, actual {actual:?}")]
+    BranchContextMismatch { expected: Uuid, actual: Option<Uuid> },
     #[error("database role must not be a superuser or have BYPASSRLS")]
     RowLevelSecurityBypassed,
     #[error(transparent)]
@@ -108,6 +110,14 @@ impl PostgresCli {
     }
 
     pub async fn begin_tenant(&self, tenant_id: Uuid) -> Result<TenantTransaction, TenantDbErr> {
+        self.begin_tenant_with_branch(tenant_id, None).await
+    }
+
+    pub async fn begin_tenant_with_branch(
+        &self,
+        tenant_id: Uuid,
+        branch_id: Option<Uuid>,
+    ) -> Result<TenantTransaction, TenantDbErr> {
         let mut transaction: Transaction<'static, Postgres> = self.pool.begin().await?;
         let tenant_is_active: bool = sqlx::query_scalar!(
             r#"SELECT EXISTS (SELECT 1 FROM tenants WHERE id = $1 AND status = 'active') AS "exists!""#,
@@ -138,7 +148,37 @@ impl PostgresCli {
             });
         }
 
-        Ok(TenantTransaction { tenant_id, transaction })
+        let branch_context: String = branch_id.map_or_else(String::new, |id: Uuid| id.to_string());
+        sqlx::query_scalar!(
+            r#"SELECT set_config('app.branch_id', $1, true) AS "branch_context!""#,
+            branch_context,
+        )
+        .fetch_one(&mut *transaction)
+        .await?;
+        let effective_branch_id: Option<Uuid> =
+            sqlx::query_scalar!(r#"SELECT NULLIF(current_setting('app.branch_id', true), '')::UUID AS "branch_id?""#,)
+                .fetch_one(&mut *transaction)
+                .await?;
+        if let Some(expected_branch_id) = branch_id
+            && effective_branch_id != Some(expected_branch_id)
+        {
+            return Err(TenantDbErr::BranchContextMismatch {
+                expected: expected_branch_id,
+                actual: effective_branch_id,
+            });
+        }
+
+        trace!(
+            operation = "postgres.begin_tenant_with_branch",
+            tenant_id = %tenant_id,
+            branch_id = ?branch_id,
+            "PostgreSQL tenant and optional branch RLS context established"
+        );
+        Ok(TenantTransaction {
+            tenant_id,
+            branch_id,
+            transaction,
+        })
     }
 
     /// Runs an SQLx-only operation with transaction-local RLS context and owns
@@ -275,12 +315,17 @@ impl PostgresCli {
 
 pub struct TenantTransaction {
     tenant_id: Uuid,
+    branch_id: Option<Uuid>,
     transaction: Transaction<'static, Postgres>,
 }
 
 impl TenantTransaction {
     pub fn tenant_id(&self) -> Uuid {
         self.tenant_id
+    }
+
+    pub fn branch_id(&self) -> Option<Uuid> {
+        self.branch_id
     }
 
     pub fn connection(&mut self) -> &mut PgConnection {
@@ -500,7 +545,6 @@ mod tests {
         let account_id: Uuid = Uuid::new_v4();
         let employee_id: Uuid = Uuid::new_v4();
         let branch_id: Uuid = Uuid::new_v4();
-        let facility_id: Uuid = Uuid::new_v4();
         let first_session_id: Uuid = Uuid::new_v4();
         let tenant_slug: String = format!("attendance-{}", tenant_id.simple());
         client
@@ -530,17 +574,6 @@ mod tests {
         .await?;
         sqlx::query!(
             r#"
-            INSERT INTO facilities (id, tenant_id, branch_id, code, name)
-            VALUES ($1, $2, $3, 'attendance-test-facility', 'Attendance test facility')
-            "#,
-            facility_id,
-            tenant_id,
-            branch_id,
-        )
-        .execute(transaction.connection())
-        .await?;
-        sqlx::query!(
-            r#"
             INSERT INTO account_roles (tenant_id, account_id, role_code)
             VALUES ($1, $2, 'staff')
             "#,
@@ -552,12 +585,13 @@ mod tests {
         sqlx::query!(
             r#"
             INSERT INTO hr_employees (
-                id, tenant_id, account_id, employee_code, display_name, status, hire_date
+                id, tenant_id, branch_id, account_id, employee_code, display_name, status, hire_date
             )
-            VALUES ($1, $2, $3, 'attendance-test-employee', 'Attendance test employee', 'active', CURRENT_DATE)
+            VALUES ($1, $2, $3, $4, 'attendance-test-employee', 'Attendance test employee', 'active', CURRENT_DATE)
             "#,
             employee_id,
             tenant_id,
+            branch_id,
             account_id,
         )
         .execute(transaction.connection())
@@ -565,14 +599,14 @@ mod tests {
         sqlx::query!(
             r#"
             INSERT INTO hr_attendance_sessions (
-                id, tenant_id, employee_id, facility_id, check_in_at, check_in_by_account_id
+                id, tenant_id, branch_id, employee_id, check_in_at, check_in_by_account_id
             )
             VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP - INTERVAL '2 hours', $5)
             "#,
             first_session_id,
             tenant_id,
+            branch_id,
             employee_id,
-            facility_id,
             account_id,
         )
         .execute(transaction.connection())
@@ -583,13 +617,13 @@ mod tests {
             .await?;
         let duplicate_open_session: Result<PgQueryResult, sqlx::Error> = sqlx::query!(
             r#"
-            INSERT INTO hr_attendance_sessions (id, tenant_id, employee_id, facility_id, check_in_by_account_id)
+            INSERT INTO hr_attendance_sessions (id, tenant_id, branch_id, employee_id, check_in_by_account_id)
             VALUES ($1, $2, $3, $4, $5)
             "#,
             Uuid::new_v4(),
             tenant_id,
+            branch_id,
             employee_id,
-            facility_id,
             account_id,
         )
         .execute(transaction.connection())
@@ -624,13 +658,13 @@ mod tests {
 
         sqlx::query!(
             r#"
-            INSERT INTO hr_attendance_sessions (id, tenant_id, employee_id, facility_id, check_in_by_account_id)
+            INSERT INTO hr_attendance_sessions (id, tenant_id, branch_id, employee_id, check_in_by_account_id)
             VALUES ($1, $2, $3, $4, $5)
             "#,
             Uuid::new_v4(),
             tenant_id,
+            branch_id,
             employee_id,
-            facility_id,
             account_id,
         )
         .execute(transaction.connection())
@@ -647,21 +681,21 @@ mod tests {
         .fetch_one(transaction.connection())
         .await?;
         assert_eq!(session_count, 2, "a completed session must not block the next check in");
-        let sessions_at_facility: i64 = sqlx::query_scalar!(
+        let sessions_at_branch: i64 = sqlx::query_scalar!(
             r#"
             SELECT COUNT(*) AS "count!"
             FROM hr_attendance_sessions
-            WHERE tenant_id = $1 AND employee_id = $2 AND facility_id = $3
+            WHERE tenant_id = $1 AND employee_id = $2 AND branch_id = $3
             "#,
             tenant_id,
             employee_id,
-            facility_id,
+            branch_id,
         )
         .fetch_one(transaction.connection())
         .await?;
         assert_eq!(
-            sessions_at_facility, session_count,
-            "every attendance session must preserve its work facility"
+            sessions_at_branch, session_count,
+            "every attendance session must preserve its branch"
         );
         transaction.rollback().await?;
 

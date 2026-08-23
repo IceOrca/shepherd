@@ -12,11 +12,11 @@ use uuid::Uuid;
 use infra_postgres::{DatabaseAdapter, TenantDbErr, TenantTransaction};
 use sqlx::PgConnection;
 
-pub struct PeopleProvider {
+pub struct PeopleDb {
     db: Arc<DatabaseAdapter>,
 }
 
-impl PeopleProvider {
+impl PeopleDb {
     pub fn new_arc(db: Arc<DatabaseAdapter>) -> Arc<Self> {
         Arc::new(Self { db })
     }
@@ -127,7 +127,6 @@ struct AssignmentRow {
     id: Uuid,
     employee_id: Uuid,
     branch_id: Uuid,
-    facility_id: Option<Uuid>,
     department_id: Option<Uuid>,
     job_id: Option<Uuid>,
     manager_employee_id: Option<Uuid>,
@@ -141,7 +140,7 @@ struct AssignmentRow {
 struct AttendanceSessionRow {
     id: Uuid,
     employee_id: Uuid,
-    facility_id: Uuid,
+    branch_id: Uuid,
     check_in_at: DateTime<Utc>,
     check_out_at: Option<DateTime<Utc>>,
     worked_seconds: Option<i64>,
@@ -154,7 +153,7 @@ impl From<AttendanceSessionRow> for AttendanceSession {
         Self {
             id: row.id,
             employee_id: row.employee_id,
-            facility_id: row.facility_id,
+            branch_id: row.branch_id,
             check_in_at: row.check_in_at,
             check_out_at: row.check_out_at,
             worked_seconds: row.worked_seconds,
@@ -170,7 +169,6 @@ impl From<AssignmentRow> for EmployeeAssignment {
             id: row.id,
             employee_id: row.employee_id,
             branch_id: row.branch_id,
-            facility_id: row.facility_id,
             department_id: row.department_id,
             job_id: row.job_id,
             manager_employee_id: row.manager_employee_id,
@@ -183,7 +181,7 @@ impl From<AssignmentRow> for EmployeeAssignment {
 }
 
 #[async_trait]
-impl PeopleRepo for PeopleProvider {
+impl PeopleRepo for PeopleDb {
     async fn list_employees(&self, tenant_id: Uuid) -> Result<Vec<Employee>, HrError> {
         let rows: Vec<EmployeeRow> = self
             .db
@@ -693,7 +691,7 @@ impl PeopleRepo for PeopleProvider {
                 let rows: Vec<AssignmentRow> = sqlx::query_as!(
                     AssignmentRow,
                     r#"
-                    SELECT id, employee_id, branch_id, facility_id, department_id, job_id, manager_employee_id,
+                    SELECT id, employee_id, branch_id, department_id, job_id, manager_employee_id,
                            date_start, date_end, is_primary, created_at
                     FROM hr_employee_assignments
                     WHERE tenant_id = $1 AND employee_id = $2
@@ -787,18 +785,17 @@ impl PeopleRepo for PeopleProvider {
             AssignmentRow,
             r#"
             INSERT INTO hr_employee_assignments (
-                id, tenant_id, employee_id, branch_id, facility_id, department_id, job_id, manager_employee_id,
+                id, tenant_id, employee_id, branch_id, department_id, job_id, manager_employee_id,
                 date_start, date_end, is_primary, created_by_account_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-            RETURNING id, employee_id, branch_id, facility_id, department_id, job_id, manager_employee_id,
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            RETURNING id, employee_id, branch_id, department_id, job_id, manager_employee_id,
                       date_start, date_end, is_primary, created_at
             "#,
             assignment_id,
             tenant_id,
             employee_id,
             input.branch_id,
-            input.facility_id,
             input.department_id,
             input.job_id,
             input.manager_employee_id,
@@ -815,12 +812,11 @@ impl PeopleRepo for PeopleProvider {
             .await
             .map_err(|error| database_failure("commit assignment creation", tenant_id, error))?;
         info!(
-            "Employee assignment created: tenant_id={} employee_id={} assignment_id={} branch_id={} facility_id={:?} date_start={} date_end={:?} primary={} audit_account_id={}",
+            "Employee assignment created: tenant_id={} employee_id={} assignment_id={} branch_id={} date_start={} date_end={:?} primary={} audit_account_id={}",
             tenant_id,
             employee_id,
             assignment_id,
             input.branch_id,
-            input.facility_id,
             input.date_start,
             input.date_end,
             input.is_primary,
@@ -849,7 +845,7 @@ impl PeopleRepo for PeopleProvider {
                 let rows: Vec<AttendanceSessionRow> = sqlx::query_as!(
                     AttendanceSessionRow,
                     r#"
-                    SELECT id, employee_id, facility_id, check_in_at, check_out_at,
+                    SELECT id, employee_id, branch_id, check_in_at, check_out_at,
                            worked_seconds, created_at, updated_at
                     FROM hr_attendance_sessions
                     WHERE tenant_id = $1 AND employee_id = $2
@@ -879,7 +875,7 @@ impl PeopleRepo for PeopleProvider {
         attendance_session_id: Uuid,
         employee_id: Uuid,
         account_id: Uuid,
-        facility_id: Uuid,
+        branch_id: Uuid,
     ) -> Result<AttendanceSession, HrError> {
         let row: Option<AttendanceSessionRow> = self
             .db
@@ -888,30 +884,26 @@ impl PeopleRepo for PeopleProvider {
                     AttendanceSessionRow,
                     r#"
                     INSERT INTO hr_attendance_sessions (
-                        id, tenant_id, employee_id, facility_id, check_in_by_account_id
+                        id, tenant_id, branch_id, employee_id, check_in_by_account_id
                     )
-                    SELECT $1, $2, employee.id, facility.id, $4
+                    SELECT $1, $2, branch.id, employee.id, $4
                     FROM hr_employees AS employee
-                    INNER JOIN facilities AS facility
-                        ON facility.tenant_id = employee.tenant_id
-                       AND facility.id = $5
-                       AND facility.status = 'active'
                     INNER JOIN branches AS branch
-                        ON branch.tenant_id = facility.tenant_id
-                       AND branch.id = facility.branch_id
+                        ON branch.tenant_id = employee.tenant_id
+                       AND branch.id = $5
                        AND branch.status = 'active'
                     WHERE employee.tenant_id = $2
                       AND employee.id = $3
                       AND employee.account_id = $4
                       AND employee.status = 'active'
-                    RETURNING id, employee_id, facility_id, check_in_at, check_out_at,
+                    RETURNING id, employee_id, branch_id, check_in_at, check_out_at,
                               worked_seconds, created_at, updated_at
                     "#,
                     attendance_session_id,
                     tenant_id,
                     employee_id,
                     account_id,
-                    facility_id,
+                    branch_id,
                 )
                 .fetch_optional(connection)
                 .await
@@ -920,8 +912,8 @@ impl PeopleRepo for PeopleProvider {
             .map_err(|error: TenantDbErr| tenant_mutation_failure("check in employee", tenant_id, error))?;
         let row: AttendanceSessionRow = row.ok_or(HrError::NotFound)?;
         info!(
-            "Employee checked in: tenant_id={} employee_id={} attendance_session_id={} account_id={} facility_id={}",
-            tenant_id, employee_id, attendance_session_id, account_id, facility_id
+            "Employee checked in: tenant_id={} employee_id={} attendance_session_id={} account_id={} branch_id={}",
+            tenant_id, employee_id, attendance_session_id, account_id, branch_id
         );
         Ok(row.into())
     }
@@ -949,7 +941,7 @@ impl PeopleRepo for PeopleProvider {
                       AND employee.tenant_id = attendance.tenant_id
                       AND employee.id = attendance.employee_id
                       AND employee.account_id = $3
-                    RETURNING attendance.id, attendance.employee_id, attendance.facility_id,
+                    RETURNING attendance.id, attendance.employee_id, attendance.branch_id,
                               attendance.check_in_at, attendance.check_out_at, attendance.worked_seconds,
                               attendance.created_at, attendance.updated_at
                     "#,

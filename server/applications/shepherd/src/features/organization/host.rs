@@ -2,14 +2,12 @@ use std::sync::Arc;
 
 use axum::{Extension, Json, Router, extract::State, http::StatusCode, routing::get};
 use tracing::{error, warn, info, debug, trace};
-use crate::features::organization::core::{BranchSummary, FacilitySummary, OrganizationError};
+use crate::features::organization::core::{BranchSummary, OrganizationError};
 
 use crate::{AppContext, auth::AuthenticatedUser};
 
 pub fn routes() -> Router<Arc<AppContext>> {
-    Router::new()
-        .route("/branches", get(list_branches))
-        .route("/facilities", get(list_facilities))
+    Router::new().route("/branches", get(list_branches))
 }
 
 pub async fn list_branches(
@@ -17,25 +15,22 @@ pub async fn list_branches(
     Extension(user): Extension<AuthenticatedUser>,
 ) -> Result<Json<Vec<BranchSummary>>, StatusCode> {
     require_permission(&user, "business.branches.read")?;
-    host.core
+    let mut branches: Vec<BranchSummary> = host
+        .core
         .organization
         .list_active_branches(user.tenant_id)
         .await
-        .map(Json)
-        .map_err(|error| business_status("list branches", &user, error))
-}
-
-pub async fn list_facilities(
-    State(host): State<Arc<AppContext>>,
-    Extension(user): Extension<AuthenticatedUser>,
-) -> Result<Json<Vec<FacilitySummary>>, StatusCode> {
-    require_permission(&user, "business.facilities.read")?;
-    host.core
-        .organization
-        .list_active_facilities(user.tenant_id)
-        .await
-        .map(Json)
-        .map_err(|error| business_status("list facilities", &user, error))
+        .map_err(|error| business_status("list branches", &user, error))?;
+    branches.retain(|branch: &BranchSummary| user.branch_ids.contains(&branch.id));
+    debug!(
+        operation = "organization.list_accessible_branches",
+        tenant_id = %user.tenant_id,
+        account_id = %user.account_id,
+        active_branch_id = ?user.active_branch_id,
+        branch_count = branches.len(),
+        "Returning only branches authorized for the current account"
+    );
+    Ok(Json(branches))
 }
 
 fn require_permission(user: &AuthenticatedUser, permission: &str) -> Result<(), StatusCode> {

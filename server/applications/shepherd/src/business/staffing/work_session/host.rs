@@ -249,6 +249,7 @@ mod tests {
     use super::{AuthenticatedUser, HeaderMap, StatusCode, idempotency_key};
 
     fn user() -> AuthenticatedUser {
+        let branch_id: uuid::Uuid = uuid::Uuid::new_v4();
         AuthenticatedUser {
             tenant_id: uuid::Uuid::new_v4(),
             account_id: uuid::Uuid::new_v4(),
@@ -257,6 +258,8 @@ mod tests {
             primary_role: RoleCode::parse("staff").expect("valid test role code"),
             roles: vec![RoleCode::parse("staff").expect("valid test role code")],
             permissions: vec![],
+            branch_ids: vec![branch_id],
+            active_branch_id: Some(branch_id),
         }
     }
 

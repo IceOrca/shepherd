@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 
 use sqlx::PgConnection;
 use tracing::{error, warn, info, debug, trace};
@@ -7,6 +7,26 @@ use uuid::Uuid;
 pub mod sql;
 
 pub use sql::postgresql::{PostgresCli, TenantDbErr, TenantTransaction};
+
+tokio::task_local! {
+    static ACTIVE_BRANCH_ID: Uuid;
+}
+
+pub async fn with_active_branch<T, F>(branch_id: Uuid, future: F) -> T
+where
+    F: Future<Output = T>,
+{
+    trace!(
+        operation = "postgres.with_active_branch",
+        branch_id = %branch_id,
+        "Entering request-scoped active branch context"
+    );
+    ACTIVE_BRANCH_ID.scope(branch_id, future).await
+}
+
+pub fn active_branch_id() -> Option<Uuid> {
+    ACTIVE_BRANCH_ID.try_with(|branch_id: &Uuid| *branch_id).ok()
+}
 
 pub struct DatabaseAdapter {
     client: PostgresCli,
@@ -44,8 +64,14 @@ impl DatabaseAdapter {
     }
 
     pub async fn begin_tenant(&self, tenant_id: Uuid) -> Result<TenantTransaction, TenantDbErr> {
-        trace!("Opening RLS-scoped tenant transaction: tenant_id={}", tenant_id);
-        self.client.begin_tenant(tenant_id).await
+        let branch_id: Option<Uuid> = active_branch_id();
+        trace!(
+            operation = "postgres.begin_tenant",
+            tenant_id = %tenant_id,
+            branch_id = ?branch_id,
+            "Opening RLS-scoped tenant transaction"
+        );
+        self.client.begin_tenant_with_branch(tenant_id, branch_id).await
     }
 
     /// Runs one SQLx operation inside an automatically committed tenant-scoped
@@ -56,7 +82,25 @@ impl DatabaseAdapter {
         T: Send,
         F: for<'connection> AsyncFnOnce(&'connection mut PgConnection) -> Result<T, sqlx::Error>,
     {
-        self.client.run_with_tenant(tenant_id, operation).await
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        let result: Result<T, sqlx::Error> = operation(transaction.connection()).await;
+        match result {
+            Ok(value) => {
+                transaction.commit().await?;
+                Ok(value)
+            }
+            Err(error) => {
+                if let Err(rollback_error) = transaction.rollback().await {
+                    error!(
+                        operation = "database_adapter.run_with_tenant",
+                        tenant_id = %tenant_id,
+                        reason = %rollback_error,
+                        "Tenant/branch transaction rollback failed"
+                    );
+                }
+                Err(TenantDbErr::Sqlx(error))
+            }
+        }
     }
 
     pub async fn resolve_active_tenant_id(&self, tenant: &str) -> Result<Option<Uuid>, TenantDbErr> {

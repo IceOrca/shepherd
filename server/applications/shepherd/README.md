@@ -8,7 +8,7 @@ Shepherd is one application crate organized first by business area, then by feat
 The top-level boundaries are:
 
 - `hr`: employees, schedules, attendance, compensation, and payroll.
-- `business`: internal organization data plus customers, customer facilities, urgent work evidence, staffing rates, shifts, and assignments.
+- `business`: internal branches plus branch-owned customer workplaces, urgent work evidence, staffing rates, shifts, and assignments.
 
 Existing HR capabilities remain under `src/features/`; new staffing behavior lives under `src/business/staffing/`.
 Rates store customer billing and worker pay independently. Assignments snapshot both values so later agreement changes
@@ -44,24 +44,24 @@ row locks and multi-step business decisions must remain one atomic unit.
 
 ## Urgent-First Staffing Work and Notifications
 
-Urgent/unplanned work is the default operational path. Supervisors may dispatch staff without creating a shift. An active employee selects a manager-maintained customer facility and starts work for themselves plus coworkers who are present but cannot use a phone. The same staff member can finish a coworker's report when they share facility work context. Every action stores the subject employee, acting account, and `self` or `peer` provenance; PostgreSQL supplies the timestamps.
+Urgent/unplanned work is the default operational path. Supervisors may dispatch staff without creating a shift. An active employee selects a manager-maintained customer in the active branch and starts work for themselves plus coworkers who are present but cannot use a phone. The same staff member can finish a coworker's report when they share customer work context. Every action stores the subject employee, acting account, and `self` or `peer` provenance; PostgreSQL supplies the timestamps.
 
 Authenticated employees use:
 
-- `GET /api/business/staffing/urgent-work/facilities`
+- `GET /api/business/staffing/urgent-work/customers`
 - `GET /api/business/staffing/urgent-work/employees`
 - `GET /api/business/staffing/urgent-work/me`
 - `GET /api/business/staffing/urgent-work/team`
 - `POST /api/business/staffing/urgent-work/start`
 - `POST /api/business/staffing/urgent-work/{report_id}/end`
 
-Supervisors record independent customer-confirmed facility and time, then reconcile through:
+Supervisors record independent customer-confirmed customer and time, then reconcile through:
 
 - `GET /api/business/staffing/urgent-work/reconciliations`
 - `PUT /api/business/staffing/urgent-work/{report_id}/customer-record`
 - `POST /api/business/staffing/urgent-work/{report_id}/reconcile`
 
-Reconciliation compares exact timestamps, duration, and facility. It atomically creates a completed formal shift and an approved assignment linked to the urgent report, preserving the existing billing, worker-pay, margin, and payroll snapshot model.
+Reconciliation compares exact timestamps, duration, and customer. It atomically creates a completed formal shift and an approved assignment linked to the urgent report, preserving the existing billing, worker-pay, margin, and payroll snapshot model.
 
 Planned staffing remains optional. Authenticated assigned employees use:
 
@@ -71,7 +71,7 @@ Authenticated employees use:
 - `POST /api/business/staffing/assignments/{assignment_id}/start`
 - `POST /api/business/staffing/assignments/{assignment_id}/end`
 
-All start and end operations require an `Idempotency-Key` UUID header. The server owns timestamps and queues notifications in the same transaction. Planned work derives employee/customer/facility from the assignment; urgent work fixes the selected active facility and selected employees in its accepted batch. GPS fields remain in the contract and schema but are discarded while `STAFFING_GPS_ENABLED=false` (the development default).
+All start and end operations require an `Idempotency-Key` UUID header. The server owns timestamps and queues notifications in the same transaction. Planned work derives employee/customer from the assignment; urgent work fixes the selected active customer and selected employees in its accepted batch. GPS fields remain in the contract and schema but are discarded while `STAFFING_GPS_ENABLED=false` (the development default).
 
 For optional planned work, supervisors create customer shifts and can assign only active employees whose effective primary job matches and whose other
 staffing assignments do not overlap. Customer confirmation or bill time is stored separately from staff work sessions. An assignment

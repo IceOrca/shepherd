@@ -11,11 +11,11 @@ use super::{
     core::{OwnStaffingAssignment, ShiftWorkActionInput, ShiftWorkSession, StaffingWorkRepo},
 };
 
-pub struct StaffingWorkProvider {
+pub struct StaffingWorkDb {
     db: Arc<DatabaseAdapter>,
 }
 
-impl StaffingWorkProvider {
+impl StaffingWorkDb {
     pub fn new_arc(db: Arc<DatabaseAdapter>) -> Arc<Self> {
         Arc::new(Self { db })
     }
@@ -93,7 +93,6 @@ struct OwnAssignmentRow {
     assignment_id: Uuid,
     shift_id: Uuid,
     customer_name: String,
-    customer_facility_name: String,
     starts_at: DateTime<Utc>,
     ends_at: DateTime<Utc>,
     status: String,
@@ -111,7 +110,6 @@ impl TryFrom<OwnAssignmentRow> for OwnStaffingAssignment {
             assignment_id: row.assignment_id,
             shift_id: row.shift_id,
             customer_name: row.customer_name,
-            customer_facility_name: row.customer_facility_name,
             starts_at: row.starts_at,
             ends_at: row.ends_at,
             status: ShiftAssignmentStatus::from_code(&row.status).ok_or(StaffingError::BackendUnavailable)?,
@@ -128,7 +126,6 @@ struct WorkContextRow {
     employee_id: Uuid,
     employee_name: String,
     customer_name: String,
-    facility_name: String,
     assignment_status: String,
     shift_status: String,
 }
@@ -166,7 +163,7 @@ impl WorkContextRow {
 }
 
 #[async_trait]
-impl StaffingWorkRepo for StaffingWorkProvider {
+impl StaffingWorkRepo for StaffingWorkDb {
     async fn list_own_assignments(
         &self,
         tenant_id: Uuid,
@@ -177,7 +174,7 @@ impl StaffingWorkRepo for StaffingWorkProvider {
             OwnAssignmentRow,
             r#"
             SELECT assignment.id AS assignment_id, assignment.shift_id,
-                   customer.name AS customer_name, facility.name AS customer_facility_name,
+                   customer.name AS customer_name,
                    shift.starts_at, shift.ends_at, assignment.status,
                    COALESCE((
                        SELECT SUM(session.worked_seconds)
@@ -215,9 +212,6 @@ impl StaffingWorkRepo for StaffingWorkProvider {
             INNER JOIN business_customers AS customer
                 ON customer.tenant_id = shift.tenant_id
                AND customer.id = shift.customer_id
-            INNER JOIN business_customer_facilities AS facility
-                ON facility.tenant_id = shift.tenant_id
-               AND facility.id = shift.customer_facility_id
             WHERE assignment.tenant_id = $1
               AND employee.account_id = $2
               AND assignment.status <> 'cancelled'
@@ -311,8 +305,8 @@ impl StaffingWorkRepo for StaffingWorkProvider {
         .map_err(|error| database_failure("mark staffing shift in progress", tenant_id, error))?;
 
         let message: String = format!(
-            "Shift started\nStaff: {}\nCustomer: {}\nLocation: {}\nServer time: {}",
-            context.employee_name, context.customer_name, context.facility_name, row.started_at
+            "Shift started\nStaff: {}\nCustomer/workplace: {}\nServer time: {}",
+            context.employee_name, context.customer_name, row.started_at
         );
         enqueue_notifications(&mut transaction, tenant_id, "staffing.shift_started", row.id, &message).await?;
 
@@ -383,10 +377,9 @@ impl StaffingWorkRepo for StaffingWorkProvider {
         .ok_or(StaffingError::Conflict)?;
 
         let message: String = format!(
-            "Shift ended\nStaff: {}\nCustomer: {}\nLocation: {}\nServer time: {}\nWorked: {} seconds",
+            "Shift ended\nStaff: {}\nCustomer/workplace: {}\nServer time: {}\nWorked: {} seconds",
             context.employee_name,
             context.customer_name,
-            context.facility_name,
             row.ended_at.ok_or(StaffingError::BackendUnavailable)?,
             row.worked_seconds.ok_or(StaffingError::BackendUnavailable)?
         );
@@ -410,7 +403,7 @@ async fn lock_work_context(
         WorkContextRow,
         r#"
         SELECT assignment.employee_id, employee.display_name AS employee_name,
-               customer.name AS customer_name, facility.name AS facility_name,
+               customer.name AS customer_name,
                assignment.status AS assignment_status, shift.status AS shift_status
         FROM business_shift_assignments AS assignment
         INNER JOIN hr_employees AS employee
@@ -422,9 +415,6 @@ async fn lock_work_context(
         INNER JOIN business_customers AS customer
             ON customer.tenant_id = shift.tenant_id
            AND customer.id = shift.customer_id
-        INNER JOIN business_customer_facilities AS facility
-            ON facility.tenant_id = shift.tenant_id
-           AND facility.id = shift.customer_facility_id
         WHERE assignment.tenant_id = $1
           AND assignment.id = $2
           AND employee.account_id = $3
@@ -521,13 +511,13 @@ async fn enqueue_notifications(
     sqlx::query!(
         r#"
         INSERT INTO notification_outbox (
-            id, tenant_id, event_type, aggregate_id, channel, destination, message
+            id, tenant_id, branch_id, event_type, aggregate_id, channel, destination, message
         )
         SELECT MD5($3::UUID::TEXT || ':' || destination.id::TEXT || ':' || $2)::UUID,
-               $1, $2, $3, destination.channel, destination.destination, $4
+               $1, destination.branch_id, $2, $3, destination.channel, destination.destination, $4
         FROM notification_destinations AS destination
         WHERE destination.tenant_id = $1 AND destination.enabled
-        ON CONFLICT (tenant_id, event_type, aggregate_id, channel, destination) DO NOTHING
+        ON CONFLICT (tenant_id, branch_id, event_type, aggregate_id, channel, destination) DO NOTHING
         "#,
         tenant_id,
         event_type,
@@ -571,22 +561,26 @@ mod database_tests {
     use infra_postgres::DatabaseAdapter;
     use uuid::Uuid;
 
-    use super::{ShiftWorkActionInput, StaffingWorkProvider, StaffingWorkRepo};
+    use super::{ShiftWorkActionInput, StaffingWorkDb, StaffingWorkRepo};
     use crate::business::staffing::{
         core::{ShiftAssignmentStatus, StaffingError, StaffingRepo},
-        database::StaffingProvider,
+        database::StaffingDb,
     };
 
     #[tokio::test]
     async fn work_session_flow_is_idempotent_and_drives_approval() -> Result<(), Box<dyn Error>> {
+        let _ignored_already_initialized: Result<(), Box<dyn Error + Send + Sync>> = tracing_subscriber::fmt()
+            .with_env_filter("shepherd=trace,infra_postgres=debug")
+            .with_test_writer()
+            .try_init();
         let database_url = std::env::var("DATABASE_URL")?;
         let db = DatabaseAdapter::connect(&database_url).await?;
         let tenant_id = Uuid::new_v4();
         let account_id = Uuid::new_v4();
         let employee_id = Uuid::new_v4();
+        let branch_id = Uuid::new_v4();
         let job_id = Uuid::new_v4();
         let customer_id = Uuid::new_v4();
-        let facility_id = Uuid::new_v4();
         let shift_id = Uuid::new_v4();
         let assignment_id = Uuid::new_v4();
         let destination_id = Uuid::new_v4();
@@ -606,6 +600,14 @@ mod database_tests {
         .execute(setup.connection())
         .await?;
         sqlx::query!(
+            r#"INSERT INTO branches (id, tenant_id, code, name)
+               VALUES ($1, $2, 'staffing-work-branch', 'Staffing Work Branch')"#,
+            branch_id,
+            tenant_id,
+        )
+        .execute(setup.connection())
+        .await?;
+        sqlx::query!(
             r#"
             INSERT INTO account_roles (tenant_id, account_id, role_code)
             VALUES ($1, $2, 'staff')
@@ -618,53 +620,38 @@ mod database_tests {
         sqlx::query!(
             r#"
             INSERT INTO hr_employees (
-                id, tenant_id, account_id, employee_code, display_name, status, hire_date
+                id, tenant_id, branch_id, account_id, employee_code, display_name, status, hire_date
             )
-            VALUES ($1, $2, $3, 'staffing-work-test', 'Staffing Work Test', 'active', CURRENT_DATE)
+            VALUES ($1, $2, $3, $4, 'staffing-work-test', 'Staffing Work Test', 'active', CURRENT_DATE)
             "#,
             employee_id,
             tenant_id,
+            branch_id,
             account_id,
         )
         .execute(setup.connection())
         .await?;
         sqlx::query!(
             r#"
-            INSERT INTO hr_jobs (id, tenant_id, code, name, status)
-            VALUES ($1, $2, 'staffing-work-job', 'Staffing Work Job', 'active')
+            INSERT INTO hr_jobs (id, tenant_id, branch_id, code, name, status)
+            VALUES ($1, $2, $3, 'staffing-work-job', 'Staffing Work Job', 'active')
             "#,
             job_id,
             tenant_id,
+            branch_id,
         )
         .execute(setup.connection())
         .await?;
         sqlx::query!(
             r#"
             INSERT INTO business_customers (
-                id, tenant_id, code, name, created_by_account_id, updated_by_account_id
+                id, tenant_id, branch_id, code, name, created_by_account_id, updated_by_account_id
             )
-            VALUES ($1, $2, 'staffing-work-customer', 'Staffing Work Customer', $3, $3)
+            VALUES ($1, $2, $3, 'staffing-work-customer', 'Staffing Work Customer', $4, $4)
             "#,
             customer_id,
             tenant_id,
-            account_id,
-        )
-        .execute(setup.connection())
-        .await?;
-        sqlx::query!(
-            r#"
-            INSERT INTO business_customer_facilities (
-                id, tenant_id, customer_id, code, name, time_zone,
-                created_by_account_id, updated_by_account_id
-            )
-            VALUES (
-                $1, $2, $3, 'staffing-work-facility', 'Staffing Work Facility',
-                'Asia/Bangkok', $4, $4
-            )
-            "#,
-            facility_id,
-            tenant_id,
-            customer_id,
+            branch_id,
             account_id,
         )
         .execute(setup.connection())
@@ -672,7 +659,7 @@ mod database_tests {
         sqlx::query!(
             r#"
             INSERT INTO business_staffing_shifts (
-                id, tenant_id, customer_id, customer_facility_id, job_id,
+                id, tenant_id, branch_id, customer_id, job_id,
                 starts_at, ends_at, required_workers, created_by_account_id, updated_by_account_id
             )
             VALUES (
@@ -682,8 +669,8 @@ mod database_tests {
             "#,
             shift_id,
             tenant_id,
+            branch_id,
             customer_id,
-            facility_id,
             job_id,
             account_id,
         )
@@ -692,13 +679,14 @@ mod database_tests {
         sqlx::query!(
             r#"
             INSERT INTO business_shift_assignments (
-                id, tenant_id, shift_id, employee_id, rate_source, manual_rate_reason, currency,
+                id, tenant_id, branch_id, shift_id, employee_id, rate_source, manual_rate_reason, currency,
                 bill_hourly_rate_snapshot, worker_hourly_rate_snapshot, created_by_account_id
             )
-            VALUES ($1, $2, $3, $4, 'manual', 'isolated staffing test rate', 'VND', 150000, 120000, $5)
+            VALUES ($1, $2, $3, $4, $5, 'manual', 'isolated staffing test rate', 'VND', 150000, 120000, $6)
             "#,
             assignment_id,
             tenant_id,
+            branch_id,
             shift_id,
             employee_id,
             account_id,
@@ -707,92 +695,94 @@ mod database_tests {
         .await?;
         sqlx::query!(
             r#"
-            INSERT INTO notification_destinations (id, tenant_id, channel, destination)
-            VALUES ($1, $2, 'telegram', '-1000000000001')
+            INSERT INTO notification_destinations (id, tenant_id, branch_id, channel, destination)
+            VALUES ($1, $2, $3, 'telegram', '-1000000000001')
             "#,
             destination_id,
             tenant_id,
+            branch_id,
         )
         .execute(setup.connection())
         .await?;
         setup.commit().await?;
 
-        let provider = StaffingWorkProvider::new_arc(Arc::clone(&db));
-        let start_key = Uuid::new_v4();
-        let start_input = ShiftWorkActionInput {
-            idempotency_key: start_key,
-            latitude: None,
-            longitude: None,
-            accuracy_meters: None,
-        };
-        let first = provider
-            .start(tenant_id, assignment_id, account_id, Uuid::new_v4(), &start_input)
-            .await
-            .map_err(staffing_error)?;
-        let repeated = provider
-            .start(tenant_id, assignment_id, account_id, Uuid::new_v4(), &start_input)
-            .await
-            .map_err(staffing_error)?;
-        assert_eq!(first.id, repeated.id);
+        infra_postgres::with_active_branch(branch_id, async {
+            let provider = StaffingWorkDb::new_arc(Arc::clone(&db));
+            let start_key = Uuid::new_v4();
+            let start_input = ShiftWorkActionInput {
+                idempotency_key: start_key,
+                latitude: None,
+                longitude: None,
+                accuracy_meters: None,
+            };
+            let first = provider
+                .start(tenant_id, assignment_id, account_id, Uuid::new_v4(), &start_input)
+                .await
+                .map_err(staffing_error)?;
+            let repeated = provider
+                .start(tenant_id, assignment_id, account_id, Uuid::new_v4(), &start_input)
+                .await
+                .map_err(staffing_error)?;
+            assert_eq!(first.id, repeated.id);
 
-        let conflicting_start = provider
-            .start(
-                tenant_id,
-                assignment_id,
-                account_id,
-                Uuid::new_v4(),
-                &ShiftWorkActionInput {
-                    idempotency_key: Uuid::new_v4(),
-                    latitude: None,
-                    longitude: None,
-                    accuracy_meters: None,
-                },
-            )
-            .await;
-        assert!(matches!(conflicting_start, Err(StaffingError::Conflict)));
+            let conflicting_start = provider
+                .start(
+                    tenant_id,
+                    assignment_id,
+                    account_id,
+                    Uuid::new_v4(),
+                    &ShiftWorkActionInput {
+                        idempotency_key: Uuid::new_v4(),
+                        latitude: None,
+                        longitude: None,
+                        accuracy_meters: None,
+                    },
+                )
+                .await;
+            assert!(matches!(conflicting_start, Err(StaffingError::Conflict)));
 
-        let mut adjust_time = db.begin_tenant(tenant_id).await?;
-        sqlx::query!(
-            r#"
+            let mut adjust_time = db.begin_tenant(tenant_id).await?;
+            sqlx::query!(
+                r#"
             UPDATE business_shift_work_sessions
             SET started_at = CURRENT_TIMESTAMP - INTERVAL '1 hour'
             WHERE tenant_id = $1 AND id = $2
             "#,
-            tenant_id,
-            first.id,
-        )
-        .execute(adjust_time.connection())
-        .await?;
-        adjust_time.commit().await?;
+                tenant_id,
+                first.id,
+            )
+            .execute(adjust_time.connection())
+            .await?;
+            adjust_time.commit().await?;
 
-        let end_input = ShiftWorkActionInput {
-            idempotency_key: Uuid::new_v4(),
-            latitude: None,
-            longitude: None,
-            accuracy_meters: None,
-        };
-        let ended = provider
-            .end(tenant_id, assignment_id, account_id, &end_input)
-            .await
-            .map_err(staffing_error)?;
-        let repeated_end = provider
-            .end(tenant_id, assignment_id, account_id, &end_input)
-            .await
-            .map_err(staffing_error)?;
-        assert_eq!(ended.id, repeated_end.id);
-        assert!(ended.worked_seconds.is_some_and(|seconds| seconds >= 3600));
+            let end_input = ShiftWorkActionInput {
+                idempotency_key: Uuid::new_v4(),
+                latitude: None,
+                longitude: None,
+                accuracy_meters: None,
+            };
+            let ended = provider
+                .end(tenant_id, assignment_id, account_id, &end_input)
+                .await
+                .map_err(staffing_error)?;
+            let repeated_end = provider
+                .end(tenant_id, assignment_id, account_id, &end_input)
+                .await
+                .map_err(staffing_error)?;
+            assert_eq!(ended.id, repeated_end.id);
+            assert!(ended.worked_seconds.is_some_and(|seconds| seconds >= 3600));
 
-        let mut customer_evidence = db.begin_tenant(tenant_id).await?;
-        sqlx::query!(
-            r#"
+            let mut customer_evidence = db.begin_tenant(tenant_id).await?;
+            sqlx::query!(
+                r#"
             INSERT INTO business_customer_work_records (
-                id, tenant_id, assignment_id, confirmed_customer_facility_id,
+                id, tenant_id, branch_id, assignment_id, confirmed_customer_id,
                 confirmed_started_at, confirmed_ended_at, customer_reference,
                 recorded_by_account_id
             )
-            SELECT $1, $2, $3, shift.customer_facility_id,
+            SELECT $1, $2, $3, $4, shift.customer_id,
                    observed.started_at, observed.ended_at,
-                   'test-customer-record', $4
+                   'test-customer-record', $5
             FROM business_shift_assignments AS assignment
             INNER JOIN business_staffing_shifts AS shift
                 ON shift.tenant_id = assignment.tenant_id
@@ -802,85 +792,85 @@ mod database_tests {
                        MAX(ended_at) AS ended_at,
                        COALESCE(SUM(worked_seconds), 0)::BIGINT AS total
                 FROM business_shift_work_sessions
-                WHERE tenant_id = $2 AND assignment_id = $3 AND ended_at IS NOT NULL
+                WHERE tenant_id = $2 AND assignment_id = $4 AND ended_at IS NOT NULL
             ) AS observed
             WHERE assignment.tenant_id = $2
-              AND assignment.id = $3
+              AND assignment.id = $4
               AND observed.total > 0
             "#,
-            Uuid::new_v4(),
-            tenant_id,
-            assignment_id,
-            account_id,
-        )
-        .execute(customer_evidence.connection())
-        .await?;
-        customer_evidence.commit().await?;
+                Uuid::new_v4(),
+                tenant_id,
+                branch_id,
+                assignment_id,
+                account_id,
+            )
+            .execute(customer_evidence.connection())
+            .await?;
+            customer_evidence.commit().await?;
 
-        let staffing = StaffingProvider::new_arc(Arc::clone(&db));
-        let approved = staffing
-            .approve_shift_assignment(tenant_id, assignment_id, None, None, account_id)
-            .await
-            .map_err(staffing_error)?;
-        assert_eq!(approved.status, ShiftAssignmentStatus::Approved);
-        assert_eq!(approved.worked_seconds, approved.observed_worked_seconds);
+            let staffing = StaffingDb::new_arc(Arc::clone(&db));
+            let approved = staffing
+                .approve_shift_assignment(tenant_id, assignment_id, None, None, account_id)
+                .await
+                .map_err(staffing_error)?;
+            assert_eq!(approved.status, ShiftAssignmentStatus::Approved);
+            assert_eq!(approved.worked_seconds, approved.observed_worked_seconds);
 
-        let mut verify = db.begin_tenant(tenant_id).await?;
-        let outbox_count = sqlx::query_scalar!(
-            r#"SELECT COUNT(*) AS "count!" FROM notification_outbox WHERE tenant_id = $1"#,
-            tenant_id
-        )
-        .fetch_one(verify.connection())
-        .await?;
-        assert_eq!(outbox_count, 2);
+            let mut verify = db.begin_tenant(tenant_id).await?;
+            let outbox_count = sqlx::query_scalar!(
+                r#"SELECT COUNT(*) AS "count!" FROM notification_outbox WHERE tenant_id = $1"#,
+                tenant_id
+            )
+            .fetch_one(verify.connection())
+            .await?;
+            assert_eq!(outbox_count, 2);
 
-        sqlx::query!("DELETE FROM notification_outbox WHERE tenant_id = $1", tenant_id)
+            sqlx::query!("DELETE FROM notification_outbox WHERE tenant_id = $1", tenant_id)
+                .execute(verify.connection())
+                .await?;
+            sqlx::query!("DELETE FROM notification_destinations WHERE tenant_id = $1", tenant_id)
+                .execute(verify.connection())
+                .await?;
+            sqlx::query!(
+                "DELETE FROM business_shift_work_sessions WHERE tenant_id = $1",
+                tenant_id
+            )
             .execute(verify.connection())
             .await?;
-        sqlx::query!("DELETE FROM notification_destinations WHERE tenant_id = $1", tenant_id)
+            sqlx::query!(
+                "DELETE FROM business_customer_work_records WHERE tenant_id = $1",
+                tenant_id
+            )
             .execute(verify.connection())
             .await?;
-        sqlx::query!(
-            "DELETE FROM business_shift_work_sessions WHERE tenant_id = $1",
-            tenant_id
-        )
-        .execute(verify.connection())
-        .await?;
-        sqlx::query!(
-            "DELETE FROM business_customer_work_records WHERE tenant_id = $1",
-            tenant_id
-        )
-        .execute(verify.connection())
-        .await?;
-        sqlx::query!("DELETE FROM business_shift_assignments WHERE tenant_id = $1", tenant_id)
-            .execute(verify.connection())
-            .await?;
-        sqlx::query!("DELETE FROM business_staffing_shifts WHERE tenant_id = $1", tenant_id)
-            .execute(verify.connection())
-            .await?;
-        sqlx::query!(
-            "DELETE FROM business_customer_facilities WHERE tenant_id = $1",
-            tenant_id
-        )
-        .execute(verify.connection())
-        .await?;
-        sqlx::query!("DELETE FROM business_customers WHERE tenant_id = $1", tenant_id)
-            .execute(verify.connection())
-            .await?;
-        sqlx::query!("DELETE FROM hr_employees WHERE tenant_id = $1", tenant_id)
-            .execute(verify.connection())
-            .await?;
-        sqlx::query!("DELETE FROM hr_jobs WHERE tenant_id = $1", tenant_id)
-            .execute(verify.connection())
-            .await?;
-        sqlx::query!("DELETE FROM accounts WHERE tenant_id = $1", tenant_id)
-            .execute(verify.connection())
-            .await?;
-        verify.commit().await?;
-        sqlx::query!("DELETE FROM tenants WHERE id = $1", tenant_id)
-            .execute(db.global_pool())
-            .await?;
-        Ok(())
+            sqlx::query!("DELETE FROM business_shift_assignments WHERE tenant_id = $1", tenant_id)
+                .execute(verify.connection())
+                .await?;
+            sqlx::query!("DELETE FROM business_staffing_shifts WHERE tenant_id = $1", tenant_id)
+                .execute(verify.connection())
+                .await?;
+            sqlx::query!("DELETE FROM business_customers WHERE tenant_id = $1", tenant_id)
+                .execute(verify.connection())
+                .await?;
+            sqlx::query!("DELETE FROM hr_employees WHERE tenant_id = $1", tenant_id)
+                .execute(verify.connection())
+                .await?;
+            sqlx::query!("DELETE FROM hr_jobs WHERE tenant_id = $1", tenant_id)
+                .execute(verify.connection())
+                .await?;
+            sqlx::query!("DELETE FROM accounts WHERE tenant_id = $1", tenant_id)
+                .execute(verify.connection())
+                .await?;
+            sqlx::query!("DELETE FROM branches WHERE tenant_id = $1", tenant_id)
+                .execute(verify.connection())
+                .await?;
+            verify.commit().await?;
+            sqlx::query!("DELETE FROM tenants WHERE id = $1", tenant_id)
+                .execute(db.global_pool())
+                .await?;
+            Ok(())
+        })
+        .await
     }
 
     fn staffing_error(error: StaffingError) -> io::Error {

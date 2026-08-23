@@ -17,15 +17,15 @@ use infra_postgres::DatabaseAdapter;
 
 use business::staffing::{
     core::StaffingService,
-    database::StaffingProvider,
-    urgent_work::{core::UrgentWorkService, database::UrgentWorkProvider},
-    work_session::{core::StaffingWorkService, database::StaffingWorkProvider},
+    database::StaffingDb,
+    urgent_work::{core::UrgentWorkService, database::UrgentWorkDb},
+    work_session::{core::StaffingWorkService, database::StaffingWorkDb},
 };
 use features::{
-    organization::{core::OrganizationService, database::OrganizationProvider},
-    payroll::{core::PayrollService, database::PayrollProvider},
-    people::{core::PeopleService, database::PeopleProvider},
-    working_schedule::{core::WorkingScheduleService, database::WorkingScheduleProvider},
+    organization::{core::OrganizationService, database::OrganizationDb},
+    payroll::{core::PayrollService, database::PayrollDb},
+    people::{core::PeopleService, database::PeopleDb},
+    working_schedule::{core::WorkingScheduleService, database::WorkingScheduleDb},
 };
 
 pub use infra_host::ratelimiting;
@@ -44,15 +44,14 @@ pub struct ApplicationCore {
 impl ApplicationCore {
     pub fn new_arc(db: Arc<DatabaseAdapter>) -> Arc<Self> {
         let organization: Arc<OrganizationService> =
-            OrganizationService::new_arc(OrganizationProvider::new_arc(Arc::clone(&db)));
-        let people: Arc<PeopleService> = PeopleService::new_arc(PeopleProvider::new_arc(Arc::clone(&db)));
+            OrganizationService::new_arc(OrganizationDb::new_arc(Arc::clone(&db)));
+        let people: Arc<PeopleService> = PeopleService::new_arc(PeopleDb::new_arc(Arc::clone(&db)));
         let working_schedules: Arc<WorkingScheduleService> =
-            WorkingScheduleService::new_arc(WorkingScheduleProvider::new_arc(Arc::clone(&db)));
-        let payroll: Arc<PayrollService> = PayrollService::new_arc(PayrollProvider::new_arc(Arc::clone(&db)));
-        let staffing: Arc<StaffingService> = StaffingService::new_arc(StaffingProvider::new_arc(Arc::clone(&db)));
-        let urgent_work: Arc<UrgentWorkService> =
-            UrgentWorkService::new_arc(UrgentWorkProvider::new_arc(Arc::clone(&db)));
-        let staffing_work: Arc<StaffingWorkService> = StaffingWorkService::new_arc(StaffingWorkProvider::new_arc(db));
+            WorkingScheduleService::new_arc(WorkingScheduleDb::new_arc(Arc::clone(&db)));
+        let payroll: Arc<PayrollService> = PayrollService::new_arc(PayrollDb::new_arc(Arc::clone(&db)));
+        let staffing: Arc<StaffingService> = StaffingService::new_arc(StaffingDb::new_arc(Arc::clone(&db)));
+        let urgent_work: Arc<UrgentWorkService> = UrgentWorkService::new_arc(UrgentWorkDb::new_arc(Arc::clone(&db)));
+        let staffing_work: Arc<StaffingWorkService> = StaffingWorkService::new_arc(StaffingWorkDb::new_arc(db));
 
         Arc::new(Self {
             organization,

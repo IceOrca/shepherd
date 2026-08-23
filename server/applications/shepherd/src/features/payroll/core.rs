@@ -79,11 +79,11 @@ pub struct EmployeeCompensationInput {
 }
 
 #[derive(Clone, Debug, Serialize, TS)]
-pub struct FacilityRateRule {
+pub struct BranchRateRule {
     pub id: Uuid,
     pub code: String,
     pub name: String,
-    pub facility_id: Uuid,
+    pub branch_id: Uuid,
     pub employee_id: Option<Uuid>,
     pub base_multiplier: String,
     pub hourly_adjustment: String,
@@ -94,10 +94,10 @@ pub struct FacilityRateRule {
 }
 
 #[derive(Clone, Debug)]
-pub struct FacilityRateRuleInput {
+pub struct BranchRateRuleInput {
     pub code: String,
     pub name: String,
-    pub facility_id: Uuid,
+    pub branch_id: Uuid,
     pub employee_id: Option<Uuid>,
     pub base_multiplier: String,
     pub hourly_adjustment: String,
@@ -172,7 +172,7 @@ pub struct PayrollEmployeeResult {
     pub employee_id: Uuid,
     pub worked_seconds: i64,
     pub base_amount: String,
-    pub facility_amount: String,
+    pub branch_amount: String,
     pub time_amount: String,
     pub overtime_amount: String,
     pub gross_amount: String,
@@ -185,7 +185,7 @@ pub struct PayrollLine {
     pub employee_id: Uuid,
     pub attendance_session_id: Option<Uuid>,
     pub staffing_assignment_id: Option<Uuid>,
-    pub facility_id: Option<Uuid>,
+    pub branch_id: Uuid,
     pub work_date: NaiveDate,
     pub component: String,
     pub rule_code: Option<String>,
@@ -245,14 +245,14 @@ pub trait PayrollRepo {
         input: &EmployeeCompensationInput,
         audit_account_id: Uuid,
     ) -> Result<EmployeeCompensation, PayrollError>;
-    async fn list_facility_rules(&self, tenant_id: Uuid) -> Result<Vec<FacilityRateRule>, PayrollError>;
-    async fn create_facility_rule(
+    async fn list_branch_rules(&self, tenant_id: Uuid) -> Result<Vec<BranchRateRule>, PayrollError>;
+    async fn create_branch_rule(
         &self,
         tenant_id: Uuid,
         rule_id: Uuid,
-        input: &FacilityRateRuleInput,
+        input: &BranchRateRuleInput,
         audit_account_id: Uuid,
-    ) -> Result<FacilityRateRule, PayrollError>;
+    ) -> Result<BranchRateRule, PayrollError>;
     async fn list_time_band_rules(&self, tenant_id: Uuid) -> Result<Vec<TimeBandRule>, PayrollError>;
     async fn create_time_band_rule(
         &self,
@@ -318,26 +318,26 @@ impl PayrollService {
             .await
     }
 
-    pub async fn list_facility_rules(&self, tenant_id: Uuid) -> Result<Vec<FacilityRateRule>, PayrollError> {
-        self.repo.list_facility_rules(tenant_id).await
+    pub async fn list_branch_rules(&self, tenant_id: Uuid) -> Result<Vec<BranchRateRule>, PayrollError> {
+        self.repo.list_branch_rules(tenant_id).await
     }
 
-    pub async fn create_facility_rule(
+    pub async fn create_branch_rule(
         &self,
         tenant_id: Uuid,
-        input: FacilityRateRuleInput,
+        input: BranchRateRuleInput,
         audit_account_id: Uuid,
-    ) -> Result<FacilityRateRule, PayrollError> {
+    ) -> Result<BranchRateRule, PayrollError> {
         validate_rule_identity(&input.code, &input.name, input.effective_from, input.effective_to)?;
         validate_decimal(&input.base_multiplier, false)?;
         if !decimal_at_least_one(&input.base_multiplier) {
             return Err(PayrollError::InvalidInput(
-                "facility base multiplier must be at least one",
+                "branch base multiplier must be at least one",
             ));
         }
         validate_decimal(&input.hourly_adjustment, true)?;
         self.repo
-            .create_facility_rule(tenant_id, Uuid::new_v4(), &input, audit_account_id)
+            .create_branch_rule(tenant_id, Uuid::new_v4(), &input, audit_account_id)
             .await
     }
 
@@ -603,7 +603,7 @@ mod tests {
     }
 
     #[test]
-    fn facility_multiplier_cannot_reduce_base_pay() {
+    fn branch_multiplier_cannot_reduce_base_pay() {
         assert!(!decimal_at_least_one("0.9999"));
         assert!(decimal_at_least_one("1.0000"));
         assert!(decimal_at_least_one("12.5000"));

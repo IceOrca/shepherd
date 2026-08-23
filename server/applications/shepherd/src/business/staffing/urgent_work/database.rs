@@ -10,15 +10,15 @@ use uuid::Uuid;
 use super::super::core::{ManualRateOverride, ReconciliationStatus};
 use super::core::{
     UrgentCustomerWorkRecord, UrgentCustomerWorkRecordInput, UrgentWorkActionSource, UrgentWorkEmployee,
-    UrgentWorkEndInput, UrgentWorkError, UrgentWorkFacility, UrgentWorkItem, UrgentWorkReconcileInput,
+    UrgentWorkCustomer, UrgentWorkEndInput, UrgentWorkError, UrgentWorkItem, UrgentWorkReconcileInput,
     UrgentWorkReconciliation, UrgentWorkRepo, UrgentWorkStartInput, UrgentWorkStatus,
 };
 
-pub struct UrgentWorkProvider {
+pub struct UrgentWorkDb {
     db: Arc<DatabaseAdapter>,
 }
 
-impl UrgentWorkProvider {
+impl UrgentWorkDb {
     pub fn new_arc(db: Arc<DatabaseAdapter>) -> Arc<Self> {
         Arc::new(Self { db })
     }
@@ -34,22 +34,18 @@ impl UrgentWorkProvider {
 }
 
 #[derive(Debug)]
-struct FacilityRow {
-    facility_id: Uuid,
+struct CustomerRow {
     customer_id: Uuid,
     customer_name: String,
-    facility_name: String,
     address: Option<String>,
     time_zone: String,
 }
 
-impl From<FacilityRow> for UrgentWorkFacility {
-    fn from(row: FacilityRow) -> Self {
+impl From<CustomerRow> for UrgentWorkCustomer {
+    fn from(row: CustomerRow) -> Self {
         Self {
-            facility_id: row.facility_id,
             customer_id: row.customer_id,
             customer_name: row.customer_name,
-            facility_name: row.facility_name,
             address: row.address,
             time_zone: row.time_zone,
         }
@@ -95,7 +91,7 @@ struct WorkDateRow {
 #[derive(Debug)]
 struct ExistingBatchRow {
     id: Uuid,
-    claimed_customer_facility_id: Uuid,
+    claimed_customer_id: Uuid,
 }
 
 #[derive(Debug)]
@@ -104,9 +100,8 @@ struct WorkItemRow {
     employee_id: Uuid,
     employee_code: String,
     employee_name: String,
-    claimed_customer_facility_id: Uuid,
+    claimed_customer_id: Uuid,
     customer_name: String,
-    claimed_facility_name: String,
     status: String,
     started_at: DateTime<Utc>,
     ended_at: Option<DateTime<Utc>>,
@@ -133,9 +128,8 @@ impl TryFrom<WorkItemRow> for UrgentWorkItem {
             employee_id: row.employee_id,
             employee_code: row.employee_code,
             employee_name: row.employee_name,
-            claimed_customer_facility_id: row.claimed_customer_facility_id,
+            claimed_customer_id: row.claimed_customer_id,
             customer_name: row.customer_name,
-            claimed_facility_name: row.claimed_facility_name,
             status: UrgentWorkStatus::from_code(&row.status).ok_or(UrgentWorkError::BackendUnavailable)?,
             started_at: row.started_at,
             ended_at: row.ended_at,
@@ -156,9 +150,8 @@ impl TryFrom<WorkItemRow> for UrgentWorkItem {
 struct CustomerRecordRow {
     id: Uuid,
     report_id: Uuid,
-    confirmed_customer_facility_id: Uuid,
+    confirmed_customer_id: Uuid,
     confirmed_customer_name: String,
-    confirmed_facility_name: String,
     confirmed_started_at: DateTime<Utc>,
     confirmed_ended_at: DateTime<Utc>,
     confirmed_worked_seconds: i64,
@@ -172,9 +165,8 @@ impl From<CustomerRecordRow> for UrgentCustomerWorkRecord {
         Self {
             id: row.id,
             report_id: row.report_id,
-            confirmed_customer_facility_id: row.confirmed_customer_facility_id,
+            confirmed_customer_id: row.confirmed_customer_id,
             confirmed_customer_name: row.confirmed_customer_name,
-            confirmed_facility_name: row.confirmed_facility_name,
             confirmed_started_at: row.confirmed_started_at,
             confirmed_ended_at: row.confirmed_ended_at,
             confirmed_worked_seconds: row.confirmed_worked_seconds,
@@ -191,9 +183,8 @@ struct ReconciliationRow {
     employee_id: Uuid,
     employee_code: String,
     employee_name: String,
-    claimed_customer_facility_id: Uuid,
+    claimed_customer_id: Uuid,
     customer_name: String,
-    claimed_facility_name: String,
     report_status: String,
     started_at: DateTime<Utc>,
     ended_at: Option<DateTime<Utc>>,
@@ -205,15 +196,14 @@ struct ReconciliationRow {
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     assignment_id: Option<Uuid>,
-    final_customer_facility_id: Option<Uuid>,
+    final_customer_id: Option<Uuid>,
     final_job_id: Option<Uuid>,
     final_worked_seconds: Option<i64>,
     adjustment_reason: Option<String>,
     eligibility_exception_reason: Option<String>,
     customer_record_id: Option<Uuid>,
-    confirmed_customer_facility_id: Option<Uuid>,
+    confirmed_customer_id: Option<Uuid>,
     confirmed_customer_name: Option<String>,
-    confirmed_facility_name: Option<String>,
     confirmed_started_at: Option<DateTime<Utc>>,
     confirmed_ended_at: Option<DateTime<Utc>>,
     confirmed_worked_seconds: Option<i64>,
@@ -225,7 +215,7 @@ struct ReconciliationRow {
 #[derive(Debug)]
 struct EndContextRow {
     employee_id: Uuid,
-    claimed_customer_facility_id: Uuid,
+    claimed_customer_id: Uuid,
     report_status: String,
     started_at: DateTime<Utc>,
 }
@@ -233,19 +223,18 @@ struct EndContextRow {
 #[derive(Debug)]
 struct ReconcileContextRow {
     employee_id: Uuid,
-    claimed_customer_facility_id: Uuid,
+    claimed_customer_id: Uuid,
     report_status: String,
     staff_started_at: DateTime<Utc>,
     staff_ended_at: Option<DateTime<Utc>>,
     staff_worked_seconds: Option<i64>,
-    confirmed_customer_facility_id: Option<Uuid>,
+    confirmed_customer_id: Option<Uuid>,
     confirmed_started_at: Option<DateTime<Utc>>,
     confirmed_ended_at: Option<DateTime<Utc>>,
     confirmed_worked_seconds: Option<i64>,
     customer_reference: Option<String>,
     customer_notes: Option<String>,
-    customer_id: Option<Uuid>,
-    facility_time_zone: Option<String>,
+    customer_time_zone: Option<String>,
 }
 
 #[derive(Debug)]
@@ -256,22 +245,19 @@ struct ResolvedRateRow {
 }
 
 #[async_trait]
-impl UrgentWorkRepo for UrgentWorkProvider {
-    async fn list_facilities(&self, tenant_id: Uuid) -> Result<Vec<UrgentWorkFacility>, UrgentWorkError> {
-        let rows: Vec<FacilityRow> = self
+impl UrgentWorkRepo for UrgentWorkDb {
+    async fn list_customers(&self, tenant_id: Uuid) -> Result<Vec<UrgentWorkCustomer>, UrgentWorkError> {
+        let rows: Vec<CustomerRow> = self
             .db
             .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
                 sqlx::query_as!(
-                    FacilityRow,
+                    CustomerRow,
                     r#"
-                    SELECT facility.id AS facility_id, customer.id AS customer_id,
-                           customer.name AS customer_name, facility.name AS facility_name,
-                           facility.address, facility.time_zone
-                    FROM business_customer_facilities AS facility
-                    INNER JOIN business_customers AS customer
-                        ON customer.tenant_id = facility.tenant_id AND customer.id = facility.customer_id
-                    WHERE facility.tenant_id = $1 AND facility.status = 'active' AND customer.status = 'active'
-                    ORDER BY lower(customer.name), lower(facility.name), facility.id
+                    SELECT customer.id AS customer_id, customer.name AS customer_name,
+                           customer.address, customer.time_zone
+                    FROM business_customers AS customer
+                    WHERE customer.tenant_id = $1 AND customer.status = 'active'
+                    ORDER BY lower(customer.name), customer.id
                     "#,
                     tenant_id,
                 )
@@ -279,9 +265,9 @@ impl UrgentWorkRepo for UrgentWorkProvider {
                 .await
             })
             .await
-            .map_err(|error: TenantDbErr| tenant_runner_failure("list urgent facilities", tenant_id, error))?;
-        debug!(tenant_id = %tenant_id, facility_count = rows.len(), "Urgent-work facilities loaded");
-        Ok(rows.into_iter().map(UrgentWorkFacility::from).collect())
+            .map_err(|error: TenantDbErr| tenant_runner_failure("list urgent customers", tenant_id, error))?;
+        debug!(tenant_id = %tenant_id, customer_count = rows.len(), "Urgent-work customers loaded");
+        Ok(rows.into_iter().map(UrgentWorkCustomer::from).collect())
     }
 
     async fn list_employees(
@@ -309,7 +295,50 @@ impl UrgentWorkRepo for UrgentWorkProvider {
                                  AND planned_session.ended_at IS NULL
                            ) AS "has_open_work!"
                     FROM hr_employees AS employee
-                    WHERE employee.tenant_id = $1 AND employee.status = 'active'
+                    INNER JOIN accounts AS account
+                        ON account.tenant_id = employee.tenant_id
+                       AND account.id = employee.account_id
+                    WHERE employee.tenant_id = $1
+                      AND employee.status = 'active'
+                      AND account.status = 'active'
+                      AND (
+                          EXISTS (
+                              SELECT 1
+                              FROM account_roles AS account_role
+                              INNER JOIN roles AS role
+                                  ON role.code = account_role.role_code
+                                 AND role.is_active
+                              INNER JOIN role_permissions AS role_permission
+                                  ON role_permission.role_code = account_role.role_code
+                              WHERE account_role.tenant_id = employee.tenant_id
+                                AND account_role.account_id = employee.account_id
+                                AND role_permission.permission_code = 'business.urgent_work.start'
+                          )
+                          OR EXISTS (
+                              SELECT 1
+                              FROM account_permissions AS account_permission
+                              WHERE account_permission.tenant_id = employee.tenant_id
+                                AND account_permission.account_id = employee.account_id
+                                AND account_permission.permission_code = 'business.urgent_work.start'
+                                AND account_permission.effect = 'allow'
+                                AND (
+                                    account_permission.expires_at IS NULL
+                                    OR account_permission.expires_at > CURRENT_TIMESTAMP
+                                )
+                          )
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM account_permissions AS account_permission
+                          WHERE account_permission.tenant_id = employee.tenant_id
+                            AND account_permission.account_id = employee.account_id
+                            AND account_permission.permission_code = 'business.urgent_work.start'
+                            AND account_permission.effect = 'deny'
+                            AND (
+                                account_permission.expires_at IS NULL
+                                OR account_permission.expires_at > CURRENT_TIMESTAMP
+                            )
+                      )
                     ORDER BY (employee.account_id = $2) DESC, lower(employee.display_name), employee.id
                     "#,
                     tenant_id,
@@ -379,7 +408,7 @@ impl UrgentWorkRepo for UrgentWorkProvider {
         let existing_batch: Option<ExistingBatchRow> = sqlx::query_as!(
             ExistingBatchRow,
             r#"
-            SELECT id, claimed_customer_facility_id
+            SELECT id, claimed_customer_id
             FROM business_urgent_work_batches
             WHERE tenant_id = $1 AND actor_account_id = $2 AND idempotency_key = $3
             "#,
@@ -391,7 +420,7 @@ impl UrgentWorkRepo for UrgentWorkProvider {
         .await
         .map_err(|error: sqlx::Error| database_failure("find urgent start idempotency batch", tenant_id, error))?;
         if let Some(existing) = existing_batch {
-            if existing.claimed_customer_facility_id != input.customer_facility_id {
+            if existing.claimed_customer_id != input.customer_id {
                 return Err(UrgentWorkError::Conflict);
             }
             let rows: Vec<WorkItemRow> = load_batch_items(&mut transaction, tenant_id, existing.id).await?;
@@ -407,34 +436,77 @@ impl UrgentWorkRepo for UrgentWorkProvider {
             return rows.into_iter().map(UrgentWorkItem::try_from).collect();
         }
 
-        let facility: ExistsRow = sqlx::query_as!(
+        let customer: ExistsRow = sqlx::query_as!(
             ExistsRow,
             r#"
             SELECT EXISTS (
-                SELECT 1 FROM business_customer_facilities AS facility
-                INNER JOIN business_customers AS customer
-                    ON customer.tenant_id = facility.tenant_id AND customer.id = facility.customer_id
-                WHERE facility.tenant_id = $1 AND facility.id = $2
-                  AND facility.status = 'active' AND customer.status = 'active'
+                SELECT 1 FROM business_customers AS customer
+                WHERE customer.tenant_id = $1 AND customer.id = $2
+                  AND customer.status = 'active'
             ) AS "exists!"
             "#,
             tenant_id,
-            input.customer_facility_id,
+            input.customer_id,
         )
         .fetch_one(transaction.connection())
         .await
-        .map_err(|error: sqlx::Error| database_failure("validate urgent facility", tenant_id, error))?;
-        if !facility.exists {
+        .map_err(|error: sqlx::Error| database_failure("validate urgent customer", tenant_id, error))?;
+        if !customer.exists {
             return Err(UrgentWorkError::NotFound);
         }
 
         let target_ids: Vec<IdRow> = sqlx::query_as!(
             IdRow,
             r#"
-            SELECT id FROM hr_employees
-            WHERE tenant_id = $1 AND id = ANY($2) AND status = 'active'
-            ORDER BY id
-            FOR UPDATE
+            SELECT employee.id
+            FROM hr_employees AS employee
+            INNER JOIN accounts AS account
+                ON account.tenant_id = employee.tenant_id
+               AND account.id = employee.account_id
+            WHERE employee.tenant_id = $1
+              AND employee.id = ANY($2)
+              AND employee.status = 'active'
+              AND account.status = 'active'
+              AND (
+                  EXISTS (
+                      SELECT 1
+                      FROM account_roles AS account_role
+                      INNER JOIN roles AS role
+                          ON role.code = account_role.role_code
+                         AND role.is_active
+                      INNER JOIN role_permissions AS role_permission
+                          ON role_permission.role_code = account_role.role_code
+                      WHERE account_role.tenant_id = employee.tenant_id
+                        AND account_role.account_id = employee.account_id
+                        AND role_permission.permission_code = 'business.urgent_work.start'
+                  )
+                  OR EXISTS (
+                      SELECT 1
+                      FROM account_permissions AS account_permission
+                      WHERE account_permission.tenant_id = employee.tenant_id
+                        AND account_permission.account_id = employee.account_id
+                        AND account_permission.permission_code = 'business.urgent_work.start'
+                        AND account_permission.effect = 'allow'
+                        AND (
+                            account_permission.expires_at IS NULL
+                            OR account_permission.expires_at > CURRENT_TIMESTAMP
+                        )
+                  )
+              )
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM account_permissions AS account_permission
+                  WHERE account_permission.tenant_id = employee.tenant_id
+                    AND account_permission.account_id = employee.account_id
+                    AND account_permission.permission_code = 'business.urgent_work.start'
+                    AND account_permission.effect = 'deny'
+                    AND (
+                        account_permission.expires_at IS NULL
+                        OR account_permission.expires_at > CURRENT_TIMESTAMP
+                    )
+              )
+            ORDER BY employee.id
+            FOR UPDATE OF employee
             "#,
             tenant_id,
             input.employee_ids.as_slice(),
@@ -446,8 +518,16 @@ impl UrgentWorkRepo for UrgentWorkProvider {
             || report_ids.len() != target_ids.len()
             || session_ids.len() != target_ids.len()
         {
+            warn!(
+                operation = "urgent_work.start",
+                tenant_id = %tenant_id,
+                actor_account_id = %actor_account_id,
+                requested_target_count = input.employee_ids.len(),
+                eligible_target_count = target_ids.len(),
+                "Rejected urgent-work start because one or more targets are inactive or lack staff-clocking authorization"
+            );
             return Err(UrgentWorkError::InvalidInput(
-                "one or more urgent-work employees are unavailable",
+                "one or more urgent-work employees are unavailable or not authorized for staff clocking",
             ));
         }
         let target_set: BTreeSet<Uuid> = target_ids.iter().map(|row: &IdRow| row.id).collect();
@@ -466,17 +546,17 @@ impl UrgentWorkRepo for UrgentWorkProvider {
                 INNER JOIN business_urgent_work_sessions AS session
                     ON session.tenant_id = report.tenant_id AND session.report_id = report.id
                 WHERE report.tenant_id = $1 AND report.employee_id = $2
-                  AND report.claimed_customer_facility_id = $3
+                  AND report.claimed_customer_id = $3
                   AND report.status = 'active' AND session.ended_at IS NULL
             ) AS "exists!"
             "#,
             tenant_id,
             actor_employee_id,
-            input.customer_facility_id,
+            input.customer_id,
         )
         .fetch_one(transaction.connection())
         .await
-        .map_err(|error: sqlx::Error| database_failure("validate urgent peer actor facility", tenant_id, error))?;
+        .map_err(|error: sqlx::Error| database_failure("validate urgent peer actor customer", tenant_id, error))?;
         if !includes_actor && !actor_open_work.exists {
             return Err(UrgentWorkError::InvalidInput(
                 "the first urgent-work batch must include the acting employee",
@@ -486,13 +566,13 @@ impl UrgentWorkRepo for UrgentWorkProvider {
         let batch_insert: PgQueryResult = sqlx::query!(
             r#"
             INSERT INTO business_urgent_work_batches (
-                id, tenant_id, actor_account_id, claimed_customer_facility_id, idempotency_key
+                id, tenant_id, actor_account_id, claimed_customer_id, idempotency_key
             ) VALUES ($1, $2, $3, $4, $5)
             "#,
             batch_id,
             tenant_id,
             actor_account_id,
-            input.customer_facility_id,
+            input.customer_id,
             input.idempotency_key,
         )
         .execute(transaction.connection())
@@ -511,7 +591,7 @@ impl UrgentWorkRepo for UrgentWorkProvider {
             let report_insert: PgQueryResult = sqlx::query!(
                 r#"
                 INSERT INTO business_urgent_work_reports (
-                    id, tenant_id, start_batch_id, employee_id, claimed_customer_facility_id,
+                    id, tenant_id, start_batch_id, employee_id, claimed_customer_id,
                     created_by_account_id
                 ) VALUES ($1, $2, $3, $4, $5, $6)
                 "#,
@@ -519,7 +599,7 @@ impl UrgentWorkRepo for UrgentWorkProvider {
                 tenant_id,
                 batch_id,
                 target.id,
-                input.customer_facility_id,
+                input.customer_id,
                 actor_account_id,
             )
             .execute(transaction.connection())
@@ -578,7 +658,7 @@ impl UrgentWorkRepo for UrgentWorkProvider {
         let context: EndContextRow = sqlx::query_as!(
             EndContextRow,
             r#"
-            SELECT report.employee_id, report.claimed_customer_facility_id,
+            SELECT report.employee_id, report.claimed_customer_id,
                    report.status AS report_status, session.started_at
             FROM business_urgent_work_reports AS report
             INNER JOIN business_urgent_work_sessions AS session
@@ -633,7 +713,7 @@ impl UrgentWorkRepo for UrgentWorkProvider {
             if !allow_peer {
                 return Err(UrgentWorkError::Forbidden);
             }
-            let actor_shared_facility: ExistsRow = sqlx::query_as!(
+            let actor_shared_customer: ExistsRow = sqlx::query_as!(
                 ExistsRow,
                 r#"
                 SELECT EXISTS (
@@ -643,7 +723,7 @@ impl UrgentWorkRepo for UrgentWorkProvider {
                        AND actor_session.report_id = actor_report.id
                     WHERE actor_report.tenant_id = $1
                       AND actor_report.employee_id = $2
-                      AND actor_report.claimed_customer_facility_id = $3
+                      AND actor_report.claimed_customer_id = $3
                       AND actor_report.status <> 'cancelled'
                       AND actor_session.started_at <= CURRENT_TIMESTAMP
                       AND (actor_session.ended_at IS NULL OR actor_session.ended_at >= $4)
@@ -651,13 +731,13 @@ impl UrgentWorkRepo for UrgentWorkProvider {
                 "#,
                 tenant_id,
                 actor_employee_id,
-                context.claimed_customer_facility_id,
+                context.claimed_customer_id,
                 context.started_at,
             )
             .fetch_one(transaction.connection())
             .await
-            .map_err(|error: sqlx::Error| database_failure("validate urgent end peer facility", tenant_id, error))?;
-            if !actor_shared_facility.exists {
+            .map_err(|error: sqlx::Error| database_failure("validate urgent end peer customer", tenant_id, error))?;
+            if !actor_shared_customer.exists {
                 return Err(UrgentWorkError::Forbidden);
             }
         }
@@ -736,18 +816,18 @@ impl UrgentWorkRepo for UrgentWorkProvider {
         let result: PgQueryResult = sqlx::query!(
             r#"
             INSERT INTO business_urgent_customer_work_records (
-                id, tenant_id, report_id, confirmed_customer_facility_id,
+                id, tenant_id, report_id, confirmed_customer_id,
                 confirmed_started_at, confirmed_ended_at, customer_reference,
                 notes, recorded_by_account_id
             )
             SELECT $1, $2, report.id, $4, $5, $6, $7, $8, $9
             FROM business_urgent_work_reports AS report
-            INNER JOIN business_customer_facilities AS facility
-                ON facility.tenant_id = report.tenant_id AND facility.id = $4
+            INNER JOIN business_customers AS customer
+                ON customer.tenant_id = report.tenant_id AND customer.id = $4
             WHERE report.tenant_id = $2 AND report.id = $3 AND report.status = 'completed'
-              AND facility.status = 'active'
+              AND customer.status = 'active'
             ON CONFLICT (tenant_id, report_id) DO UPDATE
-            SET confirmed_customer_facility_id = EXCLUDED.confirmed_customer_facility_id,
+            SET confirmed_customer_id = EXCLUDED.confirmed_customer_id,
                 confirmed_started_at = EXCLUDED.confirmed_started_at,
                 confirmed_ended_at = EXCLUDED.confirmed_ended_at,
                 customer_reference = EXCLUDED.customer_reference,
@@ -758,7 +838,7 @@ impl UrgentWorkRepo for UrgentWorkProvider {
             record_id,
             tenant_id,
             report_id,
-            input.confirmed_customer_facility_id,
+            input.confirmed_customer_id,
             input.confirmed_started_at,
             input.confirmed_ended_at,
             input.customer_reference,
@@ -812,8 +892,7 @@ async fn load_work_items(
         r#"
         SELECT report.id AS report_id, report.employee_id, employee.employee_code,
                employee.display_name AS employee_name,
-               report.claimed_customer_facility_id, customer.name AS customer_name,
-               facility.name AS claimed_facility_name, report.status,
+               report.claimed_customer_id, customer.name AS customer_name, report.status,
                session.started_at, session.ended_at, session.worked_seconds,
                session.started_by_account_id, session.start_source,
                session.ended_by_account_id, session.end_source,
@@ -824,17 +903,15 @@ async fn load_work_items(
             ON session.tenant_id = report.tenant_id AND session.report_id = report.id
         INNER JOIN hr_employees AS employee
             ON employee.tenant_id = report.tenant_id AND employee.id = report.employee_id
-        INNER JOIN business_customer_facilities AS facility
-            ON facility.tenant_id = report.tenant_id AND facility.id = report.claimed_customer_facility_id
         INNER JOIN business_customers AS customer
-            ON customer.tenant_id = facility.tenant_id AND customer.id = facility.customer_id
+            ON customer.tenant_id = report.tenant_id AND customer.id = report.claimed_customer_id
         LEFT JOIN business_shift_assignments AS assignment
             ON assignment.tenant_id = report.tenant_id AND assignment.urgent_work_report_id = report.id
         WHERE report.tenant_id = $1
           AND (
               (NOT $3 AND employee.account_id = $2)
-              OR ($3 AND report.claimed_customer_facility_id IN (
-                  SELECT actor_report.claimed_customer_facility_id
+              OR ($3 AND report.claimed_customer_id IN (
+                  SELECT actor_report.claimed_customer_id
                   FROM business_urgent_work_reports AS actor_report
                   INNER JOIN hr_employees AS actor_employee
                       ON actor_employee.tenant_id = actor_report.tenant_id
@@ -864,8 +941,7 @@ async fn load_batch_items(
         r#"
         SELECT report.id AS report_id, report.employee_id, employee.employee_code,
                employee.display_name AS employee_name,
-               report.claimed_customer_facility_id, customer.name AS customer_name,
-               facility.name AS claimed_facility_name, report.status,
+               report.claimed_customer_id, customer.name AS customer_name, report.status,
                session.started_at, session.ended_at, session.worked_seconds,
                session.started_by_account_id, session.start_source,
                session.ended_by_account_id, session.end_source,
@@ -876,10 +952,8 @@ async fn load_batch_items(
             ON session.tenant_id = report.tenant_id AND session.report_id = report.id
         INNER JOIN hr_employees AS employee
             ON employee.tenant_id = report.tenant_id AND employee.id = report.employee_id
-        INNER JOIN business_customer_facilities AS facility
-            ON facility.tenant_id = report.tenant_id AND facility.id = report.claimed_customer_facility_id
         INNER JOIN business_customers AS customer
-            ON customer.tenant_id = facility.tenant_id AND customer.id = facility.customer_id
+            ON customer.tenant_id = report.tenant_id AND customer.id = report.claimed_customer_id
         LEFT JOIN business_shift_assignments AS assignment
             ON assignment.tenant_id = report.tenant_id AND assignment.urgent_work_report_id = report.id
         WHERE report.tenant_id = $1 AND report.start_batch_id = $2
@@ -903,8 +977,7 @@ async fn load_work_item(
         r#"
         SELECT report.id AS report_id, report.employee_id, employee.employee_code,
                employee.display_name AS employee_name,
-               report.claimed_customer_facility_id, customer.name AS customer_name,
-               facility.name AS claimed_facility_name, report.status,
+               report.claimed_customer_id, customer.name AS customer_name, report.status,
                session.started_at, session.ended_at, session.worked_seconds,
                session.started_by_account_id, session.start_source,
                session.ended_by_account_id, session.end_source,
@@ -915,10 +988,8 @@ async fn load_work_item(
             ON session.tenant_id = report.tenant_id AND session.report_id = report.id
         INNER JOIN hr_employees AS employee
             ON employee.tenant_id = report.tenant_id AND employee.id = report.employee_id
-        INNER JOIN business_customer_facilities AS facility
-            ON facility.tenant_id = report.tenant_id AND facility.id = report.claimed_customer_facility_id
         INNER JOIN business_customers AS customer
-            ON customer.tenant_id = facility.tenant_id AND customer.id = facility.customer_id
+            ON customer.tenant_id = report.tenant_id AND customer.id = report.claimed_customer_id
         LEFT JOIN business_shift_assignments AS assignment
             ON assignment.tenant_id = report.tenant_id AND assignment.urgent_work_report_id = report.id
         WHERE report.tenant_id = $1 AND report.id = $2
@@ -943,8 +1014,7 @@ async fn load_by_end_key(
         r#"
         SELECT report.id AS report_id, report.employee_id, employee.employee_code,
                employee.display_name AS employee_name,
-               report.claimed_customer_facility_id, customer.name AS customer_name,
-               facility.name AS claimed_facility_name, report.status,
+               report.claimed_customer_id, customer.name AS customer_name, report.status,
                session.started_at, session.ended_at, session.worked_seconds,
                session.started_by_account_id, session.start_source,
                session.ended_by_account_id, session.end_source,
@@ -955,10 +1025,8 @@ async fn load_by_end_key(
             ON report.tenant_id = session.tenant_id AND report.id = session.report_id
         INNER JOIN hr_employees AS employee
             ON employee.tenant_id = report.tenant_id AND employee.id = report.employee_id
-        INNER JOIN business_customer_facilities AS facility
-            ON facility.tenant_id = report.tenant_id AND facility.id = report.claimed_customer_facility_id
         INNER JOIN business_customers AS customer
-            ON customer.tenant_id = facility.tenant_id AND customer.id = facility.customer_id
+            ON customer.tenant_id = report.tenant_id AND customer.id = report.claimed_customer_id
         LEFT JOIN business_shift_assignments AS assignment
             ON assignment.tenant_id = report.tenant_id AND assignment.urgent_work_report_id = report.id
         WHERE session.tenant_id = $1 AND session.ended_by_account_id = $2
@@ -981,16 +1049,14 @@ async fn load_customer_record(
     sqlx::query_as!(
         CustomerRecordRow,
         r#"
-        SELECT record.id, record.report_id, record.confirmed_customer_facility_id,
-               customer.name AS confirmed_customer_name, facility.name AS confirmed_facility_name,
+        SELECT record.id, record.report_id, record.confirmed_customer_id,
+               customer.name AS confirmed_customer_name,
                record.confirmed_started_at, record.confirmed_ended_at,
                record.confirmed_worked_seconds AS "confirmed_worked_seconds!",
                record.customer_reference, record.notes, record.updated_at
         FROM business_urgent_customer_work_records AS record
-        INNER JOIN business_customer_facilities AS facility
-            ON facility.tenant_id = record.tenant_id AND facility.id = record.confirmed_customer_facility_id
         INNER JOIN business_customers AS customer
-            ON customer.tenant_id = facility.tenant_id AND customer.id = facility.customer_id
+            ON customer.tenant_id = record.tenant_id AND customer.id = record.confirmed_customer_id
         WHERE record.tenant_id = $1 AND record.report_id = $2
         "#,
         tenant_id,
@@ -1012,22 +1078,21 @@ async fn load_reconciliation_rows(
         r#"
         SELECT report.id AS report_id, report.employee_id, employee.employee_code,
                employee.display_name AS employee_name,
-               report.claimed_customer_facility_id, claimed_customer.name AS customer_name,
-               claimed_facility.name AS claimed_facility_name, report.status AS report_status,
+               report.claimed_customer_id, claimed_customer.name AS customer_name,
+               report.status AS report_status,
                session.started_at, session.ended_at, session.worked_seconds,
                session.started_by_account_id, session.start_source,
                session.ended_by_account_id, session.end_source,
                report.created_at, report.updated_at,
                assignment.id AS "assignment_id?",
-               final_shift.customer_facility_id AS "final_customer_facility_id?",
+               final_shift.customer_id AS "final_customer_id?",
                final_shift.job_id AS "final_job_id?",
                assignment.worked_seconds AS final_worked_seconds,
                assignment.approval_adjustment_reason AS adjustment_reason,
                assignment.eligibility_exception_reason,
                customer_record.id AS "customer_record_id?",
-               customer_record.confirmed_customer_facility_id AS "confirmed_customer_facility_id?",
+               customer_record.confirmed_customer_id AS "confirmed_customer_id?",
                confirmed_customer.name AS "confirmed_customer_name?",
-               confirmed_facility.name AS "confirmed_facility_name?",
                customer_record.confirmed_started_at AS "confirmed_started_at?",
                customer_record.confirmed_ended_at AS "confirmed_ended_at?",
                customer_record.confirmed_worked_seconds AS "confirmed_worked_seconds?",
@@ -1039,20 +1104,14 @@ async fn load_reconciliation_rows(
             ON session.tenant_id = report.tenant_id AND session.report_id = report.id
         INNER JOIN hr_employees AS employee
             ON employee.tenant_id = report.tenant_id AND employee.id = report.employee_id
-        INNER JOIN business_customer_facilities AS claimed_facility
-            ON claimed_facility.tenant_id = report.tenant_id
-           AND claimed_facility.id = report.claimed_customer_facility_id
         INNER JOIN business_customers AS claimed_customer
-            ON claimed_customer.tenant_id = claimed_facility.tenant_id
-           AND claimed_customer.id = claimed_facility.customer_id
+            ON claimed_customer.tenant_id = report.tenant_id
+           AND claimed_customer.id = report.claimed_customer_id
         LEFT JOIN business_urgent_customer_work_records AS customer_record
             ON customer_record.tenant_id = report.tenant_id AND customer_record.report_id = report.id
-        LEFT JOIN business_customer_facilities AS confirmed_facility
-            ON confirmed_facility.tenant_id = customer_record.tenant_id
-           AND confirmed_facility.id = customer_record.confirmed_customer_facility_id
         LEFT JOIN business_customers AS confirmed_customer
-            ON confirmed_customer.tenant_id = confirmed_facility.tenant_id
-           AND confirmed_customer.id = confirmed_facility.customer_id
+            ON confirmed_customer.tenant_id = customer_record.tenant_id
+           AND confirmed_customer.id = customer_record.confirmed_customer_id
         LEFT JOIN business_shift_assignments AS assignment
             ON assignment.tenant_id = report.tenant_id AND assignment.urgent_work_report_id = report.id
         LEFT JOIN business_staffing_shifts AS final_shift
@@ -1078,9 +1137,8 @@ fn reconciliation_from_row(row: ReconciliationRow) -> Result<UrgentWorkReconcili
     };
     let customer_record: Option<UrgentCustomerWorkRecord> = match (
         row.customer_record_id,
-        row.confirmed_customer_facility_id,
+        row.confirmed_customer_id,
         row.confirmed_customer_name,
-        row.confirmed_facility_name,
         row.confirmed_started_at,
         row.confirmed_ended_at,
         row.confirmed_worked_seconds,
@@ -1088,9 +1146,8 @@ fn reconciliation_from_row(row: ReconciliationRow) -> Result<UrgentWorkReconcili
     ) {
         (
             Some(id),
-            Some(facility_id),
+            Some(customer_id),
             Some(customer_name),
-            Some(facility_name),
             Some(started_at),
             Some(ended_at),
             Some(worked_seconds),
@@ -1098,9 +1155,8 @@ fn reconciliation_from_row(row: ReconciliationRow) -> Result<UrgentWorkReconcili
         ) => Some(UrgentCustomerWorkRecord {
             id,
             report_id: row.report_id,
-            confirmed_customer_facility_id: facility_id,
+            confirmed_customer_id: customer_id,
             confirmed_customer_name: customer_name,
-            confirmed_facility_name: facility_name,
             confirmed_started_at: started_at,
             confirmed_ended_at: ended_at,
             confirmed_worked_seconds: worked_seconds,
@@ -1108,7 +1164,7 @@ fn reconciliation_from_row(row: ReconciliationRow) -> Result<UrgentWorkReconcili
             notes: row.customer_notes,
             updated_at,
         }),
-        (None, None, None, None, None, None, None, None) => None,
+        (None, None, None, None, None, None, None) => None,
         _ => return Err(UrgentWorkError::BackendUnavailable),
     };
     let staff_worked_seconds: i64 = row.worked_seconds.unwrap_or(0);
@@ -1121,7 +1177,7 @@ fn reconciliation_from_row(row: ReconciliationRow) -> Result<UrgentWorkReconcili
     } else if customer_record
         .as_ref()
         .is_some_and(|record: &UrgentCustomerWorkRecord| {
-            record.confirmed_customer_facility_id == row.claimed_customer_facility_id
+            record.confirmed_customer_id == row.claimed_customer_id
                 && record.confirmed_started_at == row.started_at
                 && row
                     .ended_at
@@ -1139,9 +1195,8 @@ fn reconciliation_from_row(row: ReconciliationRow) -> Result<UrgentWorkReconcili
             employee_id: row.employee_id,
             employee_code: row.employee_code,
             employee_name: row.employee_name,
-            claimed_customer_facility_id: row.claimed_customer_facility_id,
+            claimed_customer_id: row.claimed_customer_id,
             customer_name: row.customer_name,
-            claimed_facility_name: row.claimed_facility_name,
             status: report_status,
             started_at: row.started_at,
             ended_at: row.ended_at,
@@ -1156,7 +1211,7 @@ fn reconciliation_from_row(row: ReconciliationRow) -> Result<UrgentWorkReconcili
         },
         customer_record,
         reconciliation_status,
-        final_customer_facility_id: row.final_customer_facility_id,
+        final_customer_id: row.final_customer_id,
         final_job_id: row.final_job_id,
         final_worked_seconds: row.final_worked_seconds,
         adjustment_reason: row.adjustment_reason,
@@ -1165,7 +1220,7 @@ fn reconciliation_from_row(row: ReconciliationRow) -> Result<UrgentWorkReconcili
 }
 
 async fn reconcile_report(
-    provider: &UrgentWorkProvider,
+    provider: &UrgentWorkDb,
     tenant_id: Uuid,
     actor_account_id: Uuid,
     shift_id: Uuid,
@@ -1177,29 +1232,28 @@ async fn reconcile_report(
     let context: ReconcileContextRow = sqlx::query_as!(
         ReconcileContextRow,
         r#"
-        SELECT report.employee_id, report.claimed_customer_facility_id,
+        SELECT report.employee_id, report.claimed_customer_id,
                report.status AS report_status, session.started_at AS staff_started_at,
                session.ended_at AS staff_ended_at, session.worked_seconds AS staff_worked_seconds,
-               customer_record.confirmed_customer_facility_id AS "confirmed_customer_facility_id?",
+               customer_record.confirmed_customer_id AS "confirmed_customer_id?",
                customer_record.confirmed_started_at AS "confirmed_started_at?",
                customer_record.confirmed_ended_at AS "confirmed_ended_at?",
                customer_record.confirmed_worked_seconds AS "confirmed_worked_seconds?",
                customer_record.customer_reference, customer_record.notes AS customer_notes,
-               final_facility.customer_id AS "customer_id?",
-               final_facility.time_zone AS "facility_time_zone?"
+               final_customer.time_zone AS "customer_time_zone?"
         FROM business_urgent_work_reports AS report
         INNER JOIN business_urgent_work_sessions AS session
             ON session.tenant_id = report.tenant_id AND session.report_id = report.id
         LEFT JOIN business_urgent_customer_work_records AS customer_record
             ON customer_record.tenant_id = report.tenant_id AND customer_record.report_id = report.id
-        LEFT JOIN business_customer_facilities AS final_facility
-            ON final_facility.tenant_id = report.tenant_id AND final_facility.id = $3
+        LEFT JOIN business_customers AS final_customer
+            ON final_customer.tenant_id = report.tenant_id AND final_customer.id = $3
         WHERE report.tenant_id = $1 AND report.id = $2
         FOR UPDATE OF report, session
         "#,
         tenant_id,
         report_id,
-        input.final_customer_facility_id,
+        input.final_customer_id,
     )
     .fetch_optional(transaction.connection())
     .await
@@ -1220,8 +1274,8 @@ async fn reconcile_report(
     }
     let _staff_ended_at: DateTime<Utc> = context.staff_ended_at.ok_or(UrgentWorkError::Conflict)?;
     let staff_worked_seconds: i64 = context.staff_worked_seconds.ok_or(UrgentWorkError::Conflict)?;
-    let confirmed_facility_id: Uuid = context
-        .confirmed_customer_facility_id
+    let confirmed_customer_id: Uuid = context
+        .confirmed_customer_id
         .ok_or(UrgentWorkError::InvalidInput("customer evidence is required"))?;
     let confirmed_started_at: DateTime<Utc> = context
         .confirmed_started_at
@@ -1232,11 +1286,10 @@ async fn reconcile_report(
     let confirmed_worked_seconds: i64 = context
         .confirmed_worked_seconds
         .ok_or(UrgentWorkError::InvalidInput("customer evidence is required"))?;
-    let customer_id: Uuid = context.customer_id.ok_or(UrgentWorkError::NotFound)?;
-    let facility_time_zone: String = context.facility_time_zone.ok_or(UrgentWorkError::NotFound)?;
-    let has_discrepancy: bool = context.claimed_customer_facility_id != confirmed_facility_id
-        || input.final_customer_facility_id != context.claimed_customer_facility_id
-        || input.final_customer_facility_id != confirmed_facility_id
+    let customer_time_zone: String = context.customer_time_zone.ok_or(UrgentWorkError::NotFound)?;
+    let has_discrepancy: bool = context.claimed_customer_id != confirmed_customer_id
+        || input.final_customer_id != context.claimed_customer_id
+        || input.final_customer_id != confirmed_customer_id
         || context.staff_started_at != confirmed_started_at
         || _staff_ended_at != confirmed_ended_at
         || staff_worked_seconds != confirmed_worked_seconds
@@ -1244,7 +1297,7 @@ async fn reconcile_report(
         || input.worked_seconds != confirmed_worked_seconds;
     if has_discrepancy && input.adjustment_reason.is_none() {
         return Err(UrgentWorkError::InvalidInput(
-            "facility or time discrepancies require an adjustment reason",
+            "customer or time discrepancies require an adjustment reason",
         ));
     }
     let job: ExistsRow = sqlx::query_as!(
@@ -1263,7 +1316,7 @@ async fn reconcile_report(
         WorkDateRow,
         "SELECT ($1::TIMESTAMPTZ AT TIME ZONE $2)::DATE AS \"work_date!\"",
         confirmed_started_at,
-        facility_time_zone,
+        customer_time_zone,
     )
     .fetch_one(transaction.connection())
     .await
@@ -1348,23 +1401,20 @@ async fn reconcile_report(
                       AND rate_kind = 'customer_bill'
                       AND customer_id = $2
                       AND job_id = $3
-                      AND (customer_facility_id IS NULL OR customer_facility_id = $4)
-                      AND (employee_id IS NULL OR employee_id = $5)
-                      AND effective_from <= $6
-                      AND (effective_to IS NULL OR effective_to >= $6)
+                      AND (employee_id IS NULL OR employee_id = $4)
+                      AND effective_from <= $5
+                      AND (effective_to IS NULL OR effective_to >= $5)
                       AND is_active
                     ORDER BY
                         (employee_id IS NOT NULL) DESC,
-                        (customer_facility_id IS NOT NULL) DESC,
                         priority DESC,
                         effective_from DESC,
                         id
                     LIMIT 1
                     "#,
                     tenant_id,
-                    customer_id,
+                    input.final_customer_id,
                     input.job_id,
-                    input.final_customer_facility_id,
                     context.employee_id,
                     work_date,
                 )
@@ -1381,14 +1431,12 @@ async fn reconcile_report(
                       AND rate_kind = 'worker_pay'
                       AND (customer_id IS NULL OR customer_id = $2)
                       AND job_id = $3
-                      AND (customer_facility_id IS NULL OR customer_facility_id = $4)
-                      AND (employee_id IS NULL OR employee_id = $5)
-                      AND effective_from <= $6
-                      AND (effective_to IS NULL OR effective_to >= $6)
+                      AND (employee_id IS NULL OR employee_id = $4)
+                      AND effective_from <= $5
+                      AND (effective_to IS NULL OR effective_to >= $5)
                       AND is_active
                     ORDER BY
                         (employee_id IS NOT NULL) DESC,
-                        (customer_facility_id IS NOT NULL) DESC,
                         (customer_id IS NOT NULL) DESC,
                         priority DESC,
                         effective_from DESC,
@@ -1396,9 +1444,8 @@ async fn reconcile_report(
                     LIMIT 1
                     "#,
                     tenant_id,
-                    customer_id,
+                    input.final_customer_id,
                     input.job_id,
-                    input.final_customer_facility_id,
                     context.employee_id,
                     work_date,
                 )
@@ -1434,18 +1481,17 @@ async fn reconcile_report(
     let shift_insert: PgQueryResult = sqlx::query!(
         r#"
         INSERT INTO business_staffing_shifts (
-            id, tenant_id, customer_id, customer_facility_id, job_id,
+            id, tenant_id, customer_id, job_id,
             starts_at, ends_at, required_workers, status, notes,
             created_by_account_id, updated_by_account_id
         ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, 1, 'completed',
-            'System-created after urgent work reconciliation', $8, $8
+            $1, $2, $3, $4, $5, $6, 1, 'completed',
+            'System-created after urgent work reconciliation', $7, $7
         )
         "#,
         shift_id,
         tenant_id,
-        customer_id,
-        input.final_customer_facility_id,
+        input.final_customer_id,
         input.job_id,
         confirmed_started_at,
         confirmed_ended_at,
@@ -1497,7 +1543,7 @@ async fn reconcile_report(
     let customer_copy: PgQueryResult = sqlx::query!(
         r#"
         INSERT INTO business_customer_work_records (
-            id, tenant_id, assignment_id, confirmed_customer_facility_id,
+            id, tenant_id, assignment_id, confirmed_customer_id,
             confirmed_started_at, confirmed_ended_at, customer_reference, notes,
             recorded_by_account_id
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -1505,7 +1551,7 @@ async fn reconcile_report(
         copied_record_id,
         tenant_id,
         assignment_id,
-        input.final_customer_facility_id,
+        confirmed_customer_id,
         confirmed_started_at,
         confirmed_ended_at,
         context.customer_reference,
@@ -1550,13 +1596,13 @@ async fn enqueue_notification(
     let result: PgQueryResult = sqlx::query!(
         r#"
         INSERT INTO notification_outbox (
-            id, tenant_id, event_type, aggregate_id, channel, destination, message
+            id, tenant_id, branch_id, event_type, aggregate_id, channel, destination, message
         )
-        SELECT gen_random_uuid(), $1, $2, $3, destination.channel, destination.destination,
+        SELECT gen_random_uuid(), $1, destination.branch_id, $2, $3, destination.channel, destination.destination,
                'Urgent staffing work updated; report ' || $4::UUID::TEXT
         FROM notification_destinations AS destination
         WHERE destination.tenant_id = $1 AND destination.enabled
-        ON CONFLICT (tenant_id, event_type, aggregate_id, channel, destination) DO NOTHING
+        ON CONFLICT (tenant_id, branch_id, event_type, aggregate_id, channel, destination) DO NOTHING
         "#,
         tenant_id,
         event_type,

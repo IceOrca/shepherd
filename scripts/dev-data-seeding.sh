@@ -83,12 +83,12 @@ auth_identities_json='{}'
 seeded_auth_account_count=0
 tab_character="$(printf '\t')"
 
-while IFS="${tab_character}" read -r tenant_slug business_role username email password; do
+while IFS="${tab_character}" read -r tenant_slug business_role username email password branch_code; do
     case "${tenant_slug}" in
         ''|'#'*) continue ;;
     esac
 
-    if [ -z "${business_role}" ] || [ -z "${username}" ] || [ -z "${email}" ] || [ -z "${password}" ]; then
+    if [ -z "${business_role}" ] || [ -z "${username}" ] || [ -z "${email}" ] || [ -z "${password}" ] || [ -z "${branch_code}" ]; then
         echo >&2 "Invalid development Auth account row for tenant '${tenant_slug}'"
         exit 2
     fi
@@ -102,7 +102,8 @@ while IFS="${tab_character}" read -r tenant_slug business_role username email pa
             --arg username "${username}" \
             --arg tenant_slug "${tenant_slug}" \
             --arg business_role "${business_role}" \
-            '{email: $email, password: $password, email_confirm: true, role: "authenticated", user_metadata: {username: $username}, app_metadata: {managed_by: "dev-seed", tenant_slug: $tenant_slug, business_role: $business_role}}')"
+            --arg branch_code "${branch_code}" \
+            '{email: $email, password: $password, email_confirm: true, role: "authenticated", user_metadata: {username: $username}, app_metadata: {managed_by: "dev-seed", tenant_slug: $tenant_slug, business_role: $business_role, branch_code: $branch_code}}')"
         created_user="$(curl --fail --silent --show-error \
             --request POST \
             --header "Authorization: Bearer ${auth_admin_token}" \
@@ -116,7 +117,8 @@ while IFS="${tab_character}" read -r tenant_slug business_role username email pa
             --arg username "${username}" \
             --arg tenant_slug "${tenant_slug}" \
             --arg business_role "${business_role}" \
-            '{password: $password, email_confirm: true, user_metadata: {username: $username}, app_metadata: {managed_by: "dev-seed", tenant_slug: $tenant_slug, business_role: $business_role}}')"
+            --arg branch_code "${branch_code}" \
+            '{password: $password, email_confirm: true, user_metadata: {username: $username}, app_metadata: {managed_by: "dev-seed", tenant_slug: $tenant_slug, business_role: $business_role, branch_code: $branch_code}}')"
         curl --fail --silent --show-error --output /dev/null \
             --request PUT \
             --header "Authorization: Bearer ${auth_admin_token}" \
@@ -138,8 +140,9 @@ while IFS="${tab_character}" read -r tenant_slug business_role username email pa
     seeded_auth_account_count=$((seeded_auth_account_count + 1))
 done < "${dev_accounts_file}"
 
-if [ "${seeded_auth_account_count}" -ne 21 ]; then
-    echo >&2 "Expected 21 development Auth accounts, found ${seeded_auth_account_count} in ${dev_accounts_file}"
+expected_auth_account_count="$(awk -F '\t' '!/^#/ && NF { count += 1 } END { print count + 0 }' "${dev_accounts_file}")"
+if [ "${seeded_auth_account_count}" -ne "${expected_auth_account_count}" ]; then
+    echo >&2 "Expected ${expected_auth_account_count} development Auth accounts, found ${seeded_auth_account_count} in ${dev_accounts_file}"
     exit 2
 fi
 

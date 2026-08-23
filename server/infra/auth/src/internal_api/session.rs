@@ -962,9 +962,9 @@ fn read_session_idle_timeout(env_name: &str, default_value: u64) -> u64 {
 }
 
 fn idle_timeout_secs(role: &Role) -> u64 {
-    if matches!(role, Role::Owner | Role::Director) {
+    if matches!(role, Role::TenantOwner | Role::ExecutiveManager) {
         TENANT_OWNER_SESSION_IDLE_TIMEOUT_SECS.load(Ordering::Relaxed)
-    } else if matches!(role, Role::Manager | Role::Supervisor) {
+    } else if matches!(role, Role::BranchManager | Role::Supervisor) {
         SUPERVISOR_SESSION_IDLE_TIMEOUT_SECS.load(Ordering::Relaxed)
     } else {
         EMPLOYEE_SESSION_IDLE_TIMEOUT_SECS.load(Ordering::Relaxed)
@@ -972,9 +972,9 @@ fn idle_timeout_secs(role: &Role) -> u64 {
 }
 
 fn max_session(role: &Role) -> u8 {
-    if matches!(role, Role::Owner | Role::Director) {
+    if matches!(role, Role::TenantOwner | Role::ExecutiveManager) {
         TENANT_OWNER_SESSION_MAX.load(Ordering::Relaxed)
-    } else if matches!(role, Role::Manager | Role::Supervisor) {
+    } else if matches!(role, Role::BranchManager | Role::Supervisor) {
         SUPERVISOR_SESSION_MAX.load(Ordering::Relaxed)
     } else {
         EMPLOYEE_SESSION_MAX.load(Ordering::Relaxed)

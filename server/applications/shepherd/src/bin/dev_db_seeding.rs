@@ -40,31 +40,30 @@ struct DevBranch {
     code: &'static str,
     name: &'static str,
     time_zone: &'static str,
-    facilities: &'static [DevFacility],
-}
-
-struct DevFacility {
-    code: &'static str,
-    name: &'static str,
 }
 
 struct DevAccount {
     username: &'static str,
     role: DevRole,
+    branch_code: Option<&'static str>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DevRole {
-    Owner,
-    Manager,
+    TenantOwner,
+    ExecutiveManager,
+    BranchManager,
+    Supervisor,
     Staff,
 }
 
 impl DevRole {
     const fn as_code(self) -> &'static str {
         match self {
-            Self::Owner => "owner",
-            Self::Manager => "manager",
+            Self::TenantOwner => "tenant_owner",
+            Self::ExecutiveManager => "executive_manager",
+            Self::BranchManager => "branch_manager",
+            Self::Supervisor => "supervisor",
             Self::Staff => "staff",
         }
     }
@@ -86,135 +85,268 @@ struct SeedAccount {
     id: Uuid,
     username: String,
     role: DevRole,
+    branch_code: Option<&'static str>,
 }
-
-const HEAD_OFFICE_FACILITIES: &[DevFacility] = &[
-    DevFacility {
-        code: "main-office",
-        name: "Main Office",
-    },
-    DevFacility {
-        code: "warehouse",
-        name: "Warehouse",
-    },
-];
-
-const NORTH_BRANCH_FACILITIES: &[DevFacility] = &[
-    DevFacility {
-        code: "office",
-        name: "Branch Office",
-    },
-    DevFacility {
-        code: "warehouse",
-        name: "Branch Warehouse",
-    },
-];
 
 const DEV_BRANCHES: &[DevBranch] = &[
     DevBranch {
         code: "head-office",
         name: "Head Office",
         time_zone: "Asia/Bangkok",
-        facilities: HEAD_OFFICE_FACILITIES,
     },
     DevBranch {
         code: "north-branch",
         name: "North Branch",
         time_zone: "Asia/Bangkok",
-        facilities: NORTH_BRANCH_FACILITIES,
     },
 ];
 
 const ACME_ACCOUNTS: &[DevAccount] = &[
     DevAccount {
         username: "iceorca",
-        role: DevRole::Owner,
+        role: DevRole::TenantOwner,
+        branch_code: None,
     },
     DevAccount {
-        username: "acme_manager_1",
-        role: DevRole::Manager,
+        username: "acme_exec",
+        role: DevRole::ExecutiveManager,
+        branch_code: None,
     },
     DevAccount {
-        username: "acme_manager_2",
-        role: DevRole::Manager,
+        username: "acme_head_manager",
+        role: DevRole::BranchManager,
+        branch_code: Some("head-office"),
     },
     DevAccount {
-        username: "acme_staff_1",
+        username: "acme_head_supervisor_1",
+        role: DevRole::Supervisor,
+        branch_code: Some("head-office"),
+    },
+    DevAccount {
+        username: "acme_head_supervisor_2",
+        role: DevRole::Supervisor,
+        branch_code: Some("head-office"),
+    },
+    DevAccount {
+        username: "acme_head_staff_1",
         role: DevRole::Staff,
+        branch_code: Some("head-office"),
     },
     DevAccount {
-        username: "acme_staff_2",
+        username: "acme_head_staff_2",
         role: DevRole::Staff,
+        branch_code: Some("head-office"),
     },
     DevAccount {
-        username: "acme_staff_3",
+        username: "acme_head_staff_3",
         role: DevRole::Staff,
+        branch_code: Some("head-office"),
     },
     DevAccount {
-        username: "acme_staff_4",
+        username: "acme_head_staff_4",
         role: DevRole::Staff,
+        branch_code: Some("head-office"),
+    },
+    DevAccount {
+        username: "acme_north_manager",
+        role: DevRole::BranchManager,
+        branch_code: Some("north-branch"),
+    },
+    DevAccount {
+        username: "acme_north_supervisor_1",
+        role: DevRole::Supervisor,
+        branch_code: Some("north-branch"),
+    },
+    DevAccount {
+        username: "acme_north_supervisor_2",
+        role: DevRole::Supervisor,
+        branch_code: Some("north-branch"),
+    },
+    DevAccount {
+        username: "acme_north_staff_1",
+        role: DevRole::Staff,
+        branch_code: Some("north-branch"),
+    },
+    DevAccount {
+        username: "acme_north_staff_2",
+        role: DevRole::Staff,
+        branch_code: Some("north-branch"),
+    },
+    DevAccount {
+        username: "acme_north_staff_3",
+        role: DevRole::Staff,
+        branch_code: Some("north-branch"),
+    },
+    DevAccount {
+        username: "acme_north_staff_4",
+        role: DevRole::Staff,
+        branch_code: Some("north-branch"),
     },
 ];
 
 const ACME1_ACCOUNTS: &[DevAccount] = &[
     DevAccount {
         username: "acme1_owner",
-        role: DevRole::Owner,
+        role: DevRole::TenantOwner,
+        branch_code: None,
     },
     DevAccount {
-        username: "acme1_manager_1",
-        role: DevRole::Manager,
+        username: "acme1_exec",
+        role: DevRole::ExecutiveManager,
+        branch_code: None,
     },
     DevAccount {
-        username: "acme1_manager_2",
-        role: DevRole::Manager,
+        username: "acme1_head_manager",
+        role: DevRole::BranchManager,
+        branch_code: Some("head-office"),
     },
     DevAccount {
-        username: "acme1_staff_1",
+        username: "acme1_head_supervisor_1",
+        role: DevRole::Supervisor,
+        branch_code: Some("head-office"),
+    },
+    DevAccount {
+        username: "acme1_head_supervisor_2",
+        role: DevRole::Supervisor,
+        branch_code: Some("head-office"),
+    },
+    DevAccount {
+        username: "acme1_head_staff_1",
         role: DevRole::Staff,
+        branch_code: Some("head-office"),
     },
     DevAccount {
-        username: "acme1_staff_2",
+        username: "acme1_head_staff_2",
         role: DevRole::Staff,
+        branch_code: Some("head-office"),
     },
     DevAccount {
-        username: "acme1_staff_3",
+        username: "acme1_head_staff_3",
         role: DevRole::Staff,
+        branch_code: Some("head-office"),
     },
     DevAccount {
-        username: "acme1_staff_4",
+        username: "acme1_head_staff_4",
         role: DevRole::Staff,
+        branch_code: Some("head-office"),
+    },
+    DevAccount {
+        username: "acme1_north_manager",
+        role: DevRole::BranchManager,
+        branch_code: Some("north-branch"),
+    },
+    DevAccount {
+        username: "acme1_north_supervisor_1",
+        role: DevRole::Supervisor,
+        branch_code: Some("north-branch"),
+    },
+    DevAccount {
+        username: "acme1_north_supervisor_2",
+        role: DevRole::Supervisor,
+        branch_code: Some("north-branch"),
+    },
+    DevAccount {
+        username: "acme1_north_staff_1",
+        role: DevRole::Staff,
+        branch_code: Some("north-branch"),
+    },
+    DevAccount {
+        username: "acme1_north_staff_2",
+        role: DevRole::Staff,
+        branch_code: Some("north-branch"),
+    },
+    DevAccount {
+        username: "acme1_north_staff_3",
+        role: DevRole::Staff,
+        branch_code: Some("north-branch"),
+    },
+    DevAccount {
+        username: "acme1_north_staff_4",
+        role: DevRole::Staff,
+        branch_code: Some("north-branch"),
     },
 ];
 
 const ACME2_ACCOUNTS: &[DevAccount] = &[
     DevAccount {
         username: "acme2_owner",
-        role: DevRole::Owner,
+        role: DevRole::TenantOwner,
+        branch_code: None,
     },
     DevAccount {
-        username: "acme2_manager_1",
-        role: DevRole::Manager,
+        username: "acme2_exec",
+        role: DevRole::ExecutiveManager,
+        branch_code: None,
     },
     DevAccount {
-        username: "acme2_manager_2",
-        role: DevRole::Manager,
+        username: "acme2_head_manager",
+        role: DevRole::BranchManager,
+        branch_code: Some("head-office"),
     },
     DevAccount {
-        username: "acme2_staff_1",
+        username: "acme2_head_supervisor_1",
+        role: DevRole::Supervisor,
+        branch_code: Some("head-office"),
+    },
+    DevAccount {
+        username: "acme2_head_supervisor_2",
+        role: DevRole::Supervisor,
+        branch_code: Some("head-office"),
+    },
+    DevAccount {
+        username: "acme2_head_staff_1",
         role: DevRole::Staff,
+        branch_code: Some("head-office"),
     },
     DevAccount {
-        username: "acme2_staff_2",
+        username: "acme2_head_staff_2",
         role: DevRole::Staff,
+        branch_code: Some("head-office"),
     },
     DevAccount {
-        username: "acme2_staff_3",
+        username: "acme2_head_staff_3",
         role: DevRole::Staff,
+        branch_code: Some("head-office"),
     },
     DevAccount {
-        username: "acme2_staff_4",
+        username: "acme2_head_staff_4",
         role: DevRole::Staff,
+        branch_code: Some("head-office"),
+    },
+    DevAccount {
+        username: "acme2_north_manager",
+        role: DevRole::BranchManager,
+        branch_code: Some("north-branch"),
+    },
+    DevAccount {
+        username: "acme2_north_supervisor_1",
+        role: DevRole::Supervisor,
+        branch_code: Some("north-branch"),
+    },
+    DevAccount {
+        username: "acme2_north_supervisor_2",
+        role: DevRole::Supervisor,
+        branch_code: Some("north-branch"),
+    },
+    DevAccount {
+        username: "acme2_north_staff_1",
+        role: DevRole::Staff,
+        branch_code: Some("north-branch"),
+    },
+    DevAccount {
+        username: "acme2_north_staff_2",
+        role: DevRole::Staff,
+        branch_code: Some("north-branch"),
+    },
+    DevAccount {
+        username: "acme2_north_staff_3",
+        role: DevRole::Staff,
+        branch_code: Some("north-branch"),
+    },
+    DevAccount {
+        username: "acme2_north_staff_4",
+        role: DevRole::Staff,
+        branch_code: Some("north-branch"),
     },
 ];
 
@@ -314,7 +446,7 @@ async fn seed_tenant(
     let owner_definition: &DevAccount = tenant
         .accounts
         .iter()
-        .find(|account: &&DevAccount| account.role == DevRole::Owner)
+        .find(|account: &&DevAccount| account.role == DevRole::TenantOwner)
         .ok_or_else(|| io::Error::other(format!("tenant '{}' has no owner seed definition", tenant.slug)))?;
     let owner_email: String = dev_auth_email(tenant.slug, owner_definition.username);
     let owner: SeedAccount = ensure_account(
@@ -323,6 +455,7 @@ async fn seed_tenant(
         owner_definition.username,
         &owner_email,
         owner_definition.role,
+        owner_definition.branch_code,
         None,
     )
     .await?;
@@ -341,7 +474,7 @@ async fn seed_tenant(
     for account_definition in tenant
         .accounts
         .iter()
-        .filter(|account: &&DevAccount| account.role != DevRole::Owner)
+        .filter(|account: &&DevAccount| account.role != DevRole::TenantOwner)
     {
         let account_email: String = dev_auth_email(tenant.slug, account_definition.username);
         let account: SeedAccount = ensure_account(
@@ -350,6 +483,7 @@ async fn seed_tenant(
             account_definition.username,
             &account_email,
             account_definition.role,
+            account_definition.branch_code,
             Some(owner.id),
         )
         .await?;
@@ -366,20 +500,16 @@ async fn seed_tenant(
         seeded_accounts.push(account);
     }
 
-    seed_branches_and_facilities(db, tenant_id, tenant, owner.id).await?;
+    seed_branches(db, tenant_id, tenant, &seeded_accounts, owner.id).await?;
     seed_hr_infra(db, tenant_id, tenant, &seeded_accounts, owner.id).await?;
     seed_staffing_business(db, tenant_id, tenant, owner.id).await?;
 
     info!(
-        "Development tenant seed completed: tenant_slug={} tenant_id={} accounts={} branches={} facilities={} employees={}",
+        "Development tenant seed completed: tenant_slug={} tenant_id={} accounts={} branches={} employees={}",
         tenant.slug,
         tenant_id,
         tenant.accounts.len(),
         DEV_BRANCHES.len(),
-        DEV_BRANCHES
-            .iter()
-            .map(|branch: &DevBranch| branch.facilities.len())
-            .sum::<usize>(),
         seeded_accounts.len()
     );
     Ok(())
@@ -422,10 +552,18 @@ async fn seed_staffing_business(
     let mut transaction = db.begin_tenant(tenant_id).await.map_err(io::Error::other)?;
     let effective_date =
         NaiveDate::from_ymd_opt(2026, 1, 1).ok_or_else(|| io::Error::other("invalid staffing seed date"))?;
+    let branch_id: Uuid = sqlx::query_scalar!(
+        "SELECT id FROM branches WHERE tenant_id = $1 AND code = 'head-office'",
+        tenant_id,
+    )
+    .fetch_one(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
     let job: SeedIdRow = sqlx::query_as!(
         SeedIdRow,
-        "SELECT id FROM hr_jobs WHERE tenant_id = $1 AND code = 'employee'",
+        "SELECT id FROM hr_jobs WHERE tenant_id = $1 AND branch_id = $2 AND code = 'employee'",
         tenant_id,
+        branch_id,
     )
     .fetch_one(transaction.connection())
     .await
@@ -446,11 +584,13 @@ async fn seed_staffing_business(
            AND assignment.job_id = $2
            AND assignment.date_end IS NULL
         WHERE employee.tenant_id = $1 AND employee.status = 'active'
+          AND employee.branch_id = $3
         ORDER BY employee.employee_code
         LIMIT 1
         "#,
         tenant_id,
         job_id,
+        branch_id,
     )
     .fetch_one(transaction.connection())
     .await
@@ -467,25 +607,23 @@ async fn seed_staffing_business(
     .map_err(io::Error::other)?;
     let staff_account_id: Uuid = staff_account.id;
 
-    let karaoke_a_id =
-        ensure_staffing_customer(&mut transaction, tenant_id, "karaoke-a", "Karaoke A", owner_account_id).await?;
-    let karaoke_a_facility_id = ensure_customer_facility(
+    let karaoke_a_id = ensure_staffing_customer(
         &mut transaction,
         tenant_id,
-        karaoke_a_id,
-        "main",
+        branch_id,
+        "karaoke-a-main",
         "Karaoke A Main",
+        "12 Sukhumvit Road",
         owner_account_id,
     )
     .await?;
-    let karaoke_b_id =
-        ensure_staffing_customer(&mut transaction, tenant_id, "karaoke-b", "Karaoke B", owner_account_id).await?;
-    let karaoke_b_facility_id = ensure_customer_facility(
+    let karaoke_b_id = ensure_staffing_customer(
         &mut transaction,
         tenant_id,
-        karaoke_b_id,
-        "main",
+        branch_id,
+        "karaoke-b-main",
         "Karaoke B Main",
+        "24 Silom Road",
         owner_account_id,
     )
     .await?;
@@ -493,10 +631,10 @@ async fn seed_staffing_business(
     ensure_staffing_rate(
         &mut transaction,
         tenant_id,
+        branch_id,
         "karaoke-a-default",
         "Karaoke A default staff rate",
         karaoke_a_id,
-        Some(karaoke_a_facility_id),
         None,
         job_id,
         "150000.0000",
@@ -509,10 +647,10 @@ async fn seed_staffing_business(
     ensure_staffing_rate(
         &mut transaction,
         tenant_id,
+        branch_id,
         "karaoke-b-default",
         "Karaoke B default staff rate",
         karaoke_b_id,
-        Some(karaoke_b_facility_id),
         None,
         job_id,
         "180000.0000",
@@ -525,10 +663,10 @@ async fn seed_staffing_business(
     let (customer_bill_rate_id, worker_pay_rate_id) = ensure_staffing_rate(
         &mut transaction,
         tenant_id,
+        branch_id,
         "karaoke-b-worker-special",
         "Karaoke B worker-specific rate",
         karaoke_b_id,
-        Some(karaoke_b_facility_id),
         Some(employee_id),
         job_id,
         "180000.0000",
@@ -541,11 +679,12 @@ async fn seed_staffing_business(
     sqlx::query!(
         r#"
         INSERT INTO business_staffing_employee_eligibilities (
-            id, tenant_id, employee_id, job_id, effective_from, notes, created_by_account_id
+            id, tenant_id, branch_id, employee_id, job_id, effective_from, notes, created_by_account_id
         )
         SELECT
             MD5($1::UUID::TEXT || ':' || employee.id::TEXT || ':' || $2::UUID::TEXT)::UUID,
             $1,
+            $5,
             employee.id,
             $2,
             $3,
@@ -558,12 +697,14 @@ async fn seed_staffing_business(
            AND account_role.role_code = 'staff'
         WHERE employee.tenant_id = $1
           AND employee.status = 'active'
-        ON CONFLICT (tenant_id, employee_id, job_id, effective_from) DO NOTHING
+          AND employee.branch_id = $5
+        ON CONFLICT (tenant_id, branch_id, employee_id, job_id, effective_from) DO NOTHING
         "#,
         tenant_id,
         job_id,
         effective_date,
         owner_account_id,
+        branch_id,
     )
     .execute(transaction.connection())
     .await
@@ -574,7 +715,7 @@ async fn seed_staffing_business(
     sqlx::query!(
         r#"
         INSERT INTO business_staffing_shifts (
-            id, tenant_id, customer_id, customer_facility_id, job_id, starts_at, ends_at,
+            id, tenant_id, branch_id, customer_id, job_id, starts_at, ends_at,
             required_workers, status, notes, created_by_account_id, updated_by_account_id
         )
         VALUES (
@@ -586,8 +727,8 @@ async fn seed_staffing_business(
         "#,
         shift_id,
         tenant_id,
+        branch_id,
         karaoke_b_id,
-        karaoke_b_facility_id,
         job_id,
         owner_account_id,
     )
@@ -597,15 +738,16 @@ async fn seed_staffing_business(
     sqlx::query!(
         r#"
         INSERT INTO business_shift_assignments (
-            id, tenant_id, shift_id, employee_id, customer_bill_rate_id, worker_pay_rate_id,
+            id, tenant_id, branch_id, shift_id, employee_id, customer_bill_rate_id, worker_pay_rate_id,
             rate_source, currency, bill_hourly_rate_snapshot, worker_hourly_rate_snapshot,
             created_by_account_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, 'configured', 'VND', 180000, 145000, $7)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'configured', 'VND', 180000, 145000, $8)
         ON CONFLICT (id) DO NOTHING
         "#,
         assignment_id,
         tenant_id,
+        branch_id,
         shift_id,
         employee_id,
         customer_bill_rate_id,
@@ -624,14 +766,15 @@ async fn seed_staffing_business(
     let urgent_batch_insert: sqlx::postgres::PgQueryResult = sqlx::query!(
         r#"
         INSERT INTO business_urgent_work_batches (
-            id, tenant_id, actor_account_id, claimed_customer_facility_id, idempotency_key
-        ) VALUES ($1, $2, $3, $4, $1)
+            id, tenant_id, branch_id, actor_account_id, claimed_customer_id, idempotency_key
+        ) VALUES ($1, $2, $3, $4, $5, $1)
         ON CONFLICT (id) DO NOTHING
         "#,
         urgent_batch_id,
         tenant_id,
+        branch_id,
         staff_account_id,
-        karaoke_a_facility_id,
+        karaoke_a_id,
     )
     .execute(transaction.connection())
     .await
@@ -639,16 +782,17 @@ async fn seed_staffing_business(
     let urgent_report_insert: sqlx::postgres::PgQueryResult = sqlx::query!(
         r#"
         INSERT INTO business_urgent_work_reports (
-            id, tenant_id, start_batch_id, employee_id, claimed_customer_facility_id,
+            id, tenant_id, branch_id, start_batch_id, employee_id, claimed_customer_id,
             status, created_by_account_id
-        ) VALUES ($1, $2, $3, $4, $5, 'completed', $6)
+        ) VALUES ($1, $2, $3, $4, $5, $6, 'completed', $7)
         ON CONFLICT (id) DO NOTHING
         "#,
         urgent_report_id,
         tenant_id,
+        branch_id,
         urgent_batch_id,
         employee_id,
-        karaoke_a_facility_id,
+        karaoke_a_id,
         staff_account_id,
     )
     .execute(transaction.connection())
@@ -657,17 +801,18 @@ async fn seed_staffing_business(
     let urgent_session_insert: sqlx::postgres::PgQueryResult = sqlx::query!(
         r#"
         INSERT INTO business_urgent_work_sessions (
-            id, tenant_id, report_id, employee_id, started_at, ended_at,
+            id, tenant_id, branch_id, report_id, employee_id, started_at, ended_at,
             end_idempotency_key, started_by_account_id, start_source,
             ended_by_account_id, end_source
         ) VALUES (
-            $1, $2, $3, $4, CURRENT_TIMESTAMP - INTERVAL '5 hours',
-            CURRENT_TIMESTAMP - INTERVAL '1 hour', $1, $5, 'self', $5, 'self'
+            $1, $2, $3, $4, $5, CURRENT_TIMESTAMP - INTERVAL '5 hours',
+            CURRENT_TIMESTAMP - INTERVAL '1 hour', $1, $6, 'self', $6, 'self'
         )
         ON CONFLICT (id) DO NOTHING
         "#,
         urgent_session_id,
         tenant_id,
+        branch_id,
         urgent_report_id,
         employee_id,
         staff_account_id,
@@ -678,20 +823,21 @@ async fn seed_staffing_business(
     let urgent_customer_record_insert: sqlx::postgres::PgQueryResult = sqlx::query!(
         r#"
         INSERT INTO business_urgent_customer_work_records (
-            id, tenant_id, report_id, confirmed_customer_facility_id,
+            id, tenant_id, branch_id, report_id, confirmed_customer_id,
             confirmed_started_at, confirmed_ended_at, customer_reference,
             notes, recorded_by_account_id
         )
-        SELECT $1, $2, $3, $4, session.started_at, session.ended_at,
-               'DEV-MATCHED-001', 'Development matched urgent evidence', $5
+        SELECT $1, $2, $3, $4, $5, session.started_at, session.ended_at,
+               'DEV-MATCHED-001', 'Development matched urgent evidence', $6
         FROM business_urgent_work_sessions AS session
         WHERE session.tenant_id = $2 AND session.report_id = $3 AND session.ended_at IS NOT NULL
         ON CONFLICT (id) DO NOTHING
         "#,
         urgent_customer_record_id,
         tenant_id,
+        branch_id,
         urgent_report_id,
-        karaoke_a_facility_id,
+        karaoke_a_id,
         owner_account_id,
     )
     .execute(transaction.connection())
@@ -719,51 +865,23 @@ async fn seed_staffing_business(
 async fn ensure_staffing_customer(
     transaction: &mut infra_postgres::TenantTransaction,
     tenant_id: Uuid,
+    branch_id: Uuid,
     code: &str,
     name: &str,
+    address: &str,
     owner_account_id: Uuid,
 ) -> Result<Uuid, io::Error> {
     sqlx::query_scalar!(
         r#"
         INSERT INTO business_customers (
-            id, tenant_id, code, name, status, created_by_account_id, updated_by_account_id
-        )
-        VALUES ($1, $2, $3, $4, 'active', $5, $5)
-        ON CONFLICT (tenant_id, lower(code)) DO UPDATE
-        SET name = EXCLUDED.name,
-            status = 'active',
-            updated_at = CURRENT_TIMESTAMP,
-            updated_by_account_id = EXCLUDED.updated_by_account_id
-        RETURNING id
-        "#,
-        Uuid::new_v4(),
-        tenant_id,
-        code,
-        name,
-        owner_account_id,
-    )
-    .fetch_one(transaction.connection())
-    .await
-    .map_err(io::Error::other)
-}
-
-async fn ensure_customer_facility(
-    transaction: &mut infra_postgres::TenantTransaction,
-    tenant_id: Uuid,
-    customer_id: Uuid,
-    code: &str,
-    name: &str,
-    owner_account_id: Uuid,
-) -> Result<Uuid, io::Error> {
-    sqlx::query_scalar!(
-        r#"
-        INSERT INTO business_customer_facilities (
-            id, tenant_id, customer_id, code, name, time_zone, status,
+            id, tenant_id, branch_id, code, name, address, time_zone, status,
             created_by_account_id, updated_by_account_id
         )
-        VALUES ($1, $2, $3, $4, $5, 'Asia/Bangkok', 'active', $6, $6)
-        ON CONFLICT (tenant_id, customer_id, lower(code)) DO UPDATE
+        VALUES ($1, $2, $3, $4, $5, $6, 'Asia/Bangkok', 'active', $7, $7)
+        ON CONFLICT (tenant_id, branch_id, lower(code)) DO UPDATE
         SET name = EXCLUDED.name,
+            address = EXCLUDED.address,
+            time_zone = EXCLUDED.time_zone,
             status = 'active',
             updated_at = CURRENT_TIMESTAMP,
             updated_by_account_id = EXCLUDED.updated_by_account_id
@@ -771,9 +889,10 @@ async fn ensure_customer_facility(
         "#,
         Uuid::new_v4(),
         tenant_id,
-        customer_id,
+        branch_id,
         code,
         name,
+        address,
         owner_account_id,
     )
     .fetch_one(transaction.connection())
@@ -785,10 +904,10 @@ async fn ensure_customer_facility(
 async fn ensure_staffing_rate(
     transaction: &mut infra_postgres::TenantTransaction,
     tenant_id: Uuid,
+    branch_id: Uuid,
     code: &str,
     name: &str,
     customer_id: Uuid,
-    customer_facility_id: Option<Uuid>,
     employee_id: Option<Uuid>,
     job_id: Uuid,
     bill_hourly_rate: &str,
@@ -800,11 +919,11 @@ async fn ensure_staffing_rate(
     let customer_bill_rate_id: Uuid = ensure_staffing_hourly_rate(
         transaction,
         tenant_id,
+        branch_id,
         "customer_bill",
         &format!("{code}-bill"),
         &format!("{name} - customer bill"),
         Some(customer_id),
-        customer_facility_id,
         employee_id,
         job_id,
         bill_hourly_rate,
@@ -816,11 +935,11 @@ async fn ensure_staffing_rate(
     let worker_pay_rate_id: Uuid = ensure_staffing_hourly_rate(
         transaction,
         tenant_id,
+        branch_id,
         "worker_pay",
         &format!("{code}-pay"),
         &format!("{name} - worker pay"),
         Some(customer_id),
-        customer_facility_id,
         employee_id,
         job_id,
         worker_hourly_rate,
@@ -836,11 +955,11 @@ async fn ensure_staffing_rate(
 async fn ensure_staffing_hourly_rate(
     transaction: &mut infra_postgres::TenantTransaction,
     tenant_id: Uuid,
+    branch_id: Uuid,
     rate_kind: &str,
     code: &str,
     name: &str,
     customer_id: Option<Uuid>,
-    customer_facility_id: Option<Uuid>,
     employee_id: Option<Uuid>,
     job_id: Uuid,
     hourly_rate: &str,
@@ -851,7 +970,7 @@ async fn ensure_staffing_hourly_rate(
     sqlx::query_scalar!(
         r#"
         INSERT INTO business_staffing_rates (
-            id, tenant_id, rate_kind, code, name, customer_id, customer_facility_id,
+            id, tenant_id, branch_id, rate_kind, code, name, customer_id,
             employee_id, job_id, currency, hourly_rate, priority, effective_from,
             is_active, created_by_account_id
         )
@@ -859,10 +978,9 @@ async fn ensure_staffing_hourly_rate(
             $1, $2, $3, $4, $5, $6, $7, $8, $9, 'VND',
             $10::TEXT::NUMERIC, $11, $12, TRUE, $13
         )
-        ON CONFLICT (tenant_id, rate_kind, code, effective_from) DO UPDATE
+        ON CONFLICT (tenant_id, branch_id, rate_kind, code, effective_from) DO UPDATE
         SET name = EXCLUDED.name,
             customer_id = EXCLUDED.customer_id,
-            customer_facility_id = EXCLUDED.customer_facility_id,
             employee_id = EXCLUDED.employee_id,
             job_id = EXCLUDED.job_id,
             currency = EXCLUDED.currency,
@@ -874,11 +992,11 @@ async fn ensure_staffing_hourly_rate(
         "#,
         Uuid::new_v4(),
         tenant_id,
+        branch_id,
         rate_kind,
         code,
         name,
         customer_id,
-        customer_facility_id,
         employee_id,
         job_id,
         hourly_rate,
@@ -909,13 +1027,28 @@ async fn seed_hr_infra(
         effective_date
     );
 
+    let head_office_branch_id: Uuid = sqlx::query_scalar!(
+        r#"SELECT id FROM branches WHERE tenant_id = $1 AND code = 'head-office'"#,
+        tenant_id,
+    )
+    .fetch_one(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    let north_branch_id: Uuid = sqlx::query_scalar!(
+        r#"SELECT id FROM branches WHERE tenant_id = $1 AND code = 'north-branch'"#,
+        tenant_id,
+    )
+    .fetch_one(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+
     let administration_department_id: Uuid = sqlx::query_scalar!(
         r#"
         INSERT INTO hr_departments (
-            id, tenant_id, code, name, status, created_by_account_id, updated_by_account_id
+            id, tenant_id, branch_id, code, name, status, created_by_account_id, updated_by_account_id
         )
-        VALUES ($1, $2, 'administration', 'Administration', 'active', $3, $3)
-        ON CONFLICT (tenant_id, lower(code)) DO UPDATE
+        VALUES ($1, $2, $3, 'administration', 'Administration', 'active', $4, $4)
+        ON CONFLICT (tenant_id, branch_id, lower(code)) DO UPDATE
         SET name = EXCLUDED.name,
             status = 'active',
             updated_at = CURRENT_TIMESTAMP,
@@ -924,6 +1057,7 @@ async fn seed_hr_infra(
         "#,
         Uuid::new_v4(),
         tenant_id,
+        head_office_branch_id,
         owner_account_id,
     )
     .fetch_one(transaction.connection())
@@ -932,10 +1066,10 @@ async fn seed_hr_infra(
     let operations_department_id: Uuid = sqlx::query_scalar!(
         r#"
         INSERT INTO hr_departments (
-            id, tenant_id, code, name, status, created_by_account_id, updated_by_account_id
+            id, tenant_id, branch_id, code, name, status, created_by_account_id, updated_by_account_id
         )
-        VALUES ($1, $2, 'operations', 'Operations', 'active', $3, $3)
-        ON CONFLICT (tenant_id, lower(code)) DO UPDATE
+        VALUES ($1, $2, $3, 'operations', 'Operations', 'active', $4, $4)
+        ON CONFLICT (tenant_id, branch_id, lower(code)) DO UPDATE
         SET name = EXCLUDED.name,
             status = 'active',
             updated_at = CURRENT_TIMESTAMP,
@@ -944,6 +1078,43 @@ async fn seed_hr_infra(
         "#,
         Uuid::new_v4(),
         tenant_id,
+        head_office_branch_id,
+        owner_account_id,
+    )
+    .fetch_one(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    let north_administration_department_id: Uuid = sqlx::query_scalar!(
+        r#"
+        INSERT INTO hr_departments (
+            id, tenant_id, branch_id, code, name, status, created_by_account_id, updated_by_account_id
+        ) VALUES ($1, $2, $3, 'administration', 'Administration', 'active', $4, $4)
+        ON CONFLICT (tenant_id, branch_id, lower(code)) DO UPDATE
+        SET name = EXCLUDED.name, status = 'active', updated_at = CURRENT_TIMESTAMP,
+            updated_by_account_id = EXCLUDED.updated_by_account_id
+        RETURNING id
+        "#,
+        Uuid::new_v4(),
+        tenant_id,
+        north_branch_id,
+        owner_account_id,
+    )
+    .fetch_one(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    let north_operations_department_id: Uuid = sqlx::query_scalar!(
+        r#"
+        INSERT INTO hr_departments (
+            id, tenant_id, branch_id, code, name, status, created_by_account_id, updated_by_account_id
+        ) VALUES ($1, $2, $3, 'operations', 'Operations', 'active', $4, $4)
+        ON CONFLICT (tenant_id, branch_id, lower(code)) DO UPDATE
+        SET name = EXCLUDED.name, status = 'active', updated_at = CURRENT_TIMESTAMP,
+            updated_by_account_id = EXCLUDED.updated_by_account_id
+        RETURNING id
+        "#,
+        Uuid::new_v4(),
+        tenant_id,
+        north_branch_id,
         owner_account_id,
     )
     .fetch_one(transaction.connection())
@@ -953,6 +1124,7 @@ async fn seed_hr_infra(
     let owner_job_id: Uuid = ensure_dev_job(
         &mut transaction,
         tenant_id,
+        head_office_branch_id,
         "owner",
         "Owner",
         administration_department_id,
@@ -962,6 +1134,7 @@ async fn seed_hr_infra(
     let supervisor_job_id: Uuid = ensure_dev_job(
         &mut transaction,
         tenant_id,
+        head_office_branch_id,
         "supervisor",
         "Supervisor",
         operations_department_id,
@@ -971,25 +1144,78 @@ async fn seed_hr_infra(
     let employee_job_id: Uuid = ensure_dev_job(
         &mut transaction,
         tenant_id,
+        head_office_branch_id,
         "employee",
         "Employee",
         operations_department_id,
         owner_account_id,
     )
     .await?;
+    let north_owner_job_id: Uuid = ensure_dev_job(
+        &mut transaction,
+        tenant_id,
+        north_branch_id,
+        "owner",
+        "Owner",
+        north_administration_department_id,
+        owner_account_id,
+    )
+    .await?;
+    let north_supervisor_job_id: Uuid = ensure_dev_job(
+        &mut transaction,
+        tenant_id,
+        north_branch_id,
+        "supervisor",
+        "Supervisor",
+        north_operations_department_id,
+        owner_account_id,
+    )
+    .await?;
+    let north_employee_job_id: Uuid = ensure_dev_job(
+        &mut transaction,
+        tenant_id,
+        north_branch_id,
+        "employee",
+        "Employee",
+        north_operations_department_id,
+        owner_account_id,
+    )
+    .await?;
 
     let mut employee_ids: HashMap<Uuid, Uuid> = HashMap::new();
+    let mut employee_branch_ids: HashMap<Uuid, Uuid> = HashMap::new();
     for account in accounts {
+        let employee_branch_id: Uuid = if account.role == DevRole::TenantOwner {
+            head_office_branch_id
+        } else {
+            sqlx::query_scalar!(
+                r#"
+                SELECT assignment.branch_id
+                FROM account_branch_assignments AS assignment
+                INNER JOIN branches AS branch
+                    ON branch.tenant_id = assignment.tenant_id
+                   AND branch.id = assignment.branch_id
+                WHERE assignment.tenant_id = $1 AND assignment.account_id = $2
+                ORDER BY CASE WHEN branch.code = 'head-office' THEN 0 ELSE 1 END, branch.code
+                LIMIT 1
+                "#,
+                tenant_id,
+                account.id,
+            )
+            .fetch_one(transaction.connection())
+            .await
+            .map_err(io::Error::other)?
+        };
         let employee_code: String = account.username.to_ascii_lowercase();
         let work_email: String = format!("{}@{}.dev", employee_code, tenant.slug);
         let employee_id: Uuid = sqlx::query_scalar!(
             r#"
             INSERT INTO hr_employees (
-                id, tenant_id, account_id, employee_code, display_name, work_email, status, hire_date,
+                id, tenant_id, branch_id, account_id, employee_code, display_name, work_email, status, hire_date,
                 created_by_account_id, updated_by_account_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8, $8)
-            ON CONFLICT (tenant_id, lower(employee_code)) DO UPDATE
+            VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $9, $9)
+            ON CONFLICT (tenant_id, branch_id, lower(employee_code)) DO UPDATE
             SET account_id = EXCLUDED.account_id,
                 display_name = EXCLUDED.display_name,
                 work_email = EXCLUDED.work_email,
@@ -1001,6 +1227,7 @@ async fn seed_hr_infra(
             "#,
             Uuid::new_v4(),
             tenant_id,
+            employee_branch_id,
             account.id,
             employee_code,
             account.username,
@@ -1012,12 +1239,14 @@ async fn seed_hr_infra(
         .await
         .map_err(io::Error::other)?;
         employee_ids.insert(account.id, employee_id);
+        employee_branch_ids.insert(employee_id, employee_branch_id);
         debug!(
-            "Development employee ensured: tenant_slug={} employee_id={} employee_code={} account_id={} role={}",
+            "Development employee ensured: tenant_slug={} employee_id={} employee_code={} account_id={} branch_id={} role={}",
             tenant.slug,
             employee_id,
             employee_code,
             account.id,
+            employee_branch_id,
             account.role.as_code()
         );
     }
@@ -1025,150 +1254,119 @@ async fn seed_hr_infra(
     let owner_employee_id: Uuid = *employee_ids
         .get(&owner_account_id)
         .ok_or_else(|| io::Error::other("seeded owner employee was not found"))?;
-    let supervisor_employee_ids: Vec<Uuid> = accounts
-        .iter()
-        .filter(|account: &&SeedAccount| account.role == DevRole::Manager)
-        .filter_map(|account: &SeedAccount| employee_ids.get(&account.id).copied())
-        .collect();
-    let operations_manager_id: Uuid = supervisor_employee_ids.first().copied().unwrap_or(owner_employee_id);
+    let find_employee_by_role_and_branch = |role: DevRole, branch_code: Option<&str>| -> Option<Uuid> {
+        accounts
+            .iter()
+            .find(|account: &&SeedAccount| {
+                account.role == role && branch_code.is_none_or(|code: &str| account.branch_code == Some(code))
+            })
+            .and_then(|account: &SeedAccount| employee_ids.get(&account.id).copied())
+    };
+    let executive_employee_id: Uuid = find_employee_by_role_and_branch(DevRole::ExecutiveManager, None)
+        .ok_or_else(|| io::Error::other("seeded executive manager employee was not found"))?;
+    let head_branch_manager_id: Uuid = find_employee_by_role_and_branch(DevRole::BranchManager, Some("head-office"))
+        .ok_or_else(|| io::Error::other("head office branch manager employee was not found"))?;
+    let north_branch_manager_id: Uuid = find_employee_by_role_and_branch(DevRole::BranchManager, Some("north-branch"))
+        .ok_or_else(|| io::Error::other("north branch manager employee was not found"))?;
+    let head_supervisor_id: Uuid = find_employee_by_role_and_branch(DevRole::Supervisor, Some("head-office"))
+        .ok_or_else(|| io::Error::other("head office supervisor employee was not found"))?;
+    let north_supervisor_id: Uuid = find_employee_by_role_and_branch(DevRole::Supervisor, Some("north-branch"))
+        .ok_or_else(|| io::Error::other("north branch supervisor employee was not found"))?;
 
     sqlx::query!(
         r#"
         UPDATE hr_departments
-        SET manager_employee_id = CASE code
-                WHEN 'administration' THEN $2
-                WHEN 'operations' THEN $3
+        SET manager_employee_id = CASE
+                WHEN branch_id = $2 AND code = 'administration' THEN $3
+                WHEN branch_id = $2 AND code = 'operations' THEN $4
+                WHEN branch_id = $5 THEN $6
                 ELSE manager_employee_id
             END,
             updated_at = CURRENT_TIMESTAMP,
-            updated_by_account_id = $4
+            updated_by_account_id = $7
         WHERE tenant_id = $1
           AND code IN ('administration', 'operations')
         "#,
         tenant_id,
+        head_office_branch_id,
         owner_employee_id,
-        operations_manager_id,
+        head_branch_manager_id,
+        north_branch_id,
+        north_branch_manager_id,
         owner_account_id,
     )
     .execute(transaction.connection())
     .await
     .map_err(io::Error::other)?;
 
-    let head_office_branch_id: Uuid = sqlx::query_scalar!(
-        r#"SELECT id FROM branches WHERE tenant_id = $1 AND code = 'head-office'"#,
-        tenant_id
-    )
-    .fetch_one(transaction.connection())
-    .await
-    .map_err(io::Error::other)?;
-    let north_branch_id: Uuid = sqlx::query_scalar!(
-        r#"SELECT id FROM branches WHERE tenant_id = $1 AND code = 'north-branch'"#,
-        tenant_id
-    )
-    .fetch_one(transaction.connection())
-    .await
-    .map_err(io::Error::other)?;
-    let head_office_facility_id: Uuid = sqlx::query_scalar!(
-        r#"SELECT id FROM facilities WHERE tenant_id = $1 AND branch_id = $2 AND code = 'main-office'"#,
-        tenant_id,
-        head_office_branch_id,
-    )
-    .fetch_one(transaction.connection())
-    .await
-    .map_err(io::Error::other)?;
-    let north_facility_id: Uuid = sqlx::query_scalar!(
-        r#"SELECT id FROM facilities WHERE tenant_id = $1 AND branch_id = $2 AND code = 'office'"#,
-        tenant_id,
-        north_branch_id,
-    )
-    .fetch_one(transaction.connection())
-    .await
-    .map_err(io::Error::other)?;
-    let head_office_warehouse_id: Uuid = sqlx::query_scalar!(
-        r#"SELECT id FROM facilities WHERE tenant_id = $1 AND branch_id = $2 AND code = 'warehouse'"#,
-        tenant_id,
-        head_office_branch_id,
-    )
-    .fetch_one(transaction.connection())
-    .await
-    .map_err(io::Error::other)?;
-    let north_warehouse_id: Uuid = sqlx::query_scalar!(
-        r#"SELECT id FROM facilities WHERE tenant_id = $1 AND branch_id = $2 AND code = 'warehouse'"#,
-        tenant_id,
-        north_branch_id,
-    )
-    .fetch_one(transaction.connection())
-    .await
-    .map_err(io::Error::other)?;
-
-    let mut supervisor_index: usize = 0;
-    let mut employee_index: usize = 0;
-    let mut employee_facility_ids: HashMap<Uuid, Uuid> = HashMap::new();
     for account in accounts {
         let employee_id: Uuid = *employee_ids
             .get(&account.id)
             .ok_or_else(|| io::Error::other("seeded employee account mapping was not found"))?;
-        let (branch_id, facility_id, department_id, job_id, manager_employee_id) = match account.role {
-            DevRole::Owner => (
-                head_office_branch_id,
-                head_office_facility_id,
-                administration_department_id,
-                owner_job_id,
-                None,
+        let branch_id: Uuid = *employee_branch_ids
+            .get(&employee_id)
+            .ok_or_else(|| io::Error::other("seeded employee branch mapping was not found"))?;
+        let is_north_branch: bool = branch_id == north_branch_id;
+        let (department_id, job_id, manager_employee_id): (Uuid, Uuid, Option<Uuid>) = match account.role {
+            DevRole::TenantOwner => (administration_department_id, owner_job_id, None),
+            DevRole::ExecutiveManager => (operations_department_id, supervisor_job_id, Some(owner_employee_id)),
+            DevRole::BranchManager => (
+                if is_north_branch {
+                    north_operations_department_id
+                } else {
+                    operations_department_id
+                },
+                if is_north_branch {
+                    north_supervisor_job_id
+                } else {
+                    supervisor_job_id
+                },
+                Some(executive_employee_id),
             ),
-            DevRole::Manager => {
-                let use_north_branch: bool = supervisor_index % 2 == 1;
-                supervisor_index += 1;
-                (
-                    if use_north_branch {
-                        north_branch_id
-                    } else {
-                        head_office_branch_id
-                    },
-                    if use_north_branch {
-                        north_facility_id
-                    } else {
-                        head_office_facility_id
-                    },
-                    operations_department_id,
-                    supervisor_job_id,
-                    Some(owner_employee_id),
-                )
-            }
-            DevRole::Staff => {
-                let use_north_branch: bool = employee_index % 2 == 1;
-                let manager_employee_id: Uuid = supervisor_employee_ids
-                    .get(employee_index % supervisor_employee_ids.len().max(1))
-                    .copied()
-                    .unwrap_or(owner_employee_id);
-                employee_index += 1;
-                (
-                    if use_north_branch {
-                        north_branch_id
-                    } else {
-                        head_office_branch_id
-                    },
-                    if use_north_branch {
-                        north_warehouse_id
-                    } else {
-                        head_office_warehouse_id
-                    },
-                    operations_department_id,
-                    employee_job_id,
-                    Some(manager_employee_id),
-                )
-            }
+            DevRole::Supervisor => (
+                if is_north_branch {
+                    north_operations_department_id
+                } else {
+                    operations_department_id
+                },
+                if is_north_branch {
+                    north_supervisor_job_id
+                } else {
+                    supervisor_job_id
+                },
+                Some(if is_north_branch {
+                    north_branch_manager_id
+                } else {
+                    head_branch_manager_id
+                }),
+            ),
+            DevRole::Staff => (
+                if is_north_branch {
+                    north_operations_department_id
+                } else {
+                    operations_department_id
+                },
+                if is_north_branch {
+                    north_employee_job_id
+                } else {
+                    employee_job_id
+                },
+                Some(if is_north_branch {
+                    north_supervisor_id
+                } else {
+                    head_supervisor_id
+                }),
+            ),
         };
         let assignment_id: Uuid = sqlx::query_scalar!(
             r#"
             INSERT INTO hr_employee_assignments (
-                id, tenant_id, employee_id, branch_id, facility_id, department_id, job_id, manager_employee_id,
+                id, tenant_id, employee_id, branch_id, department_id, job_id, manager_employee_id,
                 date_start, is_primary, created_by_account_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, TRUE, $10)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE, $9)
             ON CONFLICT (tenant_id, employee_id) WHERE is_primary AND date_end IS NULL DO UPDATE
             SET branch_id = EXCLUDED.branch_id,
-                facility_id = EXCLUDED.facility_id,
                 department_id = EXCLUDED.department_id,
                 job_id = EXCLUDED.job_id,
                 manager_employee_id = EXCLUDED.manager_employee_id,
@@ -1179,7 +1377,6 @@ async fn seed_hr_infra(
             tenant_id,
             employee_id,
             branch_id,
-            facility_id,
             department_id,
             job_id,
             manager_employee_id,
@@ -1189,20 +1386,20 @@ async fn seed_hr_infra(
         .fetch_one(transaction.connection())
         .await
         .map_err(io::Error::other)?;
-        employee_facility_ids.insert(employee_id, facility_id);
         debug!(
-            "Development HR assignment ensured: tenant_slug={} employee_id={} assignment_id={} branch_id={} facility_id={} manager_employee_id={:?}",
-            tenant.slug, employee_id, assignment_id, branch_id, facility_id, manager_employee_id
+            "Development HR assignment ensured: tenant_slug={} employee_id={} assignment_id={} branch_id={} manager_employee_id={:?}",
+            tenant.slug, employee_id, assignment_id, branch_id, manager_employee_id
         );
     }
 
     let standard_schedule_id: Uuid = sqlx::query_scalar!(
         r#"
         INSERT INTO hr_working_schedules (
-            id, tenant_id, code, name, time_zone, status, created_by_account_id, updated_by_account_id
+            id, tenant_id, branch_id, code, name, time_zone, status,
+            created_by_account_id, updated_by_account_id
         )
-        VALUES ($1, $2, 'standard-40', 'Standard 40 Hours', 'Asia/Bangkok', 'active', $3, $3)
-        ON CONFLICT (tenant_id, lower(code)) DO UPDATE
+        VALUES ($1, $2, $3, 'standard-40', 'Standard 40 Hours', 'Asia/Bangkok', 'active', $4, $4)
+        ON CONFLICT (tenant_id, branch_id, lower(code)) DO UPDATE
         SET name = EXCLUDED.name,
             time_zone = EXCLUDED.time_zone,
             status = 'active',
@@ -1212,6 +1409,28 @@ async fn seed_hr_infra(
         "#,
         Uuid::new_v4(),
         tenant_id,
+        head_office_branch_id,
+        owner_account_id,
+    )
+    .fetch_one(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    let north_standard_schedule_id: Uuid = sqlx::query_scalar!(
+        r#"
+        INSERT INTO hr_working_schedules (
+            id, tenant_id, branch_id, code, name, time_zone, status,
+            created_by_account_id, updated_by_account_id
+        )
+        VALUES ($1, $2, $3, 'standard-40', 'Standard 40 Hours', 'Asia/Bangkok', 'active', $4, $4)
+        ON CONFLICT (tenant_id, branch_id, lower(code)) DO UPDATE
+        SET name = EXCLUDED.name, time_zone = EXCLUDED.time_zone, status = 'active',
+            updated_at = CURRENT_TIMESTAMP,
+            updated_by_account_id = EXCLUDED.updated_by_account_id
+        RETURNING id
+        "#,
+        Uuid::new_v4(),
+        tenant_id,
+        north_branch_id,
         owner_account_id,
     )
     .fetch_one(transaction.connection())
@@ -1225,45 +1444,69 @@ async fn seed_hr_infra(
     .execute(transaction.connection())
     .await
     .map_err(io::Error::other)?;
+    sqlx::query!(
+        "DELETE FROM hr_working_schedule_periods WHERE tenant_id = $1 AND schedule_id = $2",
+        tenant_id,
+        north_standard_schedule_id,
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
     let work_start: NaiveTime =
         NaiveTime::from_hms_opt(8, 0, 0).ok_or_else(|| io::Error::other("invalid seeded work start time"))?;
     let work_end: NaiveTime =
         NaiveTime::from_hms_opt(17, 0, 0).ok_or_else(|| io::Error::other("invalid seeded work end time"))?;
-    for weekday in 1_i16..=5_i16 {
-        sqlx::query!(
-            r#"
-            INSERT INTO hr_working_schedule_periods (
-                id, tenant_id, schedule_id, weekday, start_time, end_time, spans_next_day, unpaid_break_minutes
+    for (branch_id, schedule_id) in [
+        (head_office_branch_id, standard_schedule_id),
+        (north_branch_id, north_standard_schedule_id),
+    ] {
+        for weekday in 1_i16..=5_i16 {
+            sqlx::query!(
+                r#"
+                INSERT INTO hr_working_schedule_periods (
+                    id, tenant_id, branch_id, schedule_id, weekday, start_time, end_time,
+                    spans_next_day, unpaid_break_minutes
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, 60)
+                "#,
+                Uuid::new_v4(),
+                tenant_id,
+                branch_id,
+                schedule_id,
+                weekday,
+                work_start,
+                work_end,
             )
-            VALUES ($1, $2, $3, $4, $5, $6, FALSE, 60)
-            "#,
-            Uuid::new_v4(),
-            tenant_id,
-            standard_schedule_id,
-            weekday,
-            work_start,
-            work_end,
-        )
-        .execute(transaction.connection())
-        .await
-        .map_err(io::Error::other)?;
+            .execute(transaction.connection())
+            .await
+            .map_err(io::Error::other)?;
+        }
     }
     for employee_id in employee_ids.values() {
+        let employee_branch_id: Uuid = *employee_branch_ids
+            .get(employee_id)
+            .ok_or_else(|| io::Error::other("seeded schedule employee branch was not found"))?;
+        let employee_schedule_id: Uuid = if employee_branch_id == north_branch_id {
+            north_standard_schedule_id
+        } else {
+            standard_schedule_id
+        };
         let schedule_assignment_id: Uuid = sqlx::query_scalar!(
             r#"
             INSERT INTO hr_employee_schedule_assignments (
-                id, tenant_id, employee_id, schedule_id, date_start, created_by_account_id
+                id, tenant_id, branch_id, employee_id, schedule_id, date_start, created_by_account_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT (tenant_id, employee_id) WHERE date_end IS NULL DO UPDATE
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (tenant_id, branch_id, employee_id) WHERE date_end IS NULL DO UPDATE
             SET schedule_id = EXCLUDED.schedule_id,
                 date_start = EXCLUDED.date_start
             RETURNING id
             "#,
             Uuid::new_v4(),
             tenant_id,
+            employee_branch_id,
             employee_id,
-            standard_schedule_id,
+            employee_schedule_id,
             effective_date,
             owner_account_id,
         )
@@ -1272,7 +1515,7 @@ async fn seed_hr_infra(
         .map_err(io::Error::other)?;
         debug!(
             "Development working schedule assignment ensured: tenant_slug={} employee_id={} schedule_id={} assignment_id={} effective_date={}",
-            tenant.slug, employee_id, standard_schedule_id, schedule_assignment_id, effective_date
+            tenant.slug, employee_id, employee_schedule_id, schedule_assignment_id, effective_date
         );
     }
 
@@ -1282,6 +1525,7 @@ async fn seed_hr_infra(
         tenant,
         accounts,
         &employee_ids,
+        &employee_branch_ids,
         owner_account_id,
         effective_date,
     )
@@ -1293,7 +1537,7 @@ async fn seed_hr_infra(
         tenant,
         accounts,
         &employee_ids,
-        &employee_facility_ids,
+        &employee_branch_ids,
     )
     .await?;
 
@@ -1317,6 +1561,7 @@ async fn seed_payroll_configuration(
     tenant: &DevTenant,
     accounts: &[SeedAccount],
     employee_ids: &HashMap<Uuid, Uuid>,
+    employee_branch_ids: &HashMap<Uuid, Uuid>,
     owner_account_id: Uuid,
     effective_date: NaiveDate,
 ) -> Result<(), io::Error> {
@@ -1325,16 +1570,20 @@ async fn seed_payroll_configuration(
             .get(&account.id)
             .copied()
             .ok_or_else(|| io::Error::other("seeded payroll employee mapping was not found"))?;
+        let branch_id: Uuid = employee_branch_ids
+            .get(&employee_id)
+            .copied()
+            .ok_or_else(|| io::Error::other("seeded payroll employee branch was not found"))?;
         match account.role {
             DevRole::Staff => {
                 sqlx::query!(
                     r#"
                     INSERT INTO hr_employee_compensations (
-                        id, tenant_id, employee_id, currency, pay_basis, hourly_rate,
+                        id, tenant_id, branch_id, employee_id, currency, pay_basis, hourly_rate,
                         effective_from, created_by_account_id
                     )
-                    VALUES ($1, $2, $3, 'VND', 'hourly', 120000, $4, $5)
-                    ON CONFLICT (tenant_id, employee_id, effective_from) DO UPDATE
+                    VALUES ($1, $2, $3, $4, 'VND', 'hourly', 120000, $5, $6)
+                    ON CONFLICT (tenant_id, branch_id, employee_id, effective_from) DO UPDATE
                     SET currency = 'VND',
                         pay_basis = 'hourly',
                         hourly_rate = 120000,
@@ -1345,6 +1594,7 @@ async fn seed_payroll_configuration(
                     "#,
                     Uuid::new_v4(),
                     tenant_id,
+                    branch_id,
                     employee_id,
                     effective_date,
                     owner_account_id,
@@ -1353,8 +1603,8 @@ async fn seed_payroll_configuration(
                 .await
                 .map_err(io::Error::other)?;
             }
-            DevRole::Manager | DevRole::Owner => {
-                let monthly_rate: &str = if account.role == DevRole::Owner {
+            DevRole::TenantOwner | DevRole::ExecutiveManager | DevRole::BranchManager | DevRole::Supervisor => {
+                let monthly_rate: &str = if account.role == DevRole::TenantOwner {
                     "50000000"
                 } else {
                     "30000000"
@@ -1362,11 +1612,11 @@ async fn seed_payroll_configuration(
                 sqlx::query!(
                     r#"
                     INSERT INTO hr_employee_compensations (
-                        id, tenant_id, employee_id, currency, pay_basis, monthly_rate,
+                        id, tenant_id, branch_id, employee_id, currency, pay_basis, monthly_rate,
                         standard_monthly_hours, effective_from, created_by_account_id
                     )
-                    VALUES ($1, $2, $3, 'VND', 'monthly', $4::TEXT::NUMERIC, 160, $5, $6)
-                    ON CONFLICT (tenant_id, employee_id, effective_from) DO UPDATE
+                    VALUES ($1, $2, $3, $4, 'VND', 'monthly', $5::TEXT::NUMERIC, 160, $6, $7)
+                    ON CONFLICT (tenant_id, branch_id, employee_id, effective_from) DO UPDATE
                     SET currency = 'VND',
                         pay_basis = 'monthly',
                         hourly_rate = NULL,
@@ -1377,6 +1627,7 @@ async fn seed_payroll_configuration(
                     "#,
                     Uuid::new_v4(),
                     tenant_id,
+                    branch_id,
                     employee_id,
                     monthly_rate,
                     effective_date,
@@ -1389,13 +1640,11 @@ async fn seed_payroll_configuration(
         }
     }
 
-    let warehouse_facilities = sqlx::query!(
+    let payroll_branches = sqlx::query!(
         r#"
-        SELECT facility.id, branch.code AS branch_code
-        FROM facilities AS facility
-        INNER JOIN branches AS branch
-            ON branch.tenant_id = facility.tenant_id AND branch.id = facility.branch_id
-        WHERE facility.tenant_id = $1 AND facility.code = 'warehouse'
+        SELECT branch.id, branch.code AS branch_code
+        FROM branches AS branch
+        WHERE branch.tenant_id = $1 AND branch.status = 'active'
         ORDER BY branch.code
         "#,
         tenant_id,
@@ -1403,19 +1652,23 @@ async fn seed_payroll_configuration(
     .fetch_all(transaction.connection())
     .await
     .map_err(io::Error::other)?;
-    let warehouse_rule_count: usize = warehouse_facilities.len();
-    for facility in warehouse_facilities {
-        let rule_code: String = format!("warehouse-{}", facility.branch_code);
+    let branch_rule_count: usize = payroll_branches.len();
+    let default_payroll_branch_id: Uuid = payroll_branches
+        .first()
+        .map(|branch| branch.id)
+        .ok_or_else(|| io::Error::other("development tenant has no active payroll branch"))?;
+    for branch in payroll_branches {
+        let rule_code: String = format!("branch-{}", branch.branch_code);
         sqlx::query!(
             r#"
-            INSERT INTO payroll_facility_rate_rules (
-                id, tenant_id, code, name, facility_id, base_multiplier, hourly_adjustment,
+            INSERT INTO payroll_branch_rate_rules (
+                id, tenant_id, code, name, branch_id, base_multiplier, hourly_adjustment,
                 priority, effective_from, is_active, created_by_account_id
             )
-            VALUES ($1, $2, $3, 'Warehouse premium', $4, 1.15, 0, 10, $5, TRUE, $6)
+            VALUES ($1, $2, $3, 'Branch premium', $4, 1.15, 0, 10, $5, TRUE, $6)
             ON CONFLICT (tenant_id, code, effective_from) DO UPDATE
             SET name = EXCLUDED.name,
-                facility_id = EXCLUDED.facility_id,
+                branch_id = EXCLUDED.branch_id,
                 employee_id = NULL,
                 base_multiplier = EXCLUDED.base_multiplier,
                 hourly_adjustment = EXCLUDED.hourly_adjustment,
@@ -1427,7 +1680,7 @@ async fn seed_payroll_configuration(
             Uuid::new_v4(),
             tenant_id,
             rule_code,
-            facility.id,
+            branch.id,
             effective_date,
             owner_account_id,
         )
@@ -1439,15 +1692,15 @@ async fn seed_payroll_configuration(
     sqlx::query!(
         r#"
         INSERT INTO payroll_time_band_rules (
-            id, tenant_id, code, name, weekdays, start_time, end_time, spans_next_day,
+            id, tenant_id, branch_id, code, name, weekdays, start_time, end_time, spans_next_day,
             premium_multiplier, hourly_adjustment, priority, effective_from, is_active,
             created_by_account_id
         )
         VALUES (
-            $1, $2, 'night-shift', 'Night shift premium', ARRAY[1, 2, 3, 4, 5, 6, 7]::SMALLINT[],
-            TIME '22:00', TIME '06:00', TRUE, 0.25, 0, 10, $3, TRUE, $4
+            $1, $2, $3, 'night-shift', 'Night shift premium', ARRAY[1, 2, 3, 4, 5, 6, 7]::SMALLINT[],
+            TIME '22:00', TIME '06:00', TRUE, 0.25, 0, 10, $4, TRUE, $5
         )
-        ON CONFLICT (tenant_id, code, effective_from) DO UPDATE
+        ON CONFLICT (tenant_id, branch_id, code, effective_from) DO UPDATE
         SET name = EXCLUDED.name,
             weekdays = EXCLUDED.weekdays,
             start_time = EXCLUDED.start_time,
@@ -1462,6 +1715,7 @@ async fn seed_payroll_configuration(
         "#,
         Uuid::new_v4(),
         tenant_id,
+        default_payroll_branch_id,
         effective_date,
         owner_account_id,
     )
@@ -1481,11 +1735,11 @@ async fn seed_payroll_configuration(
         sqlx::query!(
             r#"
             INSERT INTO payroll_overtime_rules (
-                id, tenant_id, code, name, threshold_minutes, premium_multiplier,
+                id, tenant_id, branch_id, code, name, threshold_minutes, premium_multiplier,
                 hourly_adjustment, priority, effective_from, is_active, created_by_account_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6::TEXT::NUMERIC, 0, 10, $7, TRUE, $8)
-            ON CONFLICT (tenant_id, code, effective_from) DO UPDATE
+            VALUES ($1, $2, $3, $4, $5, $6, $7::TEXT::NUMERIC, 0, 10, $8, TRUE, $9)
+            ON CONFLICT (tenant_id, branch_id, code, effective_from) DO UPDATE
             SET name = EXCLUDED.name,
                 threshold_minutes = EXCLUDED.threshold_minutes,
                 premium_multiplier = EXCLUDED.premium_multiplier,
@@ -1497,6 +1751,7 @@ async fn seed_payroll_configuration(
             "#,
             Uuid::new_v4(),
             tenant_id,
+            default_payroll_branch_id,
             code,
             name,
             threshold_minutes,
@@ -1510,11 +1765,11 @@ async fn seed_payroll_configuration(
     }
 
     info!(
-        "Development payroll configuration ensured: tenant_slug={} tenant_id={} compensations={} warehouse_rules={} time_rules=1 overtime_rules=2 currency=VND",
+        "Development payroll configuration ensured: tenant_slug={} tenant_id={} compensations={} branch_rules={} time_rules=1 overtime_rules=2 currency=VND",
         tenant.slug,
         tenant_id,
         accounts.len(),
-        warehouse_rule_count
+        branch_rule_count
     );
     Ok(())
 }
@@ -1525,7 +1780,7 @@ async fn seed_attendance_sessions(
     tenant: &DevTenant,
     accounts: &[SeedAccount],
     employee_ids: &HashMap<Uuid, Uuid>,
-    employee_facility_ids: &HashMap<Uuid, Uuid>,
+    employee_branch_ids: &HashMap<Uuid, Uuid>,
 ) -> Result<(usize, usize), io::Error> {
     let morning_start: NaiveTime =
         NaiveTime::from_hms_opt(8, 5, 0).ok_or_else(|| io::Error::other("invalid attendance seed time"))?;
@@ -1554,16 +1809,16 @@ async fn seed_attendance_sessions(
             .get(&account.id)
             .copied()
             .ok_or_else(|| io::Error::other("seeded attendance employee mapping was not found"))?;
-        let facility_id: Uuid = employee_facility_ids
+        let branch_id: Uuid = employee_branch_ids
             .get(&employee_id)
             .copied()
-            .ok_or_else(|| io::Error::other("seeded attendance facility mapping was not found"))?;
+            .ok_or_else(|| io::Error::other("seeded attendance branch mapping was not found"))?;
 
         ensure_completed_attendance_session(
             transaction,
             tenant_id,
             employee_id,
-            facility_id,
+            branch_id,
             account.id,
             dev_attendance_session_id(account.id, 1),
             2,
@@ -1575,7 +1830,7 @@ async fn seed_attendance_sessions(
             transaction,
             tenant_id,
             employee_id,
-            facility_id,
+            branch_id,
             account.id,
             dev_attendance_session_id(account.id, 2),
             1,
@@ -1587,7 +1842,7 @@ async fn seed_attendance_sessions(
             transaction,
             tenant_id,
             employee_id,
-            facility_id,
+            branch_id,
             account.id,
             dev_attendance_session_id(account.id, 3),
             1,
@@ -1599,7 +1854,7 @@ async fn seed_attendance_sessions(
             transaction,
             tenant_id,
             employee_id,
-            facility_id,
+            branch_id,
             account.id,
             dev_attendance_session_id(account.id, 5),
             3,
@@ -1609,18 +1864,18 @@ async fn seed_attendance_sessions(
         .await?;
         completed_count += 4;
 
-        if account.username.to_ascii_lowercase().ends_with("employee1") {
+        if account.username.to_ascii_lowercase().ends_with("staff_1") {
             let session_id: Uuid = dev_attendance_session_id(account.id, 4);
             let seeded: bool = sqlx::query_scalar!(
                 r#"
                 INSERT INTO hr_attendance_sessions (
-                    id, tenant_id, employee_id, facility_id, check_in_at, check_in_by_account_id
+                    id, tenant_id, branch_id, employee_id, check_in_at, check_in_by_account_id
                 )
                 SELECT
                     $1,
                     $2,
-                    $3,
                     $5,
+                    $3,
                     LEAST(
                         (
                             (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Bangkok')::date + TIME '08:00'
@@ -1638,7 +1893,7 @@ async fn seed_attendance_sessions(
                 )
                 ON CONFLICT (id) DO UPDATE
                 SET employee_id = EXCLUDED.employee_id,
-                    facility_id = EXCLUDED.facility_id,
+                    branch_id = EXCLUDED.branch_id,
                     check_in_at = EXCLUDED.check_in_at,
                     check_out_at = NULL,
                     check_in_by_account_id = EXCLUDED.check_in_by_account_id,
@@ -1650,7 +1905,7 @@ async fn seed_attendance_sessions(
                 tenant_id,
                 employee_id,
                 account.id,
-                facility_id,
+                branch_id,
             )
             .fetch_optional(transaction.connection())
             .await
@@ -1679,7 +1934,7 @@ async fn ensure_completed_attendance_session(
     transaction: &mut infra_postgres::TenantTransaction,
     tenant_id: Uuid,
     employee_id: Uuid,
-    facility_id: Uuid,
+    branch_id: Uuid,
     account_id: Uuid,
     session_id: Uuid,
     days_ago: i32,
@@ -1689,14 +1944,14 @@ async fn ensure_completed_attendance_session(
     sqlx::query!(
         r#"
         INSERT INTO hr_attendance_sessions (
-            id, tenant_id, employee_id, facility_id, check_in_at, check_out_at,
+            id, tenant_id, branch_id, employee_id, check_in_at, check_out_at,
             check_in_by_account_id, check_out_by_account_id
         )
         VALUES (
             $1,
             $2,
-            $3,
             $8,
+            $3,
             (
                 (
                     (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Bangkok')::date - $5::integer
@@ -1712,7 +1967,7 @@ async fn ensure_completed_attendance_session(
         )
         ON CONFLICT (id) DO UPDATE
         SET employee_id = EXCLUDED.employee_id,
-            facility_id = EXCLUDED.facility_id,
+            branch_id = EXCLUDED.branch_id,
             check_in_at = EXCLUDED.check_in_at,
             check_out_at = EXCLUDED.check_out_at,
             check_in_by_account_id = EXCLUDED.check_in_by_account_id,
@@ -1726,7 +1981,7 @@ async fn ensure_completed_attendance_session(
         days_ago,
         check_in_time,
         check_out_time,
-        facility_id,
+        branch_id,
     )
     .execute(transaction.connection())
     .await
@@ -1743,7 +1998,7 @@ async fn ensure_completed_overnight_attendance_session(
     transaction: &mut infra_postgres::TenantTransaction,
     tenant_id: Uuid,
     employee_id: Uuid,
-    facility_id: Uuid,
+    branch_id: Uuid,
     account_id: Uuid,
     session_id: Uuid,
     start_days_ago: i32,
@@ -1753,14 +2008,14 @@ async fn ensure_completed_overnight_attendance_session(
     sqlx::query!(
         r#"
         INSERT INTO hr_attendance_sessions (
-            id, tenant_id, employee_id, facility_id, check_in_at, check_out_at,
+            id, tenant_id, branch_id, employee_id, check_in_at, check_out_at,
             check_in_by_account_id, check_out_by_account_id
         )
         VALUES (
             $1,
             $2,
-            $3,
             $8,
+            $3,
             (
                 ((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Bangkok')::date - $5::integer) + $6::time
             ) AT TIME ZONE 'Asia/Bangkok',
@@ -1772,7 +2027,7 @@ async fn ensure_completed_overnight_attendance_session(
         )
         ON CONFLICT (id) DO UPDATE
         SET employee_id = EXCLUDED.employee_id,
-            facility_id = EXCLUDED.facility_id,
+            branch_id = EXCLUDED.branch_id,
             check_in_at = EXCLUDED.check_in_at,
             check_out_at = EXCLUDED.check_out_at,
             check_in_by_account_id = EXCLUDED.check_in_by_account_id,
@@ -1786,7 +2041,7 @@ async fn ensure_completed_overnight_attendance_session(
         start_days_ago,
         check_in_time,
         check_out_time,
-        facility_id,
+        branch_id,
     )
     .execute(transaction.connection())
     .await
@@ -1797,6 +2052,7 @@ async fn ensure_completed_overnight_attendance_session(
 async fn ensure_dev_job(
     transaction: &mut infra_postgres::TenantTransaction,
     tenant_id: Uuid,
+    branch_id: Uuid,
     code: &str,
     name: &str,
     department_id: Uuid,
@@ -1805,10 +2061,11 @@ async fn ensure_dev_job(
     sqlx::query_scalar!(
         r#"
         INSERT INTO hr_jobs (
-            id, tenant_id, code, name, department_id, status, created_by_account_id, updated_by_account_id
+            id, tenant_id, branch_id, code, name, department_id, status,
+            created_by_account_id, updated_by_account_id
         )
-        VALUES ($1, $2, $3, $4, $5, 'active', $6, $6)
-        ON CONFLICT (tenant_id, lower(code)) DO UPDATE
+        VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $7)
+        ON CONFLICT (tenant_id, branch_id, lower(code)) DO UPDATE
         SET name = EXCLUDED.name,
             department_id = EXCLUDED.department_id,
             status = 'active',
@@ -1818,6 +2075,7 @@ async fn ensure_dev_job(
         "#,
         Uuid::new_v4(),
         tenant_id,
+        branch_id,
         code,
         name,
         department_id,
@@ -1828,10 +2086,11 @@ async fn ensure_dev_job(
     .map_err(io::Error::other)
 }
 
-async fn seed_branches_and_facilities(
+async fn seed_branches(
     db: &DatabaseAdapter,
     tenant_id: Uuid,
     tenant: &DevTenant,
+    accounts: &[SeedAccount],
     owner_account_id: Uuid,
 ) -> Result<(), io::Error> {
     let mut transaction = db.begin_tenant(tenant_id).await.map_err(io::Error::other)?;
@@ -1842,6 +2101,7 @@ async fn seed_branches_and_facilities(
         DEV_BRANCHES.len()
     );
 
+    let mut branch_ids: Vec<Uuid> = Vec::with_capacity(DEV_BRANCHES.len());
     for branch in DEV_BRANCHES {
         let branch_id: Uuid = Uuid::new_v4();
         let branch_id: Uuid = sqlx::query_scalar!(
@@ -1869,41 +2129,60 @@ async fn seed_branches_and_facilities(
         .await
         .map_err(io::Error::other)?;
         debug!(
-            "Development branch ensured: tenant_slug={} branch_id={} branch_code={} facilities={}",
-            tenant.slug,
-            branch_id,
-            branch.code,
-            branch.facilities.len()
+            "Development branch ensured: tenant_slug={} branch_id={} branch_code={}",
+            tenant.slug, branch_id, branch.code
         );
+        branch_ids.push(branch_id);
+    }
 
-        for facility in branch.facilities {
-            let facility_id: Uuid = Uuid::new_v4();
-            let facility_id: Uuid = sqlx::query_scalar!(
+    for account in accounts {
+        sqlx::query!(
+            "DELETE FROM account_branch_assignments WHERE tenant_id = $1 AND account_id = $2",
+            tenant_id,
+            account.id,
+        )
+        .execute(transaction.connection())
+        .await
+        .map_err(io::Error::other)?;
+        let assigned_branch_ids: Vec<Uuid> = match account.role {
+            DevRole::TenantOwner => Vec::new(),
+            DevRole::ExecutiveManager => branch_ids.clone(),
+            DevRole::BranchManager | DevRole::Supervisor | DevRole::Staff => {
+                let branch_code: &str = account.branch_code.ok_or_else(|| {
+                    io::Error::other(format!(
+                        "branch-scoped development account '{}' has no branch code",
+                        account.username
+                    ))
+                })?;
+                let branch_index: usize = DEV_BRANCHES
+                    .iter()
+                    .position(|branch: &DevBranch| branch.code == branch_code)
+                    .ok_or_else(|| io::Error::other(format!("unknown development branch code '{branch_code}'")))?;
+                vec![branch_ids[branch_index]]
+            }
+        };
+        for branch_id in assigned_branch_ids {
+            sqlx::query!(
                 r#"
-                INSERT INTO facilities (
-                    id, tenant_id, branch_id, code, name, created_by_account_id, updated_by_account_id
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $6)
-                ON CONFLICT (tenant_id, branch_id, lower(code)) DO UPDATE
-                SET name = EXCLUDED.name,
-                    status = 'active',
-                    updated_at = CURRENT_TIMESTAMP,
-                    updated_by_account_id = EXCLUDED.updated_by_account_id
-                RETURNING id
+                INSERT INTO account_branch_assignments (
+                    tenant_id, account_id, branch_id, assigned_by_account_id
+                ) VALUES ($1, $2, $3, $4)
                 "#,
-                facility_id,
                 tenant_id,
+                account.id,
                 branch_id,
-                facility.code,
-                facility.name,
                 owner_account_id,
             )
-            .fetch_one(transaction.connection())
+            .execute(transaction.connection())
             .await
             .map_err(io::Error::other)?;
             debug!(
-                "Development facility ensured: tenant_slug={} branch_id={} facility_id={} facility_code={}",
-                tenant.slug, branch_id, facility_id, facility.code
+                tenant_slug = tenant.slug,
+                tenant_id = %tenant_id,
+                account_id = %account.id,
+                branch_id = %branch_id,
+                role = account.role.as_code(),
+                "Development account branch assignment ensured"
             );
         }
     }
@@ -1931,6 +2210,7 @@ async fn ensure_account(
     username: &str,
     email: &str,
     role: DevRole,
+    branch_code: Option<&'static str>,
     audit_account_id: Option<Uuid>,
 ) -> Result<SeedAccount, io::Error> {
     let mut transaction: infra_postgres::TenantTransaction =
@@ -2014,6 +2294,7 @@ async fn ensure_account(
         id: account_id,
         username: username.to_owned(),
         role,
+        branch_code,
     })
 }
 

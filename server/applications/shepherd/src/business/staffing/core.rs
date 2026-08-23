@@ -119,20 +119,9 @@ pub struct Customer {
     pub id: Uuid,
     pub code: String,
     pub name: String,
-    pub billing_email: Option<String>,
-    pub status: BusinessRecordStatus,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug, Serialize, TS)]
-pub struct CustomerFacility {
-    pub id: Uuid,
-    pub customer_id: Uuid,
-    pub code: String,
-    pub name: String,
     pub address: Option<String>,
     pub time_zone: String,
+    pub billing_email: Option<String>,
     pub status: BusinessRecordStatus,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -145,7 +134,6 @@ pub struct StaffingRate {
     pub code: String,
     pub name: String,
     pub customer_id: Option<Uuid>,
-    pub customer_facility_id: Option<Uuid>,
     pub employee_id: Option<Uuid>,
     pub job_id: Uuid,
     pub currency: String,
@@ -161,7 +149,6 @@ pub struct StaffingRate {
 pub struct StaffingShift {
     pub id: Uuid,
     pub customer_id: Uuid,
-    pub customer_facility_id: Uuid,
     pub job_id: Uuid,
     pub starts_at: DateTime<Utc>,
     pub ends_at: DateTime<Utc>,
@@ -232,7 +219,7 @@ pub enum ReconciliationStatus {
 pub struct CustomerWorkRecord {
     pub id: Uuid,
     pub assignment_id: Uuid,
-    pub confirmed_customer_facility_id: Uuid,
+    pub confirmed_customer_id: Uuid,
     pub confirmed_started_at: DateTime<Utc>,
     pub confirmed_ended_at: DateTime<Utc>,
     pub confirmed_worked_seconds: i64,
@@ -246,12 +233,10 @@ pub struct StaffingReconciliation {
     pub assignment_id: Uuid,
     pub shift_id: Uuid,
     pub customer_id: Uuid,
-    pub customer_facility_id: Uuid,
     pub employee_id: Uuid,
     pub employee_code: String,
     pub employee_name: String,
     pub customer_name: String,
-    pub customer_facility_name: String,
     pub scheduled_starts_at: DateTime<Utc>,
     pub scheduled_ends_at: DateTime<Utc>,
     pub assignment_status: ShiftAssignmentStatus,
@@ -268,16 +253,9 @@ pub struct StaffingReconciliation {
 pub struct CustomerInput {
     pub code: String,
     pub name: String,
-    pub billing_email: Option<String>,
-    pub status: BusinessRecordStatus,
-}
-
-#[derive(Clone, Debug)]
-pub struct CustomerFacilityInput {
-    pub code: String,
-    pub name: String,
     pub address: Option<String>,
     pub time_zone: String,
+    pub billing_email: Option<String>,
     pub status: BusinessRecordStatus,
 }
 
@@ -287,7 +265,6 @@ pub struct StaffingRateInput {
     pub code: String,
     pub name: String,
     pub customer_id: Option<Uuid>,
-    pub customer_facility_id: Option<Uuid>,
     pub employee_id: Option<Uuid>,
     pub job_id: Uuid,
     pub currency: String,
@@ -310,7 +287,6 @@ pub struct StaffingEligibilityInput {
 #[derive(Clone, Debug)]
 pub struct StaffingShiftInput {
     pub customer_id: Uuid,
-    pub customer_facility_id: Uuid,
     pub job_id: Uuid,
     pub starts_at: DateTime<Utc>,
     pub ends_at: DateTime<Utc>,
@@ -334,7 +310,7 @@ pub struct ShiftAssignmentInput {
 
 #[derive(Clone, Debug)]
 pub struct CustomerWorkRecordInput {
-    pub confirmed_customer_facility_id: Uuid,
+    pub confirmed_customer_id: Uuid,
     pub confirmed_started_at: DateTime<Utc>,
     pub confirmed_ended_at: DateTime<Utc>,
     pub customer_reference: Option<String>,
@@ -367,19 +343,6 @@ pub trait StaffingRepo {
         input: &CustomerInput,
         audit_account_id: Uuid,
     ) -> Result<Customer, StaffingError>;
-    async fn list_customer_facilities(
-        &self,
-        tenant_id: Uuid,
-        customer_id: Uuid,
-    ) -> Result<Vec<CustomerFacility>, StaffingError>;
-    async fn create_customer_facility(
-        &self,
-        tenant_id: Uuid,
-        facility_id: Uuid,
-        customer_id: Uuid,
-        input: &CustomerFacilityInput,
-        audit_account_id: Uuid,
-    ) -> Result<CustomerFacility, StaffingError>;
     async fn list_rates(&self, tenant_id: Uuid) -> Result<Vec<StaffingRate>, StaffingError>;
     async fn create_rate(
         &self,
@@ -473,6 +436,7 @@ impl StaffingService {
             "Validating staffing customer creation"
         );
         validate_identity(&input.code, &input.name)?;
+        validate_customer_location(&input)?;
         let result: Result<Customer, StaffingError> = self
             .repo
             .create_customer(tenant_id, customer_id, &input, audit_account_id)
@@ -511,6 +475,7 @@ impl StaffingService {
             return Err(StaffingError::InvalidInput("customer id is invalid"));
         }
         validate_identity(&input.code, &input.name)?;
+        validate_customer_location(&input)?;
         let result: Result<Customer, StaffingError> = self
             .repo
             .update_customer(tenant_id, customer_id, &input, audit_account_id)
@@ -520,57 +485,6 @@ impl StaffingService {
             tenant_id,
             Some(audit_account_id),
             Some(customer_id),
-            &result,
-        );
-        result
-    }
-
-    pub async fn list_customer_facilities(
-        &self,
-        tenant_id: Uuid,
-        customer_id: Uuid,
-    ) -> Result<Vec<CustomerFacility>, StaffingError> {
-        debug!(
-            operation = "list_customer_facilities",
-            tenant_id = %tenant_id,
-            customer_id = %customer_id,
-            "Staffing service operation accepted"
-        );
-        let result: Result<Vec<CustomerFacility>, StaffingError> =
-            self.repo.list_customer_facilities(tenant_id, customer_id).await;
-        log_staffing_operation("list_customer_facilities", tenant_id, None, Some(customer_id), &result);
-        result
-    }
-
-    pub async fn create_customer_facility(
-        &self,
-        tenant_id: Uuid,
-        customer_id: Uuid,
-        input: CustomerFacilityInput,
-        audit_account_id: Uuid,
-    ) -> Result<CustomerFacility, StaffingError> {
-        let facility_id: Uuid = Uuid::new_v4();
-        trace!(
-            operation = "create_customer_facility",
-            tenant_id = %tenant_id,
-            audit_account_id = %audit_account_id,
-            customer_id = %customer_id,
-            facility_id = %facility_id,
-            "Validating staffing customer facility creation"
-        );
-        validate_identity(&input.code, &input.name)?;
-        if input.time_zone.is_empty() || input.time_zone.len() > 128 {
-            return Err(StaffingError::InvalidInput("customer facility time zone is invalid"));
-        }
-        let result: Result<CustomerFacility, StaffingError> = self
-            .repo
-            .create_customer_facility(tenant_id, facility_id, customer_id, &input, audit_account_id)
-            .await;
-        log_staffing_operation(
-            "create_customer_facility",
-            tenant_id,
-            Some(audit_account_id),
-            Some(facility_id),
             &result,
         );
         result
@@ -596,7 +510,6 @@ impl StaffingService {
             audit_account_id = %audit_account_id,
             rate_id = %rate_id,
             customer_id = ?input.customer_id,
-            customer_facility_id = ?input.customer_facility_id,
             employee_id = ?input.employee_id,
             job_id = %input.job_id,
             "Validating staffing hourly rate creation"
@@ -606,11 +519,6 @@ impl StaffingService {
         validate_positive_decimal(&input.hourly_rate)?;
         if input.rate_kind == StaffingRateKind::CustomerBill && input.customer_id.is_none() {
             return Err(StaffingError::InvalidInput("customer bill rate requires a customer"));
-        }
-        if input.customer_facility_id.is_some() && input.customer_id.is_none() {
-            return Err(StaffingError::InvalidInput(
-                "facility-specific rate requires a customer",
-            ));
         }
         if input
             .effective_to
@@ -710,7 +618,6 @@ impl StaffingService {
             audit_account_id = %audit_account_id,
             shift_id = %shift_id,
             customer_id = ?input.customer_id,
-            customer_facility_id = %input.customer_facility_id,
             job_id = %input.job_id,
             required_workers = input.required_workers,
             "Validating staffing shift creation"
@@ -895,6 +802,20 @@ impl StaffingService {
         );
         result
     }
+}
+
+fn validate_customer_location(input: &CustomerInput) -> Result<(), StaffingError> {
+    if input.time_zone.is_empty() || input.time_zone.len() > 128 {
+        return Err(StaffingError::InvalidInput("customer time zone is invalid"));
+    }
+    if input
+        .address
+        .as_deref()
+        .is_some_and(|address: &str| address.len() > 500)
+    {
+        return Err(StaffingError::InvalidInput("customer address is invalid"));
+    }
+    Ok(())
 }
 
 fn log_staffing_operation<T>(

@@ -17,11 +17,17 @@ import {
 import { useMemo, useState, type FormEvent } from "react";
 import type {
   AuthUserSummary,
+  BranchSummary,
   CreateAuthUserRequest,
+  RoleCode,
 } from "../../api/generated/contracts";
 import { friendlyApiError } from "../../shared/api/client";
 import { roleLabel } from "../../shared/lib/format";
 import { useAuth } from "../auth/AuthProvider";
+import {
+  listBranches,
+  operationsQueryKeys,
+} from "../operations/api";
 import {
   authAdminQueryKeys,
   createAuthUser,
@@ -34,7 +40,32 @@ const emptyCreateRequest: CreateAuthUserRequest = {
   email: "",
   password: "",
   primary_role: "staff",
+  branch_ids: [],
 };
+
+const roleOptions: ReadonlyArray<{ code: RoleCode; label: string }> = [
+  { code: "tenant_owner", label: "Chủ doanh nghiệp" },
+  { code: "executive_manager", label: "Quản lý điều hành" },
+  { code: "branch_manager", label: "Quản lý chi nhánh" },
+  { code: "supervisor", label: "Giám sát" },
+  { code: "staff", label: "Nhân viên" },
+];
+
+function grantableRoleCodes(roles: RoleCode[]): RoleCode[] {
+  if (roles.includes("tenant_owner")) {
+    return roleOptions.map((role): RoleCode => role.code);
+  }
+  if (roles.includes("executive_manager")) {
+    return ["branch_manager", "supervisor", "staff"];
+  }
+  if (roles.includes("branch_manager")) {
+    return ["supervisor", "staff"];
+  }
+  if (roles.includes("supervisor")) {
+    return ["staff"];
+  }
+  return [];
+}
 
 type CreateAuthUserVariables = {
   request: CreateAuthUserRequest;
@@ -72,8 +103,7 @@ export function AuthUsersPage() {
   const canRead = permissions.includes("auth.accounts.read");
   const canCreate = permissions.includes("auth.accounts.create");
   const canDisable = permissions.includes("auth.accounts.disable");
-  const canGrantElevatedRoles: boolean =
-    profile?.roles.some((role: string): boolean => role === "owner" || role === "director") ?? false;
+  const grantableRoles: RoleCode[] = grantableRoleCodes(profile?.roles ?? []);
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -91,6 +121,13 @@ export function AuthUsersPage() {
     queryFn: listAuthUsers,
     enabled: canRead,
   });
+  const branchesQuery = useQuery<BranchSummary[]>({
+    queryKey: operationsQueryKeys.branches,
+    queryFn: listBranches,
+    enabled: canCreate,
+    staleTime: 60_000,
+  });
+  const branches: BranchSummary[] = branchesQuery.data ?? [];
 
   const createMutation = useMutation({
     mutationFn: (variables: CreateAuthUserVariables): Promise<AuthUserSummary> =>
@@ -238,6 +275,10 @@ export function AuthUsersPage() {
               className="action-primary lg:ml-auto"
               onClick={() => {
                 setFeedback(null);
+                setCreateRequest({
+                  ...emptyCreateRequest,
+                  branch_ids: profile?.active_branch_id ? [profile.active_branch_id] : [],
+                });
                 setShowCreate(true);
               }}
               type="button"
@@ -345,12 +386,16 @@ export function AuthUsersPage() {
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {users.map((user) => {
-                  const disabled = userIsDisabled(user);
-                  const isSelf = user.account_id === profile?.account_id;
-                  const isChanging =
+                  const disabled: boolean = userIsDisabled(user);
+                  const isSelf: boolean = user.account_id === profile?.account_id;
+                  const isChanging: boolean =
                     statusMutation.isPending &&
                     statusMutation.variables?.authUserId === user.auth_user_id;
-                  const providerMissing = user.provider_status === "missing";
+                  const providerMissing: boolean = user.provider_status === "missing";
+                  const assignedBranchNames: string[] = user.branch_ids.map(
+                    (branchId: string): string =>
+                      branches.find((branch: BranchSummary): boolean => branch.id === branchId)?.name ?? branchId,
+                  );
 
                   return (
                     <tr className="hover:bg-slate-50/70" key={user.account_id}>
@@ -376,7 +421,12 @@ export function AuthUsersPage() {
                         </div>
                       </td>
                       <td className="px-5 py-4 font-medium text-slate-700">
-                        {roleLabel(user.primary_role)}
+                        <p>{roleLabel(user.primary_role)}</p>
+                        <p className="mt-1 text-xs font-normal text-slate-500">
+                          {assignedBranchNames.length > 0
+                            ? assignedBranchNames.join(", ")
+                            : "Toàn doanh nghiệp"}
+                        </p>
                       </td>
                       <td className="px-5 py-4">
                         <span
@@ -559,25 +609,90 @@ export function AuthUsersPage() {
                 </span>
                 <select
                   className="mt-2 min-h-11 rounded-xl border-slate-300"
-                  onChange={(event) =>
-                    setCreateRequest((current) => ({
+                  onChange={(event): void => {
+                    const primaryRole: RoleCode = event.target.value;
+                    setCreateRequest((current: CreateAuthUserRequest): CreateAuthUserRequest => ({
                       ...current,
-                      primary_role: event.target.value,
-                    }))
-                  }
+                      primary_role: primaryRole,
+                      branch_ids:
+                        primaryRole === "tenant_owner"
+                          ? []
+                          : primaryRole === "executive_manager"
+                            ? current.branch_ids.length > 0
+                              ? current.branch_ids
+                              : profile?.active_branch_id
+                                ? [profile.active_branch_id]
+                                : []
+                            : [current.branch_ids[0] ?? profile?.active_branch_id ?? branches[0]?.id].filter(
+                                (branchId: string | undefined): branchId is string => branchId !== undefined,
+                              ),
+                    }));
+                  }}
                   value={createRequest.primary_role}
                 >
-                  <option value="staff">Nhân viên</option>
-                  {canGrantElevatedRoles ? (
-                    <>
-                      <option value="supervisor">Giám sát</option>
-                      <option value="manager">Quản lý</option>
-                      <option value="director">Giám đốc</option>
-                      <option value="owner">Chủ doanh nghiệp</option>
-                    </>
-                  ) : null}
+                  {roleOptions
+                    .filter((role): boolean => grantableRoles.includes(role.code))
+                    .map((role) => (
+                      <option key={role.code} value={role.code}>
+                        {role.label}
+                      </option>
+                    ))}
                 </select>
               </label>
+
+              {createRequest.primary_role === "tenant_owner" ? (
+                <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm leading-6 text-blue-800">
+                  Chủ doanh nghiệp có quyền toàn tenant, nên không gán trực tiếp vào chi nhánh.
+                </div>
+              ) : createRequest.primary_role === "executive_manager" ? (
+                <fieldset>
+                  <legend className="text-sm font-semibold text-slate-700">Các chi nhánh phụ trách</legend>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    {branches.map((branch: BranchSummary) => (
+                      <label
+                        className="flex min-h-11 items-center gap-3 rounded-xl border border-slate-200 px-3 text-sm font-medium text-slate-700"
+                        key={branch.id}
+                      >
+                        <input
+                          checked={createRequest.branch_ids.includes(branch.id)}
+                          onChange={(event): void => {
+                            setCreateRequest((current: CreateAuthUserRequest): CreateAuthUserRequest => ({
+                              ...current,
+                              branch_ids: event.target.checked
+                                ? [...current.branch_ids, branch.id]
+                                : current.branch_ids.filter((branchId: string): boolean => branchId !== branch.id),
+                            }));
+                          }}
+                          type="checkbox"
+                        />
+                        {branch.name}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+              ) : (
+                <label className="block">
+                  <span className="text-sm font-semibold text-slate-700">Chi nhánh</span>
+                  <select
+                    className="mt-2 min-h-11 rounded-xl border-slate-300"
+                    onChange={(event): void => {
+                      setCreateRequest((current: CreateAuthUserRequest): CreateAuthUserRequest => ({
+                        ...current,
+                        branch_ids: [event.target.value],
+                      }));
+                    }}
+                    required
+                    value={createRequest.branch_ids[0] ?? ""}
+                  >
+                    <option disabled value="">Chọn chi nhánh</option>
+                    {branches.map((branch: BranchSummary) => (
+                      <option key={branch.id} value={branch.id}>
+                        {branch.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
 
               <div className="flex flex-col-reverse gap-3 pt-3 sm:flex-row sm:justify-end">
                 <button

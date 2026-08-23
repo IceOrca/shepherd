@@ -447,7 +447,7 @@ impl AccountRepo for AuthProvider {
         .await
         .map_err(|_| AccountMutationError::BackendUnavailable)?
         .ok_or(AccountMutationError::AccountNotFound)?;
-        if current.primary_role_code == Role::Owner.as_code() && status != AccountStatus::Active {
+        if current.primary_role_code == Role::TenantOwner.as_code() && status != AccountStatus::Active {
             ensure_another_active_owner(transaction.connection(), tenant_id, account_id).await?;
         }
         sqlx::query!(
@@ -505,7 +505,7 @@ impl AccountRepo for AuthProvider {
         .await
         .map_err(|_| AccountMutationError::BackendUnavailable)?
         .ok_or(AccountMutationError::AccountNotFound)?;
-        if current.primary_role_code == Role::Owner.as_code() && primary_role != Role::Owner {
+        if current.primary_role_code == Role::TenantOwner.as_code() && primary_role != Role::TenantOwner {
             ensure_another_active_owner(transaction.connection(), tenant_id, account_id).await?;
         }
         let role_codes: Vec<String> = role_codes.into_iter().collect();
@@ -700,7 +700,7 @@ async fn ensure_another_active_owner(
         FROM accounts
         WHERE tenant_id = $1
           AND status = 'active'
-          AND primary_role_code = 'owner'
+          AND primary_role_code = 'tenant_owner'
         ORDER BY id
         FOR UPDATE
         "#,

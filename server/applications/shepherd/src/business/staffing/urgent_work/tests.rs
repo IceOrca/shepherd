@@ -15,14 +15,14 @@ use super::{
         UrgentCustomerWorkRecordInput, UrgentWorkActionSource, UrgentWorkEndInput, UrgentWorkError,
         UrgentWorkLocationInput, UrgentWorkReconcileInput, UrgentWorkService, UrgentWorkStartInput,
     },
-    database::UrgentWorkProvider,
+    database::UrgentWorkDb,
 };
 use crate::business::staffing::{
     core::{ManualRateOverride, ReconciliationStatus, StaffingError},
-    database::StaffingProvider,
+    database::StaffingDb,
     work_session::{
         core::{ShiftWorkActionInput, StaffingWorkService},
-        database::StaffingWorkProvider,
+        database::StaffingWorkDb,
     },
 };
 
@@ -52,8 +52,10 @@ struct Fixture {
     actor_employee_id: Uuid,
     peer_account_id: Uuid,
     peer_employee_id: Uuid,
-    customer_facility_id: Uuid,
-    alternate_facility_id: Uuid,
+    coordinator_employee_id: Uuid,
+    branch_id: Uuid,
+    customer_id: Uuid,
+    alternate_customer_id: Uuid,
     job_id: Uuid,
     planned_assignment_id: Uuid,
 }
@@ -68,9 +70,11 @@ impl Fixture {
         let actor_employee_id: Uuid = Uuid::new_v4();
         let peer_account_id: Uuid = Uuid::new_v4();
         let peer_employee_id: Uuid = Uuid::new_v4();
+        let coordinator_account_id: Uuid = Uuid::new_v4();
+        let coordinator_employee_id: Uuid = Uuid::new_v4();
+        let branch_id: Uuid = Uuid::new_v4();
         let customer_id: Uuid = Uuid::new_v4();
-        let customer_facility_id: Uuid = Uuid::new_v4();
-        let alternate_facility_id: Uuid = Uuid::new_v4();
+        let alternate_customer_id: Uuid = Uuid::new_v4();
         let job_id: Uuid = Uuid::new_v4();
         let planned_shift_id: Uuid = Uuid::new_v4();
         let planned_assignment_id: Uuid = Uuid::new_v4();
@@ -83,11 +87,13 @@ impl Fixture {
         sqlx::query!(
             r#"
             INSERT INTO accounts (id, tenant_id, username, primary_role_code)
-            VALUES ($1, $3, 'test-worker-actor', 'staff'),
-                   ($2, $3, 'test-worker-peer', 'staff')
+            VALUES ($1, $4, 'test-worker-actor', 'staff'),
+                   ($2, $4, 'test-worker-peer', 'staff'),
+                   ($3, $4, 'test-coordinator-manager', 'supervisor')
             "#,
             actor_account_id,
             peer_account_id,
+            coordinator_account_id,
             tenant_id,
         )
         .execute(setup.connection())
@@ -95,62 +101,66 @@ impl Fixture {
         sqlx::query!(
             r#"
             INSERT INTO account_roles (tenant_id, account_id, role_code)
-            VALUES ($1, $2, 'staff'), ($1, $3, 'staff')
+            VALUES ($1, $2, 'staff'), ($1, $3, 'staff'), ($1, $4, 'supervisor')
             "#,
             tenant_id,
             actor_account_id,
             peer_account_id,
+            coordinator_account_id,
+        )
+        .execute(setup.connection())
+        .await?;
+        sqlx::query!(
+            r#"
+            INSERT INTO branches (id, tenant_id, code, name, time_zone)
+            VALUES ($1, $2, 'test-branch', 'Test Branch', 'Asia/Bangkok')
+            "#,
+            branch_id,
+            tenant_id,
         )
         .execute(setup.connection())
         .await?;
         sqlx::query!(
             r#"
             INSERT INTO hr_employees (
-                id, tenant_id, account_id, employee_code, display_name, status, hire_date
+                id, tenant_id, branch_id, account_id, employee_code, display_name, status, hire_date
             ) VALUES
-                ($1, $3, $4, 'worker-actor', 'Test Worker Actor', 'active', CURRENT_DATE),
-                ($2, $3, $5, 'worker-peer', 'Test Worker Peer', 'active', CURRENT_DATE)
+                ($1, $4, $5, $6, 'worker-actor', 'Test Worker Actor', 'active', CURRENT_DATE),
+                ($2, $4, $5, $7, 'worker-peer', 'Test Worker Peer', 'active', CURRENT_DATE),
+                ($3, $4, $5, $8, 'coordinator-manager', 'Test Coordinator Manager', 'active', CURRENT_DATE)
             "#,
             actor_employee_id,
             peer_employee_id,
+            coordinator_employee_id,
             tenant_id,
+            branch_id,
             actor_account_id,
             peer_account_id,
+            coordinator_account_id,
         )
         .execute(setup.connection())
         .await?;
         sqlx::query!(
-            "INSERT INTO hr_jobs (id, tenant_id, code, name, status) VALUES ($1, $2, 'staff', 'Staff', 'active')",
+            "INSERT INTO hr_jobs (id, tenant_id, branch_id, code, name, status) VALUES ($1, $2, $3, 'staff', 'Staff', 'active')",
             job_id,
             tenant_id,
+            branch_id,
         )
         .execute(setup.connection())
         .await?;
         sqlx::query!(
             r#"
             INSERT INTO business_customers (
-                id, tenant_id, code, name, created_by_account_id, updated_by_account_id
-            ) VALUES ($1, $2, 'customer', 'Test Customer', $3, $3)
-            "#,
-            customer_id,
-            tenant_id,
-            actor_account_id,
-        )
-        .execute(setup.connection())
-        .await?;
-        sqlx::query!(
-            r#"
-            INSERT INTO business_customer_facilities (
-                id, tenant_id, customer_id, code, name, time_zone,
+                id, tenant_id, branch_id, code, name, address, time_zone,
                 created_by_account_id, updated_by_account_id
             ) VALUES
-                ($1, $3, $4, 'main', 'Main Facility', 'Asia/Bangkok', $5, $5),
-                ($2, $3, $4, 'alternate', 'Alternate Facility', 'Asia/Bangkok', $5, $5)
+                ($1, $3, $4, 'main-customer', 'Main Customer', 'Main address', 'Asia/Bangkok', $5, $5),
+                ($2, $3, $4, 'alternate-customer', 'Alternate Customer', 'Alternate address', 'Asia/Bangkok', $5, $5)
             "#,
-            customer_facility_id,
-            alternate_facility_id,
-            tenant_id,
             customer_id,
+            alternate_customer_id,
+            tenant_id,
+            branch_id,
             actor_account_id,
         )
         .execute(setup.connection())
@@ -158,7 +168,7 @@ impl Fixture {
         sqlx::query!(
             r#"
             INSERT INTO business_staffing_shifts (
-                id, tenant_id, customer_id, customer_facility_id, job_id,
+                id, tenant_id, branch_id, customer_id, job_id,
                 starts_at, ends_at, required_workers, status,
                 created_by_account_id, updated_by_account_id
             ) VALUES (
@@ -168,8 +178,8 @@ impl Fixture {
             "#,
             planned_shift_id,
             tenant_id,
+            branch_id,
             customer_id,
-            customer_facility_id,
             job_id,
             actor_account_id,
         )
@@ -178,12 +188,13 @@ impl Fixture {
         sqlx::query!(
             r#"
             INSERT INTO business_shift_assignments (
-                id, tenant_id, shift_id, employee_id, rate_source, manual_rate_reason, currency,
+                id, tenant_id, branch_id, shift_id, employee_id, rate_source, manual_rate_reason, currency,
                 bill_hourly_rate_snapshot, worker_hourly_rate_snapshot, created_by_account_id
-            ) VALUES ($1, $2, $3, $4, 'manual', 'isolated staffing test rate', 'VND', 150000, 120000, $5)
+            ) VALUES ($1, $2, $3, $4, $5, 'manual', 'isolated staffing test rate', 'VND', 150000, 120000, $6)
             "#,
             planned_assignment_id,
             tenant_id,
+            branch_id,
             planned_shift_id,
             peer_employee_id,
             actor_account_id,
@@ -199,19 +210,21 @@ impl Fixture {
             actor_employee_id,
             peer_account_id,
             peer_employee_id,
-            customer_facility_id,
-            alternate_facility_id,
+            coordinator_employee_id,
+            branch_id,
+            customer_id,
+            alternate_customer_id,
             job_id,
             planned_assignment_id,
         })
     }
 
     fn urgent_service(&self) -> Arc<UrgentWorkService> {
-        UrgentWorkService::new_arc(UrgentWorkProvider::new_arc(Arc::clone(&self.database)))
+        UrgentWorkService::new_arc(UrgentWorkDb::new_arc(Arc::clone(&self.database)))
     }
 
     fn planned_service(&self) -> Arc<StaffingWorkService> {
-        StaffingWorkService::new_arc(StaffingWorkProvider::new_arc(Arc::clone(&self.database)))
+        StaffingWorkService::new_arc(StaffingWorkDb::new_arc(Arc::clone(&self.database)))
     }
 
     async fn age_urgent_report(&self, report_id: Uuid) -> Result<(), Box<dyn Error>> {
@@ -374,12 +387,6 @@ impl Fixture {
         )
         .execute(transaction.connection())
         .await?;
-        let facility_delete: PgQueryResult = sqlx::query!(
-            "DELETE FROM business_customer_facilities WHERE tenant_id = $1",
-            self.tenant_id,
-        )
-        .execute(transaction.connection())
-        .await?;
         let customer_delete: PgQueryResult =
             sqlx::query!("DELETE FROM business_customers WHERE tenant_id = $1", self.tenant_id)
                 .execute(transaction.connection())
@@ -392,6 +399,9 @@ impl Fixture {
             .execute(transaction.connection())
             .await?;
         let account_delete: PgQueryResult = sqlx::query!("DELETE FROM accounts WHERE tenant_id = $1", self.tenant_id)
+            .execute(transaction.connection())
+            .await?;
+        let branch_delete: PgQueryResult = sqlx::query!("DELETE FROM branches WHERE tenant_id = $1", self.tenant_id)
             .execute(transaction.connection())
             .await?;
         transaction.commit().await?;
@@ -412,11 +422,11 @@ impl Fixture {
             urgent_report_rows = urgent_report_delete.rows_affected(),
             urgent_batch_rows = urgent_batch_delete.rows_affected(),
             rate_rows = rate_delete.rows_affected(),
-            facility_rows = facility_delete.rows_affected(),
             customer_rows = customer_delete.rows_affected(),
             employee_rows = employee_delete.rows_affected(),
             job_rows = job_delete.rows_affected(),
             account_rows = account_delete.rows_affected(),
+            branch_rows = branch_delete.rows_affected(),
             tenant_rows = tenant_delete.rows_affected(),
             "Urgent-work test tenant cleanup completed"
         );
@@ -445,7 +455,7 @@ fn location() -> UrgentWorkLocationInput {
 
 fn start_input(fixture: &Fixture, employee_ids: Vec<Uuid>, idempotency_key: Uuid) -> UrgentWorkStartInput {
     UrgentWorkStartInput {
-        customer_facility_id: fixture.customer_facility_id,
+        customer_id: fixture.customer_id,
         employee_ids,
         idempotency_key,
         location: location(),
@@ -474,9 +484,50 @@ fn urgent_location_is_optional_and_validated_when_present() {
 }
 
 #[tokio::test]
+async fn peer_targets_require_effective_staff_clocking_permission() -> TestResult {
+    let fixture: Fixture = Fixture::create().await?;
+    let test_result: TestResult = infra_postgres::with_active_branch(fixture.branch_id, async {
+        let service: Arc<UrgentWorkService> = fixture.urgent_service();
+        let employees: Vec<super::core::UrgentWorkEmployee> = service
+            .list_employees(fixture.tenant_id, fixture.actor_account_id)
+            .await
+            .map_err(|operation_error: UrgentWorkError| {
+                io::Error::other(format!("urgent employee list failed: {operation_error:?}"))
+            })?;
+
+        let listed_employee_ids: BTreeSet<Uuid> = employees
+            .iter()
+            .map(|employee: &super::core::UrgentWorkEmployee| employee.employee_id)
+            .collect();
+        assert!(listed_employee_ids.contains(&fixture.actor_employee_id));
+        assert!(listed_employee_ids.contains(&fixture.peer_employee_id));
+        assert!(!listed_employee_ids.contains(&fixture.coordinator_employee_id));
+
+        let result: Result<Vec<super::core::UrgentWorkItem>, UrgentWorkError> = service
+            .start(
+                fixture.tenant_id,
+                fixture.actor_account_id,
+                true,
+                start_input(
+                    &fixture,
+                    vec![fixture.actor_employee_id, fixture.coordinator_employee_id],
+                    Uuid::new_v4(),
+                ),
+            )
+            .await;
+        assert!(matches!(result, Err(UrgentWorkError::InvalidInput(_))));
+        Ok(())
+    })
+    .await;
+    let cleanup_result: TestResult = fixture.cleanup().await;
+    cleanup_result?;
+    test_result
+}
+
+#[tokio::test]
 async fn concurrent_peer_lifecycle_is_idempotent_and_preserves_provenance() -> TestResult {
     let fixture: Fixture = Fixture::create().await?;
-    let test_result: TestResult = async {
+    let test_result: TestResult = infra_postgres::with_active_branch(fixture.branch_id, async {
         let service: Arc<UrgentWorkService> = fixture.urgent_service();
         let start_key: Uuid = Uuid::new_v4();
         let input: UrgentWorkStartInput = start_input(
@@ -578,7 +629,7 @@ async fn concurrent_peer_lifecycle_is_idempotent_and_preserves_provenance() -> T
         assert_eq!(actor_ended.end_source, Some(UrgentWorkActionSource::SelfReported));
         assert_eq!(fixture.location_count().await?, 0);
         Ok(())
-    }
+    })
     .await;
     let cleanup_result: TestResult = fixture.cleanup().await;
     cleanup_result?;
@@ -588,7 +639,7 @@ async fn concurrent_peer_lifecycle_is_idempotent_and_preserves_provenance() -> T
 #[tokio::test]
 async fn urgent_open_work_blocks_a_planned_session_for_the_same_employee() -> TestResult {
     let fixture: Fixture = Fixture::create().await?;
-    let test_result: TestResult = async {
+    let test_result: TestResult = infra_postgres::with_active_branch(fixture.branch_id, async {
         let urgent_service: Arc<UrgentWorkService> = fixture.urgent_service();
         let started: Vec<super::core::UrgentWorkItem> = require_urgent(
             urgent_service
@@ -623,7 +674,7 @@ async fn urgent_open_work_blocks_a_planned_session_for_the_same_employee() -> Te
                 .await;
         assert!(matches!(planned_result, Err(StaffingError::Conflict)));
         Ok(())
-    }
+    })
     .await;
     let cleanup_result: TestResult = fixture.cleanup().await;
     cleanup_result?;
@@ -633,7 +684,7 @@ async fn urgent_open_work_blocks_a_planned_session_for_the_same_employee() -> Te
 #[tokio::test]
 async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -> TestResult {
     let fixture: Fixture = Fixture::create().await?;
-    let test_result: TestResult = async {
+    let test_result: TestResult = infra_postgres::with_active_branch(fixture.branch_id, async {
         let service: Arc<UrgentWorkService> = fixture.urgent_service();
         let started: Vec<super::core::UrgentWorkItem> = require_urgent(
             service
@@ -678,7 +729,7 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
                     fixture.actor_account_id,
                     report_id,
                     UrgentCustomerWorkRecordInput {
-                        confirmed_customer_facility_id: fixture.customer_facility_id,
+                        confirmed_customer_id: fixture.customer_id,
                         confirmed_started_at: ended.started_at + Duration::minutes(1),
                         confirmed_ended_at: ended_at + Duration::minutes(1),
                         customer_reference: Some("customer-bill-001".to_owned()),
@@ -701,7 +752,7 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
                 fixture.actor_account_id,
                 report_id,
                 UrgentWorkReconcileInput {
-                    final_customer_facility_id: fixture.customer_facility_id,
+                    final_customer_id: fixture.customer_id,
                     job_id: fixture.job_id,
                     worked_seconds,
                     adjustment_reason: None,
@@ -724,7 +775,7 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
                     fixture.actor_account_id,
                     report_id,
                     UrgentCustomerWorkRecordInput {
-                        confirmed_customer_facility_id: fixture.alternate_facility_id,
+                        confirmed_customer_id: fixture.alternate_customer_id,
                         confirmed_started_at: ended.started_at,
                         confirmed_ended_at: ended_at,
                         customer_reference: Some("customer-bill-001".to_owned()),
@@ -733,13 +784,13 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
                 )
                 .await,
         )?;
-        let facility_rejected: Result<super::core::UrgentWorkReconciliation, UrgentWorkError> = service
+        let customer_rejected: Result<super::core::UrgentWorkReconciliation, UrgentWorkError> = service
             .reconcile(
                 fixture.tenant_id,
                 fixture.actor_account_id,
                 report_id,
                 UrgentWorkReconcileInput {
-                    final_customer_facility_id: fixture.alternate_facility_id,
+                    final_customer_id: fixture.alternate_customer_id,
                     job_id: fixture.job_id,
                     worked_seconds,
                     adjustment_reason: None,
@@ -753,7 +804,7 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
                 },
             )
             .await;
-        assert!(matches!(facility_rejected, Err(UrgentWorkError::InvalidInput(_))));
+        assert!(matches!(customer_rejected, Err(UrgentWorkError::InvalidInput(_))));
 
         require_urgent(
             service
@@ -762,7 +813,7 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
                     fixture.actor_account_id,
                     report_id,
                     UrgentCustomerWorkRecordInput {
-                        confirmed_customer_facility_id: fixture.customer_facility_id,
+                        confirmed_customer_id: fixture.customer_id,
                         confirmed_started_at: ended.started_at,
                         confirmed_ended_at: ended_at,
                         customer_reference: Some("customer-bill-001".to_owned()),
@@ -780,7 +831,7 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
                     fixture.actor_account_id,
                     report_id,
                     UrgentWorkReconcileInput {
-                        final_customer_facility_id: fixture.customer_facility_id,
+                        final_customer_id: fixture.customer_id,
                         job_id: fixture.job_id,
                         worked_seconds,
                         adjustment_reason: None,
@@ -796,10 +847,7 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
                 .await,
         )?;
         assert_eq!(reconciled.reconciliation_status, ReconciliationStatus::Reconciled);
-        assert_eq!(
-            reconciled.final_customer_facility_id,
-            Some(fixture.customer_facility_id)
-        );
+        assert_eq!(reconciled.final_customer_id, Some(fixture.customer_id));
         assert_eq!(reconciled.final_worked_seconds, Some(worked_seconds));
 
         let snapshot: SnapshotRow = fixture.snapshot(report_id).await?;
@@ -822,7 +870,7 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
 
         let planned_reconciliations: Vec<crate::business::staffing::core::StaffingReconciliation> =
             crate::business::staffing::core::StaffingRepo::list_reconciliations(
-                &*StaffingProvider::new_arc(Arc::clone(&fixture.database)),
+                &*StaffingDb::new_arc(Arc::clone(&fixture.database)),
                 fixture.tenant_id,
             )
             .await
@@ -837,7 +885,7 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
             Some(fixture.planned_assignment_id)
         );
         Ok(())
-    }
+    })
     .await;
     let cleanup_result: TestResult = fixture.cleanup().await;
     cleanup_result?;

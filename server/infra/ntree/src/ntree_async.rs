@@ -114,7 +114,7 @@ impl<T> TreeNode<T> {
     }
 
     fn childlist_first(childlist: &ChildList<SharedNode<T>>) -> Option<SharedNode<T>> {
-        childlist.get(0).cloned()
+        childlist.first().cloned()
     }
 
     fn childlist_last(childlist: &ChildList<SharedNode<T>>) -> Option<SharedNode<T>> {

@@ -34,12 +34,12 @@ export function formatDuration(totalSeconds: number): string {
 
 export function roleLabel(role: RoleCode): string {
   switch (role) {
-    case "owner":
+    case "tenant_owner":
       return "Chủ doanh nghiệp";
-    case "director":
-      return "Giám đốc";
-    case "manager":
-      return "Quản lý";
+    case "executive_manager":
+      return "Quản lý điều hành";
+    case "branch_manager":
+      return "Quản lý chi nhánh";
     case "supervisor":
       return "Giám sát";
     case "staff":

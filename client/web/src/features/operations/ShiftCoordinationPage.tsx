@@ -8,7 +8,6 @@ import { useAuth } from "../auth/AuthProvider";
 import {
   createShiftAssignment,
   createStaffingShift,
-  listCustomerFacilities,
   listCustomers,
   listJobs,
   listShiftCandidates,
@@ -18,7 +17,6 @@ import {
 
 interface ShiftDraft {
   customerId: string;
-  facilityId: string;
   jobId: string;
   startsAt: string;
   endsAt: string;
@@ -28,7 +26,6 @@ interface ShiftDraft {
 
 const emptyDraft: ShiftDraft = {
   customerId: "",
-  facilityId: "",
   jobId: "",
   startsAt: "",
   endsAt: "",
@@ -48,11 +45,6 @@ export function ShiftCoordinationPage() {
   const customersQuery = useQuery({ queryKey: operationsQueryKeys.customers, queryFn: listCustomers });
   const jobsQuery = useQuery({ queryKey: operationsQueryKeys.jobs, queryFn: listJobs });
   const shiftsQuery = useQuery({ queryKey: operationsQueryKeys.shifts, queryFn: listStaffingShifts });
-  const facilitiesQuery = useQuery({
-    queryKey: operationsQueryKeys.facilities(draft.customerId),
-    queryFn: () => listCustomerFacilities(draft.customerId),
-    enabled: Boolean(draft.customerId),
-  });
   const candidatesQuery = useQuery({
     queryKey: operationsQueryKeys.candidates(selectedShiftId ?? ""),
     queryFn: () => listShiftCandidates(selectedShiftId ?? ""),
@@ -97,7 +89,6 @@ export function ShiftCoordinationPage() {
     setMessage(null);
     const payload: StaffingShiftCreateRequest = {
       customer_id: draft.customerId,
-      customer_facility_id: draft.facilityId,
       job_id: draft.jobId,
       starts_at: new Date(draft.startsAt).toISOString(),
       ends_at: new Date(draft.endsAt).toISOString(),
@@ -120,13 +111,8 @@ export function ShiftCoordinationPage() {
         </div>
         <form className="mt-5 space-y-4" onSubmit={submit}>
           <label className="block text-sm font-semibold text-slate-700">Khách hàng
-            <select className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5" required value={draft.customerId} onChange={(event) => setDraft({ ...draft, customerId: event.target.value, facilityId: "" })}>
+            <select className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5" required value={draft.customerId} onChange={(event) => setDraft({ ...draft, customerId: event.target.value })}>
               <option value="">Chọn khách hàng</option>{customersQuery.data?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-            </select>
-          </label>
-          <label className="block text-sm font-semibold text-slate-700">Cơ sở làm việc
-            <select className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5" required value={draft.facilityId} onChange={(event) => setDraft({ ...draft, facilityId: event.target.value })}>
-              <option value="">Chọn cơ sở</option>{facilitiesQuery.data?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
             </select>
           </label>
           <label className="block text-sm font-semibold text-slate-700">Công việc

@@ -6,7 +6,7 @@ import { friendlyApiError } from "../../shared/api/client";
 import { formatDateTime, formatDuration } from "../../shared/lib/format";
 import { useAuth } from "../auth/AuthProvider";
 import {
-  listCustomerFacilities,
+  listCustomers,
   listReconciliations,
   operationsQueryKeys,
   reconcileAssignment,
@@ -38,7 +38,7 @@ function statusTone(status: ReconciliationStatus): string {
 }
 
 interface EvidenceDraft {
-  facilityId: string;
+  customerId: string;
   startedAt: string;
   endedAt: string;
   reference: string;
@@ -53,7 +53,7 @@ export function ReconciliationPage() {
   const canManage = permissions.includes("business.reconciliation.manage");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [evidence, setEvidence] = useState<EvidenceDraft>({
-    facilityId: "",
+    customerId: "",
     startedAt: "",
     endedAt: "",
     reference: "",
@@ -71,14 +71,11 @@ export function ReconciliationPage() {
   const items = useMemo(() => query.data ?? [], [query.data]);
   const selected = items.find((item) => item.assignment_id === selectedId) ?? null;
 
-  const facilityQuery = useQuery({
-    queryKey: selected
-      ? operationsQueryKeys.facilities(selected.customer_id)
-      : ["operations", "customers", "none", "facilities"],
-    queryFn: () => listCustomerFacilities(selected?.customer_id ?? ""),
-    enabled: canRead && Boolean(selected?.customer_id),
+  const customersQuery = useQuery({
+    queryKey: operationsQueryKeys.customers,
+    queryFn: listCustomers,
+    enabled: canRead,
   });
-  const customerFacilities = facilityQuery.data ?? [];
 
   useEffect(() => {
     if (!selectedId && items.length > 0) setSelectedId(items[0].assignment_id);
@@ -87,7 +84,7 @@ export function ReconciliationPage() {
   useEffect(() => {
     if (!selected) return;
     setEvidence({
-      facilityId: selected.customer_record?.confirmed_customer_facility_id ?? "",
+      customerId: selected.customer_record?.confirmed_customer_id ?? "",
       startedAt: localDateTime(selected.customer_record?.confirmed_started_at),
       endedAt: localDateTime(selected.customer_record?.confirmed_ended_at),
       reference: selected.customer_record?.customer_reference ?? "",
@@ -101,7 +98,7 @@ export function ReconciliationPage() {
   const refresh = () => queryClient.invalidateQueries({ queryKey: operationsQueryKeys.reconciliations });
   const evidenceMutation = useMutation({
     mutationFn: () => saveCustomerWorkRecord(selectedId ?? "", {
-      confirmed_customer_facility_id: evidence.facilityId,
+      confirmed_customer_id: evidence.customerId,
       confirmed_started_at: new Date(evidence.startedAt).toISOString(),
       confirmed_ended_at: new Date(evidence.endedAt).toISOString(),
       customer_reference: evidence.reference.trim() || null,
@@ -134,7 +131,7 @@ export function ReconciliationPage() {
       <section className="panel overflow-hidden">
         <div className="border-b border-slate-200 px-5 py-4"><h2 className="font-bold text-slate-950">Ca cần đối soát</h2><p className="mt-1 text-sm text-slate-500">So sánh dữ liệu nhân viên với xác nhận khách hàng.</p></div>
         <div className="max-h-[70vh] divide-y divide-slate-100 overflow-y-auto">
-          {items.map((item) => <button className={`w-full px-5 py-4 text-left hover:bg-slate-50 ${selectedId === item.assignment_id ? "bg-blue-50" : ""}`} key={item.assignment_id} onClick={() => setSelectedId(item.assignment_id)} type="button"><div className="flex items-start justify-between gap-2"><div><p className="font-bold text-slate-900">{item.employee_name}</p><p className="mt-1 text-xs text-slate-500">{item.customer_name} · {item.customer_facility_name}</p></div><span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold ${statusTone(item.reconciliation_status)}`}>{statusLabel(item.reconciliation_status)}</span></div><p className="mt-2 text-xs text-slate-500">{formatDateTime(item.scheduled_starts_at)}</p></button>)}
+          {items.map((item) => <button className={`w-full px-5 py-4 text-left hover:bg-slate-50 ${selectedId === item.assignment_id ? "bg-blue-50" : ""}`} key={item.assignment_id} onClick={() => setSelectedId(item.assignment_id)} type="button"><div className="flex items-start justify-between gap-2"><div><p className="font-bold text-slate-900">{item.employee_name}</p><p className="mt-1 text-xs text-slate-500">{item.customer_name}</p></div><span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold ${statusTone(item.reconciliation_status)}`}>{statusLabel(item.reconciliation_status)}</span></div><p className="mt-2 text-xs text-slate-500">{formatDateTime(item.scheduled_starts_at)}</p></button>)}
           {items.length === 0 ? <p className="p-8 text-center text-sm text-slate-500">Chưa có ca được phân công.</p> : null}
         </div>
       </section>
@@ -142,7 +139,7 @@ export function ReconciliationPage() {
       {selected ? <div className="space-y-5">
         {message ? <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-medium text-blue-800">{message}</div> : null}
         <section className="panel p-5 sm:p-6">
-          <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-lg font-black text-slate-950">{selected.employee_name}</h2><p className="mt-1 text-sm text-slate-500">{selected.employee_code} · {selected.customer_name} / {selected.customer_facility_name}</p></div><span className={`rounded-full px-3 py-1 text-xs font-bold ${statusTone(selected.reconciliation_status)}`}>{statusLabel(selected.reconciliation_status)}</span></div>
+          <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-lg font-black text-slate-950">{selected.employee_name}</h2><p className="mt-1 text-sm text-slate-500">{selected.employee_code} · {selected.customer_name}</p></div><span className={`rounded-full px-3 py-1 text-xs font-bold ${statusTone(selected.reconciliation_status)}`}>{statusLabel(selected.reconciliation_status)}</span></div>
           <div className="mt-5 grid gap-3 sm:grid-cols-3">
             <div className="rounded-xl bg-violet-50 p-4"><p className="text-xs font-bold uppercase text-violet-600">Nhân viên ghi</p><p className="mt-2 text-xl font-black text-violet-950">{formatDuration(selected.staff_worked_seconds)}</p><p className="mt-1 text-xs text-violet-700">{selected.staff_started_at ? formatDateTime(selected.staff_started_at) : "Chưa bắt đầu"}</p></div>
             <div className="rounded-xl bg-amber-50 p-4"><p className="text-xs font-bold uppercase text-amber-600">Khách hàng xác nhận</p><p className="mt-2 text-xl font-black text-amber-950">{selected.customer_record ? formatDuration(selected.customer_record.confirmed_worked_seconds) : "—"}</p><p className="mt-1 text-xs text-amber-700">Nguồn độc lập</p></div>
@@ -152,17 +149,17 @@ export function ReconciliationPage() {
 
         <form className="panel p-5 sm:p-6" onSubmit={saveEvidence}>
           <h3 className="font-bold text-slate-950">Xác nhận / bill từ khách hàng</h3><p className="mt-1 text-sm text-slate-500">Nhập đúng dữ liệu khách hàng cung cấp, không sửa dữ liệu nhân viên.</p>
-          <label className="mt-4 block text-sm font-semibold text-slate-700">Cơ sở khách hàng xác nhận
+          <label className="mt-4 block text-sm font-semibold text-slate-700">Khách hàng / nơi làm việc xác nhận
             <select
               className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5"
-              disabled={!canManage || selected.assignment_status === "approved" || facilityQuery.isPending}
+              disabled={!canManage || selected.assignment_status === "approved" || customersQuery.isPending}
               required
-              value={evidence.facilityId}
-              onChange={(event) => setEvidence({ ...evidence, facilityId: event.target.value })}
+              value={evidence.customerId}
+              onChange={(event) => setEvidence({ ...evidence, customerId: event.target.value })}
             >
-              <option value="">Chọn đúng cơ sở trên dữ liệu khách hàng</option>
-              {customerFacilities.map((facility) => (
-                <option key={facility.id} value={facility.id}>{facility.name}</option>
+              <option value="">Chọn đúng khách hàng trên dữ liệu xác nhận</option>
+              {(customersQuery.data ?? []).map((customer) => (
+                <option key={customer.id} value={customer.id}>{customer.name}</option>
               ))}
             </select>
           </label>

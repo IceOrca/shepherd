@@ -14,11 +14,11 @@ use uuid::Uuid;
 
 use infra_postgres::{DatabaseAdapter, TenantDbErr, TenantTransaction};
 use sqlx::PgConnection;
-pub struct WorkingScheduleProvider {
+pub struct WorkingScheduleDb {
     db: Arc<DatabaseAdapter>,
 }
 
-impl WorkingScheduleProvider {
+impl WorkingScheduleDb {
     pub fn new_arc(db: Arc<DatabaseAdapter>) -> Arc<Self> {
         Arc::new(Self { db })
     }
@@ -99,7 +99,7 @@ impl From<ScheduleAssignmentRow> for EmployeeScheduleAssignment {
 }
 
 #[async_trait]
-impl WorkingScheduleRepo for WorkingScheduleProvider {
+impl WorkingScheduleRepo for WorkingScheduleDb {
     async fn list_schedules(&self, tenant_id: Uuid) -> Result<Vec<WorkingSchedule>, HrError> {
         let (schedule_rows, period_rows): (Vec<ScheduleRow>, Vec<PeriodRow>) = self
             .db

@@ -21,8 +21,8 @@ import {
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type {
   PermissionCode,
+  UrgentWorkCustomer,
   UrgentWorkEmployee,
-  UrgentWorkFacility,
   UrgentWorkItem,
 } from "../../api/generated/contracts";
 import { friendlyApiError, isRetryableApiError } from "../../shared/api/client";
@@ -34,7 +34,7 @@ import {
   listOwnUrgentWork,
   listTeamUrgentWork,
   listUrgentEmployees,
-  listUrgentFacilities,
+  listUrgentCustomers,
   operationsQueryKeys,
   startUrgentWork,
   type UrgentEndActionInput,
@@ -65,14 +65,14 @@ export function UrgentWorkPage(): React.JSX.Element {
   const canRead: boolean = permissions.includes("business.urgent_work.read");
   const canStart: boolean = permissions.includes("business.urgent_work.start");
   const canManagePeers: boolean = permissions.includes("business.urgent_work.peer_manage");
-  const [facilityId, setFacilityId] = useState<string>("");
+  const [customerId, setCustomerId] = useState<string>("");
   const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<string[]>([]);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [endingReportId, setEndingReportId] = useState<string | null>(null);
 
-  const facilitiesQuery: UseQueryResult<UrgentWorkFacility[], Error> = useQuery({
-    queryKey: operationsQueryKeys.urgentFacilities,
-    queryFn: listUrgentFacilities,
+  const customersQuery: UseQueryResult<UrgentWorkCustomer[], Error> = useQuery({
+    queryKey: operationsQueryKeys.urgentCustomers,
+    queryFn: listUrgentCustomers,
     enabled: canRead,
   });
   const employeesQuery: UseQueryResult<UrgentWorkEmployee[], Error> = useQuery({
@@ -112,20 +112,24 @@ export function UrgentWorkPage(): React.JSX.Element {
     : activeTeamWork;
   const selfEmployee: UrgentWorkEmployee | null =
     (employeesQuery.data ?? []).find((employee: UrgentWorkEmployee): boolean => employee.is_self) ?? null;
+  const clockableEmployees: UrgentWorkEmployee[] = useMemo<UrgentWorkEmployee[]>(
+    (): UrgentWorkEmployee[] => employeesQuery.data ?? [],
+    [employeesQuery.data],
+  );
 
   useEffect((): void => {
     if (activeOwnWork) {
-      setFacilityId(activeOwnWork.claimed_customer_facility_id);
+      setCustomerId(activeOwnWork.claimed_customer_id);
       setSelectedEmployeeIds([]);
       return;
     }
-    if (!facilityId && (facilitiesQuery.data?.length ?? 0) > 0) {
-      const firstFacilityId: string | undefined = facilitiesQuery.data?.at(0)?.facility_id;
-      if (firstFacilityId) {
-        setFacilityId(firstFacilityId);
+    if (!customerId && (customersQuery.data?.length ?? 0) > 0) {
+      const firstCustomerId: string | undefined = customersQuery.data?.at(0)?.customer_id;
+      if (firstCustomerId) {
+        setCustomerId(firstCustomerId);
       }
     }
-  }, [activeOwnWork, facilitiesQuery.data, facilityId]);
+  }, [activeOwnWork, customersQuery.data, customerId]);
 
   useEffect((): void => {
     if (!activeOwnWork && selfEmployee && !selfEmployee.has_open_work) {
@@ -134,6 +138,18 @@ export function UrgentWorkPage(): React.JSX.Element {
       );
     }
   }, [activeOwnWork, selfEmployee]);
+
+  useEffect((): void => {
+    const clockableEmployeeIds: Set<string> = new Set<string>(
+      clockableEmployees.map((employee: UrgentWorkEmployee): string => employee.employee_id),
+    );
+    setSelectedEmployeeIds((current: string[]): string[] => {
+      const eligibleSelection: string[] = current.filter((employeeId: string): boolean =>
+        clockableEmployeeIds.has(employeeId),
+      );
+      return eligibleSelection.length === current.length ? current : eligibleSelection;
+    });
+  }, [clockableEmployees]);
 
   const refreshUrgentWork = (): Promise<void> =>
     queryClient.invalidateQueries({ queryKey: ["operations", "urgent-work"] });
@@ -198,7 +214,7 @@ export function UrgentWorkPage(): React.JSX.Element {
       setFeedback({ kind: "error", message: "Thiết bị đang ngoại tuyến. Hãy kết nối mạng trước khi ghi nhận." });
       return;
     }
-    if (!facilityId || selectedEmployeeIds.length === 0) {
+    if (!customerId || selectedEmployeeIds.length === 0) {
       setFeedback({ kind: "error", message: "Hãy chọn nơi làm việc và ít nhất một nhân viên." });
       return;
     }
@@ -206,7 +222,7 @@ export function UrgentWorkPage(): React.JSX.Element {
     startMutation.mutate({
       idempotencyKey: crypto.randomUUID(),
       payload: {
-        customer_facility_id: facilityId,
+        customer_id: customerId,
         employee_ids: selectedEmployeeIds,
         latitude: null,
         longitude: null,
@@ -240,12 +256,12 @@ export function UrgentWorkPage(): React.JSX.Element {
   }
 
   const firstError: unknown =
-    facilitiesQuery.error ??
+    customersQuery.error ??
     employeesQuery.error ??
     ownWorkQuery.error ??
     (canManagePeers ? teamWorkQuery.error : null);
   const isPending: boolean =
-    facilitiesQuery.isPending ||
+    customersQuery.isPending ||
     employeesQuery.isPending ||
     ownWorkQuery.isPending ||
     (canManagePeers && teamWorkQuery.isPending);
@@ -274,7 +290,7 @@ export function UrgentWorkPage(): React.JSX.Element {
         <p className="text-sm font-bold text-blue-100">Ghi nhận nhanh tại hiện trường</p>
         <h2 className="mt-2 text-2xl font-black">Không cần tạo ca trước</h2>
         <p className="mt-2 max-w-2xl text-sm leading-6 text-blue-50">
-          Chọn đúng cơ sở khách hàng, chọn bạn và đồng nghiệp đang có mặt, rồi bấm Bắt đầu. Hệ thống dùng thời gian máy chủ; GPS hiện đang tắt.
+          Chọn đúng khách hàng là nơi làm việc, chọn bạn và đồng nghiệp đang có mặt, rồi bấm Bắt đầu. Hệ thống dùng thời gian máy chủ; GPS hiện đang tắt.
         </p>
       </section>
 
@@ -298,8 +314,8 @@ export function UrgentWorkPage(): React.JSX.Element {
       {visibleActiveWork.length > 0 ? (
         <section className="panel overflow-hidden">
           <div className="border-b border-slate-200 px-5 py-4">
-            <h2 className="font-bold text-slate-950">Đang làm việc tại cơ sở</h2>
-            <p className="mt-1 text-sm text-slate-500">Bạn có thể kết thúc cho chính mình hoặc đồng nghiệp cùng cơ sở.</p>
+            <h2 className="font-bold text-slate-950">Đang làm việc tại khách hàng</h2>
+            <p className="mt-1 text-sm text-slate-500">Bạn có thể kết thúc cho chính mình hoặc đồng nghiệp cùng nơi làm việc.</p>
           </div>
           <div className="divide-y divide-slate-100">
             {visibleActiveWork.map((work: UrgentWorkItem): React.JSX.Element => {
@@ -315,7 +331,7 @@ export function UrgentWorkPage(): React.JSX.Element {
                     </div>
                     <p className="mt-1 flex items-center gap-1.5 text-sm text-slate-500">
                       <MapPin className="size-4 text-blue-600" />
-                      {work.customer_name} · {work.claimed_facility_name}
+                      {work.customer_name}
                     </p>
                     <p className="mt-1 text-xs text-slate-500">
                       Bắt đầu {formatDateTime(work.started_at)} · {sourceLabel(work.start_source)}
@@ -346,25 +362,25 @@ export function UrgentWorkPage(): React.JSX.Element {
             <h2 className="font-bold text-slate-950">Bắt đầu công việc</h2>
             <p className="mt-1 text-sm text-slate-500">
               {activeOwnWork
-                ? "Bạn đang làm tại cơ sở này; có thể bổ sung đồng nghiệp vừa đến."
+                ? "Bạn đang làm tại khách hàng này; có thể bổ sung đồng nghiệp vừa đến."
                 : "Lần ghi đầu tiên phải bao gồm chính bạn."}
             </p>
           </div>
         </div>
 
         <label className="mt-5 block text-sm font-semibold text-slate-700">
-          Cơ sở khách hàng
+          Khách hàng / nơi làm việc
           <select
             className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5"
             disabled={Boolean(activeOwnWork) || startMutation.isPending}
-            onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => setFacilityId(event.target.value)}
+            onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => setCustomerId(event.target.value)}
             required
-            value={facilityId}
+            value={customerId}
           >
-            <option value="">Chọn cơ sở</option>
-            {(facilitiesQuery.data ?? []).map((facility): React.JSX.Element => (
-              <option key={facility.facility_id} value={facility.facility_id}>
-                {facility.customer_name} · {facility.facility_name}
+            <option value="">Chọn khách hàng</option>
+            {(customersQuery.data ?? []).map((customer: UrgentWorkCustomer): React.JSX.Element => (
+              <option key={customer.customer_id} value={customer.customer_id}>
+                {customer.customer_name}
               </option>
             ))}
           </select>
@@ -372,11 +388,11 @@ export function UrgentWorkPage(): React.JSX.Element {
 
         <div className="mt-5">
           <div className="flex items-center justify-between gap-3">
-            <p className="text-sm font-semibold text-slate-700">Nhân viên bắt đầu</p>
+            <p className="text-sm font-semibold text-slate-700">Nhân viên được phép ghi nhận công việc</p>
             <span className="text-xs font-semibold text-slate-500">Đã chọn {selectedEmployeeIds.length}</span>
           </div>
           <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-            {(employeesQuery.data ?? []).map((employee: UrgentWorkEmployee): React.JSX.Element => {
+            {clockableEmployees.map((employee: UrgentWorkEmployee): React.JSX.Element => {
               const selected: boolean = selectedEmployeeIds.includes(employee.employee_id);
               const lockedSelf: boolean = !activeOwnWork && employee.is_self;
               const disabled: boolean = employee.has_open_work || (!canManagePeers && !employee.is_self);
@@ -403,12 +419,15 @@ export function UrgentWorkPage(): React.JSX.Element {
                 </button>
               );
             })}
+            {!employeesQuery.isLoading && clockableEmployees.length === 0 ? (
+              <p className="text-sm text-slate-500">Không có nhân viên thuộc nhóm làm việc để ghi nhận.</p>
+            ) : null}
           </div>
         </div>
 
         <button
           className="action-primary mt-5 w-full sm:w-auto"
-          disabled={!canStart || !isOnline || !facilityId || selectedEmployeeIds.length === 0 || startMutation.isPending}
+          disabled={!canStart || !isOnline || !customerId || selectedEmployeeIds.length === 0 || startMutation.isPending}
           type="submit"
         >
           {startMutation.isPending ? <RefreshCw className="size-4 animate-spin" /> : <LogIn className="size-4" />}
@@ -425,7 +444,7 @@ export function UrgentWorkPage(): React.JSX.Element {
             {ownWork.slice(0, 20).map((work: UrgentWorkItem): React.JSX.Element => (
               <article className="grid gap-2 px-5 py-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center" key={work.report_id}>
                 <div>
-                  <p className="font-semibold text-slate-900">{work.customer_name} · {work.claimed_facility_name}</p>
+                  <p className="font-semibold text-slate-900">{work.customer_name}</p>
                   <p className="mt-1 text-xs text-slate-500">
                     {formatDateTime(work.started_at)} · {sourceLabel(work.start_source)}
                   </p>

@@ -101,7 +101,6 @@ pub struct EmployeeAssignment {
     pub id: Uuid,
     pub employee_id: Uuid,
     pub branch_id: Uuid,
-    pub facility_id: Option<Uuid>,
     pub department_id: Option<Uuid>,
     pub job_id: Option<Uuid>,
     pub manager_employee_id: Option<Uuid>,
@@ -117,7 +116,7 @@ pub struct EmployeeAssignment {
 pub struct AttendanceSession {
     pub id: Uuid,
     pub employee_id: Uuid,
-    pub facility_id: Uuid,
+    pub branch_id: Uuid,
     pub check_in_at: DateTime<Utc>,
     pub check_out_at: Option<DateTime<Utc>>,
     pub worked_seconds: Option<i64>,
@@ -158,7 +157,6 @@ pub struct JobPositionInput {
 #[derive(Clone, Debug)]
 pub struct EmployeeAssignmentInput {
     pub branch_id: Uuid,
-    pub facility_id: Option<Uuid>,
     pub department_id: Option<Uuid>,
     pub job_id: Option<Uuid>,
     pub manager_employee_id: Option<Uuid>,
@@ -247,7 +245,7 @@ pub trait PeopleRepo {
         attendance_session_id: Uuid,
         employee_id: Uuid,
         account_id: Uuid,
-        facility_id: Uuid,
+        branch_id: Uuid,
     ) -> Result<AttendanceSession, HrError>;
     async fn check_out(
         &self,
@@ -407,10 +405,10 @@ impl PeopleService {
         tenant_id: Uuid,
         employee_id: Uuid,
         account_id: Uuid,
-        facility_id: Uuid,
+        branch_id: Uuid,
     ) -> Result<AttendanceSession, HrError> {
         self.repo
-            .check_in(tenant_id, Uuid::new_v4(), employee_id, account_id, facility_id)
+            .check_in(tenant_id, Uuid::new_v4(), employee_id, account_id, branch_id)
             .await
     }
 

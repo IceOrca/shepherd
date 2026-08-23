@@ -2,4 +2,4 @@
 
 pub mod database;
 
-pub use database::{DatabaseAdapter, PostgresCli, TenantDbErr, TenantTransaction};
+pub use database::{DatabaseAdapter, PostgresCli, TenantDbErr, TenantTransaction, active_branch_id, with_active_branch};

@@ -48,11 +48,9 @@ impl UrgentWorkActionSource {
 }
 
 #[derive(Clone, Debug, Serialize, TS)]
-pub struct UrgentWorkFacility {
-    pub facility_id: Uuid,
+pub struct UrgentWorkCustomer {
     pub customer_id: Uuid,
     pub customer_name: String,
-    pub facility_name: String,
     pub address: Option<String>,
     pub time_zone: String,
 }
@@ -72,9 +70,8 @@ pub struct UrgentWorkItem {
     pub employee_id: Uuid,
     pub employee_code: String,
     pub employee_name: String,
-    pub claimed_customer_facility_id: Uuid,
+    pub claimed_customer_id: Uuid,
     pub customer_name: String,
-    pub claimed_facility_name: String,
     pub status: UrgentWorkStatus,
     pub started_at: DateTime<Utc>,
     pub ended_at: Option<DateTime<Utc>>,
@@ -92,9 +89,8 @@ pub struct UrgentWorkItem {
 pub struct UrgentCustomerWorkRecord {
     pub id: Uuid,
     pub report_id: Uuid,
-    pub confirmed_customer_facility_id: Uuid,
+    pub confirmed_customer_id: Uuid,
     pub confirmed_customer_name: String,
-    pub confirmed_facility_name: String,
     pub confirmed_started_at: DateTime<Utc>,
     pub confirmed_ended_at: DateTime<Utc>,
     pub confirmed_worked_seconds: i64,
@@ -108,7 +104,7 @@ pub struct UrgentWorkReconciliation {
     pub work: UrgentWorkItem,
     pub customer_record: Option<UrgentCustomerWorkRecord>,
     pub reconciliation_status: ReconciliationStatus,
-    pub final_customer_facility_id: Option<Uuid>,
+    pub final_customer_id: Option<Uuid>,
     pub final_job_id: Option<Uuid>,
     pub final_worked_seconds: Option<i64>,
     pub adjustment_reason: Option<String>,
@@ -144,7 +140,7 @@ impl UrgentWorkLocationInput {
 
 #[derive(Clone, Debug)]
 pub struct UrgentWorkStartInput {
-    pub customer_facility_id: Uuid,
+    pub customer_id: Uuid,
     pub employee_ids: Vec<Uuid>,
     pub idempotency_key: Uuid,
     pub location: UrgentWorkLocationInput,
@@ -158,7 +154,7 @@ pub struct UrgentWorkEndInput {
 
 #[derive(Clone, Debug)]
 pub struct UrgentCustomerWorkRecordInput {
-    pub confirmed_customer_facility_id: Uuid,
+    pub confirmed_customer_id: Uuid,
     pub confirmed_started_at: DateTime<Utc>,
     pub confirmed_ended_at: DateTime<Utc>,
     pub customer_reference: Option<String>,
@@ -167,7 +163,7 @@ pub struct UrgentCustomerWorkRecordInput {
 
 #[derive(Clone, Debug)]
 pub struct UrgentWorkReconcileInput {
-    pub final_customer_facility_id: Uuid,
+    pub final_customer_id: Uuid,
     pub job_id: Uuid,
     pub worked_seconds: i64,
     pub adjustment_reason: Option<String>,
@@ -187,7 +183,7 @@ pub enum UrgentWorkError {
 
 #[async_trait]
 pub trait UrgentWorkRepo {
-    async fn list_facilities(&self, tenant_id: Uuid) -> Result<Vec<UrgentWorkFacility>, UrgentWorkError>;
+    async fn list_customers(&self, tenant_id: Uuid) -> Result<Vec<UrgentWorkCustomer>, UrgentWorkError>;
     async fn list_employees(
         &self,
         tenant_id: Uuid,
@@ -253,10 +249,10 @@ impl UrgentWorkService {
         Arc::new(Self { repo })
     }
 
-    pub async fn list_facilities(&self, tenant_id: Uuid) -> Result<Vec<UrgentWorkFacility>, UrgentWorkError> {
-        debug!(operation = "urgent_work.list_facilities", tenant_id = %tenant_id, "Urgent-work operation accepted");
-        let result: Result<Vec<UrgentWorkFacility>, UrgentWorkError> = self.repo.list_facilities(tenant_id).await;
-        log_result("urgent_work.list_facilities", tenant_id, None, None, &result);
+    pub async fn list_customers(&self, tenant_id: Uuid) -> Result<Vec<UrgentWorkCustomer>, UrgentWorkError> {
+        debug!(operation = "urgent_work.list_customers", tenant_id = %tenant_id, "Urgent-work operation accepted");
+        let result: Result<Vec<UrgentWorkCustomer>, UrgentWorkError> = self.repo.list_customers(tenant_id).await;
+        log_result("urgent_work.list_customers", tenant_id, None, None, &result);
         result
     }
 
@@ -314,7 +310,7 @@ impl UrgentWorkService {
         mut input: UrgentWorkStartInput,
     ) -> Result<Vec<UrgentWorkItem>, UrgentWorkError> {
         input.location.validate()?;
-        if input.customer_facility_id.is_nil() || input.employee_ids.is_empty() || input.employee_ids.len() > 50 {
+        if input.customer_id.is_nil() || input.employee_ids.is_empty() || input.employee_ids.len() > 50 {
             return Err(UrgentWorkError::InvalidInput("urgent-work start selection is invalid"));
         }
         let employee_ids: BTreeSet<Uuid> = input.employee_ids.into_iter().collect();
@@ -328,7 +324,7 @@ impl UrgentWorkService {
         let batch_id: Uuid = Uuid::new_v4();
         let report_ids: Vec<Uuid> = (0..target_count).map(|_index: usize| Uuid::new_v4()).collect();
         let session_ids: Vec<Uuid> = (0..target_count).map(|_index: usize| Uuid::new_v4()).collect();
-        trace!(operation = "urgent_work.start", tenant_id = %tenant_id, actor_account_id = %actor_account_id, facility_id = %input.customer_facility_id, target_count, allow_peer, "Validated urgent-work batch without logging location coordinates");
+        trace!(operation = "urgent_work.start", tenant_id = %tenant_id, actor_account_id = %actor_account_id, customer_id = %input.customer_id, target_count, allow_peer, "Validated urgent-work batch without logging location coordinates");
         let result: Result<Vec<UrgentWorkItem>, UrgentWorkError> = self
             .repo
             .start(
@@ -394,7 +390,7 @@ impl UrgentWorkService {
         report_id: Uuid,
         input: UrgentCustomerWorkRecordInput,
     ) -> Result<UrgentCustomerWorkRecord, UrgentWorkError> {
-        if input.confirmed_customer_facility_id.is_nil() || input.confirmed_ended_at <= input.confirmed_started_at {
+        if input.confirmed_customer_id.is_nil() || input.confirmed_ended_at <= input.confirmed_started_at {
             return Err(UrgentWorkError::InvalidInput("urgent customer evidence is invalid"));
         }
         if input
@@ -429,7 +425,7 @@ impl UrgentWorkService {
         report_id: Uuid,
         mut input: UrgentWorkReconcileInput,
     ) -> Result<UrgentWorkReconciliation, UrgentWorkError> {
-        if input.final_customer_facility_id.is_nil() || input.job_id.is_nil() || input.worked_seconds <= 0 {
+        if input.final_customer_id.is_nil() || input.job_id.is_nil() || input.worked_seconds <= 0 {
             return Err(UrgentWorkError::InvalidInput(
                 "urgent reconciliation values are invalid",
             ));

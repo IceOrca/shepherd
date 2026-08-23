@@ -2,4 +2,4 @@
 import type { PermissionCode } from "./PermissionCode";
 import type { RoleCode } from "./RoleCode";
 
-export type CurrentUserProfile = { tenant_id: string, account_id: string, username: string, email: string | null, primary_role: RoleCode, roles: Array<RoleCode>, permissions: Array<PermissionCode>, };
+export type CurrentUserProfile = { tenant_id: string, account_id: string, username: string, email: string | null, primary_role: RoleCode, roles: Array<RoleCode>, permissions: Array<PermissionCode>, branch_ids: Array<string>, active_branch_id: string | null, };

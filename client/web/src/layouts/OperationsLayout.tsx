@@ -18,10 +18,12 @@ import {
   Zap,
   X,
 } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../features/auth/AuthProvider";
+import { listBranches, operationsQueryKeys } from "../features/operations/api";
+import type { BranchSummary } from "../api/generated/contracts";
 import { friendlyApiError } from "../shared/api/client";
 import { formatToday, roleLabel } from "../shared/lib/format";
 import { useOnlineStatus } from "../shared/lib/useOnlineStatus";
@@ -104,7 +106,7 @@ function pageTitle(pathname: string): { title: string; description: string } {
   if (pathname === "/operations/work") {
     return {
       title: "Ghi nhận công việc",
-      description: "Chọn cơ sở, bắt đầu hoặc kết thúc cho bạn và đồng nghiệp tại hiện trường.",
+      description: "Chọn khách hàng, bắt đầu hoặc kết thúc cho bạn và đồng nghiệp tại nơi làm việc.",
     };
   }
 
@@ -132,7 +134,7 @@ function pageTitle(pathname: string): { title: string; description: string } {
   if (pathname === "/operations/reconciliation") {
     return {
       title: "Đối soát công việc phát sinh",
-      description: "So sánh cả cơ sở và thời gian nhân viên ghi với bill của khách hàng.",
+      description: "So sánh khách hàng và thời gian nhân viên ghi với bill của khách hàng.",
     };
   }
 
@@ -159,6 +161,12 @@ export function OperationsLayout() {
   const [logoutError, setLogoutError] = useState<string | null>(null);
   const profile = auth.profile;
   const heading = pageTitle(location.pathname);
+  const branchesQuery = useQuery<BranchSummary[]>({
+    queryKey: operationsQueryKeys.branches,
+    queryFn: listBranches,
+    enabled: profile !== null,
+    staleTime: 60_000,
+  });
 
   if (!profile) {
     return null;
@@ -167,6 +175,23 @@ export function OperationsLayout() {
   const visibleNavigation = navigation.filter(
     (item) => !item.permission || profile.permissions.includes(item.permission),
   );
+  const branches: BranchSummary[] = branchesQuery.data ?? [];
+  const activeBranch: BranchSummary | undefined = branches.find(
+    (branch: BranchSummary): boolean => branch.id === profile.active_branch_id,
+  );
+
+  const switchBranch = async (branchId: string): Promise<void> => {
+    if (branchId === profile.active_branch_id) {
+      return;
+    }
+    auth.selectBranch(branchId);
+    console.info("Shepherd UI branch selection changed", {
+      tenantId: profile.tenant_id,
+      accountId: profile.account_id,
+      branchId,
+    });
+    await queryClient.invalidateQueries();
+  };
 
   const logout = async () => {
     setLoggingOut(true);
@@ -301,6 +326,30 @@ export function OperationsLayout() {
             </div>
 
             <div className="ml-auto flex items-center gap-3">
+              {branches.length > 1 ? (
+                <label className="hidden items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 lg:flex">
+                  <Building2 className="size-4 text-blue-600" />
+                  <span className="sr-only">Chi nhánh đang làm việc</span>
+                  <select
+                    className="min-h-0 border-0 bg-transparent py-0 pl-0 pr-7 text-sm font-semibold text-slate-700 focus:ring-0"
+                    onChange={(event): void => {
+                      void switchBranch(event.target.value);
+                    }}
+                    value={profile.active_branch_id ?? ""}
+                  >
+                    {branches.map((branch: BranchSummary) => (
+                      <option key={branch.id} value={branch.id}>
+                        {branch.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : activeBranch ? (
+                <div className="hidden items-center gap-2 rounded-xl bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700 lg:flex">
+                  <Building2 className="size-4 text-blue-600" />
+                  {activeBranch.name}
+                </div>
+              ) : null}
               <div
                 className={`hidden items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold sm:flex ${
                   isOnline ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"

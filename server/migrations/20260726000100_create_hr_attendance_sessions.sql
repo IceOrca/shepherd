@@ -4,6 +4,7 @@
 CREATE TABLE hr_attendance_sessions (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
+    branch_id UUID NOT NULL,
     employee_id UUID NOT NULL,
     check_in_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     check_out_at TIMESTAMPTZ,
@@ -17,9 +18,9 @@ CREATE TABLE hr_attendance_sessions (
     check_out_by_account_id UUID,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT hr_attendance_sessions_employee_tenant_fk
-        FOREIGN KEY (tenant_id, employee_id)
-        REFERENCES hr_employees (tenant_id, id)
+    CONSTRAINT hr_attendance_sessions_employee_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id, employee_id)
+        REFERENCES hr_employees (tenant_id, branch_id, id)
         ON DELETE RESTRICT,
     CONSTRAINT hr_attendance_sessions_check_in_by_tenant_fk
         FOREIGN KEY (tenant_id, check_in_by_account_id)
@@ -38,18 +39,21 @@ CREATE TABLE hr_attendance_sessions (
 );
 
 CREATE UNIQUE INDEX hr_attendance_sessions_tenant_employee_open_uq
-    ON hr_attendance_sessions (tenant_id, employee_id)
+    ON hr_attendance_sessions (tenant_id, branch_id, employee_id)
     WHERE check_out_at IS NULL;
 CREATE INDEX hr_attendance_sessions_tenant_employee_checkin_idx
-    ON hr_attendance_sessions (tenant_id, employee_id, check_in_at DESC);
+    ON hr_attendance_sessions (tenant_id, branch_id, employee_id, check_in_at DESC);
 CREATE INDEX hr_attendance_sessions_tenant_checkin_idx
-    ON hr_attendance_sessions (tenant_id, check_in_at DESC);
+    ON hr_attendance_sessions (tenant_id, branch_id, check_in_at DESC);
 
 ALTER TABLE hr_attendance_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE hr_attendance_sessions FORCE ROW LEVEL SECURITY;
 CREATE POLICY hr_attendance_sessions_tenant_isolation ON hr_attendance_sessions
-    USING (tenant_id = shepherd_current_tenant_id())
-    WITH CHECK (tenant_id = shepherd_current_tenant_id());
+    USING (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id))
+    WITH CHECK (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id));
+
+ALTER TABLE hr_attendance_sessions
+    ALTER COLUMN branch_id SET DEFAULT shepherd_current_branch_id();
 
 INSERT INTO permissions (code, description)
 VALUES
@@ -61,12 +65,13 @@ INSERT INTO role_permissions (role_code, permission_code)
 SELECT role.code, permission.code
 FROM roles AS role
 CROSS JOIN permissions AS permission
-WHERE role.code IN ('owner', 'director')
+WHERE role.code = 'tenant_owner'
   AND permission.code = 'hr.attendance.read';
 
 INSERT INTO role_permissions (role_code, permission_code)
 VALUES
-    ('manager', 'hr.attendance.read'),
+    ('executive_manager', 'hr.attendance.read'),
+    ('branch_manager', 'hr.attendance.read'),
     ('supervisor', 'hr.attendance.read'),
     ('staff', 'hr.attendance.self.read'),
     ('staff', 'hr.attendance.self.manage');

@@ -13,14 +13,6 @@ pub struct BranchSummary {
     pub time_zone: String,
 }
 
-#[derive(Clone, Debug, Serialize, TS)]
-pub struct FacilitySummary {
-    pub id: Uuid,
-    pub branch_id: Uuid,
-    pub code: String,
-    pub name: String,
-}
-
 #[derive(Debug)]
 pub enum OrganizationError {
     BackendUnavailable,
@@ -29,7 +21,6 @@ pub enum OrganizationError {
 #[async_trait]
 pub trait OrganizationRepo {
     async fn list_active_branches(&self, tenant_id: Uuid) -> Result<Vec<BranchSummary>, OrganizationError>;
-    async fn list_active_facilities(&self, tenant_id: Uuid) -> Result<Vec<FacilitySummary>, OrganizationError>;
 }
 
 pub type DynOrganizationRepo = Arc<dyn OrganizationRepo + Send + Sync>;
@@ -45,9 +36,5 @@ impl OrganizationService {
 
     pub async fn list_active_branches(&self, tenant_id: Uuid) -> Result<Vec<BranchSummary>, OrganizationError> {
         self.repository.list_active_branches(tenant_id).await
-    }
-
-    pub async fn list_active_facilities(&self, tenant_id: Uuid) -> Result<Vec<FacilitySummary>, OrganizationError> {
-        self.repository.list_active_facilities(tenant_id).await
     }
 }

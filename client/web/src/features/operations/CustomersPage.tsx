@@ -25,6 +25,8 @@ import {
 const emptyDraft: CustomerUpsertRequest = {
   code: "",
   name: "",
+  address: null,
+  time_zone: "Asia/Bangkok",
   billing_email: null,
   status: "active",
 };
@@ -42,6 +44,8 @@ function customerDraft(customer: Customer): CustomerUpsertRequest {
   return {
     code: customer.code,
     name: customer.name,
+    address: customer.address,
+    time_zone: customer.time_zone,
     billing_email: customer.billing_email,
     status: customer.status,
   };
@@ -71,7 +75,7 @@ export function CustomersPage(): React.JSX.Element {
       return customersQuery.data ?? [];
     }
     return (customersQuery.data ?? []).filter((customer: Customer): boolean =>
-      [customer.code, customer.name, customer.billing_email ?? ""]
+      [customer.code, customer.name, customer.address ?? "", customer.billing_email ?? ""]
         .join(" ")
         .toLocaleLowerCase("vi")
         .includes(normalizedSearch),
@@ -114,6 +118,8 @@ export function CustomersPage(): React.JSX.Element {
         ...draft,
         code: draft.code.trim().toLocaleLowerCase("en-US"),
         name: draft.name.trim(),
+        address: draft.address?.trim() || null,
+        time_zone: draft.time_zone.trim(),
         billing_email: draft.billing_email?.trim().toLocaleLowerCase("en-US") || null,
       },
     });
@@ -191,7 +197,8 @@ export function CustomersPage(): React.JSX.Element {
                       {statusLabel(customer.status)}
                     </span>
                   </div>
-                  <p className="mt-1 text-sm text-slate-500">{customer.billing_email ?? "Chưa có email thanh toán"}</p>
+                  <p className="mt-1 text-sm text-slate-500">{customer.address ?? "Chưa có địa chỉ nơi làm việc"}</p>
+                  <p className="mt-1 text-xs text-slate-400">{customer.time_zone} · {customer.billing_email ?? "Chưa có email thanh toán"}</p>
                 </div>
                 {canManage ? (
                   <button className="action-secondary" onClick={(): void => openEdit(customer)} type="button">
@@ -225,6 +232,14 @@ export function CustomersPage(): React.JSX.Element {
               <label className="text-sm font-semibold text-slate-700">
                 Tên khách hàng
                 <input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" maxLength={200} onChange={(event): void => setDraft((current: CustomerUpsertRequest): CustomerUpsertRequest => ({ ...current, name: event.target.value }))} required value={draft.name} />
+              </label>
+              <label className="text-sm font-semibold text-slate-700">
+                Địa chỉ nơi làm việc
+                <input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" maxLength={500} onChange={(event): void => setDraft((current: CustomerUpsertRequest): CustomerUpsertRequest => ({ ...current, address: event.target.value }))} value={draft.address ?? ""} />
+              </label>
+              <label className="text-sm font-semibold text-slate-700">
+                Múi giờ IANA
+                <input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" maxLength={128} onChange={(event): void => setDraft((current: CustomerUpsertRequest): CustomerUpsertRequest => ({ ...current, time_zone: event.target.value }))} required value={draft.time_zone} />
               </label>
               <label className="text-sm font-semibold text-slate-700">
                 Email thanh toán

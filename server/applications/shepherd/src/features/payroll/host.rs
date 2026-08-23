@@ -10,7 +10,7 @@ use chrono::{NaiveDate, NaiveTime};
 use serde::Deserialize;
 use tracing::{error, warn, info, debug, trace};
 use crate::features::payroll::core::{
-    EmployeeCompensation, EmployeeCompensationInput, FacilityRateRule, FacilityRateRuleInput, OvertimeRule,
+    BranchRateRule, BranchRateRuleInput, EmployeeCompensation, EmployeeCompensationInput, OvertimeRule,
     OvertimeRuleInput, PayBasis, PayrollError, PayrollRun, TimeBandRule, TimeBandRuleInput,
 };
 use ts_rs::TS;
@@ -46,10 +46,10 @@ impl From<EmployeeCompensationCreateRequest> for EmployeeCompensationInput {
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(optional_fields = nullable)]
-pub struct FacilityRateRuleCreateRequest {
+pub struct BranchRateRuleCreateRequest {
     pub code: String,
     pub name: String,
-    pub facility_id: Uuid,
+    pub branch_id: Uuid,
     pub employee_id: Option<Uuid>,
     pub base_multiplier: String,
     pub hourly_adjustment: String,
@@ -59,12 +59,12 @@ pub struct FacilityRateRuleCreateRequest {
     pub is_active: bool,
 }
 
-impl From<FacilityRateRuleCreateRequest> for FacilityRateRuleInput {
-    fn from(value: FacilityRateRuleCreateRequest) -> Self {
+impl From<BranchRateRuleCreateRequest> for BranchRateRuleInput {
+    fn from(value: BranchRateRuleCreateRequest) -> Self {
         Self {
             code: value.code.trim().to_ascii_lowercase(),
             name: value.name.trim().to_owned(),
-            facility_id: value.facility_id,
+            branch_id: value.branch_id,
             employee_id: value.employee_id,
             base_multiplier: value.base_multiplier.trim().to_owned(),
             hourly_adjustment: value.hourly_adjustment.trim().to_owned(),
@@ -156,7 +156,7 @@ pub fn routes() -> Router<Arc<AppContext>> {
             "/employees/{employee_id}/compensations",
             get(list_compensations).post(create_compensation),
         )
-        .route("/facility-rules", get(list_facility_rules).post(create_facility_rule))
+        .route("/branch-rules", get(list_branch_rules).post(create_branch_rule))
         .route(
             "/time-band-rules",
             get(list_time_band_rules).post(create_time_band_rule),
@@ -197,31 +197,31 @@ pub async fn create_compensation(
     Ok((StatusCode::CREATED, Json(compensation)))
 }
 
-pub async fn list_facility_rules(
+pub async fn list_branch_rules(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
-) -> Result<Json<Vec<FacilityRateRule>>, StatusCode> {
+) -> Result<Json<Vec<BranchRateRule>>, StatusCode> {
     require_permission(&user, "payroll.config.read")?;
     host.core
         .payroll
-        .list_facility_rules(user.tenant_id)
+        .list_branch_rules(user.tenant_id)
         .await
         .map(Json)
-        .map_err(|error| payroll_status("list facility rules", &user, error))
+        .map_err(|error| payroll_status("list branch rules", &user, error))
 }
 
-pub async fn create_facility_rule(
+pub async fn create_branch_rule(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
-    Json(payload): Json<FacilityRateRuleCreateRequest>,
-) -> Result<(StatusCode, Json<FacilityRateRule>), StatusCode> {
+    Json(payload): Json<BranchRateRuleCreateRequest>,
+) -> Result<(StatusCode, Json<BranchRateRule>), StatusCode> {
     require_permission(&user, "payroll.config.manage")?;
-    let rule: FacilityRateRule = host
+    let rule: BranchRateRule = host
         .core
         .payroll
-        .create_facility_rule(user.tenant_id, payload.into(), user.account_id)
+        .create_branch_rule(user.tenant_id, payload.into(), user.account_id)
         .await
-        .map_err(|error| payroll_status("create facility rule", &user, error))?;
+        .map_err(|error| payroll_status("create branch rule", &user, error))?;
     Ok((StatusCode::CREATED, Json(rule)))
 }
 

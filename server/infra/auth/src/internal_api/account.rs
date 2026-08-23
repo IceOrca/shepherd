@@ -10,9 +10,9 @@ use ts_rs::TS;
 #[cfg_attr(feature = "password-auth", derive(TS))]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
-    Owner,
-    Director,
-    Manager,
+    TenantOwner,
+    ExecutiveManager,
+    BranchManager,
     Supervisor,
     Staff,
 }
@@ -20,9 +20,9 @@ pub enum Role {
 impl Role {
     pub fn as_code(&self) -> &'static str {
         match self {
-            Self::Owner => "owner",
-            Self::Director => "director",
-            Self::Manager => "manager",
+            Self::TenantOwner => "tenant_owner",
+            Self::ExecutiveManager => "executive_manager",
+            Self::BranchManager => "branch_manager",
             Self::Supervisor => "supervisor",
             Self::Staff => "staff",
         }
@@ -30,9 +30,9 @@ impl Role {
 
     pub fn from_code(code: &str) -> Option<Self> {
         match code {
-            "owner" => Some(Self::Owner),
-            "director" => Some(Self::Director),
-            "manager" => Some(Self::Manager),
+            "tenant_owner" => Some(Self::TenantOwner),
+            "executive_manager" => Some(Self::ExecutiveManager),
+            "branch_manager" => Some(Self::BranchManager),
             "supervisor" => Some(Self::Supervisor),
             "staff" => Some(Self::Staff),
             _ => None,

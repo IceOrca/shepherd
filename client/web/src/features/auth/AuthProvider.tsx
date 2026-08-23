@@ -8,6 +8,7 @@ import {
 } from "react";
 import type { CurrentUserProfile } from "../../api/generated/contracts";
 import {
+  setApiActiveBranchId,
   setAuthenticationLostHandler,
   setAuthenticationRefreshHandler,
 } from "../../shared/api/client";
@@ -23,11 +24,29 @@ type AuthStatus = "loading" | "authenticated" | "anonymous";
 interface AuthContextValue {
   status: AuthStatus;
   profile: CurrentUserProfile | null;
+  selectBranch(branchId: string): void;
   login(email: string, password: string): Promise<void>;
   logout(): Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+
+function branchStorageKey(tenantId: string): string {
+  return `shepherd.active-branch.${tenantId}`;
+}
+
+function initializeActiveBranch(profile: CurrentUserProfile): CurrentUserProfile {
+  const storedBranchId: string | null = localStorage.getItem(branchStorageKey(profile.tenant_id));
+  const activeBranchId: string | null =
+    storedBranchId !== null && profile.branch_ids.includes(storedBranchId)
+      ? storedBranchId
+      : profile.active_branch_id;
+  setApiActiveBranchId(activeBranchId);
+  if (activeBranchId !== null) {
+    localStorage.setItem(branchStorageKey(profile.tenant_id), activeBranchId);
+  }
+  return { ...profile, active_branch_id: activeBranchId };
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>("loading");
@@ -39,13 +58,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void restoreSession()
       .then((restoredProfile) => {
         if (active) {
-          setProfile(restoredProfile);
+          setProfile(initializeActiveBranch(restoredProfile));
           setStatus("authenticated");
         }
       })
       .catch(() => {
         if (active) {
           setProfile(null);
+          setApiActiveBranchId(null);
           setStatus("anonymous");
         }
       });
@@ -59,6 +79,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAuthenticationRefreshHandler(() => refreshAccessToken(true));
     setAuthenticationLostHandler(() => {
       setProfile(null);
+      setApiActiveBranchId(null);
       setStatus("anonymous");
     });
 
@@ -72,9 +93,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () => ({
       status,
       profile,
+      selectBranch(branchId: string): void {
+        if (!profile || !profile.branch_ids.includes(branchId)) {
+          console.warn("Ignored unauthorized frontend branch selection", { branchId });
+          return;
+        }
+        setApiActiveBranchId(branchId);
+        localStorage.setItem(branchStorageKey(profile.tenant_id), branchId);
+        setProfile({ ...profile, active_branch_id: branchId });
+      },
       async login(email: string, password: string) {
         const restoredProfile = await signInWithPassword(email, password);
-        setProfile(restoredProfile);
+        setProfile(initializeActiveBranch(restoredProfile));
         setStatus("authenticated");
       },
       async logout() {
@@ -82,6 +112,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           await logoutSession();
         } finally {
           setProfile(null);
+          setApiActiveBranchId(null);
           setStatus("anonymous");
         }
       },

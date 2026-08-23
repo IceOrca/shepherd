@@ -1,6 +1,7 @@
 CREATE TABLE hr_working_schedules (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
+    branch_id UUID NOT NULL,
     code TEXT NOT NULL,
     name TEXT NOT NULL,
     time_zone TEXT NOT NULL,
@@ -10,6 +11,11 @@ CREATE TABLE hr_working_schedules (
     created_by_account_id UUID,
     updated_by_account_id UUID,
     CONSTRAINT hr_working_schedules_tenant_id_id_uq UNIQUE (tenant_id, id),
+    CONSTRAINT hr_working_schedules_tenant_branch_id_id_uq UNIQUE (tenant_id, branch_id, id),
+    CONSTRAINT hr_working_schedules_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id)
+        REFERENCES branches (tenant_id, id)
+        ON DELETE RESTRICT,
     CONSTRAINT hr_working_schedules_created_by_tenant_fk
         FOREIGN KEY (tenant_id, created_by_account_id)
         REFERENCES accounts (tenant_id, id)
@@ -33,23 +39,24 @@ CREATE TABLE hr_working_schedules (
     CONSTRAINT hr_working_schedules_updated_after_created CHECK (updated_at >= created_at)
 );
 
-CREATE UNIQUE INDEX hr_working_schedules_tenant_code_normalized_uq
-    ON hr_working_schedules (tenant_id, lower(code));
-CREATE INDEX hr_working_schedules_tenant_status_idx
-    ON hr_working_schedules (tenant_id, status);
+CREATE UNIQUE INDEX hr_working_schedules_branch_code_normalized_uq
+    ON hr_working_schedules (tenant_id, branch_id, lower(code));
+CREATE INDEX hr_working_schedules_branch_status_idx
+    ON hr_working_schedules (tenant_id, branch_id, status);
 
 CREATE TABLE hr_working_schedule_periods (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
+    branch_id UUID NOT NULL,
     schedule_id UUID NOT NULL,
     weekday SMALLINT NOT NULL,
     start_time TIME NOT NULL,
     end_time TIME NOT NULL,
     spans_next_day BOOLEAN NOT NULL DEFAULT FALSE,
     unpaid_break_minutes SMALLINT NOT NULL DEFAULT 0,
-    CONSTRAINT hr_working_schedule_periods_schedule_tenant_fk
-        FOREIGN KEY (tenant_id, schedule_id)
-        REFERENCES hr_working_schedules (tenant_id, id)
+    CONSTRAINT hr_working_schedule_periods_schedule_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id, schedule_id)
+        REFERENCES hr_working_schedules (tenant_id, branch_id, id)
         ON DELETE CASCADE,
     CONSTRAINT hr_working_schedule_periods_weekday_valid CHECK (weekday BETWEEN 1 AND 7),
     CONSTRAINT hr_working_schedule_periods_time_range_valid CHECK (
@@ -62,28 +69,29 @@ CREATE TABLE hr_working_schedule_periods (
     CONSTRAINT hr_working_schedule_periods_break_valid CHECK (
         unpaid_break_minutes BETWEEN 0 AND 1439
     ),
-    UNIQUE (tenant_id, schedule_id, weekday, start_time)
+    UNIQUE (tenant_id, branch_id, schedule_id, weekday, start_time)
 );
 
 CREATE INDEX hr_working_schedule_periods_tenant_schedule_weekday_idx
-    ON hr_working_schedule_periods (tenant_id, schedule_id, weekday, start_time);
+    ON hr_working_schedule_periods (tenant_id, branch_id, schedule_id, weekday, start_time);
 
 CREATE TABLE hr_employee_schedule_assignments (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
+    branch_id UUID NOT NULL,
     employee_id UUID NOT NULL,
     schedule_id UUID NOT NULL,
     date_start DATE NOT NULL,
     date_end DATE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_by_account_id UUID,
-    CONSTRAINT hr_employee_schedule_assignments_employee_tenant_fk
-        FOREIGN KEY (tenant_id, employee_id)
-        REFERENCES hr_employees (tenant_id, id)
+    CONSTRAINT hr_employee_schedule_assignments_employee_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id, employee_id)
+        REFERENCES hr_employees (tenant_id, branch_id, id)
         ON DELETE RESTRICT,
-    CONSTRAINT hr_employee_schedule_assignments_schedule_tenant_fk
-        FOREIGN KEY (tenant_id, schedule_id)
-        REFERENCES hr_working_schedules (tenant_id, id)
+    CONSTRAINT hr_employee_schedule_assignments_schedule_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id, schedule_id)
+        REFERENCES hr_working_schedules (tenant_id, branch_id, id)
         ON DELETE RESTRICT,
     CONSTRAINT hr_employee_schedule_assignments_created_by_tenant_fk
         FOREIGN KEY (tenant_id, created_by_account_id)
@@ -95,11 +103,11 @@ CREATE TABLE hr_employee_schedule_assignments (
 );
 
 CREATE INDEX hr_employee_schedule_assignments_tenant_employee_dates_idx
-    ON hr_employee_schedule_assignments (tenant_id, employee_id, date_start DESC, date_end);
+    ON hr_employee_schedule_assignments (tenant_id, branch_id, employee_id, date_start DESC, date_end);
 CREATE INDEX hr_employee_schedule_assignments_tenant_schedule_idx
-    ON hr_employee_schedule_assignments (tenant_id, schedule_id);
+    ON hr_employee_schedule_assignments (tenant_id, branch_id, schedule_id);
 CREATE UNIQUE INDEX hr_employee_schedule_assignments_tenant_one_open_uq
-    ON hr_employee_schedule_assignments (tenant_id, employee_id)
+    ON hr_employee_schedule_assignments (tenant_id, branch_id, employee_id)
     WHERE date_end IS NULL;
 
 INSERT INTO permissions (code, description)
@@ -112,14 +120,16 @@ INSERT INTO role_permissions (role_code, permission_code)
 SELECT role.code, permission.code
 FROM roles AS role
 CROSS JOIN permissions AS permission
-WHERE role.code IN ('owner', 'director')
+WHERE role.code = 'tenant_owner'
   AND permission.code LIKE 'hr.working_schedules.%'
   AND permission.code <> 'hr.working_schedules.self.read';
 
 INSERT INTO role_permissions (role_code, permission_code)
 VALUES
-    ('manager', 'hr.working_schedules.read'),
-    ('manager', 'hr.working_schedules.manage'),
+    ('executive_manager', 'hr.working_schedules.read'),
+    ('executive_manager', 'hr.working_schedules.manage'),
+    ('branch_manager', 'hr.working_schedules.read'),
+    ('branch_manager', 'hr.working_schedules.manage'),
     ('supervisor', 'hr.working_schedules.read'),
     ('supervisor', 'hr.working_schedules.manage'),
     ('staff', 'hr.working_schedules.self.read');

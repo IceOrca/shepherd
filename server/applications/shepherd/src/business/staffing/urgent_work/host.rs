@@ -17,13 +17,13 @@ use crate::{AppContext, auth::AuthenticatedUser};
 use super::super::{core::ManualRateOverride, host::ManualRateOverrideRequest};
 use super::core::{
     UrgentCustomerWorkRecord, UrgentCustomerWorkRecordInput, UrgentWorkEmployee, UrgentWorkEndInput, UrgentWorkError,
-    UrgentWorkFacility, UrgentWorkItem, UrgentWorkLocationInput, UrgentWorkReconcileInput, UrgentWorkReconciliation,
+    UrgentWorkCustomer, UrgentWorkItem, UrgentWorkLocationInput, UrgentWorkReconcileInput, UrgentWorkReconciliation,
     UrgentWorkStartInput,
 };
 
 #[derive(Debug, Deserialize, TS)]
 pub struct UrgentWorkStartRequest {
-    pub customer_facility_id: Uuid,
+    pub customer_id: Uuid,
     pub employee_ids: Vec<Uuid>,
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
@@ -40,7 +40,7 @@ pub struct UrgentWorkEndRequest {
 #[derive(Debug, Deserialize, TS)]
 #[ts(optional_fields = nullable)]
 pub struct UrgentCustomerWorkRecordUpsertRequest {
-    pub confirmed_customer_facility_id: Uuid,
+    pub confirmed_customer_id: Uuid,
     pub confirmed_started_at: DateTime<Utc>,
     pub confirmed_ended_at: DateTime<Utc>,
     pub customer_reference: Option<String>,
@@ -50,7 +50,7 @@ pub struct UrgentCustomerWorkRecordUpsertRequest {
 #[derive(Debug, Deserialize, TS)]
 #[ts(optional_fields = nullable)]
 pub struct UrgentWorkReconcileRequest {
-    pub final_customer_facility_id: Uuid,
+    pub final_customer_id: Uuid,
     pub job_id: Uuid,
     pub worked_seconds: i64,
     pub adjustment_reason: Option<String>,
@@ -61,7 +61,7 @@ pub struct UrgentWorkReconcileRequest {
 pub fn routes() -> Router<Arc<AppContext>> {
     info!("Configured urgent-first staffing routes");
     Router::new()
-        .route("/staffing/urgent-work/facilities", get(list_facilities))
+        .route("/staffing/urgent-work/customers", get(list_customers))
         .route("/staffing/urgent-work/employees", get(list_employees))
         .route("/staffing/urgent-work/me", get(list_own_work))
         .route("/staffing/urgent-work/team", get(list_team_work))
@@ -75,19 +75,19 @@ pub fn routes() -> Router<Arc<AppContext>> {
         .route("/staffing/urgent-work/{report_id}/reconcile", post(reconcile))
 }
 
-async fn list_facilities(
+async fn list_customers(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
-) -> Result<Json<Vec<UrgentWorkFacility>>, StatusCode> {
+) -> Result<Json<Vec<UrgentWorkCustomer>>, StatusCode> {
     require_any_permission(&user, &["business.urgent_work.read", "business.reconciliation.read"])?;
-    let facilities: Vec<UrgentWorkFacility> = context
+    let customers: Vec<UrgentWorkCustomer> = context
         .core
         .urgent_work
-        .list_facilities(user.tenant_id)
+        .list_customers(user.tenant_id)
         .await
-        .map_err(|operation_error: UrgentWorkError| status("list urgent facilities", &user, operation_error))?;
-    debug!(tenant_id = %user.tenant_id, account_id = %user.account_id, facility_count = facilities.len(), "Urgent facility request completed");
-    Ok(Json(facilities))
+        .map_err(|operation_error: UrgentWorkError| status("list urgent customers", &user, operation_error))?;
+    debug!(tenant_id = %user.tenant_id, account_id = %user.account_id, customer_count = customers.len(), "Urgent customer request completed");
+    Ok(Json(customers))
 }
 
 async fn list_employees(
@@ -143,11 +143,11 @@ async fn start_work(
     let allow_peer: bool = user.has_permission("business.urgent_work.peer_manage");
     let idempotency_key: Uuid = idempotency_key(&headers, &user)?;
     let target_count: usize = request.employee_ids.len();
-    info!(tenant_id = %user.tenant_id, account_id = %user.account_id, facility_id = %request.customer_facility_id, target_count, allow_peer, "Urgent-work start request accepted");
+    info!(tenant_id = %user.tenant_id, account_id = %user.account_id, customer_id = %request.customer_id, target_count, allow_peer, "Urgent-work start request accepted");
     let location: UrgentWorkLocationInput =
         location_input(request.latitude, request.longitude, request.accuracy_meters);
     let input: UrgentWorkStartInput = UrgentWorkStartInput {
-        customer_facility_id: request.customer_facility_id,
+        customer_id: request.customer_id,
         employee_ids: request.employee_ids,
         idempotency_key,
         location,
@@ -211,7 +211,7 @@ async fn upsert_customer_record(
 ) -> Result<Json<UrgentCustomerWorkRecord>, StatusCode> {
     require_permission(&user, "business.urgent_work.reconcile")?;
     let input: UrgentCustomerWorkRecordInput = UrgentCustomerWorkRecordInput {
-        confirmed_customer_facility_id: request.confirmed_customer_facility_id,
+        confirmed_customer_id: request.confirmed_customer_id,
         confirmed_started_at: request.confirmed_started_at,
         confirmed_ended_at: request.confirmed_ended_at,
         customer_reference: normalize_optional(request.customer_reference),
@@ -235,7 +235,7 @@ async fn reconcile(
     require_permission(&user, "business.urgent_work.reconcile")?;
     let manual_rate: Option<ManualRateOverride> = request.manual_rate.map(ManualRateOverride::from);
     let input: UrgentWorkReconcileInput = UrgentWorkReconcileInput {
-        final_customer_facility_id: request.final_customer_facility_id,
+        final_customer_id: request.final_customer_id,
         job_id: request.job_id,
         worked_seconds: request.worked_seconds,
         adjustment_reason: normalize_optional(request.adjustment_reason),

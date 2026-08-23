@@ -2,8 +2,8 @@
 -- customer staffing. They are intentionally separate from internal HR
 -- attendance so payroll cannot count the same work through both sources.
 ALTER TABLE business_shift_assignments
-    ADD CONSTRAINT business_shift_assignments_tenant_id_id_employee_uq
-        UNIQUE (tenant_id, id, employee_id),
+    ADD CONSTRAINT business_shift_assignments_tenant_branch_id_id_employee_uq
+        UNIQUE (tenant_id, branch_id, id, employee_id),
     ADD COLUMN observed_worked_seconds BIGINT,
     ADD COLUMN approval_adjustment_reason TEXT,
     DROP CONSTRAINT business_shift_assignments_financial_state_valid,
@@ -49,6 +49,7 @@ ALTER TABLE business_shift_assignments
 CREATE TABLE business_shift_work_sessions (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
+    branch_id UUID NOT NULL,
     assignment_id UUID NOT NULL,
     employee_id UUID NOT NULL,
     started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -72,9 +73,9 @@ CREATE TABLE business_shift_work_sessions (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT business_shift_work_sessions_tenant_id_id_uq UNIQUE (tenant_id, id),
-    CONSTRAINT business_shift_work_sessions_assignment_employee_tenant_fk
-        FOREIGN KEY (tenant_id, assignment_id, employee_id)
-        REFERENCES business_shift_assignments (tenant_id, id, employee_id) ON DELETE RESTRICT,
+    CONSTRAINT business_shift_work_sessions_assignment_employee_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id, assignment_id, employee_id)
+        REFERENCES business_shift_assignments (tenant_id, branch_id, id, employee_id) ON DELETE RESTRICT,
     CONSTRAINT business_shift_work_sessions_started_by_tenant_fk
         FOREIGN KEY (tenant_id, started_by_account_id)
         REFERENCES accounts (tenant_id, id) ON DELETE RESTRICT,
@@ -100,22 +101,23 @@ CREATE TABLE business_shift_work_sessions (
             AND (ended_accuracy_meters IS NULL OR ended_accuracy_meters >= 0))
     ),
     CONSTRAINT business_shift_work_sessions_updated_after_created CHECK (updated_at >= created_at),
-    UNIQUE (tenant_id, start_idempotency_key),
-    UNIQUE (tenant_id, end_idempotency_key)
+    UNIQUE (tenant_id, branch_id, start_idempotency_key),
+    UNIQUE (tenant_id, branch_id, end_idempotency_key)
 );
 
 CREATE UNIQUE INDEX business_shift_work_sessions_assignment_open_uq
-    ON business_shift_work_sessions (tenant_id, assignment_id)
+    ON business_shift_work_sessions (tenant_id, branch_id, assignment_id)
     WHERE ended_at IS NULL;
 CREATE UNIQUE INDEX business_shift_work_sessions_employee_open_uq
-    ON business_shift_work_sessions (tenant_id, employee_id)
+    ON business_shift_work_sessions (tenant_id, branch_id, employee_id)
     WHERE ended_at IS NULL;
 CREATE INDEX business_shift_work_sessions_assignment_started_idx
-    ON business_shift_work_sessions (tenant_id, assignment_id, started_at DESC);
+    ON business_shift_work_sessions (tenant_id, branch_id, assignment_id, started_at DESC);
 
 CREATE TABLE business_urgent_work_sessions (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
+    branch_id UUID NOT NULL,
     report_id UUID NOT NULL,
     employee_id UUID NOT NULL,
     started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -138,9 +140,9 @@ CREATE TABLE business_urgent_work_sessions (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT business_urgent_work_sessions_tenant_id_id_uq UNIQUE (tenant_id, id),
-    CONSTRAINT business_urgent_work_sessions_report_employee_tenant_fk
-        FOREIGN KEY (tenant_id, report_id, employee_id)
-        REFERENCES business_urgent_work_reports (tenant_id, id, employee_id) ON DELETE RESTRICT,
+    CONSTRAINT business_urgent_work_sessions_report_employee_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id, report_id, employee_id)
+        REFERENCES business_urgent_work_reports (tenant_id, branch_id, id, employee_id) ON DELETE RESTRICT,
     CONSTRAINT business_urgent_work_sessions_started_by_tenant_fk
         FOREIGN KEY (tenant_id, started_by_account_id)
         REFERENCES accounts (tenant_id, id) ON DELETE RESTRICT,
@@ -175,15 +177,15 @@ CREATE TABLE business_urgent_work_sessions (
             AND (ended_accuracy_meters IS NULL OR ended_accuracy_meters >= 0))
     ),
     CONSTRAINT business_urgent_work_sessions_updated_after_created CHECK (updated_at >= created_at),
-    UNIQUE (tenant_id, report_id),
-    UNIQUE (tenant_id, ended_by_account_id, end_idempotency_key)
+    UNIQUE (tenant_id, branch_id, report_id),
+    UNIQUE (tenant_id, branch_id, ended_by_account_id, end_idempotency_key)
 );
 
 CREATE UNIQUE INDEX business_urgent_work_sessions_employee_open_uq
-    ON business_urgent_work_sessions (tenant_id, employee_id)
+    ON business_urgent_work_sessions (tenant_id, branch_id, employee_id)
     WHERE ended_at IS NULL;
 CREATE INDEX business_urgent_work_sessions_report_started_idx
-    ON business_urgent_work_sessions (tenant_id, report_id, started_at DESC);
+    ON business_urgent_work_sessions (tenant_id, branch_id, report_id, started_at DESC);
 
 -- Lock the employee row before every start so planned and urgent inserts cannot
 -- race across their separate evidence tables.
@@ -194,7 +196,7 @@ AS $$
 BEGIN
     PERFORM 1
     FROM hr_employees
-    WHERE tenant_id = NEW.tenant_id AND id = NEW.employee_id
+    WHERE tenant_id = NEW.tenant_id AND branch_id = NEW.branch_id AND id = NEW.employee_id
     FOR UPDATE;
 
     IF NOT FOUND THEN
@@ -204,14 +206,16 @@ BEGIN
     IF TG_TABLE_NAME = 'business_shift_work_sessions' THEN
         IF EXISTS (
             SELECT 1 FROM business_urgent_work_sessions
-            WHERE tenant_id = NEW.tenant_id AND employee_id = NEW.employee_id AND ended_at IS NULL
+            WHERE tenant_id = NEW.tenant_id AND branch_id = NEW.branch_id
+              AND employee_id = NEW.employee_id AND ended_at IS NULL
         ) THEN
             RAISE EXCEPTION 'employee already has an open urgent work session' USING ERRCODE = '23505';
         END IF;
     ELSE
         IF EXISTS (
             SELECT 1 FROM business_shift_work_sessions
-            WHERE tenant_id = NEW.tenant_id AND employee_id = NEW.employee_id AND ended_at IS NULL
+            WHERE tenant_id = NEW.tenant_id AND branch_id = NEW.branch_id
+              AND employee_id = NEW.employee_id AND ended_at IS NULL
         ) THEN
             RAISE EXCEPTION 'employee already has an open planned work session' USING ERRCODE = '23505';
         END IF;
@@ -235,7 +239,7 @@ AS $$
 BEGIN
     IF OLD.employee_id IS DISTINCT FROM NEW.employee_id
         OR OLD.start_batch_id IS DISTINCT FROM NEW.start_batch_id
-        OR OLD.claimed_customer_facility_id IS DISTINCT FROM NEW.claimed_customer_facility_id
+        OR OLD.claimed_customer_id IS DISTINCT FROM NEW.claimed_customer_id
         OR OLD.created_by_account_id IS DISTINCT FROM NEW.created_by_account_id
         OR OLD.created_at IS DISTINCT FROM NEW.created_at
     THEN
@@ -252,28 +256,33 @@ CREATE TRIGGER business_urgent_work_reports_protect_evidence
 BEFORE UPDATE ON business_urgent_work_reports
 FOR EACH ROW EXECUTE FUNCTION business_protect_urgent_work_evidence();
 
--- Destinations are tenant configuration. Provider credentials remain in the
+-- Destinations are branch configuration. Provider credentials remain in the
 -- deployment environment and are never stored in this table.
 CREATE TABLE notification_destinations (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
+    branch_id UUID NOT NULL,
     channel TEXT NOT NULL,
     destination TEXT NOT NULL,
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT notification_destinations_tenant_id_id_uq UNIQUE (tenant_id, id),
+    CONSTRAINT notification_destinations_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id)
+        REFERENCES branches (tenant_id, id) ON DELETE RESTRICT,
     CONSTRAINT notification_destinations_channel_valid CHECK (channel IN ('telegram', 'zalo')),
     CONSTRAINT notification_destinations_destination_valid CHECK (
         destination = btrim(destination) AND char_length(destination) BETWEEN 1 AND 200
     ),
     CONSTRAINT notification_destinations_updated_after_created CHECK (updated_at >= created_at),
-    UNIQUE (tenant_id, channel, destination)
+    UNIQUE (tenant_id, branch_id, channel, destination)
 );
 
 CREATE TABLE notification_outbox (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
+    branch_id UUID NOT NULL,
     event_type TEXT NOT NULL,
     aggregate_id UUID NOT NULL,
     channel TEXT NOT NULL,
@@ -288,6 +297,9 @@ CREATE TABLE notification_outbox (
     last_error TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT notification_outbox_tenant_id_id_uq UNIQUE (tenant_id, id),
+    CONSTRAINT notification_outbox_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id)
+        REFERENCES branches (tenant_id, id) ON DELETE RESTRICT,
     CONSTRAINT notification_outbox_event_valid CHECK (
         event_type IN (
             'staffing.shift_started',
@@ -304,54 +316,60 @@ CREATE TABLE notification_outbox (
         (status = 'sent' AND sent_at IS NOT NULL)
         OR (status <> 'sent' AND sent_at IS NULL)
     ),
-    UNIQUE (tenant_id, event_type, aggregate_id, channel, destination)
+    UNIQUE (tenant_id, branch_id, event_type, aggregate_id, channel, destination)
 );
 
 CREATE INDEX notification_outbox_pending_idx
-    ON notification_outbox (tenant_id, next_attempt_at, created_at)
+    ON notification_outbox (tenant_id, branch_id, next_attempt_at, created_at)
     WHERE status IN ('pending', 'processing');
 
 ALTER TABLE business_shift_work_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE business_shift_work_sessions FORCE ROW LEVEL SECURITY;
 CREATE POLICY business_shift_work_sessions_tenant_isolation ON business_shift_work_sessions
-    USING (tenant_id = shepherd_current_tenant_id())
-    WITH CHECK (tenant_id = shepherd_current_tenant_id());
+    USING (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id))
+    WITH CHECK (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id));
 
 ALTER TABLE business_urgent_work_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE business_urgent_work_sessions FORCE ROW LEVEL SECURITY;
 CREATE POLICY business_urgent_work_sessions_tenant_isolation ON business_urgent_work_sessions
-    USING (tenant_id = shepherd_current_tenant_id())
-    WITH CHECK (tenant_id = shepherd_current_tenant_id());
+    USING (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id))
+    WITH CHECK (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id));
 
 ALTER TABLE notification_destinations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notification_destinations FORCE ROW LEVEL SECURITY;
 CREATE POLICY notification_destinations_tenant_isolation ON notification_destinations
-    USING (tenant_id = shepherd_current_tenant_id())
-    WITH CHECK (tenant_id = shepherd_current_tenant_id());
+    USING (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id))
+    WITH CHECK (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id));
 
 ALTER TABLE notification_outbox ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notification_outbox FORCE ROW LEVEL SECURITY;
 CREATE POLICY notification_outbox_tenant_isolation ON notification_outbox
-    USING (tenant_id = shepherd_current_tenant_id())
-    WITH CHECK (tenant_id = shepherd_current_tenant_id());
+    USING (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id))
+    WITH CHECK (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id));
+
+ALTER TABLE business_shift_work_sessions ALTER COLUMN branch_id SET DEFAULT shepherd_current_branch_id();
+ALTER TABLE business_urgent_work_sessions ALTER COLUMN branch_id SET DEFAULT shepherd_current_branch_id();
+ALTER TABLE notification_destinations ALTER COLUMN branch_id SET DEFAULT shepherd_current_branch_id();
+ALTER TABLE notification_outbox ALTER COLUMN branch_id SET DEFAULT shepherd_current_branch_id();
 
 INSERT INTO permissions (code, description)
 VALUES
     ('business.staffing_work.self.read', 'View own customer staffing assignments and work sessions'),
     ('business.staffing_work.self.manage', 'Start and end own customer staffing work sessions'),
     ('business.staffing_work.read', 'View customer staffing work sessions'),
-    ('business.urgent_work.read', 'View own urgent staffing work and available facilities'),
+    ('business.urgent_work.read', 'View own urgent staffing work and available customers'),
     ('business.urgent_work.start', 'Start and finish urgent staffing work'),
     ('business.urgent_work.peer_manage', 'Start and finish urgent work for coworkers');
 
 INSERT INTO role_permissions (role_code, permission_code)
 SELECT role.code, 'business.staffing_work.read'
 FROM roles AS role
-WHERE role.code IN ('owner', 'director');
+WHERE role.code = 'tenant_owner';
 
 INSERT INTO role_permissions (role_code, permission_code)
 VALUES
-    ('manager', 'business.staffing_work.read'),
+    ('executive_manager', 'business.staffing_work.read'),
+    ('branch_manager', 'business.staffing_work.read'),
     ('supervisor', 'business.staffing_work.read'),
     ('staff', 'business.staffing_work.self.read'),
     ('staff', 'business.staffing_work.self.manage'),

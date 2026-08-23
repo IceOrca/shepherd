@@ -1,15 +1,19 @@
-use std::{error::Error, io, sync::Arc};
+use std::{
+    error::Error,
+    io,
+    sync::{Arc, Once},
+};
 
 use infra_postgres::DatabaseAdapter;
 use uuid::Uuid;
 
 use super::{
     core::{ShiftWorkActionInput, ShiftWorkSession, StaffingWorkRepo},
-    database::StaffingWorkProvider,
+    database::StaffingWorkDb,
 };
 use crate::business::staffing::{
     core::{ShiftAssignmentStatus, StaffingError, StaffingRepo},
-    database::StaffingProvider,
+    database::StaffingDb,
 };
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -17,20 +21,22 @@ type TestResult = Result<(), Box<dyn Error>>;
 struct Fixture {
     db: Arc<DatabaseAdapter>,
     tenant_id: Uuid,
+    branch_id: Uuid,
     account_id: Uuid,
     assignment_id: Uuid,
 }
 
 impl Fixture {
     async fn create() -> Result<Self, Box<dyn Error>> {
+        init_tracing();
         let database_url = std::env::var("DATABASE_URL")?;
         let db = DatabaseAdapter::connect(&database_url).await?;
         let tenant_id = Uuid::new_v4();
         let account_id = Uuid::new_v4();
         let employee_id = Uuid::new_v4();
+        let branch_id = Uuid::new_v4();
         let job_id = Uuid::new_v4();
         let customer_id = Uuid::new_v4();
-        let facility_id = Uuid::new_v4();
         let shift_id = Uuid::new_v4();
         let assignment_id = Uuid::new_v4();
         let tenant_slug = format!("staffing-work-cases-{}", tenant_id.simple());
@@ -60,54 +66,53 @@ impl Fixture {
         .await?;
         sqlx::query!(
             r#"
+            INSERT INTO branches (id, tenant_id, code, name, time_zone)
+            VALUES ($1, $2, 'staffing-work-branch', 'Staffing Work Branch', 'Asia/Bangkok')
+            "#,
+            branch_id,
+            tenant_id,
+        )
+        .execute(setup.connection())
+        .await?;
+        sqlx::query!(
+            r#"
             INSERT INTO hr_employees (
-                id, tenant_id, account_id, employee_code, display_name, status, hire_date
+                id, tenant_id, branch_id, account_id, employee_code, display_name, status, hire_date
             )
-            VALUES ($1, $2, $3, 'staffing-work-cases', 'Staffing Work Cases', 'active', CURRENT_DATE)
+            VALUES ($1, $2, $3, $4, 'staffing-work-cases', 'Staffing Work Cases', 'active', CURRENT_DATE)
             "#,
             employee_id,
             tenant_id,
+            branch_id,
             account_id,
         )
         .execute(setup.connection())
         .await?;
         sqlx::query!(
             r#"
-            INSERT INTO hr_jobs (id, tenant_id, code, name, status)
-            VALUES ($1, $2, 'staffing-work-cases', 'Staffing Work Cases', 'active')
+            INSERT INTO hr_jobs (id, tenant_id, branch_id, code, name, status)
+            VALUES ($1, $2, $3, 'staffing-work-cases', 'Staffing Work Cases', 'active')
             "#,
             job_id,
             tenant_id,
+            branch_id,
         )
         .execute(setup.connection())
         .await?;
         sqlx::query!(
             r#"
             INSERT INTO business_customers (
-                id, tenant_id, code, name, created_by_account_id, updated_by_account_id
-            )
-            VALUES ($1, $2, 'staffing-work-cases', 'Staffing Work Customer', $3, $3)
-            "#,
-            customer_id,
-            tenant_id,
-            account_id,
-        )
-        .execute(setup.connection())
-        .await?;
-        sqlx::query!(
-            r#"
-            INSERT INTO business_customer_facilities (
-                id, tenant_id, customer_id, code, name, time_zone,
+                id, tenant_id, branch_id, code, name, address, time_zone,
                 created_by_account_id, updated_by_account_id
             )
             VALUES (
-                $1, $2, $3, 'staffing-work-cases', 'Staffing Work Facility',
-                'Asia/Bangkok', $4, $4
+                $1, $2, $3, 'staffing-work-cases', 'Staffing Work Customer',
+                'Staffing work address', 'Asia/Bangkok', $4, $4
             )
             "#,
-            facility_id,
-            tenant_id,
             customer_id,
+            tenant_id,
+            branch_id,
             account_id,
         )
         .execute(setup.connection())
@@ -115,7 +120,7 @@ impl Fixture {
         sqlx::query!(
             r#"
             INSERT INTO business_staffing_shifts (
-                id, tenant_id, customer_id, customer_facility_id, job_id,
+                id, tenant_id, branch_id, customer_id, job_id,
                 starts_at, ends_at, required_workers, created_by_account_id, updated_by_account_id
             )
             VALUES (
@@ -125,8 +130,8 @@ impl Fixture {
             "#,
             shift_id,
             tenant_id,
+            branch_id,
             customer_id,
-            facility_id,
             job_id,
             account_id,
         )
@@ -135,13 +140,14 @@ impl Fixture {
         sqlx::query!(
             r#"
             INSERT INTO business_shift_assignments (
-                id, tenant_id, shift_id, employee_id, rate_source, manual_rate_reason, currency,
+                id, tenant_id, branch_id, shift_id, employee_id, rate_source, manual_rate_reason, currency,
                 bill_hourly_rate_snapshot, worker_hourly_rate_snapshot, created_by_account_id
             )
-            VALUES ($1, $2, $3, $4, 'manual', 'isolated staffing test rate', 'VND', 150000, 120000, $5)
+            VALUES ($1, $2, $3, $4, $5, 'manual', 'isolated staffing test rate', 'VND', 150000, 120000, $6)
             "#,
             assignment_id,
             tenant_id,
+            branch_id,
             shift_id,
             employee_id,
             account_id,
@@ -150,11 +156,12 @@ impl Fixture {
         .await?;
         sqlx::query!(
             r#"
-            INSERT INTO notification_destinations (id, tenant_id, channel, destination)
-            VALUES ($1, $2, 'telegram', '-1000000000001')
+            INSERT INTO notification_destinations (id, tenant_id, branch_id, channel, destination)
+            VALUES ($1, $2, $3, 'telegram', '-1000000000001')
             "#,
             Uuid::new_v4(),
             tenant_id,
+            branch_id,
         )
         .execute(setup.connection())
         .await?;
@@ -163,17 +170,18 @@ impl Fixture {
         Ok(Self {
             db,
             tenant_id,
+            branch_id,
             account_id,
             assignment_id,
         })
     }
 
-    fn work_provider(&self) -> Arc<StaffingWorkProvider> {
-        StaffingWorkProvider::new_arc(Arc::clone(&self.db))
+    fn work_provider(&self) -> Arc<StaffingWorkDb> {
+        StaffingWorkDb::new_arc(Arc::clone(&self.db))
     }
 
-    fn staffing_provider(&self) -> Arc<StaffingProvider> {
-        StaffingProvider::new_arc(Arc::clone(&self.db))
+    fn staffing_provider(&self) -> Arc<StaffingDb> {
+        StaffingDb::new_arc(Arc::clone(&self.db))
     }
 
     async fn age_session(&self, session_id: Uuid, seconds: f64) -> Result<(), Box<dyn Error>> {
@@ -276,11 +284,11 @@ impl Fixture {
         sqlx::query!(
             r#"
             INSERT INTO business_customer_work_records (
-                id, tenant_id, assignment_id, confirmed_customer_facility_id,
+                id, tenant_id, branch_id, assignment_id, confirmed_customer_id,
                 confirmed_started_at, confirmed_ended_at, customer_reference,
                 recorded_by_account_id
             )
-            SELECT $1, $2, $3, shift.customer_facility_id,
+            SELECT $1, $2, assignment.branch_id, $3, shift.customer_id,
                    observed.started_at, observed.ended_at,
                    'test-customer-record', $4
             FROM business_shift_assignments AS assignment
@@ -344,12 +352,6 @@ impl Fixture {
         )
         .execute(transaction.connection())
         .await?;
-        sqlx::query!(
-            "DELETE FROM business_customer_facilities WHERE tenant_id = $1",
-            self.tenant_id,
-        )
-        .execute(transaction.connection())
-        .await?;
         sqlx::query!("DELETE FROM business_customers WHERE tenant_id = $1", self.tenant_id)
             .execute(transaction.connection())
             .await?;
@@ -362,12 +364,26 @@ impl Fixture {
         sqlx::query!("DELETE FROM accounts WHERE tenant_id = $1", self.tenant_id)
             .execute(transaction.connection())
             .await?;
+        sqlx::query!("DELETE FROM branches WHERE tenant_id = $1", self.tenant_id)
+            .execute(transaction.connection())
+            .await?;
         transaction.commit().await?;
         sqlx::query!("DELETE FROM tenants WHERE id = $1", self.tenant_id)
             .execute(self.db.global_pool())
             .await?;
         Ok(())
     }
+}
+
+fn init_tracing() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        let result: Result<(), Box<dyn Error + Send + Sync>> = tracing_subscriber::fmt()
+            .with_env_filter("shepherd=trace,infra_postgres=debug")
+            .with_test_writer()
+            .try_init();
+        let _ignored_already_initialized: Result<(), Box<dyn Error + Send + Sync>> = result;
+    });
 }
 
 fn action_input() -> ShiftWorkActionInput {
@@ -408,346 +424,370 @@ fn one_success_one_conflict(
 #[tokio::test]
 async fn regular_flow_supports_multiple_sessions_and_durable_outbox_events() -> TestResult {
     let fixture = Fixture::create().await?;
-    let work = fixture.work_provider();
-    let staffing = fixture.staffing_provider();
+    let test_result: TestResult = infra_postgres::with_active_branch(fixture.branch_id, async {
+        let work = fixture.work_provider();
+        let staffing = fixture.staffing_provider();
 
-    let initial = work
-        .list_own_assignments(fixture.tenant_id, fixture.account_id)
-        .await
-        .map_err(staffing_error)?;
-    assert_eq!(initial.len(), 1);
-    let initial_assignment = initial
-        .first()
-        .ok_or_else(|| io::Error::other("own assignment was not returned"))?;
-    assert!(!initial_assignment.is_working);
-    assert_eq!(initial_assignment.observed_worked_seconds, 0);
+        let initial = work
+            .list_own_assignments(fixture.tenant_id, fixture.account_id)
+            .await
+            .map_err(staffing_error)?;
+        assert_eq!(initial.len(), 1);
+        let initial_assignment = initial
+            .first()
+            .ok_or_else(|| io::Error::other("own assignment was not returned"))?;
+        assert!(!initial_assignment.is_working);
+        assert_eq!(initial_assignment.observed_worked_seconds, 0);
 
-    let start_input = located_input(10.7769, 106.7009, 8.5);
-    let first = work
-        .start(
-            fixture.tenant_id,
-            fixture.assignment_id,
-            fixture.account_id,
-            Uuid::new_v4(),
-            &start_input,
-        )
-        .await
-        .map_err(staffing_error)?;
-    let repeated_start = work
-        .start(
-            fixture.tenant_id,
-            fixture.assignment_id,
-            fixture.account_id,
-            Uuid::new_v4(),
-            &start_input,
-        )
-        .await
-        .map_err(staffing_error)?;
-    assert_eq!(first.id, repeated_start.id);
-    assert_eq!(first.started_latitude, start_input.latitude);
-    assert_eq!(first.started_longitude, start_input.longitude);
-    assert_eq!(first.started_accuracy_meters, start_input.accuracy_meters);
+        let start_input = located_input(10.7769, 106.7009, 8.5);
+        let first = work
+            .start(
+                fixture.tenant_id,
+                fixture.assignment_id,
+                fixture.account_id,
+                Uuid::new_v4(),
+                &start_input,
+            )
+            .await
+            .map_err(staffing_error)?;
+        let repeated_start = work
+            .start(
+                fixture.tenant_id,
+                fixture.assignment_id,
+                fixture.account_id,
+                Uuid::new_v4(),
+                &start_input,
+            )
+            .await
+            .map_err(staffing_error)?;
+        assert_eq!(first.id, repeated_start.id);
+        assert_eq!(first.started_latitude, start_input.latitude);
+        assert_eq!(first.started_longitude, start_input.longitude);
+        assert_eq!(first.started_accuracy_meters, start_input.accuracy_meters);
 
-    fixture.age_session(first.id, 3600.0).await?;
-    let end_input = located_input(10.7770, 106.7010, 6.0);
-    let first_ended = work
-        .end(fixture.tenant_id, fixture.assignment_id, fixture.account_id, &end_input)
-        .await
-        .map_err(staffing_error)?;
-    let repeated_end = work
-        .end(fixture.tenant_id, fixture.assignment_id, fixture.account_id, &end_input)
-        .await
-        .map_err(staffing_error)?;
-    assert_eq!(first_ended.id, repeated_end.id);
-    assert!(first_ended.worked_seconds.is_some_and(|seconds| seconds >= 3600));
-    assert_eq!(first_ended.ended_latitude, end_input.latitude);
-    assert_eq!(first_ended.ended_longitude, end_input.longitude);
-    assert_eq!(first_ended.ended_accuracy_meters, end_input.accuracy_meters);
+        fixture.age_session(first.id, 3600.0).await?;
+        let end_input = located_input(10.7770, 106.7010, 6.0);
+        let first_ended = work
+            .end(fixture.tenant_id, fixture.assignment_id, fixture.account_id, &end_input)
+            .await
+            .map_err(staffing_error)?;
+        let repeated_end = work
+            .end(fixture.tenant_id, fixture.assignment_id, fixture.account_id, &end_input)
+            .await
+            .map_err(staffing_error)?;
+        assert_eq!(first_ended.id, repeated_end.id);
+        assert!(first_ended.worked_seconds.is_some_and(|seconds| seconds >= 3600));
+        assert_eq!(first_ended.ended_latitude, end_input.latitude);
+        assert_eq!(first_ended.ended_longitude, end_input.longitude);
+        assert_eq!(first_ended.ended_accuracy_meters, end_input.accuracy_meters);
 
-    let second_start_input = action_input();
-    let second = work
-        .start(
-            fixture.tenant_id,
-            fixture.assignment_id,
-            fixture.account_id,
-            Uuid::new_v4(),
-            &second_start_input,
-        )
-        .await
-        .map_err(staffing_error)?;
-    fixture.age_session(second.id, 1800.0).await?;
-    let second_ended = work
-        .end(
-            fixture.tenant_id,
-            fixture.assignment_id,
-            fixture.account_id,
-            &action_input(),
-        )
-        .await
-        .map_err(staffing_error)?;
-    assert!(second_ended.worked_seconds.is_some_and(|seconds| seconds >= 1800));
+        let second_start_input = action_input();
+        let second = work
+            .start(
+                fixture.tenant_id,
+                fixture.assignment_id,
+                fixture.account_id,
+                Uuid::new_v4(),
+                &second_start_input,
+            )
+            .await
+            .map_err(staffing_error)?;
+        fixture.age_session(second.id, 1800.0).await?;
+        let second_ended = work
+            .end(
+                fixture.tenant_id,
+                fixture.assignment_id,
+                fixture.account_id,
+                &action_input(),
+            )
+            .await
+            .map_err(staffing_error)?;
+        assert!(second_ended.worked_seconds.is_some_and(|seconds| seconds >= 1800));
 
-    let completed = work
-        .list_own_assignments(fixture.tenant_id, fixture.account_id)
-        .await
-        .map_err(staffing_error)?;
-    let completed_assignment = completed
-        .first()
-        .ok_or_else(|| io::Error::other("completed assignment was not returned"))?;
-    assert!(!completed_assignment.is_working);
-    assert!(completed_assignment.observed_worked_seconds >= 5400);
+        let completed = work
+            .list_own_assignments(fixture.tenant_id, fixture.account_id)
+            .await
+            .map_err(staffing_error)?;
+        let completed_assignment = completed
+            .first()
+            .ok_or_else(|| io::Error::other("completed assignment was not returned"))?;
+        assert!(!completed_assignment.is_working);
+        assert!(completed_assignment.observed_worked_seconds >= 5400);
 
-    assert_eq!(fixture.session_count().await?, 2);
-    assert_eq!(fixture.outbox_count().await?, 4);
-    assert_eq!(fixture.pending_outbox_count().await?, 4);
+        assert_eq!(fixture.session_count().await?, 2);
+        assert_eq!(fixture.outbox_count().await?, 4);
+        assert_eq!(fixture.pending_outbox_count().await?, 4);
 
-    fixture.record_matching_customer_evidence().await?;
+        fixture.record_matching_customer_evidence().await?;
 
-    let approved = staffing
-        .approve_shift_assignment(
-            fixture.tenant_id,
-            fixture.assignment_id,
-            None,
-            Some("multiple staff sessions reconciled to one customer interval".to_owned()),
-            fixture.account_id,
-        )
-        .await
-        .map_err(staffing_error)?;
-    assert_eq!(approved.status, ShiftAssignmentStatus::Approved);
-    assert_eq!(approved.worked_seconds, approved.observed_worked_seconds);
-    assert!(fixture.financial_snapshot_is_consistent().await?);
+        let approved = staffing
+            .approve_shift_assignment(
+                fixture.tenant_id,
+                fixture.assignment_id,
+                None,
+                Some("multiple staff sessions reconciled to one customer interval".to_owned()),
+                fixture.account_id,
+            )
+            .await
+            .map_err(staffing_error)?;
+        assert_eq!(approved.status, ShiftAssignmentStatus::Approved);
+        assert_eq!(approved.worked_seconds, approved.observed_worked_seconds);
+        assert!(fixture.financial_snapshot_is_consistent().await?);
 
-    let start_after_approval = work
-        .start(
-            fixture.tenant_id,
-            fixture.assignment_id,
-            fixture.account_id,
-            Uuid::new_v4(),
-            &action_input(),
-        )
-        .await;
-    assert!(matches!(start_after_approval, Err(StaffingError::Conflict)));
+        let start_after_approval = work
+            .start(
+                fixture.tenant_id,
+                fixture.assignment_id,
+                fixture.account_id,
+                Uuid::new_v4(),
+                &action_input(),
+            )
+            .await;
+        assert!(matches!(start_after_approval, Err(StaffingError::Conflict)));
 
-    fixture.cleanup().await
+        Ok(())
+    })
+    .await;
+    let cleanup_result: TestResult = fixture.cleanup().await;
+    cleanup_result?;
+    test_result
 }
 
 #[tokio::test]
 async fn invalid_state_ownership_and_approval_transitions_are_rejected() -> TestResult {
     let fixture = Fixture::create().await?;
-    let work = fixture.work_provider();
-    let staffing = fixture.staffing_provider();
+    let test_result: TestResult = infra_postgres::with_active_branch(fixture.branch_id, async {
+        let work = fixture.work_provider();
+        let staffing = fixture.staffing_provider();
 
-    let premature_end = work
-        .end(
+        let premature_end = work
+            .end(
+                fixture.tenant_id,
+                fixture.assignment_id,
+                fixture.account_id,
+                &action_input(),
+            )
+            .await;
+        assert!(matches!(premature_end, Err(StaffingError::Conflict)));
+
+        let approval_without_work = staffing
+            .approve_shift_assignment(fixture.tenant_id, fixture.assignment_id, None, None, fixture.account_id)
+            .await;
+        assert!(matches!(approval_without_work, Err(StaffingError::Conflict)));
+
+        let wrong_account = Uuid::new_v4();
+        let another_account_start = work
+            .start(
+                fixture.tenant_id,
+                fixture.assignment_id,
+                wrong_account,
+                Uuid::new_v4(),
+                &action_input(),
+            )
+            .await;
+        assert!(matches!(another_account_start, Err(StaffingError::NotFound)));
+        let another_account_assignments = work
+            .list_own_assignments(fixture.tenant_id, wrong_account)
+            .await
+            .map_err(staffing_error)?;
+        assert!(another_account_assignments.is_empty());
+
+        let started = work
+            .start(
+                fixture.tenant_id,
+                fixture.assignment_id,
+                fixture.account_id,
+                Uuid::new_v4(),
+                &action_input(),
+            )
+            .await
+            .map_err(staffing_error)?;
+
+        let approval_while_open = staffing
+            .approve_shift_assignment(fixture.tenant_id, fixture.assignment_id, None, None, fixture.account_id)
+            .await;
+        assert!(matches!(approval_while_open, Err(StaffingError::Conflict)));
+
+        let overlapping_start = work
+            .start(
+                fixture.tenant_id,
+                fixture.assignment_id,
+                fixture.account_id,
+                Uuid::new_v4(),
+                &action_input(),
+            )
+            .await;
+        assert!(matches!(overlapping_start, Err(StaffingError::Conflict)));
+
+        fixture.age_session(started.id, 60.0).await?;
+        work.end(
             fixture.tenant_id,
             fixture.assignment_id,
             fixture.account_id,
             &action_input(),
-        )
-        .await;
-    assert!(matches!(premature_end, Err(StaffingError::Conflict)));
-
-    let approval_without_work = staffing
-        .approve_shift_assignment(fixture.tenant_id, fixture.assignment_id, None, None, fixture.account_id)
-        .await;
-    assert!(matches!(approval_without_work, Err(StaffingError::Conflict)));
-
-    let wrong_account = Uuid::new_v4();
-    let another_account_start = work
-        .start(
-            fixture.tenant_id,
-            fixture.assignment_id,
-            wrong_account,
-            Uuid::new_v4(),
-            &action_input(),
-        )
-        .await;
-    assert!(matches!(another_account_start, Err(StaffingError::NotFound)));
-    let another_account_assignments = work
-        .list_own_assignments(fixture.tenant_id, wrong_account)
-        .await
-        .map_err(staffing_error)?;
-    assert!(another_account_assignments.is_empty());
-
-    let started = work
-        .start(
-            fixture.tenant_id,
-            fixture.assignment_id,
-            fixture.account_id,
-            Uuid::new_v4(),
-            &action_input(),
-        )
-        .await
-        .map_err(staffing_error)?;
-
-    let approval_while_open = staffing
-        .approve_shift_assignment(fixture.tenant_id, fixture.assignment_id, None, None, fixture.account_id)
-        .await;
-    assert!(matches!(approval_while_open, Err(StaffingError::Conflict)));
-
-    let overlapping_start = work
-        .start(
-            fixture.tenant_id,
-            fixture.assignment_id,
-            fixture.account_id,
-            Uuid::new_v4(),
-            &action_input(),
-        )
-        .await;
-    assert!(matches!(overlapping_start, Err(StaffingError::Conflict)));
-
-    fixture.age_session(started.id, 60.0).await?;
-    work.end(
-        fixture.tenant_id,
-        fixture.assignment_id,
-        fixture.account_id,
-        &action_input(),
-    )
-    .await
-    .map_err(staffing_error)?;
-
-    let repeated_end_with_new_key = work
-        .end(
-            fixture.tenant_id,
-            fixture.assignment_id,
-            fixture.account_id,
-            &action_input(),
-        )
-        .await;
-    assert!(matches!(repeated_end_with_new_key, Err(StaffingError::Conflict)));
-
-    fixture.record_matching_customer_evidence().await?;
-
-    let override_without_reason = staffing
-        .approve_shift_assignment(
-            fixture.tenant_id,
-            fixture.assignment_id,
-            Some(120),
-            None,
-            fixture.account_id,
-        )
-        .await;
-    assert!(matches!(override_without_reason, Err(StaffingError::Conflict)));
-
-    let approved = staffing
-        .approve_shift_assignment(
-            fixture.tenant_id,
-            fixture.assignment_id,
-            Some(120),
-            Some("Customer confirmed setup and cleanup time".to_owned()),
-            fixture.account_id,
         )
         .await
         .map_err(staffing_error)?;
-    assert_eq!(approved.worked_seconds, Some(120));
-    assert!(approved.observed_worked_seconds.is_some_and(|seconds| seconds >= 60));
-    assert_eq!(
-        approved.approval_adjustment_reason.as_deref(),
-        Some("Customer confirmed setup and cleanup time")
-    );
 
-    let repeated_approval = staffing
-        .approve_shift_assignment(fixture.tenant_id, fixture.assignment_id, None, None, fixture.account_id)
-        .await;
-    assert!(matches!(repeated_approval, Err(StaffingError::Conflict)));
+        let repeated_end_with_new_key = work
+            .end(
+                fixture.tenant_id,
+                fixture.assignment_id,
+                fixture.account_id,
+                &action_input(),
+            )
+            .await;
+        assert!(matches!(repeated_end_with_new_key, Err(StaffingError::Conflict)));
 
-    fixture.cleanup().await
+        fixture.record_matching_customer_evidence().await?;
+
+        let override_without_reason = staffing
+            .approve_shift_assignment(
+                fixture.tenant_id,
+                fixture.assignment_id,
+                Some(120),
+                None,
+                fixture.account_id,
+            )
+            .await;
+        assert!(matches!(override_without_reason, Err(StaffingError::Conflict)));
+
+        let approved = staffing
+            .approve_shift_assignment(
+                fixture.tenant_id,
+                fixture.assignment_id,
+                Some(120),
+                Some("Customer confirmed setup and cleanup time".to_owned()),
+                fixture.account_id,
+            )
+            .await
+            .map_err(staffing_error)?;
+        assert_eq!(approved.worked_seconds, Some(120));
+        assert!(approved.observed_worked_seconds.is_some_and(|seconds| seconds >= 60));
+        assert_eq!(
+            approved.approval_adjustment_reason.as_deref(),
+            Some("Customer confirmed setup and cleanup time")
+        );
+
+        let repeated_approval = staffing
+            .approve_shift_assignment(fixture.tenant_id, fixture.assignment_id, None, None, fixture.account_id)
+            .await;
+        assert!(matches!(repeated_approval, Err(StaffingError::Conflict)));
+
+        Ok(())
+    })
+    .await;
+    let cleanup_result: TestResult = fixture.cleanup().await;
+    cleanup_result?;
+    test_result
 }
 
 #[tokio::test]
 async fn concurrent_actions_create_exactly_one_session_transition() -> TestResult {
     let fixture = Fixture::create().await?;
-    let work = fixture.work_provider();
-    let start_left = action_input();
-    let start_right = action_input();
+    let test_result: TestResult = infra_postgres::with_active_branch(fixture.branch_id, async {
+        let work = fixture.work_provider();
+        let start_left = action_input();
+        let start_right = action_input();
 
-    let (left_result, right_result) = tokio::join!(
-        work.start(
-            fixture.tenant_id,
-            fixture.assignment_id,
-            fixture.account_id,
-            Uuid::new_v4(),
-            &start_left,
-        ),
-        work.start(
-            fixture.tenant_id,
-            fixture.assignment_id,
-            fixture.account_id,
-            Uuid::new_v4(),
-            &start_right,
-        ),
-    );
-    let (started, left_started) = one_success_one_conflict(left_result, right_result)?;
-    let winning_start = if left_started { &start_left } else { &start_right };
-    let repeated_start = work
-        .start(
-            fixture.tenant_id,
-            fixture.assignment_id,
-            fixture.account_id,
-            Uuid::new_v4(),
-            winning_start,
-        )
-        .await
-        .map_err(staffing_error)?;
-    assert_eq!(started.id, repeated_start.id);
+        let (left_result, right_result) = tokio::join!(
+            work.start(
+                fixture.tenant_id,
+                fixture.assignment_id,
+                fixture.account_id,
+                Uuid::new_v4(),
+                &start_left,
+            ),
+            work.start(
+                fixture.tenant_id,
+                fixture.assignment_id,
+                fixture.account_id,
+                Uuid::new_v4(),
+                &start_right,
+            ),
+        );
+        let (started, left_started) = one_success_one_conflict(left_result, right_result)?;
+        let winning_start = if left_started { &start_left } else { &start_right };
+        let repeated_start = work
+            .start(
+                fixture.tenant_id,
+                fixture.assignment_id,
+                fixture.account_id,
+                Uuid::new_v4(),
+                winning_start,
+            )
+            .await
+            .map_err(staffing_error)?;
+        assert_eq!(started.id, repeated_start.id);
 
-    fixture.age_session(started.id, 60.0).await?;
-    let end_left = action_input();
-    let end_right = action_input();
-    let (left_result, right_result) = tokio::join!(
-        work.end(fixture.tenant_id, fixture.assignment_id, fixture.account_id, &end_left,),
-        work.end(fixture.tenant_id, fixture.assignment_id, fixture.account_id, &end_right,),
-    );
-    let (ended, left_ended) = one_success_one_conflict(left_result, right_result)?;
-    let winning_end = if left_ended { &end_left } else { &end_right };
-    let repeated_end = work
-        .end(
-            fixture.tenant_id,
-            fixture.assignment_id,
-            fixture.account_id,
-            winning_end,
-        )
-        .await
-        .map_err(staffing_error)?;
-    assert_eq!(ended.id, repeated_end.id);
+        fixture.age_session(started.id, 60.0).await?;
+        let end_left = action_input();
+        let end_right = action_input();
+        let (left_result, right_result) = tokio::join!(
+            work.end(fixture.tenant_id, fixture.assignment_id, fixture.account_id, &end_left,),
+            work.end(fixture.tenant_id, fixture.assignment_id, fixture.account_id, &end_right,),
+        );
+        let (ended, left_ended) = one_success_one_conflict(left_result, right_result)?;
+        let winning_end = if left_ended { &end_left } else { &end_right };
+        let repeated_end = work
+            .end(
+                fixture.tenant_id,
+                fixture.assignment_id,
+                fixture.account_id,
+                winning_end,
+            )
+            .await
+            .map_err(staffing_error)?;
+        assert_eq!(ended.id, repeated_end.id);
 
-    assert_eq!(fixture.session_count().await?, 1);
-    assert_eq!(fixture.outbox_count().await?, 2);
-    assert_eq!(fixture.pending_outbox_count().await?, 2);
+        assert_eq!(fixture.session_count().await?, 1);
+        assert_eq!(fixture.outbox_count().await?, 2);
+        assert_eq!(fixture.pending_outbox_count().await?, 2);
 
-    fixture.cleanup().await
+        Ok(())
+    })
+    .await;
+    let cleanup_result: TestResult = fixture.cleanup().await;
+    cleanup_result?;
+    test_result
 }
 
 #[tokio::test]
 async fn missing_notification_destination_never_rolls_back_work() -> TestResult {
     let fixture = Fixture::create().await?;
-    fixture.disable_destinations().await?;
-    let work = fixture.work_provider();
+    let test_result: TestResult = infra_postgres::with_active_branch(fixture.branch_id, async {
+        fixture.disable_destinations().await?;
+        let work = fixture.work_provider();
 
-    let started = work
-        .start(
-            fixture.tenant_id,
-            fixture.assignment_id,
-            fixture.account_id,
-            Uuid::new_v4(),
-            &action_input(),
-        )
-        .await
-        .map_err(staffing_error)?;
-    fixture.age_session(started.id, 60.0).await?;
-    let ended = work
-        .end(
-            fixture.tenant_id,
-            fixture.assignment_id,
-            fixture.account_id,
-            &action_input(),
-        )
-        .await
-        .map_err(staffing_error)?;
+        let started = work
+            .start(
+                fixture.tenant_id,
+                fixture.assignment_id,
+                fixture.account_id,
+                Uuid::new_v4(),
+                &action_input(),
+            )
+            .await
+            .map_err(staffing_error)?;
+        fixture.age_session(started.id, 60.0).await?;
+        let ended = work
+            .end(
+                fixture.tenant_id,
+                fixture.assignment_id,
+                fixture.account_id,
+                &action_input(),
+            )
+            .await
+            .map_err(staffing_error)?;
 
-    assert!(ended.worked_seconds.is_some_and(|seconds| seconds >= 60));
-    assert_eq!(fixture.session_count().await?, 1);
-    assert_eq!(fixture.outbox_count().await?, 0);
+        assert!(ended.worked_seconds.is_some_and(|seconds| seconds >= 60));
+        assert_eq!(fixture.session_count().await?, 1);
+        assert_eq!(fixture.outbox_count().await?, 0);
 
-    fixture.cleanup().await
+        Ok(())
+    })
+    .await;
+    let cleanup_result: TestResult = fixture.cleanup().await;
+    cleanup_result?;
+    test_result
 }

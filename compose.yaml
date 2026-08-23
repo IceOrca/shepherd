@@ -2,6 +2,7 @@ services:
   postgres-db:
     image: postgres:18-alpine
     container_name: shepherd-postgresql
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -42,6 +43,7 @@ services:
   redis-cache:
     image: redis:8-alpine
     container_name: shepherd-redis
+    restart: unless-stopped
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:${REDIS_PORT:-6379}"
     healthcheck:
@@ -57,6 +59,7 @@ services:
       target: builder
     image: iceorca/shepherd-srv:0.1.0_dev
     container_name: shepherd-server
+    restart: unless-stopped
     working_dir: /app/shepherd_server
     ports:
       - "127.0.0.1:${BACKEND_PORT:-8000}:${BACKEND_PORT:-8000}"
@@ -109,6 +112,7 @@ services:
       target: builder
     image: iceorca/shepherd-cli:0.1.0_dev
     container_name: shepherd-client
+    restart: unless-stopped
     working_dir: /app/shepherd_client
     ports:
       - "127.0.0.1:${FRONTEND_DEV_PORT:-5173}:${FRONTEND_DEV_PORT:-5173}"
@@ -136,6 +140,11 @@ services:
     environment:
       GOTRUE_API_HOST: 0.0.0.0
       GOTRUE_API_PORT: 9999
+      AUTH_DB_HOST: postgres-db
+      AUTH_DB_PORT: ${POSTGRES_PORT:-5432}
+      AUTH_DB_STARTUP_TIMEOUT_SECS: ${AUTH_DB_STARTUP_TIMEOUT_SECS:-240}
+      AUTH_DB_STARTUP_RETRY_INTERVAL_SECS: ${AUTH_DB_STARTUP_RETRY_INTERVAL_SECS:-2}
+      AUTH_DB_STARTUP_PROBE_TIMEOUT_SECS: ${AUTH_DB_STARTUP_PROBE_TIMEOUT_SECS:-2}
       API_EXTERNAL_URL: ${AUTH_PUBLIC_URL}
       GOTRUE_SITE_URL: ${SHEPHERD_PUBLIC_URL}
       GOTRUE_URI_ALLOW_LIST: ${SHEPHERD_PUBLIC_URL}/**,http://localhost:${FRONTEND_DEV_PORT:-5173}/**
@@ -164,13 +173,19 @@ services:
       GOTRUE_EXTERNAL_FACEBOOK_REDIRECT_URI: ${AUTH_PUBLIC_URL}/callback
     ports:
       - "127.0.0.1:${AUTH_PORT:-9999}:9999"
+    volumes:
+      - ./scripts/start-supabase-auth.sh:/usr/local/bin/start-supabase-auth.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/start-supabase-auth.sh"]
+    command: []
     healthcheck:
       test: [ "CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9999/health" ]
       interval: 5s
       timeout: 5s
       retries: 12
-      start_period: 10s
+      start_period: ${AUTH_DB_STARTUP_TIMEOUT_SECS:-240}s
     depends_on:
+      postgres-db:
+        condition: service_healthy
       postgres-bootstrap:
         condition: service_completed_successfully
 

@@ -1,11 +1,16 @@
--- Customer-facing staffing is separate from the tenant's own branches and facilities.
+-- Every customer belongs to exactly one staffing-company branch and represents
+-- the actual workplace where staff are supplied. Shepherd deliberately does
+-- not model the customer's own organization or a second facility hierarchy.
 -- Commercial and worker rates are resolved when an employee is assigned, then
 -- copied to the assignment so later rate changes cannot rewrite history.
 CREATE TABLE business_customers (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
+    branch_id UUID NOT NULL,
     code TEXT NOT NULL,
     name TEXT NOT NULL,
+    address TEXT,
+    time_zone TEXT NOT NULL DEFAULT 'Asia/Bangkok',
     billing_email TEXT,
     status TEXT NOT NULL DEFAULT 'active',
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -13,6 +18,10 @@ CREATE TABLE business_customers (
     created_by_account_id UUID NOT NULL,
     updated_by_account_id UUID NOT NULL,
     CONSTRAINT business_customers_tenant_id_id_uq UNIQUE (tenant_id, id),
+    CONSTRAINT business_customers_tenant_branch_id_id_uq UNIQUE (tenant_id, branch_id, id),
+    CONSTRAINT business_customers_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id)
+        REFERENCES branches (tenant_id, id) ON DELETE RESTRICT,
     CONSTRAINT business_customers_created_by_tenant_fk
         FOREIGN KEY (tenant_id, created_by_account_id)
         REFERENCES accounts (tenant_id, id) ON DELETE RESTRICT,
@@ -27,6 +36,12 @@ CREATE TABLE business_customers (
     CONSTRAINT business_customers_name_valid CHECK (
         name = btrim(name) AND char_length(name) BETWEEN 1 AND 200
     ),
+    CONSTRAINT business_customers_address_valid CHECK (
+        address IS NULL OR (address = btrim(address) AND char_length(address) BETWEEN 1 AND 500)
+    ),
+    CONSTRAINT business_customers_time_zone_valid CHECK (
+        time_zone = btrim(time_zone) AND char_length(time_zone) BETWEEN 1 AND 128
+    ),
     CONSTRAINT business_customers_billing_email_valid CHECK (
         billing_email IS NULL
         OR (billing_email = btrim(billing_email) AND char_length(billing_email) BETWEEN 3 AND 320)
@@ -35,66 +50,19 @@ CREATE TABLE business_customers (
     CONSTRAINT business_customers_updated_after_created CHECK (updated_at >= created_at)
 );
 
-CREATE UNIQUE INDEX business_customers_tenant_code_uq
-    ON business_customers (tenant_id, lower(code));
-CREATE INDEX business_customers_tenant_status_idx
-    ON business_customers (tenant_id, status, lower(name));
-
-CREATE TABLE business_customer_facilities (
-    id UUID PRIMARY KEY,
-    tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
-    customer_id UUID NOT NULL,
-    code TEXT NOT NULL,
-    name TEXT NOT NULL,
-    address TEXT,
-    time_zone TEXT NOT NULL DEFAULT 'Asia/Bangkok',
-    status TEXT NOT NULL DEFAULT 'active',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    created_by_account_id UUID NOT NULL,
-    updated_by_account_id UUID NOT NULL,
-    CONSTRAINT business_customer_facilities_tenant_id_id_uq UNIQUE (tenant_id, id),
-    CONSTRAINT business_customer_facilities_tenant_customer_id_id_uq UNIQUE (tenant_id, customer_id, id),
-    CONSTRAINT business_customer_facilities_customer_tenant_fk
-        FOREIGN KEY (tenant_id, customer_id)
-        REFERENCES business_customers (tenant_id, id) ON DELETE RESTRICT,
-    CONSTRAINT business_customer_facilities_created_by_tenant_fk
-        FOREIGN KEY (tenant_id, created_by_account_id)
-        REFERENCES accounts (tenant_id, id) ON DELETE RESTRICT,
-    CONSTRAINT business_customer_facilities_updated_by_tenant_fk
-        FOREIGN KEY (tenant_id, updated_by_account_id)
-        REFERENCES accounts (tenant_id, id) ON DELETE RESTRICT,
-    CONSTRAINT business_customer_facilities_code_valid CHECK (
-        code = lower(btrim(code))
-        AND char_length(code) BETWEEN 2 AND 63
-        AND code ~ '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
-    ),
-    CONSTRAINT business_customer_facilities_name_valid CHECK (
-        name = btrim(name) AND char_length(name) BETWEEN 1 AND 200
-    ),
-    CONSTRAINT business_customer_facilities_address_valid CHECK (
-        address IS NULL OR (address = btrim(address) AND char_length(address) BETWEEN 1 AND 500)
-    ),
-    CONSTRAINT business_customer_facilities_time_zone_valid CHECK (
-        time_zone = btrim(time_zone) AND char_length(time_zone) BETWEEN 1 AND 128
-    ),
-    CONSTRAINT business_customer_facilities_status_valid CHECK (status IN ('active', 'disabled')),
-    CONSTRAINT business_customer_facilities_updated_after_created CHECK (updated_at >= created_at)
-);
-
-CREATE UNIQUE INDEX business_customer_facilities_tenant_customer_code_uq
-    ON business_customer_facilities (tenant_id, customer_id, lower(code));
-CREATE INDEX business_customer_facilities_tenant_customer_status_idx
-    ON business_customer_facilities (tenant_id, customer_id, status, lower(name));
+CREATE UNIQUE INDEX business_customers_branch_code_uq
+    ON business_customers (tenant_id, branch_id, lower(code));
+CREATE INDEX business_customers_branch_status_idx
+    ON business_customers (tenant_id, branch_id, status, lower(name));
 
 CREATE TABLE business_staffing_rates (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
+    branch_id UUID NOT NULL,
     rate_kind TEXT NOT NULL,
     code TEXT NOT NULL,
     name TEXT NOT NULL,
     customer_id UUID,
-    customer_facility_id UUID,
     employee_id UUID,
     job_id UUID NOT NULL,
     currency TEXT NOT NULL,
@@ -106,18 +74,19 @@ CREATE TABLE business_staffing_rates (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_by_account_id UUID NOT NULL,
     CONSTRAINT business_staffing_rates_tenant_id_id_uq UNIQUE (tenant_id, id),
-    CONSTRAINT business_staffing_rates_customer_tenant_fk
-        FOREIGN KEY (tenant_id, customer_id)
-        REFERENCES business_customers (tenant_id, id) ON DELETE RESTRICT,
-    CONSTRAINT business_staffing_rates_facility_customer_tenant_fk
-        FOREIGN KEY (tenant_id, customer_id, customer_facility_id)
-        REFERENCES business_customer_facilities (tenant_id, customer_id, id) ON DELETE RESTRICT,
-    CONSTRAINT business_staffing_rates_employee_tenant_fk
-        FOREIGN KEY (tenant_id, employee_id)
-        REFERENCES hr_employees (tenant_id, id) ON DELETE RESTRICT,
-    CONSTRAINT business_staffing_rates_job_tenant_fk
-        FOREIGN KEY (tenant_id, job_id)
-        REFERENCES hr_jobs (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_staffing_rates_tenant_branch_id_id_uq UNIQUE (tenant_id, branch_id, id),
+    CONSTRAINT business_staffing_rates_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id)
+        REFERENCES branches (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_staffing_rates_customer_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id, customer_id)
+        REFERENCES business_customers (tenant_id, branch_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_staffing_rates_employee_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id, employee_id)
+        REFERENCES hr_employees (tenant_id, branch_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_staffing_rates_job_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id, job_id)
+        REFERENCES hr_jobs (tenant_id, branch_id, id) ON DELETE RESTRICT,
     CONSTRAINT business_staffing_rates_created_by_tenant_fk
         FOREIGN KEY (tenant_id, created_by_account_id)
         REFERENCES accounts (tenant_id, id) ON DELETE RESTRICT,
@@ -127,9 +96,6 @@ CREATE TABLE business_staffing_rates (
     CONSTRAINT business_staffing_rates_scope_valid CHECK (
         (rate_kind = 'customer_bill' AND customer_id IS NOT NULL)
         OR rate_kind = 'worker_pay'
-    ),
-    CONSTRAINT business_staffing_rates_facility_scope_valid CHECK (
-        customer_facility_id IS NULL OR customer_id IS NOT NULL
     ),
     CONSTRAINT business_staffing_rates_code_valid CHECK (
         code = lower(btrim(code))
@@ -146,12 +112,12 @@ CREATE TABLE business_staffing_rates (
     CONSTRAINT business_staffing_rates_dates_valid CHECK (
         effective_to IS NULL OR effective_to >= effective_from
     ),
-    UNIQUE (tenant_id, rate_kind, code, effective_from)
+    UNIQUE (tenant_id, branch_id, rate_kind, code, effective_from)
 );
 
 CREATE INDEX business_staffing_rates_resolution_idx
     ON business_staffing_rates (
-        tenant_id, rate_kind, customer_id, job_id, employee_id, customer_facility_id,
+        tenant_id, branch_id, rate_kind, customer_id, job_id, employee_id,
         effective_from DESC, effective_to, priority DESC
     )
     WHERE is_active;
@@ -165,11 +131,11 @@ BEGIN
         SELECT 1
         FROM business_staffing_rates AS existing
         WHERE existing.tenant_id = NEW.tenant_id
+          AND existing.branch_id = NEW.branch_id
           AND existing.id <> NEW.id
           AND existing.is_active
           AND existing.rate_kind = NEW.rate_kind
           AND existing.customer_id IS NOT DISTINCT FROM NEW.customer_id
-          AND existing.customer_facility_id IS NOT DISTINCT FROM NEW.customer_facility_id
           AND existing.employee_id IS NOT DISTINCT FROM NEW.employee_id
           AND existing.job_id = NEW.job_id
           AND existing.priority = NEW.priority
@@ -191,6 +157,7 @@ EXECUTE FUNCTION business_reject_ambiguous_staffing_rate();
 CREATE TABLE business_staffing_employee_eligibilities (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
+    branch_id UUID NOT NULL,
     employee_id UUID NOT NULL,
     job_id UUID NOT NULL,
     effective_from DATE NOT NULL,
@@ -199,12 +166,13 @@ CREATE TABLE business_staffing_employee_eligibilities (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_by_account_id UUID NOT NULL,
     CONSTRAINT business_staffing_employee_eligibilities_tenant_id_id_uq UNIQUE (tenant_id, id),
-    CONSTRAINT business_staffing_employee_eligibilities_employee_tenant_fk
-        FOREIGN KEY (tenant_id, employee_id)
-        REFERENCES hr_employees (tenant_id, id) ON DELETE RESTRICT,
-    CONSTRAINT business_staffing_employee_eligibilities_job_tenant_fk
-        FOREIGN KEY (tenant_id, job_id)
-        REFERENCES hr_jobs (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_staffing_employee_eligibilities_tenant_branch_id_id_uq UNIQUE (tenant_id, branch_id, id),
+    CONSTRAINT business_staffing_employee_eligibilities_employee_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id, employee_id)
+        REFERENCES hr_employees (tenant_id, branch_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_staffing_employee_eligibilities_job_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id, job_id)
+        REFERENCES hr_jobs (tenant_id, branch_id, id) ON DELETE RESTRICT,
     CONSTRAINT business_staffing_employee_eligibilities_created_by_tenant_fk
         FOREIGN KEY (tenant_id, created_by_account_id)
         REFERENCES accounts (tenant_id, id) ON DELETE RESTRICT,
@@ -214,19 +182,19 @@ CREATE TABLE business_staffing_employee_eligibilities (
     CONSTRAINT business_staffing_employee_eligibilities_notes_valid CHECK (
         notes IS NULL OR (notes = btrim(notes) AND char_length(notes) BETWEEN 1 AND 1000)
     ),
-    UNIQUE (tenant_id, employee_id, job_id, effective_from)
+    UNIQUE (tenant_id, branch_id, employee_id, job_id, effective_from)
 );
 
 CREATE INDEX business_staffing_employee_eligibilities_resolution_idx
     ON business_staffing_employee_eligibilities (
-        tenant_id, employee_id, job_id, effective_from DESC, effective_to
+        tenant_id, branch_id, employee_id, job_id, effective_from DESC, effective_to
     );
 
 CREATE TABLE business_staffing_shifts (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
+    branch_id UUID NOT NULL,
     customer_id UUID NOT NULL,
-    customer_facility_id UUID NOT NULL,
     job_id UUID NOT NULL,
     starts_at TIMESTAMPTZ NOT NULL,
     ends_at TIMESTAMPTZ NOT NULL,
@@ -238,15 +206,13 @@ CREATE TABLE business_staffing_shifts (
     created_by_account_id UUID NOT NULL,
     updated_by_account_id UUID NOT NULL,
     CONSTRAINT business_staffing_shifts_tenant_id_id_uq UNIQUE (tenant_id, id),
-    CONSTRAINT business_staffing_shifts_customer_tenant_fk
-        FOREIGN KEY (tenant_id, customer_id)
-        REFERENCES business_customers (tenant_id, id) ON DELETE RESTRICT,
-    CONSTRAINT business_staffing_shifts_facility_customer_tenant_fk
-        FOREIGN KEY (tenant_id, customer_id, customer_facility_id)
-        REFERENCES business_customer_facilities (tenant_id, customer_id, id) ON DELETE RESTRICT,
-    CONSTRAINT business_staffing_shifts_job_tenant_fk
-        FOREIGN KEY (tenant_id, job_id)
-        REFERENCES hr_jobs (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_staffing_shifts_tenant_branch_id_id_uq UNIQUE (tenant_id, branch_id, id),
+    CONSTRAINT business_staffing_shifts_customer_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id, customer_id)
+        REFERENCES business_customers (tenant_id, branch_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_staffing_shifts_job_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id, job_id)
+        REFERENCES hr_jobs (tenant_id, branch_id, id) ON DELETE RESTRICT,
     CONSTRAINT business_staffing_shifts_created_by_tenant_fk
         FOREIGN KEY (tenant_id, created_by_account_id)
         REFERENCES accounts (tenant_id, id) ON DELETE RESTRICT,
@@ -265,7 +231,7 @@ CREATE TABLE business_staffing_shifts (
 );
 
 CREATE INDEX business_staffing_shifts_tenant_schedule_idx
-    ON business_staffing_shifts (tenant_id, starts_at, customer_id, status);
+    ON business_staffing_shifts (tenant_id, branch_id, starts_at, customer_id, status);
 
 -- Urgent work is staff-reported evidence created without a planned shift. A
 -- supervisor creates the formal completed shift and assignment only when the
@@ -273,41 +239,46 @@ CREATE INDEX business_staffing_shifts_tenant_schedule_idx
 CREATE TABLE business_urgent_work_batches (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
+    branch_id UUID NOT NULL,
     actor_account_id UUID NOT NULL,
-    claimed_customer_facility_id UUID NOT NULL,
+    claimed_customer_id UUID NOT NULL,
     idempotency_key UUID NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT business_urgent_work_batches_tenant_id_id_uq UNIQUE (tenant_id, id),
+    CONSTRAINT business_urgent_work_batches_tenant_branch_id_id_uq UNIQUE (tenant_id, branch_id, id),
     CONSTRAINT business_urgent_work_batches_actor_tenant_fk
         FOREIGN KEY (tenant_id, actor_account_id)
         REFERENCES accounts (tenant_id, id) ON DELETE RESTRICT,
-    CONSTRAINT business_urgent_work_batches_facility_tenant_fk
-        FOREIGN KEY (tenant_id, claimed_customer_facility_id)
-        REFERENCES business_customer_facilities (tenant_id, id) ON DELETE RESTRICT,
-    UNIQUE (tenant_id, actor_account_id, idempotency_key)
+    CONSTRAINT business_urgent_work_batches_customer_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id, claimed_customer_id)
+        REFERENCES business_customers (tenant_id, branch_id, id) ON DELETE RESTRICT,
+    UNIQUE (tenant_id, branch_id, actor_account_id, idempotency_key)
 );
 
 CREATE TABLE business_urgent_work_reports (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
+    branch_id UUID NOT NULL,
     start_batch_id UUID NOT NULL,
     employee_id UUID NOT NULL,
-    claimed_customer_facility_id UUID NOT NULL,
+    claimed_customer_id UUID NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
     created_by_account_id UUID NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT business_urgent_work_reports_tenant_id_id_uq UNIQUE (tenant_id, id),
-    CONSTRAINT business_urgent_work_reports_tenant_id_id_employee_uq UNIQUE (tenant_id, id, employee_id),
-    CONSTRAINT business_urgent_work_reports_batch_tenant_fk
-        FOREIGN KEY (tenant_id, start_batch_id)
-        REFERENCES business_urgent_work_batches (tenant_id, id) ON DELETE RESTRICT,
-    CONSTRAINT business_urgent_work_reports_employee_tenant_fk
-        FOREIGN KEY (tenant_id, employee_id)
-        REFERENCES hr_employees (tenant_id, id) ON DELETE RESTRICT,
-    CONSTRAINT business_urgent_work_reports_facility_tenant_fk
-        FOREIGN KEY (tenant_id, claimed_customer_facility_id)
-        REFERENCES business_customer_facilities (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_urgent_work_reports_tenant_branch_id_id_uq UNIQUE (tenant_id, branch_id, id),
+    CONSTRAINT business_urgent_work_reports_tenant_branch_id_id_employee_uq
+        UNIQUE (tenant_id, branch_id, id, employee_id),
+    CONSTRAINT business_urgent_work_reports_batch_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id, start_batch_id)
+        REFERENCES business_urgent_work_batches (tenant_id, branch_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_urgent_work_reports_employee_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id, employee_id)
+        REFERENCES hr_employees (tenant_id, branch_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_urgent_work_reports_customer_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id, claimed_customer_id)
+        REFERENCES business_customers (tenant_id, branch_id, id) ON DELETE RESTRICT,
     CONSTRAINT business_urgent_work_reports_created_by_tenant_fk
         FOREIGN KEY (tenant_id, created_by_account_id)
         REFERENCES accounts (tenant_id, id) ON DELETE RESTRICT,
@@ -318,16 +289,17 @@ CREATE TABLE business_urgent_work_reports (
 );
 
 CREATE UNIQUE INDEX business_urgent_work_reports_employee_active_uq
-    ON business_urgent_work_reports (tenant_id, employee_id)
+    ON business_urgent_work_reports (tenant_id, branch_id, employee_id)
     WHERE status = 'active';
 CREATE INDEX business_urgent_work_reports_tenant_status_idx
-    ON business_urgent_work_reports (tenant_id, status, created_at DESC);
-CREATE INDEX business_urgent_work_reports_facility_created_idx
-    ON business_urgent_work_reports (tenant_id, claimed_customer_facility_id, created_at DESC);
+    ON business_urgent_work_reports (tenant_id, branch_id, status, created_at DESC);
+CREATE INDEX business_urgent_work_reports_customer_created_idx
+    ON business_urgent_work_reports (tenant_id, branch_id, claimed_customer_id, created_at DESC);
 
 CREATE TABLE business_shift_assignments (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
+    branch_id UUID NOT NULL,
     shift_id UUID NOT NULL,
     employee_id UUID NOT NULL,
     urgent_work_report_id UUID,
@@ -349,21 +321,22 @@ CREATE TABLE business_shift_assignments (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_by_account_id UUID NOT NULL,
     CONSTRAINT business_shift_assignments_tenant_id_id_uq UNIQUE (tenant_id, id),
-    CONSTRAINT business_shift_assignments_shift_tenant_fk
-        FOREIGN KEY (tenant_id, shift_id)
-        REFERENCES business_staffing_shifts (tenant_id, id) ON DELETE RESTRICT,
-    CONSTRAINT business_shift_assignments_employee_tenant_fk
-        FOREIGN KEY (tenant_id, employee_id)
-        REFERENCES hr_employees (tenant_id, id) ON DELETE RESTRICT,
-    CONSTRAINT business_shift_assignments_urgent_report_tenant_fk
-        FOREIGN KEY (tenant_id, urgent_work_report_id)
-        REFERENCES business_urgent_work_reports (tenant_id, id) ON DELETE RESTRICT,
-    CONSTRAINT business_shift_assignments_customer_bill_rate_tenant_fk
-        FOREIGN KEY (tenant_id, customer_bill_rate_id)
-        REFERENCES business_staffing_rates (tenant_id, id) ON DELETE RESTRICT,
-    CONSTRAINT business_shift_assignments_worker_pay_rate_tenant_fk
-        FOREIGN KEY (tenant_id, worker_pay_rate_id)
-        REFERENCES business_staffing_rates (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_shift_assignments_tenant_branch_id_id_uq UNIQUE (tenant_id, branch_id, id),
+    CONSTRAINT business_shift_assignments_shift_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id, shift_id)
+        REFERENCES business_staffing_shifts (tenant_id, branch_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_shift_assignments_employee_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id, employee_id)
+        REFERENCES hr_employees (tenant_id, branch_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_shift_assignments_urgent_report_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id, urgent_work_report_id)
+        REFERENCES business_urgent_work_reports (tenant_id, branch_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_shift_assignments_customer_bill_rate_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id, customer_bill_rate_id)
+        REFERENCES business_staffing_rates (tenant_id, branch_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_shift_assignments_worker_pay_rate_branch_tenant_fk
+        FOREIGN KEY (tenant_id, branch_id, worker_pay_rate_id)
+        REFERENCES business_staffing_rates (tenant_id, branch_id, id) ON DELETE RESTRICT,
     CONSTRAINT business_shift_assignments_approved_by_tenant_fk
         FOREIGN KEY (tenant_id, approved_by_account_id)
         REFERENCES accounts (tenant_id, id) ON DELETE RESTRICT,
@@ -418,15 +391,15 @@ CREATE TABLE business_shift_assignments (
             AND approved_at IS NULL
             AND approved_by_account_id IS NULL)
     ),
-    UNIQUE (tenant_id, shift_id, employee_id)
+    UNIQUE (tenant_id, branch_id, shift_id, employee_id)
 );
 
 CREATE INDEX business_shift_assignments_tenant_employee_idx
-    ON business_shift_assignments (tenant_id, employee_id, created_at DESC);
+    ON business_shift_assignments (tenant_id, branch_id, employee_id, created_at DESC);
 CREATE INDEX business_shift_assignments_tenant_shift_idx
-    ON business_shift_assignments (tenant_id, shift_id, status);
+    ON business_shift_assignments (tenant_id, branch_id, shift_id, status);
 CREATE UNIQUE INDEX business_shift_assignments_urgent_report_uq
-    ON business_shift_assignments (tenant_id, urgent_work_report_id)
+    ON business_shift_assignments (tenant_id, branch_id, urgent_work_report_id)
     WHERE urgent_work_report_id IS NOT NULL;
 
 -- Payroll consumes the approved worker-pay snapshot rather than resolving the
@@ -439,7 +412,7 @@ ALTER TABLE payroll_run_lines
         ON DELETE RESTRICT,
     DROP CONSTRAINT payroll_run_lines_component_valid,
     ADD CONSTRAINT payroll_run_lines_component_valid CHECK (
-        component IN ('base', 'facility', 'time_band', 'overtime', 'staffing')
+        component IN ('base', 'branch', 'time_band', 'overtime', 'staffing')
     ),
     ADD CONSTRAINT payroll_run_lines_source_valid CHECK (
         (component = 'staffing' AND staffing_assignment_id IS NOT NULL AND attendance_session_id IS NULL)
@@ -485,56 +458,58 @@ EXECUTE FUNCTION business_prevent_assignment_snapshot_mutation();
 ALTER TABLE business_customers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE business_customers FORCE ROW LEVEL SECURITY;
 CREATE POLICY business_customers_tenant_isolation ON business_customers
-    USING (tenant_id = shepherd_current_tenant_id())
-    WITH CHECK (tenant_id = shepherd_current_tenant_id());
-
-ALTER TABLE business_customer_facilities ENABLE ROW LEVEL SECURITY;
-ALTER TABLE business_customer_facilities FORCE ROW LEVEL SECURITY;
-CREATE POLICY business_customer_facilities_tenant_isolation ON business_customer_facilities
-    USING (tenant_id = shepherd_current_tenant_id())
-    WITH CHECK (tenant_id = shepherd_current_tenant_id());
+    USING (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id))
+    WITH CHECK (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id));
 
 ALTER TABLE business_staffing_rates ENABLE ROW LEVEL SECURITY;
 ALTER TABLE business_staffing_rates FORCE ROW LEVEL SECURITY;
 CREATE POLICY business_staffing_rates_tenant_isolation ON business_staffing_rates
-    USING (tenant_id = shepherd_current_tenant_id())
-    WITH CHECK (tenant_id = shepherd_current_tenant_id());
+    USING (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id))
+    WITH CHECK (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id));
 
 ALTER TABLE business_staffing_employee_eligibilities ENABLE ROW LEVEL SECURITY;
 ALTER TABLE business_staffing_employee_eligibilities FORCE ROW LEVEL SECURITY;
 CREATE POLICY business_staffing_employee_eligibilities_tenant_isolation
     ON business_staffing_employee_eligibilities
-    USING (tenant_id = shepherd_current_tenant_id())
-    WITH CHECK (tenant_id = shepherd_current_tenant_id());
+    USING (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id))
+    WITH CHECK (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id));
 
 ALTER TABLE business_staffing_shifts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE business_staffing_shifts FORCE ROW LEVEL SECURITY;
 CREATE POLICY business_staffing_shifts_tenant_isolation ON business_staffing_shifts
-    USING (tenant_id = shepherd_current_tenant_id())
-    WITH CHECK (tenant_id = shepherd_current_tenant_id());
+    USING (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id))
+    WITH CHECK (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id));
 
 ALTER TABLE business_shift_assignments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE business_shift_assignments FORCE ROW LEVEL SECURITY;
 CREATE POLICY business_shift_assignments_tenant_isolation ON business_shift_assignments
-    USING (tenant_id = shepherd_current_tenant_id())
-    WITH CHECK (tenant_id = shepherd_current_tenant_id());
+    USING (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id))
+    WITH CHECK (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id));
 
 ALTER TABLE business_urgent_work_batches ENABLE ROW LEVEL SECURITY;
 ALTER TABLE business_urgent_work_batches FORCE ROW LEVEL SECURITY;
 CREATE POLICY business_urgent_work_batches_tenant_isolation ON business_urgent_work_batches
-    USING (tenant_id = shepherd_current_tenant_id())
-    WITH CHECK (tenant_id = shepherd_current_tenant_id());
+    USING (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id))
+    WITH CHECK (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id));
 
 ALTER TABLE business_urgent_work_reports ENABLE ROW LEVEL SECURITY;
 ALTER TABLE business_urgent_work_reports FORCE ROW LEVEL SECURITY;
 CREATE POLICY business_urgent_work_reports_tenant_isolation ON business_urgent_work_reports
-    USING (tenant_id = shepherd_current_tenant_id())
-    WITH CHECK (tenant_id = shepherd_current_tenant_id());
+    USING (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id))
+    WITH CHECK (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id));
+
+ALTER TABLE business_customers ALTER COLUMN branch_id SET DEFAULT shepherd_current_branch_id();
+ALTER TABLE business_staffing_rates ALTER COLUMN branch_id SET DEFAULT shepherd_current_branch_id();
+ALTER TABLE business_staffing_employee_eligibilities ALTER COLUMN branch_id SET DEFAULT shepherd_current_branch_id();
+ALTER TABLE business_staffing_shifts ALTER COLUMN branch_id SET DEFAULT shepherd_current_branch_id();
+ALTER TABLE business_shift_assignments ALTER COLUMN branch_id SET DEFAULT shepherd_current_branch_id();
+ALTER TABLE business_urgent_work_batches ALTER COLUMN branch_id SET DEFAULT shepherd_current_branch_id();
+ALTER TABLE business_urgent_work_reports ALTER COLUMN branch_id SET DEFAULT shepherd_current_branch_id();
 
 INSERT INTO permissions (code, description)
 VALUES
-    ('business.customers.read', 'View staffing customers and workplaces'),
-    ('business.customers.manage', 'Create and update staffing customers and workplaces'),
+    ('business.customers.read', 'View branch-owned customer workplaces'),
+    ('business.customers.manage', 'Create and update branch-owned customer workplaces'),
     ('business.staffing_rates.read', 'View customer and worker staffing rates'),
     ('business.staffing_rates.manage', 'Create customer and worker staffing rates'),
     ('business.staffing_eligibility.read', 'View effective staffing job eligibility'),
@@ -547,7 +522,7 @@ INSERT INTO role_permissions (role_code, permission_code)
 SELECT role.code, permission.code
 FROM roles AS role
 CROSS JOIN permissions AS permission
-WHERE role.code IN ('owner', 'director')
+WHERE role.code = 'tenant_owner'
   AND permission.code IN (
     'business.customers.read',
     'business.customers.manage',
@@ -562,15 +537,24 @@ WHERE role.code IN ('owner', 'director')
 
 INSERT INTO role_permissions (role_code, permission_code)
 VALUES
-    ('manager', 'business.customers.read'),
-    ('manager', 'business.customers.manage'),
-    ('manager', 'business.staffing_rates.read'),
-    ('manager', 'business.staffing_rates.manage'),
-    ('manager', 'business.staffing_eligibility.read'),
-    ('manager', 'business.staffing_eligibility.manage'),
-    ('manager', 'business.shifts.read'),
-    ('manager', 'business.shifts.manage'),
-    ('manager', 'business.shifts.approve'),
+    ('executive_manager', 'business.customers.read'),
+    ('executive_manager', 'business.customers.manage'),
+    ('executive_manager', 'business.staffing_rates.read'),
+    ('executive_manager', 'business.staffing_rates.manage'),
+    ('executive_manager', 'business.staffing_eligibility.read'),
+    ('executive_manager', 'business.staffing_eligibility.manage'),
+    ('executive_manager', 'business.shifts.read'),
+    ('executive_manager', 'business.shifts.manage'),
+    ('executive_manager', 'business.shifts.approve'),
+    ('branch_manager', 'business.customers.read'),
+    ('branch_manager', 'business.customers.manage'),
+    ('branch_manager', 'business.staffing_rates.read'),
+    ('branch_manager', 'business.staffing_rates.manage'),
+    ('branch_manager', 'business.staffing_eligibility.read'),
+    ('branch_manager', 'business.staffing_eligibility.manage'),
+    ('branch_manager', 'business.shifts.read'),
+    ('branch_manager', 'business.shifts.manage'),
+    ('branch_manager', 'business.shifts.approve'),
     ('supervisor', 'business.customers.read'),
     ('supervisor', 'business.customers.manage'),
     ('supervisor', 'business.staffing_rates.read'),

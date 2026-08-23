@@ -27,20 +27,41 @@ impl AuthAccountProvisioner for ShepherdAuthAccountProvisioner {
             return Ok(());
         }
 
+        let branch_id: uuid::Uuid = context.branch_ids.first().copied().ok_or_else(|| {
+            error!(
+                tenant_id = %context.tenant_id,
+                actor_id = %context.actor_account_id,
+                account_id = %context.account_id,
+                "Staff account provisioning received no branch assignment"
+            );
+            AuthAccountProvisioningError::new("staff_branch_assignment_missing")
+        })?;
+        if context.branch_ids.len() != 1 {
+            error!(
+                tenant_id = %context.tenant_id,
+                actor_id = %context.actor_account_id,
+                account_id = %context.account_id,
+                branch_count = context.branch_ids.len(),
+                "Staff account provisioning received multiple branch assignments"
+            );
+            return Err(AuthAccountProvisioningError::new("staff_branch_assignment_invalid"));
+        }
+
         let employee_code: String = generated_employee_code(&context.username, context.account_id);
         let result: PgQueryResult = sqlx::query!(
             r#"
             INSERT INTO hr_employees (
-                id, tenant_id, account_id, employee_code, display_name, work_email,
+                id, tenant_id, branch_id, account_id, employee_code, display_name, work_email,
                 status, hire_date, created_by_account_id, updated_by_account_id
             )
             VALUES (
-                $1, $2, $3, $4, $5, $6,
-                'active', CURRENT_DATE, $7, $7
+                $1, $2, $3, $4, $5, $6, $7,
+                'active', CURRENT_DATE, $8, $8
             )
             "#,
             uuid::Uuid::new_v4(),
             context.tenant_id,
+            branch_id,
             context.account_id,
             employee_code,
             context.username,
@@ -63,6 +84,7 @@ impl AuthAccountProvisioner for ShepherdAuthAccountProvisioner {
             tenant_id = %context.tenant_id,
             actor_id = %context.actor_account_id,
             account_id = %context.account_id,
+            branch_id = %branch_id,
             rows_affected = result.rows_affected(),
             "Active HR employee profile provisioned for Auth account"
         );

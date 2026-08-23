@@ -71,9 +71,9 @@ impl JwtHandle {
     }
 
     pub fn expiration_for_role(&self, role: &Role) -> usize {
-        if matches!(role, Role::Owner | Role::Director) {
+        if matches!(role, Role::TenantOwner | Role::ExecutiveManager) {
             self.tenant_owner_expiration_secs
-        } else if matches!(role, Role::Manager | Role::Supervisor) {
+        } else if matches!(role, Role::BranchManager | Role::Supervisor) {
             self.supervisor_expiration_secs
         } else {
             self.employee_expiration_secs

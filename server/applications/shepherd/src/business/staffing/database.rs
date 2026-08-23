@@ -7,18 +7,17 @@ use tracing::{debug, error, info, trace, warn};
 use uuid::Uuid;
 
 use super::core::{
-    BusinessRecordStatus, Customer, CustomerFacility, CustomerFacilityInput, CustomerInput, CustomerWorkRecord,
-    CustomerWorkRecordInput, ManualRateOverride, RateSource, ReconciliationStatus, ShiftAssignment,
-    ShiftAssignmentInput, ShiftAssignmentStatus, StaffingCandidate, StaffingEligibility, StaffingEligibilityInput,
-    StaffingError, StaffingRate, StaffingRateInput, StaffingRateKind, StaffingReconciliation, StaffingRepo,
-    StaffingShift, StaffingShiftInput, StaffingShiftStatus,
+    BusinessRecordStatus, Customer, CustomerInput, CustomerWorkRecord, CustomerWorkRecordInput, ManualRateOverride,
+    RateSource, ReconciliationStatus, ShiftAssignment, ShiftAssignmentInput, ShiftAssignmentStatus, StaffingCandidate,
+    StaffingEligibility, StaffingEligibilityInput, StaffingError, StaffingRate, StaffingRateInput, StaffingRateKind,
+    StaffingReconciliation, StaffingRepo, StaffingShift, StaffingShiftInput, StaffingShiftStatus,
 };
 
-pub struct StaffingProvider {
+pub struct StaffingDb {
     db: Arc<DatabaseAdapter>,
 }
 
-impl StaffingProvider {
+impl StaffingDb {
     pub fn new_arc(db: Arc<DatabaseAdapter>) -> Arc<Self> {
         Arc::new(Self { db })
     }
@@ -57,6 +56,8 @@ struct CustomerRow {
     id: Uuid,
     code: String,
     name: String,
+    address: Option<String>,
+    time_zone: String,
     billing_email: Option<String>,
     status: String,
     created_at: DateTime<Utc>,
@@ -71,38 +72,9 @@ impl TryFrom<CustomerRow> for Customer {
             id: row.id,
             code: row.code,
             name: row.name,
-            billing_email: row.billing_email,
-            status: BusinessRecordStatus::from_code(&row.status).ok_or(StaffingError::BackendUnavailable)?,
-            created_at: row.created_at,
-            updated_at: row.updated_at,
-        })
-    }
-}
-
-#[derive(Debug)]
-struct CustomerFacilityRow {
-    id: Uuid,
-    customer_id: Uuid,
-    code: String,
-    name: String,
-    address: Option<String>,
-    time_zone: String,
-    status: String,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
-}
-
-impl TryFrom<CustomerFacilityRow> for CustomerFacility {
-    type Error = StaffingError;
-
-    fn try_from(row: CustomerFacilityRow) -> Result<Self, Self::Error> {
-        Ok(Self {
-            id: row.id,
-            customer_id: row.customer_id,
-            code: row.code,
-            name: row.name,
             address: row.address,
             time_zone: row.time_zone,
+            billing_email: row.billing_email,
             status: BusinessRecordStatus::from_code(&row.status).ok_or(StaffingError::BackendUnavailable)?,
             created_at: row.created_at,
             updated_at: row.updated_at,
@@ -117,7 +89,6 @@ struct StaffingRateRow {
     code: String,
     name: String,
     customer_id: Option<Uuid>,
-    customer_facility_id: Option<Uuid>,
     employee_id: Option<Uuid>,
     job_id: Uuid,
     currency: String,
@@ -138,7 +109,6 @@ impl From<StaffingRateRow> for StaffingRate {
             code: row.code,
             name: row.name,
             customer_id: row.customer_id,
-            customer_facility_id: row.customer_facility_id,
             employee_id: row.employee_id,
             job_id: row.job_id,
             currency: row.currency,
@@ -181,7 +151,6 @@ impl From<StaffingEligibilityRow> for StaffingEligibility {
 struct ShiftRow {
     id: Uuid,
     customer_id: Uuid,
-    customer_facility_id: Uuid,
     job_id: Uuid,
     starts_at: DateTime<Utc>,
     ends_at: DateTime<Utc>,
@@ -199,7 +168,6 @@ impl TryFrom<ShiftRow> for StaffingShift {
         Ok(Self {
             id: row.id,
             customer_id: row.customer_id,
-            customer_facility_id: row.customer_facility_id,
             job_id: row.job_id,
             starts_at: row.starts_at,
             ends_at: row.ends_at,
@@ -268,7 +236,6 @@ impl TryFrom<AssignmentRow> for ShiftAssignment {
 #[derive(Debug)]
 struct ShiftRateContext {
     customer_id: Uuid,
-    customer_facility_id: Uuid,
     job_id: Uuid,
     work_date: NaiveDate,
     starts_at: DateTime<Utc>,
@@ -305,7 +272,7 @@ impl From<CandidateRow> for StaffingCandidate {
 struct CustomerWorkRecordRow {
     id: Uuid,
     assignment_id: Uuid,
-    confirmed_customer_facility_id: Uuid,
+    confirmed_customer_id: Uuid,
     confirmed_started_at: DateTime<Utc>,
     confirmed_ended_at: DateTime<Utc>,
     confirmed_worked_seconds: i64,
@@ -319,7 +286,7 @@ impl From<CustomerWorkRecordRow> for CustomerWorkRecord {
         Self {
             id: row.id,
             assignment_id: row.assignment_id,
-            confirmed_customer_facility_id: row.confirmed_customer_facility_id,
+            confirmed_customer_id: row.confirmed_customer_id,
             confirmed_started_at: row.confirmed_started_at,
             confirmed_ended_at: row.confirmed_ended_at,
             confirmed_worked_seconds: row.confirmed_worked_seconds,
@@ -335,12 +302,10 @@ struct ReconciliationRow {
     assignment_id: Uuid,
     shift_id: Uuid,
     customer_id: Uuid,
-    customer_facility_id: Uuid,
     employee_id: Uuid,
     employee_code: String,
     employee_name: String,
     customer_name: String,
-    customer_facility_name: String,
     scheduled_starts_at: DateTime<Utc>,
     scheduled_ends_at: DateTime<Utc>,
     assignment_status: String,
@@ -348,7 +313,7 @@ struct ReconciliationRow {
     staff_ended_at: Option<DateTime<Utc>>,
     staff_worked_seconds: i64,
     customer_record_id: Option<Uuid>,
-    confirmed_customer_facility_id: Option<Uuid>,
+    confirmed_customer_id: Option<Uuid>,
     customer_started_at: Option<DateTime<Utc>>,
     customer_ended_at: Option<DateTime<Utc>>,
     customer_worked_seconds: Option<i64>,
@@ -367,7 +332,7 @@ struct ResolvedRateRow {
 }
 
 #[async_trait]
-impl StaffingRepo for StaffingProvider {
+impl StaffingRepo for StaffingDb {
     async fn list_customers(&self, tenant_id: Uuid) -> Result<Vec<Customer>, StaffingError> {
         let rows: Vec<CustomerRow> = self
             .db
@@ -375,7 +340,7 @@ impl StaffingRepo for StaffingProvider {
                 sqlx::query_as!(
                     CustomerRow,
                     r#"
-                    SELECT id, code, name, billing_email, status, created_at, updated_at
+                    SELECT id, code, name, address, time_zone, billing_email, status, created_at, updated_at
                     FROM business_customers
                     WHERE tenant_id = $1
                     ORDER BY lower(name), code
@@ -404,16 +369,18 @@ impl StaffingRepo for StaffingProvider {
                     CustomerRow,
                     r#"
                     INSERT INTO business_customers (
-                        id, tenant_id, code, name, billing_email, status,
+                        id, tenant_id, code, name, address, time_zone, billing_email, status,
                         created_by_account_id, updated_by_account_id
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
-                    RETURNING id, code, name, billing_email, status, created_at, updated_at
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+                    RETURNING id, code, name, address, time_zone, billing_email, status, created_at, updated_at
                     "#,
                     customer_id,
                     tenant_id,
                     input.code,
                     input.name,
+                    input.address,
+                    input.time_zone,
                     input.billing_email,
                     input.status.as_code(),
                     audit_account_id,
@@ -446,17 +413,21 @@ impl StaffingRepo for StaffingProvider {
                     UPDATE business_customers
                     SET code = $3,
                         name = $4,
-                        billing_email = $5,
-                        status = $6,
+                        address = $5,
+                        time_zone = $6,
+                        billing_email = $7,
+                        status = $8,
                         updated_at = CURRENT_TIMESTAMP,
-                        updated_by_account_id = $7
+                        updated_by_account_id = $9
                     WHERE tenant_id = $1 AND id = $2
-                    RETURNING id, code, name, billing_email, status, created_at, updated_at
+                    RETURNING id, code, name, address, time_zone, billing_email, status, created_at, updated_at
                     "#,
                     tenant_id,
                     customer_id,
                     input.code,
                     input.name,
+                    input.address,
+                    input.time_zone,
                     input.billing_email,
                     input.status.as_code(),
                     audit_account_id,
@@ -475,72 +446,6 @@ impl StaffingRepo for StaffingProvider {
         Customer::try_from(row)
     }
 
-    async fn list_customer_facilities(
-        &self,
-        tenant_id: Uuid,
-        customer_id: Uuid,
-    ) -> Result<Vec<CustomerFacility>, StaffingError> {
-        let rows: Vec<CustomerFacilityRow> = self
-            .db
-            .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
-                sqlx::query_as!(
-                    CustomerFacilityRow,
-                    r#"
-                    SELECT id, customer_id, code, name, address, time_zone, status, created_at, updated_at
-                    FROM business_customer_facilities
-                    WHERE tenant_id = $1 AND customer_id = $2
-                    ORDER BY lower(name), code
-                    "#,
-                    tenant_id,
-                    customer_id,
-                )
-                .fetch_all(connection)
-                .await
-            })
-            .await
-            .map_err(|error: TenantDbErr| tenant_database_failure("list customer facilities", tenant_id, error))?;
-        rows.into_iter().map(CustomerFacility::try_from).collect()
-    }
-
-    async fn create_customer_facility(
-        &self,
-        tenant_id: Uuid,
-        facility_id: Uuid,
-        customer_id: Uuid,
-        input: &CustomerFacilityInput,
-        audit_account_id: Uuid,
-    ) -> Result<CustomerFacility, StaffingError> {
-        let row: CustomerFacilityRow = self
-            .db
-            .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
-                sqlx::query_as!(
-                    CustomerFacilityRow,
-                    r#"
-                    INSERT INTO business_customer_facilities (
-                        id, tenant_id, customer_id, code, name, address, time_zone, status,
-                        created_by_account_id, updated_by_account_id
-                    )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
-                    RETURNING id, customer_id, code, name, address, time_zone, status, created_at, updated_at
-                    "#,
-                    facility_id,
-                    tenant_id,
-                    customer_id,
-                    input.code,
-                    input.name,
-                    input.address,
-                    input.time_zone,
-                    input.status.as_code(),
-                    audit_account_id,
-                )
-                .fetch_one(connection)
-                .await
-            })
-            .await
-            .map_err(|error: TenantDbErr| tenant_mutation_failure("create customer facility", tenant_id, error))?;
-        CustomerFacility::try_from(row)
-    }
-
     async fn list_rates(&self, tenant_id: Uuid) -> Result<Vec<StaffingRate>, StaffingError> {
         let rows: Vec<StaffingRateRow> = self
             .db
@@ -548,8 +453,7 @@ impl StaffingRepo for StaffingProvider {
                 sqlx::query_as!(
                     StaffingRateRow,
                     r#"
-                    SELECT id, rate_kind, code, name, customer_id, customer_facility_id,
-                           employee_id, job_id, currency,
+                    SELECT id, rate_kind, code, name, customer_id, employee_id, job_id, currency,
                            hourly_rate::TEXT AS "hourly_rate!",
                            priority, effective_from, effective_to, is_active, created_at
                     FROM business_staffing_rates
@@ -580,16 +484,15 @@ impl StaffingRepo for StaffingProvider {
                     StaffingRateRow,
                     r#"
                     INSERT INTO business_staffing_rates (
-                        id, tenant_id, rate_kind, code, name, customer_id, customer_facility_id,
-                        employee_id, job_id, currency, hourly_rate, priority, effective_from,
+                        id, tenant_id, rate_kind, code, name, customer_id, employee_id,
+                        job_id, currency, hourly_rate, priority, effective_from,
                         effective_to, is_active, created_by_account_id
                     )
                     VALUES (
-                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                        $11::TEXT::NUMERIC, $12, $13, $14, $15, $16
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9,
+                        $10::TEXT::NUMERIC, $11, $12, $13, $14, $15
                     )
-                    RETURNING id, rate_kind, code, name, customer_id, customer_facility_id,
-                              employee_id, job_id, currency,
+                    RETURNING id, rate_kind, code, name, customer_id, employee_id, job_id, currency,
                               hourly_rate::TEXT AS "hourly_rate!",
                               priority, effective_from, effective_to, is_active, created_at
                     "#,
@@ -599,7 +502,6 @@ impl StaffingRepo for StaffingProvider {
                     input.code,
                     input.name,
                     input.customer_id,
-                    input.customer_facility_id,
                     input.employee_id,
                     input.job_id,
                     input.currency,
@@ -692,7 +594,7 @@ impl StaffingRepo for StaffingProvider {
                 sqlx::query_as!(
                     ShiftRow,
                     r#"
-                    SELECT id, customer_id, customer_facility_id, job_id, starts_at, ends_at,
+                    SELECT id, customer_id, job_id, starts_at, ends_at,
                            required_workers, status, notes, created_at, updated_at
                     FROM business_staffing_shifts
                     WHERE tenant_id = $1
@@ -722,17 +624,16 @@ impl StaffingRepo for StaffingProvider {
                     ShiftRow,
                     r#"
                     INSERT INTO business_staffing_shifts (
-                        id, tenant_id, customer_id, customer_facility_id, job_id, starts_at, ends_at,
+                        id, tenant_id, customer_id, job_id, starts_at, ends_at,
                         required_workers, status, notes, created_by_account_id, updated_by_account_id
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'open', $9, $10, $10)
-                    RETURNING id, customer_id, customer_facility_id, job_id, starts_at, ends_at,
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, 'open', $8, $9, $9)
+                    RETURNING id, customer_id, job_id, starts_at, ends_at,
                               required_workers, status, notes, created_at, updated_at
                     "#,
                     shift_id,
                     tenant_id,
                     input.customer_id,
-                    input.customer_facility_id,
                     input.job_id,
                     input.starts_at,
                     input.ends_at,
@@ -787,11 +688,11 @@ impl StaffingRepo for StaffingProvider {
                     r#"
             WITH target AS (
                 SELECT shift.id, shift.job_id, shift.starts_at, shift.ends_at,
-                       (shift.starts_at AT TIME ZONE facility.time_zone)::DATE AS work_date
+                       (shift.starts_at AT TIME ZONE customer.time_zone)::DATE AS work_date
                 FROM business_staffing_shifts AS shift
-                INNER JOIN business_customer_facilities AS facility
-                    ON facility.tenant_id = shift.tenant_id
-                   AND facility.id = shift.customer_facility_id
+                INNER JOIN business_customers AS customer
+                    ON customer.tenant_id = shift.tenant_id
+                   AND customer.id = shift.customer_id
                 WHERE shift.tenant_id = $1 AND shift.id = $2
             )
             SELECT employee.id AS employee_id, employee.employee_code, employee.display_name,
@@ -874,13 +775,13 @@ impl StaffingRepo for StaffingProvider {
         let shift: Option<ShiftRateContext> = sqlx::query_as!(
             ShiftRateContext,
             r#"
-            SELECT shift.customer_id, shift.customer_facility_id, shift.job_id,
-                   (shift.starts_at AT TIME ZONE facility.time_zone)::DATE AS "work_date!",
+            SELECT shift.customer_id, shift.job_id,
+                   (shift.starts_at AT TIME ZONE customer.time_zone)::DATE AS "work_date!",
                    shift.starts_at, shift.ends_at, shift.status
             FROM business_staffing_shifts AS shift
-            INNER JOIN business_customer_facilities AS facility
-                ON facility.tenant_id = shift.tenant_id
-               AND facility.id = shift.customer_facility_id
+            INNER JOIN business_customers AS customer
+                ON customer.tenant_id = shift.tenant_id
+               AND customer.id = shift.customer_id
             WHERE shift.tenant_id = $1 AND shift.id = $2
             FOR UPDATE OF shift
             "#,
@@ -1009,14 +910,12 @@ impl StaffingRepo for StaffingProvider {
                           AND rate_kind = 'customer_bill'
                           AND customer_id = $2
                           AND job_id = $3
-                          AND (customer_facility_id IS NULL OR customer_facility_id = $4)
-                          AND (employee_id IS NULL OR employee_id = $5)
-                          AND effective_from <= $6
-                          AND (effective_to IS NULL OR effective_to >= $6)
+                          AND (employee_id IS NULL OR employee_id = $4)
+                          AND effective_from <= $5
+                          AND (effective_to IS NULL OR effective_to >= $5)
                           AND is_active
                         ORDER BY
                             (employee_id IS NOT NULL) DESC,
-                            (customer_facility_id IS NOT NULL) DESC,
                             priority DESC,
                             effective_from DESC,
                             id
@@ -1025,7 +924,6 @@ impl StaffingRepo for StaffingProvider {
                     tenant_id,
                     shift.customer_id,
                     shift.job_id,
-                    shift.customer_facility_id,
                     input.employee_id,
                     shift.work_date,
                 )
@@ -1042,14 +940,12 @@ impl StaffingRepo for StaffingProvider {
                           AND rate_kind = 'worker_pay'
                           AND (customer_id IS NULL OR customer_id = $2)
                           AND job_id = $3
-                          AND (customer_facility_id IS NULL OR customer_facility_id = $4)
-                          AND (employee_id IS NULL OR employee_id = $5)
-                          AND effective_from <= $6
-                          AND (effective_to IS NULL OR effective_to >= $6)
+                          AND (employee_id IS NULL OR employee_id = $4)
+                          AND effective_from <= $5
+                          AND (effective_to IS NULL OR effective_to >= $5)
                           AND is_active
                         ORDER BY
                             (employee_id IS NOT NULL) DESC,
-                            (customer_facility_id IS NOT NULL) DESC,
                             (customer_id IS NOT NULL) DESC,
                             priority DESC,
                             effective_from DESC,
@@ -1059,7 +955,6 @@ impl StaffingRepo for StaffingProvider {
                     tenant_id,
                     shift.customer_id,
                     shift.job_id,
-                    shift.customer_facility_id,
                     input.employee_id,
                     shift.work_date,
                 )
@@ -1183,7 +1078,7 @@ impl StaffingRepo for StaffingProvider {
                 FROM business_shift_work_sessions
                 WHERE tenant_id = $1 AND assignment_id = $2 AND ended_at IS NOT NULL
             ), customer AS (
-                SELECT confirmed_customer_facility_id, confirmed_started_at,
+                SELECT confirmed_customer_id, confirmed_started_at,
                        confirmed_ended_at, confirmed_worked_seconds AS total
                 FROM business_customer_work_records
                 WHERE tenant_id = $1 AND assignment_id = $2
@@ -1226,8 +1121,8 @@ impl StaffingRepo for StaffingProvider {
                       AND observed.total = customer.total
                       AND observed.started_at = customer.confirmed_started_at
                       AND observed.ended_at = customer.confirmed_ended_at
-                      AND customer.confirmed_customer_facility_id = (
-                          SELECT shift.customer_facility_id
+                      AND customer.confirmed_customer_id = (
+                          SELECT shift.customer_id
                           FROM business_staffing_shifts AS shift
                           WHERE shift.tenant_id = assignment.tenant_id
                             AND shift.id = assignment.shift_id
@@ -1312,15 +1207,15 @@ impl StaffingRepo for StaffingProvider {
                     ReconciliationRow,
                     r#"
             SELECT assignment.id AS assignment_id, assignment.shift_id,
-                   shift.customer_id, shift.customer_facility_id, assignment.employee_id,
+                   shift.customer_id, assignment.employee_id,
                    employee.employee_code, employee.display_name AS employee_name,
-                   customer.name AS customer_name, facility.name AS customer_facility_name,
+                   customer.name AS customer_name,
                    shift.starts_at AS scheduled_starts_at, shift.ends_at AS scheduled_ends_at,
                    assignment.status AS assignment_status,
                    work.staff_started_at, work.staff_ended_at,
                    work.staff_worked_seconds AS "staff_worked_seconds!",
                    customer_record.id AS "customer_record_id?",
-                   customer_record.confirmed_customer_facility_id AS "confirmed_customer_facility_id?",
+                   customer_record.confirmed_customer_id AS "confirmed_customer_id?",
                    customer_record.confirmed_started_at AS "customer_started_at?",
                    customer_record.confirmed_ended_at AS "customer_ended_at?",
                    customer_record.confirmed_worked_seconds AS "customer_worked_seconds?",
@@ -1333,8 +1228,6 @@ impl StaffingRepo for StaffingProvider {
                 ON shift.tenant_id = assignment.tenant_id AND shift.id = assignment.shift_id
             INNER JOIN business_customers AS customer
                 ON customer.tenant_id = shift.tenant_id AND customer.id = shift.customer_id
-            INNER JOIN business_customer_facilities AS facility
-                ON facility.tenant_id = shift.tenant_id AND facility.id = shift.customer_facility_id
             INNER JOIN hr_employees AS employee
                 ON employee.tenant_id = assignment.tenant_id AND employee.id = assignment.employee_id
             LEFT JOIN LATERAL (
@@ -1368,7 +1261,7 @@ impl StaffingRepo for StaffingProvider {
                     .ok_or(StaffingError::BackendUnavailable)?;
                 let customer_record: Option<CustomerWorkRecord> = match (
                     row.customer_record_id,
-                    row.confirmed_customer_facility_id,
+                    row.confirmed_customer_id,
                     row.customer_started_at,
                     row.customer_ended_at,
                     row.customer_worked_seconds,
@@ -1376,7 +1269,7 @@ impl StaffingRepo for StaffingProvider {
                 ) {
                     (
                         Some(id),
-                        Some(confirmed_customer_facility_id),
+                        Some(confirmed_customer_id),
                         Some(started_at),
                         Some(ended_at),
                         Some(worked_seconds),
@@ -1384,7 +1277,7 @@ impl StaffingRepo for StaffingProvider {
                     ) => Some(CustomerWorkRecord {
                         id,
                         assignment_id: row.assignment_id,
-                        confirmed_customer_facility_id,
+                        confirmed_customer_id,
                         confirmed_started_at: started_at,
                         confirmed_ended_at: ended_at,
                         confirmed_worked_seconds: worked_seconds,
@@ -1403,7 +1296,7 @@ impl StaffingRepo for StaffingProvider {
                     } else if customer_record.is_none() {
                         ReconciliationStatus::PendingCustomer
                     } else if customer_record.as_ref().is_some_and(|record: &CustomerWorkRecord| {
-                        record.confirmed_customer_facility_id == row.customer_facility_id
+                        record.confirmed_customer_id == row.customer_id
                             && row
                                 .staff_started_at
                                 .is_some_and(|started_at: DateTime<Utc>| record.confirmed_started_at == started_at)
@@ -1420,12 +1313,10 @@ impl StaffingRepo for StaffingProvider {
                     assignment_id: row.assignment_id,
                     shift_id: row.shift_id,
                     customer_id: row.customer_id,
-                    customer_facility_id: row.customer_facility_id,
                     employee_id: row.employee_id,
                     employee_code: row.employee_code,
                     employee_name: row.employee_name,
                     customer_name: row.customer_name,
-                    customer_facility_name: row.customer_facility_name,
                     scheduled_starts_at: row.scheduled_starts_at,
                     scheduled_ends_at: row.scheduled_ends_at,
                     assignment_status,
@@ -1456,7 +1347,7 @@ impl StaffingRepo for StaffingProvider {
                     CustomerWorkRecordRow,
                     r#"
                     INSERT INTO business_customer_work_records (
-                        id, tenant_id, assignment_id, confirmed_customer_facility_id,
+                        id, tenant_id, assignment_id, confirmed_customer_id,
                         confirmed_started_at, confirmed_ended_at,
                         customer_reference, notes, recorded_by_account_id
                     )
@@ -1466,14 +1357,14 @@ impl StaffingRepo for StaffingProvider {
                       AND assignment.id = $3
                       AND assignment.status = 'assigned'
                     ON CONFLICT (tenant_id, assignment_id) DO UPDATE
-                    SET confirmed_customer_facility_id = EXCLUDED.confirmed_customer_facility_id,
+                    SET confirmed_customer_id = EXCLUDED.confirmed_customer_id,
                         confirmed_started_at = EXCLUDED.confirmed_started_at,
                         confirmed_ended_at = EXCLUDED.confirmed_ended_at,
                         customer_reference = EXCLUDED.customer_reference,
                         notes = EXCLUDED.notes,
                         recorded_by_account_id = EXCLUDED.recorded_by_account_id,
                         updated_at = CURRENT_TIMESTAMP
-                    RETURNING id, assignment_id, confirmed_customer_facility_id,
+                    RETURNING id, assignment_id, confirmed_customer_id,
                               confirmed_started_at, confirmed_ended_at,
                               confirmed_worked_seconds AS "confirmed_worked_seconds!",
                               customer_reference, notes, updated_at
@@ -1481,7 +1372,7 @@ impl StaffingRepo for StaffingProvider {
                     record_id,
                     tenant_id,
                     assignment_id,
-                    input.confirmed_customer_facility_id,
+                    input.confirmed_customer_id,
                     input.confirmed_started_at,
                     input.confirmed_ended_at,
                     input.customer_reference,

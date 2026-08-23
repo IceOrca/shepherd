@@ -202,10 +202,10 @@ export function OperationsOverviewPage(): React.JSX.Element {
         <section className="overflow-hidden rounded-2xl bg-gradient-to-br from-blue-700 via-blue-600 to-cyan-500 p-6 text-white shadow-xl shadow-blue-900/10 sm:p-8">
           <p className="text-sm font-bold text-blue-100">Chào {auth.profile?.username},</p>
           <h2 className="mt-2 max-w-2xl text-2xl font-black tracking-tight sm:text-3xl">
-            Ghi nhận công việc ngay khi đến cơ sở
+            Ghi nhận công việc ngay khi đến nơi làm việc của khách hàng
           </h2>
           <p className="mt-3 max-w-xl text-sm leading-6 text-blue-50">
-            Không cần chờ quản lý tạo ca. Chọn đúng cơ sở, chọn bạn và đồng nghiệp, rồi bắt đầu bằng thời gian máy chủ.
+            Không cần chờ quản lý tạo ca. Chọn đúng khách hàng, chọn bạn và đồng nghiệp, rồi bắt đầu bằng thời gian máy chủ.
           </p>
           <Link className="mt-6 inline-flex min-h-11 items-center rounded-xl bg-white px-5 text-sm font-bold text-blue-700 shadow-lg" to="/operations/work">
             Ghi nhận công việc

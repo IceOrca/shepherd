@@ -3,13 +3,13 @@ use std::{collections::BTreeSet, sync::Arc};
 use axum::{
     Extension, Json, Router,
     extract::{Request, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     middleware::Next,
     response::Response,
     routing::get,
 };
 use infra_kernel::request::PrincipalRateLimitKey;
-use infra_postgres::{DatabaseAdapter, TenantDbErr};
+use infra_postgres::{DatabaseAdapter, TenantDbErr, with_active_branch};
 use sqlx::PgConnection;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, trace, warn};
@@ -70,6 +70,8 @@ pub struct AuthenticatedUser {
     pub primary_role: RoleCode,
     pub roles: Vec<RoleCode>,
     pub permissions: Vec<PermissionCode>,
+    pub branch_ids: Vec<Uuid>,
+    pub active_branch_id: Option<Uuid>,
 }
 
 impl AuthenticatedUser {
@@ -88,6 +90,8 @@ impl AuthenticatedUser {
             primary_role: self.primary_role.clone(),
             roles: self.roles.clone(),
             permissions: self.permissions.clone(),
+            branch_ids: self.branch_ids.clone(),
+            active_branch_id: self.active_branch_id,
         }
     }
 }
@@ -104,6 +108,10 @@ pub struct CurrentUserProfile {
     pub primary_role: RoleCode,
     pub roles: Vec<RoleCode>,
     pub permissions: Vec<PermissionCode>,
+    #[ts(type = "Array<string>")]
+    pub branch_ids: Vec<Uuid>,
+    #[ts(type = "string | null")]
+    pub active_branch_id: Option<Uuid>,
 }
 
 pub fn routes(auth: Arc<AuthService>) -> Router {
@@ -148,6 +156,12 @@ struct AccountPermission {
     pub effect: String,
 }
 
+struct AccountBranch {
+    pub branch_id: Uuid,
+}
+
+const ACTIVE_BRANCH_HEADER: &str = "x-shepherd-branch-id";
+
 pub async fn resolve_application_account(
     State(ctx): State<Arc<AuthService>>,
     Extension(principal): Extension<AuthenticatedPrincipal>,
@@ -181,7 +195,7 @@ pub async fn resolve_application_account(
             None
         }
     };
-    let user: AuthenticatedUser = match cached_user {
+    let mut user: AuthenticatedUser = match cached_user {
         Some(cached_user) if principal.tenant_id == Some(cached_user.tenant_id) => {
             trace!(
                 operation = "resolve_application_account",
@@ -234,6 +248,8 @@ pub async fn resolve_application_account(
         );
         return Err(StatusCode::UNAUTHORIZED);
     }
+    let active_branch_id: Uuid = resolve_active_branch(request.headers(), &user)?;
+    user.active_branch_id = Some(active_branch_id);
     let tenant_id: Uuid = user.tenant_id;
     let account_id: Uuid = user.account_id;
     debug!(
@@ -242,13 +258,15 @@ pub async fn resolve_application_account(
         account_id = %account_id,
         role_count = user.roles.len(),
         permission_count = user.permissions.len(),
+        active_branch_id = %active_branch_id,
+        accessible_branch_count = user.branch_ids.len(),
         "Resolved active application account for external identity"
     );
     request
         .extensions_mut()
         .insert(PrincipalRateLimitKey::new(format!("{tenant_id}:{account_id}")));
     request.extensions_mut().insert(user);
-    let response: Response = next.run(request).await;
+    let response: Response = with_active_branch(active_branch_id, next.run(request)).await;
     info!(
         operation = "resolve_application_account",
         method = %method,
@@ -259,6 +277,47 @@ pub async fn resolve_application_account(
         "Protected request completed after application account resolution"
     );
     Ok(response)
+}
+
+fn resolve_active_branch(headers: &HeaderMap, user: &AuthenticatedUser) -> Result<Uuid, StatusCode> {
+    let requested_branch_id: Option<Uuid> = headers
+        .get(ACTIVE_BRANCH_HEADER)
+        .map(|value| value.to_str().map_err(|_| StatusCode::BAD_REQUEST))
+        .transpose()?
+        .map(|value: &str| Uuid::parse_str(value).map_err(|_| StatusCode::BAD_REQUEST))
+        .transpose()?;
+    let active_branch_id: Uuid = match requested_branch_id {
+        Some(branch_id) if user.branch_ids.contains(&branch_id) => branch_id,
+        Some(branch_id) => {
+            warn!(
+                operation = "resolve_active_branch",
+                tenant_id = %user.tenant_id,
+                account_id = %user.account_id,
+                requested_branch_id = %branch_id,
+                accessible_branch_count = user.branch_ids.len(),
+                "Account attempted to select an unauthorized branch"
+            );
+            return Err(StatusCode::FORBIDDEN);
+        }
+        None => user.branch_ids.first().copied().ok_or_else(|| {
+            warn!(
+                operation = "resolve_active_branch",
+                tenant_id = %user.tenant_id,
+                account_id = %user.account_id,
+                "Active account has no accessible active branch"
+            );
+            StatusCode::FORBIDDEN
+        })?,
+    };
+    debug!(
+        operation = "resolve_active_branch",
+        tenant_id = %user.tenant_id,
+        account_id = %user.account_id,
+        active_branch_id = %active_branch_id,
+        requested_explicitly = requested_branch_id.is_some(),
+        "Resolved validated active branch for protected request"
+    );
+    Ok(active_branch_id)
 }
 
 async fn load_account(
@@ -304,7 +363,12 @@ async fn load_account(
 
     let tenant_id: Uuid = identity.tenant_id;
     let account_id: Uuid = identity.account_id;
-    let authorization_rows: (Option<UserAccount>, Vec<AccountRole>, Vec<AccountPermission>) = db
+    let authorization_rows: (
+        Option<UserAccount>,
+        Vec<AccountRole>,
+        Vec<AccountPermission>,
+        Vec<AccountBranch>,
+    ) = db
         .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
             let account: Option<UserAccount> = sqlx::query_as!(
                 UserAccount,
@@ -351,9 +415,36 @@ async fn load_account(
                 tenant_id,
                 account_id,
             )
-            .fetch_all(connection)
+            .fetch_all(&mut *connection)
             .await?;
-            Ok((account, role_rows, permission_rows))
+            let branch_rows: Vec<AccountBranch> = sqlx::query_as!(
+                AccountBranch,
+                r#"
+                SELECT branch.id AS branch_id
+                FROM branches AS branch
+                INNER JOIN accounts AS account
+                    ON account.tenant_id = branch.tenant_id
+                   AND account.id = $2
+                INNER JOIN auth_role_branch_assignment_rules AS branch_rule
+                    ON branch_rule.role_code = account.primary_role_code
+                LEFT JOIN account_branch_assignments AS assignment
+                    ON assignment.tenant_id = account.tenant_id
+                   AND assignment.account_id = account.id
+                   AND assignment.branch_id = branch.id
+                WHERE branch.tenant_id = $1
+                  AND branch.status = 'active'
+                  AND (
+                      branch_rule.max_assignments = 0
+                      OR assignment.branch_id IS NOT NULL
+                  )
+                ORDER BY lower(branch.name), branch.id
+                "#,
+                tenant_id,
+                account_id,
+            )
+            .fetch_all(&mut *connection)
+            .await?;
+            Ok((account, role_rows, permission_rows, branch_rows))
         })
         .await
         .map_err(|database_error: TenantDbErr| {
@@ -365,8 +456,12 @@ async fn load_account(
             );
             StatusCode::SERVICE_UNAVAILABLE
         })?;
-    let (account, role_rows, permission_rows): (Option<UserAccount>, Vec<AccountRole>, Vec<AccountPermission>) =
-        authorization_rows;
+    let (account, role_rows, permission_rows, branch_rows): (
+        Option<UserAccount>,
+        Vec<AccountRole>,
+        Vec<AccountPermission>,
+        Vec<AccountBranch>,
+    ) = authorization_rows;
     let account: UserAccount = account.ok_or_else(|| {
         error!(
             tenant_id = %tenant_id,
@@ -459,12 +554,17 @@ async fn load_account(
         }
     }
     let permissions: Vec<PermissionCode> = permission_set.into_iter().collect();
+    let branch_ids: Vec<Uuid> = branch_rows
+        .into_iter()
+        .map(|row: AccountBranch| row.branch_id)
+        .collect();
     debug!(
         operation = "load_application_account",
         tenant_id = %account.tenant_id,
         account_id = %account.id,
         role_count = roles.len(),
         permission_count = permissions.len(),
+        accessible_branch_count = branch_ids.len(),
         "Resolved effective application authorization"
     );
 
@@ -476,5 +576,7 @@ async fn load_account(
         primary_role,
         roles,
         permissions,
+        branch_ids,
+        active_branch_id: None,
     })
 }

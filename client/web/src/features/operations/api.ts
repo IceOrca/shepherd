@@ -1,6 +1,6 @@
 import type {
+  BranchSummary,
   Customer,
-  CustomerFacility,
   CustomerUpsertRequest,
   CustomerWorkRecord,
   CustomerWorkRecordUpsertRequest,
@@ -24,7 +24,7 @@ import type {
   UrgentCustomerWorkRecordUpsertRequest,
   UrgentWorkEmployee,
   UrgentWorkEndRequest,
-  UrgentWorkFacility,
+  UrgentWorkCustomer,
   UrgentWorkItem,
   UrgentWorkReconcileRequest,
   UrgentWorkReconciliation,
@@ -34,6 +34,7 @@ import { apiRequest } from "../../shared/api/client";
 
 export const operationsQueryKeys = {
   all: ["operations"] as const,
+  branches: ["operations", "branches"] as const,
   customers: ["operations", "customers"] as const,
   jobs: ["operations", "jobs"] as const,
   employees: ["operations", "employees"] as const,
@@ -42,14 +43,17 @@ export const operationsQueryKeys = {
   ownAssignments: ["operations", "own-assignments"] as const,
   reconciliations: ["operations", "reconciliations"] as const,
   urgentEmployees: ["operations", "urgent-work", "employees"] as const,
-  urgentFacilities: ["operations", "urgent-work", "facilities"] as const,
+  urgentCustomers: ["operations", "urgent-work", "customers"] as const,
   urgentOwnWork: ["operations", "urgent-work", "me"] as const,
   urgentTeamWork: ["operations", "urgent-work", "team"] as const,
   urgentReconciliations: ["operations", "urgent-work", "reconciliations"] as const,
   shifts: ["operations", "shifts"] as const,
-  facilities: (customerId: string) => ["operations", "customers", customerId, "facilities"] as const,
   candidates: (shiftId: string) => ["operations", "shifts", shiftId, "candidates"] as const,
 };
+
+export function listBranches(): Promise<BranchSummary[]> {
+  return apiRequest<BranchSummary[]>("/api/business/branches");
+}
 
 export interface WorkActionInput {
   action: "start" | "end";
@@ -85,10 +89,6 @@ export function updateCustomer(customerId: string, payload: CustomerUpsertReques
     method: "PUT",
     body: JSON.stringify(payload),
   });
-}
-
-export function listCustomerFacilities(customerId: string): Promise<CustomerFacility[]> {
-  return apiRequest<CustomerFacility[]>(`/api/business/customers/${customerId}/facilities`);
 }
 
 export function listJobs(): Promise<JobPosition[]> {
@@ -187,8 +187,8 @@ export function executeWorkAction(input: WorkActionInput): Promise<ShiftWorkSess
   );
 }
 
-export function listUrgentFacilities(): Promise<UrgentWorkFacility[]> {
-  return apiRequest<UrgentWorkFacility[]>("/api/business/staffing/urgent-work/facilities");
+export function listUrgentCustomers(): Promise<UrgentWorkCustomer[]> {
+  return apiRequest<UrgentWorkCustomer[]>("/api/business/staffing/urgent-work/customers");
 }
 
 export function listUrgentEmployees(): Promise<UrgentWorkEmployee[]> {

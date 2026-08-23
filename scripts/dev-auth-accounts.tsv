@@ -1,25 +1,52 @@
 # Development-only login catalog. Columns are tab-separated.
-# The seed uses one representative role from each current responsibility band:
-# owner/director -> owner, manager/supervisor -> manager, staff -> staff.
-# tenant	business_role	username	email	password
-acme	owner	iceorca	iceorca@shepherd.local	01234567aA
-acme	manager	acme_manager_1	acme.manager1@shepherd.local	01234567aA
-acme	manager	acme_manager_2	acme.manager2@shepherd.local	01234567aA
-acme	staff	acme_staff_1	acme.staff1@shepherd.local	01234567aA
-acme	staff	acme_staff_2	acme.staff2@shepherd.local	01234567aA
-acme	staff	acme_staff_3	acme.staff3@shepherd.local	01234567aA
-acme	staff	acme_staff_4	acme.staff4@shepherd.local	01234567aA
-acme1	owner	acme1_owner	acme1.owner@shepherd.local	01234567aA
-acme1	manager	acme1_manager_1	acme1.manager1@shepherd.local	01234567aA
-acme1	manager	acme1_manager_2	acme1.manager2@shepherd.local	01234567aA
-acme1	staff	acme1_staff_1	acme1.staff1@shepherd.local	01234567aA
-acme1	staff	acme1_staff_2	acme1.staff2@shepherd.local	01234567aA
-acme1	staff	acme1_staff_3	acme1.staff3@shepherd.local	01234567aA
-acme1	staff	acme1_staff_4	acme1.staff4@shepherd.local	01234567aA
-acme2	owner	acme2_owner	acme2.owner@shepherd.local	01234567aA
-acme2	manager	acme2_manager_1	acme2.manager1@shepherd.local	01234567aA
-acme2	manager	acme2_manager_2	acme2.manager2@shepherd.local	01234567aA
-acme2	staff	acme2_staff_1	acme2.staff1@shepherd.local	01234567aA
-acme2	staff	acme2_staff_2	acme2.staff2@shepherd.local	01234567aA
-acme2	staff	acme2_staff_3	acme2.staff3@shepherd.local	01234567aA
-acme2	staff	acme2_staff_4	acme2.staff4@shepherd.local	01234567aA
+# Each tenant has a tenant owner and executive manager above two branches.
+# Each branch has exactly 1 branch manager, 2 supervisors, and 4 staff.
+# tenant	business_role	username	email	password	branch
+acme	tenant_owner	iceorca	iceorca@shepherd.local	01234567aA	all
+acme	executive_manager	acme_exec	acme.exec@shepherd.local	01234567aA	all
+acme	branch_manager	acme_head_manager	acme.headmanager@shepherd.local	01234567aA	head-office
+acme	supervisor	acme_head_supervisor_1	acme.headsupervisor1@shepherd.local	01234567aA	head-office
+acme	supervisor	acme_head_supervisor_2	acme.headsupervisor2@shepherd.local	01234567aA	head-office
+acme	staff	acme_head_staff_1	acme.headstaff1@shepherd.local	01234567aA	head-office
+acme	staff	acme_head_staff_2	acme.headstaff2@shepherd.local	01234567aA	head-office
+acme	staff	acme_head_staff_3	acme.headstaff3@shepherd.local	01234567aA	head-office
+acme	staff	acme_head_staff_4	acme.headstaff4@shepherd.local	01234567aA	head-office
+acme	branch_manager	acme_north_manager	acme.northmanager@shepherd.local	01234567aA	north-branch
+acme	supervisor	acme_north_supervisor_1	acme.northsupervisor1@shepherd.local	01234567aA	north-branch
+acme	supervisor	acme_north_supervisor_2	acme.northsupervisor2@shepherd.local	01234567aA	north-branch
+acme	staff	acme_north_staff_1	acme.northstaff1@shepherd.local	01234567aA	north-branch
+acme	staff	acme_north_staff_2	acme.northstaff2@shepherd.local	01234567aA	north-branch
+acme	staff	acme_north_staff_3	acme.northstaff3@shepherd.local	01234567aA	north-branch
+acme	staff	acme_north_staff_4	acme.northstaff4@shepherd.local	01234567aA	north-branch
+acme1	tenant_owner	acme1_owner	acme1.owner@shepherd.local	01234567aA	all
+acme1	executive_manager	acme1_exec	acme1.exec@shepherd.local	01234567aA	all
+acme1	branch_manager	acme1_head_manager	acme1.headmanager@shepherd.local	01234567aA	head-office
+acme1	supervisor	acme1_head_supervisor_1	acme1.headsupervisor1@shepherd.local	01234567aA	head-office
+acme1	supervisor	acme1_head_supervisor_2	acme1.headsupervisor2@shepherd.local	01234567aA	head-office
+acme1	staff	acme1_head_staff_1	acme1.headstaff1@shepherd.local	01234567aA	head-office
+acme1	staff	acme1_head_staff_2	acme1.headstaff2@shepherd.local	01234567aA	head-office
+acme1	staff	acme1_head_staff_3	acme1.headstaff3@shepherd.local	01234567aA	head-office
+acme1	staff	acme1_head_staff_4	acme1.headstaff4@shepherd.local	01234567aA	head-office
+acme1	branch_manager	acme1_north_manager	acme1.northmanager@shepherd.local	01234567aA	north-branch
+acme1	supervisor	acme1_north_supervisor_1	acme1.northsupervisor1@shepherd.local	01234567aA	north-branch
+acme1	supervisor	acme1_north_supervisor_2	acme1.northsupervisor2@shepherd.local	01234567aA	north-branch
+acme1	staff	acme1_north_staff_1	acme1.northstaff1@shepherd.local	01234567aA	north-branch
+acme1	staff	acme1_north_staff_2	acme1.northstaff2@shepherd.local	01234567aA	north-branch
+acme1	staff	acme1_north_staff_3	acme1.northstaff3@shepherd.local	01234567aA	north-branch
+acme1	staff	acme1_north_staff_4	acme1.northstaff4@shepherd.local	01234567aA	north-branch
+acme2	tenant_owner	acme2_owner	acme2.owner@shepherd.local	01234567aA	all
+acme2	executive_manager	acme2_exec	acme2.exec@shepherd.local	01234567aA	all
+acme2	branch_manager	acme2_head_manager	acme2.headmanager@shepherd.local	01234567aA	head-office
+acme2	supervisor	acme2_head_supervisor_1	acme2.headsupervisor1@shepherd.local	01234567aA	head-office
+acme2	supervisor	acme2_head_supervisor_2	acme2.headsupervisor2@shepherd.local	01234567aA	head-office
+acme2	staff	acme2_head_staff_1	acme2.headstaff1@shepherd.local	01234567aA	head-office
+acme2	staff	acme2_head_staff_2	acme2.headstaff2@shepherd.local	01234567aA	head-office
+acme2	staff	acme2_head_staff_3	acme2.headstaff3@shepherd.local	01234567aA	head-office
+acme2	staff	acme2_head_staff_4	acme2.headstaff4@shepherd.local	01234567aA	head-office
+acme2	branch_manager	acme2_north_manager	acme2.northmanager@shepherd.local	01234567aA	north-branch
+acme2	supervisor	acme2_north_supervisor_1	acme2.northsupervisor1@shepherd.local	01234567aA	north-branch
+acme2	supervisor	acme2_north_supervisor_2	acme2.northsupervisor2@shepherd.local	01234567aA	north-branch
+acme2	staff	acme2_north_staff_1	acme2.northstaff1@shepherd.local	01234567aA	north-branch
+acme2	staff	acme2_north_staff_2	acme2.northstaff2@shepherd.local	01234567aA	north-branch
+acme2	staff	acme2_north_staff_3	acme2.northstaff3@shepherd.local	01234567aA	north-branch
+acme2	staff	acme2_north_staff_4	acme2.northstaff4@shepherd.local	01234567aA	north-branch

@@ -32,7 +32,6 @@ pub struct OwnStaffingAssignment {
     pub assignment_id: Uuid,
     pub shift_id: Uuid,
     pub customer_name: String,
-    pub customer_facility_name: String,
     pub starts_at: DateTime<Utc>,
     pub ends_at: DateTime<Utc>,
     pub status: ShiftAssignmentStatus,

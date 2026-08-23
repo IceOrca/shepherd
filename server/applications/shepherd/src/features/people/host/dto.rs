@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 #[derive(Debug, Deserialize, TS)]
 pub struct AttendanceCheckInRequest {
-    pub facility_id: Uuid,
+    pub branch_id: Uuid,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -87,7 +87,6 @@ impl From<JobPositionUpsertRequest> for JobPositionInput {
 #[ts(optional_fields = nullable)]
 pub struct EmployeeAssignmentCreateRequest {
     pub branch_id: Uuid,
-    pub facility_id: Option<Uuid>,
     pub department_id: Option<Uuid>,
     pub job_id: Option<Uuid>,
     pub manager_employee_id: Option<Uuid>,
@@ -100,7 +99,6 @@ impl From<EmployeeAssignmentCreateRequest> for EmployeeAssignmentInput {
     fn from(value: EmployeeAssignmentCreateRequest) -> Self {
         Self {
             branch_id: value.branch_id,
-            facility_id: value.facility_id,
             department_id: value.department_id,
             job_id: value.job_id,
             manager_employee_id: value.manager_employee_id,

@@ -2,7 +2,6 @@
 
 pub mod app_routes;
 pub mod audit;
-pub mod client_identifying;
 pub mod common;
 pub mod ip_extract;
 pub mod logging;

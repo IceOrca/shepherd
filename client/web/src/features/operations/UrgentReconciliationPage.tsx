@@ -15,7 +15,7 @@ import type {
   PermissionCode,
   ReconciliationStatus,
   UrgentCustomerWorkRecord,
-  UrgentWorkFacility,
+  UrgentWorkCustomer,
   UrgentWorkReconciliation,
 } from "../../api/generated/contracts";
 import { friendlyApiError } from "../../shared/api/client";
@@ -23,7 +23,7 @@ import { formatDateTime, formatDuration } from "../../shared/lib/format";
 import { useAuth } from "../auth/AuthProvider";
 import {
   listJobs,
-  listUrgentFacilities,
+  listUrgentCustomers,
   listUrgentReconciliations,
   operationsQueryKeys,
   reconcileUrgentWork,
@@ -31,7 +31,7 @@ import {
 } from "./api";
 
 interface EvidenceDraft {
-  facilityId: string;
+  customerId: string;
   startedAt: string;
   endedAt: string;
   reference: string;
@@ -39,7 +39,7 @@ interface EvidenceDraft {
 }
 
 interface FinalDraft {
-  facilityId: string;
+  customerId: string;
   jobId: string;
   hours: string;
   reason: string;
@@ -84,7 +84,7 @@ function statusTone(status: ReconciliationStatus): string {
 function initialEvidence(item: UrgentWorkReconciliation): EvidenceDraft {
   const customerRecord: UrgentCustomerWorkRecord | null = item.customer_record;
   return {
-    facilityId: customerRecord?.confirmed_customer_facility_id ?? "",
+    customerId: customerRecord?.confirmed_customer_id ?? "",
     startedAt: localDateTime(customerRecord?.confirmed_started_at),
     endedAt: localDateTime(customerRecord?.confirmed_ended_at),
     reference: customerRecord?.customer_reference ?? "",
@@ -96,10 +96,10 @@ function initialFinal(item: UrgentWorkReconciliation): FinalDraft {
   const seconds: number =
     item.final_worked_seconds ?? item.customer_record?.confirmed_worked_seconds ?? item.work.worked_seconds ?? 0;
   return {
-    facilityId:
-      item.final_customer_facility_id ??
-      item.customer_record?.confirmed_customer_facility_id ??
-      item.work.claimed_customer_facility_id,
+    customerId:
+      item.final_customer_id ??
+      item.customer_record?.confirmed_customer_id ??
+      item.work.claimed_customer_id,
     jobId: item.final_job_id ?? "",
     hours: seconds > 0 ? (seconds / 3600).toFixed(2) : "",
     reason: item.adjustment_reason ?? "",
@@ -120,14 +120,14 @@ export function UrgentReconciliationPage(): React.JSX.Element {
   const canManage: boolean = permissions.includes("business.urgent_work.reconcile");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [evidence, setEvidence] = useState<EvidenceDraft>({
-    facilityId: "",
+    customerId: "",
     startedAt: "",
     endedAt: "",
     reference: "",
     notes: "",
   });
   const [finalDraft, setFinalDraft] = useState<FinalDraft>({
-    facilityId: "",
+    customerId: "",
     jobId: "",
     hours: "",
     reason: "",
@@ -145,9 +145,9 @@ export function UrgentReconciliationPage(): React.JSX.Element {
     queryFn: listUrgentReconciliations,
     enabled: canRead,
   });
-  const facilitiesQuery: UseQueryResult<UrgentWorkFacility[], Error> = useQuery({
-    queryKey: operationsQueryKeys.urgentFacilities,
-    queryFn: listUrgentFacilities,
+  const customersQuery: UseQueryResult<UrgentWorkCustomer[], Error> = useQuery({
+    queryKey: operationsQueryKeys.urgentCustomers,
+    queryFn: listUrgentCustomers,
     enabled: canRead,
   });
   const jobsQuery: UseQueryResult<JobPosition[], Error> = useQuery({
@@ -194,7 +194,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
         return Promise.reject(new Error("urgent report is not selected"));
       }
       return saveUrgentCustomerWorkRecord(selectedId, {
-        confirmed_customer_facility_id: evidence.facilityId,
+        confirmed_customer_id: evidence.customerId,
         confirmed_started_at: new Date(evidence.startedAt).toISOString(),
         confirmed_ended_at: new Date(evidence.endedAt).toISOString(),
         customer_reference: evidence.reference.trim() || null,
@@ -228,7 +228,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
           }
         : null;
       return reconcileUrgentWork(selectedId, {
-        final_customer_facility_id: finalDraft.facilityId,
+        final_customer_id: finalDraft.customerId,
         job_id: finalDraft.jobId,
         worked_seconds: Math.round(Number(finalDraft.hours) * 3600),
         adjustment_reason: finalDraft.reason.trim() || null,
@@ -237,12 +237,12 @@ export function UrgentReconciliationPage(): React.JSX.Element {
       });
     },
     onSuccess: (): void => {
-      setMessage("Đã chốt cơ sở, thời gian và ảnh chụp tài chính cuối cùng.");
+      setMessage("Đã chốt khách hàng, thời gian và ảnh chụp tài chính cuối cùng.");
       void refresh();
     },
     onError: (error: unknown): void => {
       setMessage(
-        friendlyApiError(error, "Không thể chốt đối soát. Mọi chênh lệch về cơ sở hoặc thời gian cần có lý do."),
+        friendlyApiError(error, "Không thể chốt đối soát. Mọi chênh lệch về khách hàng hoặc thời gian cần có lý do."),
       );
     },
   });
@@ -257,8 +257,8 @@ export function UrgentReconciliationPage(): React.JSX.Element {
     return <section className="panel p-8 text-center text-sm text-slate-500">Bạn chưa có quyền xem đối soát.</section>;
   }
 
-  const isPending: boolean = reconciliationQuery.isPending || facilitiesQuery.isPending || jobsQuery.isPending;
-  const firstError: unknown = reconciliationQuery.error ?? facilitiesQuery.error ?? jobsQuery.error;
+  const isPending: boolean = reconciliationQuery.isPending || customersQuery.isPending || jobsQuery.isPending;
+  const firstError: unknown = reconciliationQuery.error ?? customersQuery.error ?? jobsQuery.error;
   if (isPending) {
     return (
       <section className="panel p-8 text-center text-sm text-slate-500">
@@ -289,7 +289,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
         <section className="panel overflow-hidden">
           <div className="border-b border-slate-200 px-5 py-4">
             <h2 className="font-bold text-slate-950">Công việc cần đối soát</h2>
-            <p className="mt-1 text-sm text-slate-500">Bằng chứng nhân viên chọn cơ sở và tự/ghi hộ thời gian.</p>
+            <p className="mt-1 text-sm text-slate-500">Bằng chứng nhân viên chọn khách hàng và tự/ghi hộ thời gian.</p>
           </div>
           <div className="max-h-[72vh] divide-y divide-slate-100 overflow-y-auto">
             {items.map((item: UrgentWorkReconciliation): React.JSX.Element => (
@@ -303,7 +303,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                   <div>
                     <p className="font-bold text-slate-900">{item.work.employee_name}</p>
                     <p className="mt-1 text-xs text-slate-500">
-                      {item.work.customer_name} · {item.work.claimed_facility_name}
+                      {item.work.customer_name}
                     </p>
                   </div>
                   <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold ${statusTone(item.reconciliation_status)}`}>
@@ -342,7 +342,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
               <div className="mt-5 grid gap-3 lg:grid-cols-3">
                 <div className="rounded-xl bg-violet-50 p-4">
                   <p className="text-xs font-bold uppercase text-violet-600">Nhân viên khai</p>
-                  <p className="mt-2 font-black text-violet-950">{selected.work.claimed_facility_name}</p>
+                  <p className="mt-2 font-black text-violet-950">{selected.work.customer_name}</p>
                   <p className="mt-1 text-sm font-bold text-violet-900">
                     {formatDuration(selected.work.worked_seconds ?? 0)}
                   </p>
@@ -353,7 +353,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                 <div className="rounded-xl bg-amber-50 p-4">
                   <p className="text-xs font-bold uppercase text-amber-600">Khách hàng xác nhận</p>
                   <p className="mt-2 font-black text-amber-950">
-                    {selected.customer_record?.confirmed_facility_name ?? "Chưa nhập"}
+                    {selected.customer_record?.confirmed_customer_name ?? "Chưa nhập"}
                   </p>
                   <p className="mt-1 text-sm font-bold text-amber-900">
                     {selected.customer_record ? formatDuration(selected.customer_record.confirmed_worked_seconds) : "—"}
@@ -376,23 +376,23 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                 <h3 className="font-bold text-slate-950">Xác nhận / bill từ khách hàng</h3>
               </div>
               <p className="mt-1 text-sm text-slate-500">
-                Nhập đúng cơ sở và thời gian khách hàng cung cấp. Form trống cho đến khi có bằng chứng khách hàng.
+                Nhập đúng khách hàng và thời gian trên dữ liệu xác nhận. Form trống cho đến khi có bằng chứng khách hàng.
               </p>
               <label className="mt-4 block text-sm font-semibold text-slate-700">
-                Cơ sở khách hàng xác nhận
+                Khách hàng / nơi làm việc xác nhận
                 <select
                   className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5"
                   disabled={!canManage || selected.reconciliation_status === "reconciled"}
                   onChange={(event: React.ChangeEvent<HTMLSelectElement>): void =>
-                    setEvidence((current: EvidenceDraft): EvidenceDraft => ({ ...current, facilityId: event.target.value }))
+                    setEvidence((current: EvidenceDraft): EvidenceDraft => ({ ...current, customerId: event.target.value }))
                   }
                   required
-                  value={evidence.facilityId}
+                  value={evidence.customerId}
                 >
-                  <option value="">Chọn cơ sở theo bill</option>
-                  {(facilitiesQuery.data ?? []).map((facility): React.JSX.Element => (
-                    <option key={facility.facility_id} value={facility.facility_id}>
-                      {facility.customer_name} · {facility.facility_name}
+                  <option value="">Chọn khách hàng theo bill</option>
+                  {(customersQuery.data ?? []).map((customer: UrgentWorkCustomer): React.JSX.Element => (
+                    <option key={customer.customer_id} value={customer.customer_id}>
+                      {customer.customer_name}
                     </option>
                   ))}
                 </select>
@@ -463,19 +463,19 @@ export function UrgentReconciliationPage(): React.JSX.Element {
               </div>
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <label className="text-sm font-semibold text-slate-700">
-                  Cơ sở cuối cùng
+                  Khách hàng cuối cùng
                   <select
                     className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5"
                     disabled={selected.reconciliation_status === "reconciled"}
                     onChange={(event: React.ChangeEvent<HTMLSelectElement>): void =>
-                      setFinalDraft((current: FinalDraft): FinalDraft => ({ ...current, facilityId: event.target.value }))
+                      setFinalDraft((current: FinalDraft): FinalDraft => ({ ...current, customerId: event.target.value }))
                     }
-                    value={finalDraft.facilityId}
+                    value={finalDraft.customerId}
                   >
-                    <option value="">Chọn cơ sở cuối</option>
-                    {(facilitiesQuery.data ?? []).map((facility): React.JSX.Element => (
-                      <option key={facility.facility_id} value={facility.facility_id}>
-                        {facility.customer_name} · {facility.facility_name}
+                    <option value="">Chọn khách hàng cuối</option>
+                    {(customersQuery.data ?? []).map((customer: UrgentWorkCustomer): React.JSX.Element => (
+                      <option key={customer.customer_id} value={customer.customer_id}>
+                        {customer.customer_name}
                       </option>
                     ))}
                   </select>
@@ -518,7 +518,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                     onChange={(event: React.ChangeEvent<HTMLInputElement>): void =>
                       setFinalDraft((current: FinalDraft): FinalDraft => ({ ...current, reason: event.target.value }))
                     }
-                    placeholder="Bắt buộc nếu cơ sở hoặc thời gian lệch"
+                    placeholder="Bắt buộc nếu khách hàng hoặc thời gian lệch"
                     value={finalDraft.reason}
                   />
                 </label>
@@ -571,7 +571,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                   disabled={
                     !canManage ||
                     !selected.customer_record ||
-                    !finalDraft.facilityId ||
+                    !finalDraft.customerId ||
                     !finalDraft.jobId ||
                     Number(finalDraft.hours) <= 0 ||
                     reconcileMutation.isPending

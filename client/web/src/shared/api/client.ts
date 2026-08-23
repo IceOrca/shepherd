@@ -17,11 +17,13 @@ interface ClientApiLogContext {
   hasBody: boolean;
   status?: number;
   refreshed?: boolean;
+  activeBranchId?: string | null;
 }
 
 let authenticationLostHandler: (() => void) | null = null;
 let authenticationRefreshHandler: (() => Promise<string | null>) | null = null;
 let accessToken: string | null = null;
+let activeBranchId: string | null = null;
 
 function requestMethod(init: RequestInit): string {
   return init.method ?? "GET";
@@ -57,6 +59,15 @@ export function setApiAccessToken(token: string | null): void {
   accessToken = token;
 }
 
+export function setApiActiveBranchId(branchId: string | null): void {
+  activeBranchId = branchId;
+  console.info("Shepherd API active branch updated", { activeBranchId });
+}
+
+export function getApiActiveBranchId(): string | null {
+  return activeBranchId;
+}
+
 async function readPayload(response: Response): Promise<unknown> {
   const text: string = await response.text();
   if (!text) {
@@ -82,8 +93,11 @@ async function sendRequest(path: string, init: RequestInit): Promise<Response> {
   if (accessToken) {
     headers.set("Authorization", `Bearer ${accessToken}`);
   }
+  if (activeBranchId) {
+    headers.set("X-Shepherd-Branch-Id", activeBranchId);
+  }
 
-  logClientApiRequest({ path, method, hasAccessToken, hasBody });
+  logClientApiRequest({ path, method, hasAccessToken, hasBody, activeBranchId });
   return fetchWithTimeout(path, {
     ...init,
     headers,
@@ -116,6 +130,7 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
     hasBody,
     status: response.status,
     refreshed,
+    activeBranchId,
   };
   logClientApiResponse(logContext);
 

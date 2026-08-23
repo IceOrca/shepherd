@@ -7,18 +7,18 @@ use crate::{
     },
     business::staffing::{
         core::{
-            BusinessRecordStatus, Customer, CustomerFacility, CustomerWorkRecord, RateSource, ReconciliationStatus,
-            ShiftAssignment, ShiftAssignmentStatus, StaffingCandidate, StaffingEligibility, StaffingRate,
-            StaffingRateKind, StaffingReconciliation, StaffingShift, StaffingShiftStatus,
+            BusinessRecordStatus, Customer, CustomerWorkRecord, RateSource, ReconciliationStatus, ShiftAssignment,
+            ShiftAssignmentStatus, StaffingCandidate, StaffingEligibility, StaffingRate, StaffingRateKind,
+            StaffingReconciliation, StaffingShift, StaffingShiftStatus,
         },
         host::{
-            CustomerFacilityCreateRequest, CustomerUpsertRequest, CustomerWorkRecordUpsertRequest,
-            ManualRateOverrideRequest, ShiftAssignmentApproveRequest, ShiftAssignmentCreateRequest,
-            StaffingEligibilityCreateRequest, StaffingRateCreateRequest, StaffingShiftCreateRequest,
+            CustomerUpsertRequest, CustomerWorkRecordUpsertRequest, ManualRateOverrideRequest,
+            ShiftAssignmentApproveRequest, ShiftAssignmentCreateRequest, StaffingEligibilityCreateRequest,
+            StaffingRateCreateRequest, StaffingShiftCreateRequest,
         },
         urgent_work::{
             core::{
-                UrgentCustomerWorkRecord, UrgentWorkActionSource, UrgentWorkEmployee, UrgentWorkFacility,
+                UrgentCustomerWorkRecord, UrgentWorkActionSource, UrgentWorkCustomer, UrgentWorkEmployee,
                 UrgentWorkItem, UrgentWorkReconciliation, UrgentWorkStatus,
             },
             host::{
@@ -32,14 +32,14 @@ use crate::{
         },
     },
     features::{
-        organization::core::{BranchSummary, FacilitySummary},
+        organization::core::BranchSummary,
         payroll::{
             core::{
-                EmployeeCompensation, FacilityRateRule, OvertimeRule, PayBasis, PayrollEmployeeResult, PayrollLine,
+                BranchRateRule, EmployeeCompensation, OvertimeRule, PayBasis, PayrollEmployeeResult, PayrollLine,
                 PayrollRun, PayrollRunStatus, TimeBandRule,
             },
             host::{
-                EmployeeCompensationCreateRequest, FacilityRateRuleCreateRequest, OvertimeRuleCreateRequest,
+                BranchRateRuleCreateRequest, EmployeeCompensationCreateRequest, OvertimeRuleCreateRequest,
                 PayrollCalculateRequest, TimeBandRuleCreateRequest,
             },
         },
@@ -77,14 +77,12 @@ pub fn contract() -> String {
     push::<SetAuthUserStatusRequest>(&mut output, &config);
 
     push::<BranchSummary>(&mut output, &config);
-    push::<FacilitySummary>(&mut output, &config);
     push::<BusinessRecordStatus>(&mut output, &config);
     push::<StaffingShiftStatus>(&mut output, &config);
     push::<ShiftAssignmentStatus>(&mut output, &config);
     push::<RateSource>(&mut output, &config);
     push::<StaffingRateKind>(&mut output, &config);
     push::<Customer>(&mut output, &config);
-    push::<CustomerFacility>(&mut output, &config);
     push::<StaffingRate>(&mut output, &config);
     push::<StaffingShift>(&mut output, &config);
     push::<ShiftAssignment>(&mut output, &config);
@@ -95,7 +93,6 @@ pub fn contract() -> String {
     push::<StaffingReconciliation>(&mut output, &config);
     push::<CustomerWorkRecordUpsertRequest>(&mut output, &config);
     push::<CustomerUpsertRequest>(&mut output, &config);
-    push::<CustomerFacilityCreateRequest>(&mut output, &config);
     push::<StaffingRateCreateRequest>(&mut output, &config);
     push::<StaffingEligibilityCreateRequest>(&mut output, &config);
     push::<StaffingShiftCreateRequest>(&mut output, &config);
@@ -107,7 +104,7 @@ pub fn contract() -> String {
     push::<ShiftWorkActionRequest>(&mut output, &config);
     push::<UrgentWorkStatus>(&mut output, &config);
     push::<UrgentWorkActionSource>(&mut output, &config);
-    push::<UrgentWorkFacility>(&mut output, &config);
+    push::<UrgentWorkCustomer>(&mut output, &config);
     push::<UrgentWorkEmployee>(&mut output, &config);
     push::<UrgentWorkItem>(&mut output, &config);
     push::<UrgentCustomerWorkRecord>(&mut output, &config);
@@ -119,14 +116,14 @@ pub fn contract() -> String {
     push::<PayBasis>(&mut output, &config);
     push::<PayrollRunStatus>(&mut output, &config);
     push::<EmployeeCompensation>(&mut output, &config);
-    push::<FacilityRateRule>(&mut output, &config);
+    push::<BranchRateRule>(&mut output, &config);
     push::<TimeBandRule>(&mut output, &config);
     push::<OvertimeRule>(&mut output, &config);
     push::<PayrollEmployeeResult>(&mut output, &config);
     push::<PayrollLine>(&mut output, &config);
     push::<PayrollRun>(&mut output, &config);
     push::<EmployeeCompensationCreateRequest>(&mut output, &config);
-    push::<FacilityRateRuleCreateRequest>(&mut output, &config);
+    push::<BranchRateRuleCreateRequest>(&mut output, &config);
     push::<TimeBandRuleCreateRequest>(&mut output, &config);
     push::<OvertimeRuleCreateRequest>(&mut output, &config);
     push::<PayrollCalculateRequest>(&mut output, &config);

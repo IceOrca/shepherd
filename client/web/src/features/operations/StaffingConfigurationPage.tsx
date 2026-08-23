@@ -9,7 +9,6 @@ import { BadgeDollarSign, LoaderCircle, Plus, ShieldCheck } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 import type {
   Customer,
-  CustomerFacility,
   Employee,
   JobPosition,
   PermissionCode,
@@ -24,7 +23,6 @@ import { useAuth } from "../auth/AuthProvider";
 import {
   createStaffingEligibility,
   createStaffingRate,
-  listCustomerFacilities,
   listCustomers,
   listEmployees,
   listJobs,
@@ -38,7 +36,6 @@ interface RateDraft {
   code: string;
   name: string;
   customerId: string;
-  customerFacilityId: string;
   employeeId: string;
   jobId: string;
   currency: string;
@@ -63,7 +60,6 @@ const emptyRateDraft: RateDraft = {
   code: "",
   name: "",
   customerId: "",
-  customerFacilityId: "",
   employeeId: "",
   jobId: "",
   currency: "VND",
@@ -122,14 +118,6 @@ export function StaffingConfigurationPage(): React.JSX.Element {
     queryFn: listEmployees,
     enabled: canReadRates || canReadEligibility,
   });
-  const facilitiesQuery: UseQueryResult<CustomerFacility[], Error> = useQuery({
-    queryKey: rateDraft.customerId
-      ? operationsQueryKeys.facilities(rateDraft.customerId)
-      : ["operations", "customers", "none", "facilities"],
-    queryFn: (): Promise<CustomerFacility[]> => listCustomerFacilities(rateDraft.customerId),
-    enabled: canReadRates && Boolean(rateDraft.customerId),
-  });
-
   const customerNames: Map<string, string> = useMemo(
     (): Map<string, string> =>
       new Map((customersQuery.data ?? []).map((customer: Customer): [string, string] => [customer.id, customer.name])),
@@ -177,7 +165,6 @@ export function StaffingConfigurationPage(): React.JSX.Element {
       code: rateDraft.code.trim().toLocaleLowerCase("en-US"),
       name: rateDraft.name.trim(),
       customer_id: rateDraft.customerId || null,
-      customer_facility_id: rateDraft.customerFacilityId || null,
       employee_id: rateDraft.employeeId || null,
       job_id: rateDraft.jobId,
       currency: rateDraft.currency.trim().toLocaleUpperCase("en-US"),
@@ -227,14 +214,13 @@ export function StaffingConfigurationPage(): React.JSX.Element {
       <div className="grid gap-5 xl:grid-cols-2">
         <section className="panel p-5 sm:p-6">
           <div className="flex items-center gap-2"><BadgeDollarSign className="size-5 text-blue-600" /><h2 className="font-black text-slate-950">Giá thu và tiền công</h2></div>
-          <p className="mt-1 text-sm text-slate-500">Hai loại giá độc lập; tiền công có thể thay đổi theo nhân viên, khách hàng, cơ sở và ngày hiệu lực.</p>
+          <p className="mt-1 text-sm text-slate-500">Hai loại giá độc lập; tiền công có thể thay đổi theo nhân viên, khách hàng và ngày hiệu lực.</p>
           {canManageRates ? (
             <form className="mt-5 grid gap-3 sm:grid-cols-2" onSubmit={submitRate}>
               <label className="text-sm font-semibold text-slate-700">Loại giá<select className="mt-1.5 w-full rounded-xl border-slate-300" value={rateDraft.rateKind} onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => setRateDraft({ ...rateDraft, rateKind: event.target.value as StaffingRateKind })}><option value="customer_bill">Giá thu khách hàng</option><option value="worker_pay">Tiền công nhân viên</option></select></label>
               <label className="text-sm font-semibold text-slate-700">Mã<input className="mt-1.5 w-full rounded-xl border-slate-300" required value={rateDraft.code} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => setRateDraft({ ...rateDraft, code: event.target.value })} /></label>
               <label className="text-sm font-semibold text-slate-700 sm:col-span-2">Tên<input className="mt-1.5 w-full rounded-xl border-slate-300" required value={rateDraft.name} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => setRateDraft({ ...rateDraft, name: event.target.value })} /></label>
-              <label className="text-sm font-semibold text-slate-700">Khách hàng<select className="mt-1.5 w-full rounded-xl border-slate-300" required={rateDraft.rateKind === "customer_bill"} value={rateDraft.customerId} onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => setRateDraft({ ...rateDraft, customerId: event.target.value, customerFacilityId: "" })}><option value="">{rateDraft.rateKind === "worker_pay" ? "Mặc định mọi khách hàng" : "Chọn khách hàng"}</option>{(customersQuery.data ?? []).map((customer: Customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}</select></label>
-              <label className="text-sm font-semibold text-slate-700">Cơ sở<select className="mt-1.5 w-full rounded-xl border-slate-300" disabled={!rateDraft.customerId} value={rateDraft.customerFacilityId} onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => setRateDraft({ ...rateDraft, customerFacilityId: event.target.value })}><option value="">Mọi cơ sở</option>{(facilitiesQuery.data ?? []).map((facility: CustomerFacility) => <option key={facility.id} value={facility.id}>{facility.name}</option>)}</select></label>
+              <label className="text-sm font-semibold text-slate-700">Khách hàng / nơi làm việc<select className="mt-1.5 w-full rounded-xl border-slate-300" required={rateDraft.rateKind === "customer_bill"} value={rateDraft.customerId} onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => setRateDraft({ ...rateDraft, customerId: event.target.value })}><option value="">{rateDraft.rateKind === "worker_pay" ? "Mặc định mọi khách hàng" : "Chọn khách hàng"}</option>{(customersQuery.data ?? []).map((customer: Customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}</select></label>
               <label className="text-sm font-semibold text-slate-700">Nhân viên<select className="mt-1.5 w-full rounded-xl border-slate-300" value={rateDraft.employeeId} onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => setRateDraft({ ...rateDraft, employeeId: event.target.value })}><option value="">Mọi nhân viên phù hợp</option>{(employeesQuery.data ?? []).filter((employee: Employee): boolean => employee.status === "active").map((employee: Employee) => <option key={employee.id} value={employee.id}>{employee.display_name}</option>)}</select></label>
               <label className="text-sm font-semibold text-slate-700">Dịch vụ / công việc<select className="mt-1.5 w-full rounded-xl border-slate-300" required value={rateDraft.jobId} onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => setRateDraft({ ...rateDraft, jobId: event.target.value })}><option value="">Chọn công việc</option>{(jobsQuery.data ?? []).map((job: JobPosition) => <option key={job.id} value={job.id}>{job.name}</option>)}</select></label>
               <label className="text-sm font-semibold text-slate-700">Đơn giá / giờ<input className="mt-1.5 w-full rounded-xl border-slate-300" inputMode="decimal" required value={rateDraft.hourlyRate} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => setRateDraft({ ...rateDraft, hourlyRate: event.target.value })} /></label>

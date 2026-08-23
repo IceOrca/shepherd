@@ -99,7 +99,15 @@ CREATE TABLE accounts (
         )
     ),
     CONSTRAINT accounts_primary_role_supported
-        CHECK (primary_role_code IN ('owner', 'director', 'manager', 'supervisor', 'staff')),
+        CHECK (
+            primary_role_code IN (
+                'tenant_owner',
+                'executive_manager',
+                'branch_manager',
+                'supervisor',
+                'staff'
+            )
+        ),
     CONSTRAINT accounts_updated_after_created CHECK (updated_at >= created_at)
 );
 
@@ -230,10 +238,10 @@ CREATE INDEX account_permissions_tenant_active_expiry_idx
 
 INSERT INTO roles (code, display_name, description, is_system)
 VALUES
-    ('owner', 'Owner', 'Staffing-company owner; currently shares the director responsibility band', TRUE),
-    ('director', 'Director', 'Directs the staffing company; currently shares the owner responsibility band', TRUE),
-    ('manager', 'Manager', 'Manages staffing operations; currently shares the supervisor responsibility band', TRUE),
-    ('supervisor', 'Supervisor', 'Coordinates staffing operations; currently shares the manager responsibility band', TRUE),
+    ('tenant_owner', 'Tenant owner', 'Owns the staffing company and has explicit tenant-wide authority', TRUE),
+    ('executive_manager', 'Executive manager', 'Manages the branches assigned by the tenant owner', TRUE),
+    ('branch_manager', 'Branch manager', 'Owns the independent operation of one staffing-company branch', TRUE),
+    ('supervisor', 'Supervisor', 'Coordinates staffing work inside one branch', TRUE),
     ('staff', 'Staff', 'Staff self-service and peer-clocking role', TRUE);
 
 INSERT INTO permissions (code, description)
@@ -249,13 +257,20 @@ INSERT INTO role_permissions (role_code, permission_code)
 SELECT role.code, permission.code
 FROM roles AS role
 CROSS JOIN permissions AS permission
-WHERE role.code IN ('owner', 'director');
+WHERE role.code = 'tenant_owner';
 
 INSERT INTO role_permissions (role_code, permission_code)
 VALUES
-    ('manager', 'auth.accounts.read'),
-    ('manager', 'auth.accounts.create'),
-    ('manager', 'auth.roles.read'),
+    ('executive_manager', 'auth.accounts.read'),
+    ('executive_manager', 'auth.accounts.create'),
+    ('executive_manager', 'auth.accounts.update'),
+    ('executive_manager', 'auth.accounts.disable'),
+    ('executive_manager', 'auth.roles.read'),
+    ('branch_manager', 'auth.accounts.read'),
+    ('branch_manager', 'auth.accounts.create'),
+    ('branch_manager', 'auth.accounts.update'),
+    ('branch_manager', 'auth.accounts.disable'),
+    ('branch_manager', 'auth.roles.read'),
     ('supervisor', 'auth.accounts.read'),
     ('supervisor', 'auth.accounts.create'),
     ('supervisor', 'auth.roles.read');
@@ -264,9 +279,13 @@ INSERT INTO auth_role_assignment_grants (grantor_role_code, target_role_code)
 SELECT grantor.code, target.code
 FROM roles AS grantor
 CROSS JOIN roles AS target
-WHERE grantor.code IN ('owner', 'director');
+WHERE grantor.code = 'tenant_owner';
 
 INSERT INTO auth_role_assignment_grants (grantor_role_code, target_role_code)
 VALUES
-    ('manager', 'staff'),
+    ('executive_manager', 'branch_manager'),
+    ('executive_manager', 'supervisor'),
+    ('executive_manager', 'staff'),
+    ('branch_manager', 'supervisor'),
+    ('branch_manager', 'staff'),
     ('supervisor', 'staff');

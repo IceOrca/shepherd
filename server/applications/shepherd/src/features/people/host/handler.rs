@@ -94,7 +94,7 @@ pub async fn check_in(
     let session: AttendanceSession = host
         .core
         .people
-        .check_in(user.tenant_id, employee.id, user.account_id, request.facility_id)
+        .check_in(user.tenant_id, employee.id, user.account_id, request.branch_id)
         .await
         .map_err(|error| hr_status("check in", &user, error))?;
     Ok((StatusCode::CREATED, Json(session)))

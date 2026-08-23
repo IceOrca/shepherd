@@ -237,7 +237,7 @@ export function MyAssignmentsPage() {
                       <h2 className="truncate text-lg font-black text-slate-950">{assignment.customer_name}</h2>
                       <p className="mt-1 flex items-center gap-1.5 text-sm text-slate-500">
                         <MapPin className="size-4 shrink-0 text-blue-600" />
-                        <span className="truncate">{assignment.customer_facility_name}</span>
+              <span className="truncate">{assignment.customer_name}</span>
                       </p>
                     </div>
                     <span className={`rounded-full px-3 py-1 text-xs font-bold ring-1 ring-inset ${assignmentTone(assignment)}`}>
