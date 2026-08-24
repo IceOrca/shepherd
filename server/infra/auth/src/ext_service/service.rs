@@ -7,7 +7,7 @@ use jsonwebtoken::{
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info, trace, warn};
 
-use super::{AccessTokenClaims, ExtProviderConfig, AccessTokenError, AuthenticatedPrincipal};
+use super::{AccessTokenClaims, AccessTokenError, AuthenticatedPrincipal, OidcJwksVerifierConfig};
 
 const UNKNOWN_KID_REFRESH_COOLDOWN_SECS: u64 = 10;
 
@@ -19,20 +19,20 @@ struct CachedJwks {
 
 /// Validates access tokens locally and refreshes provider signing keys on a
 /// bounded interval or immediately when the provider rotates to an unknown KID.
-pub struct ExtProvider {
-    config: ExtProviderConfig,
+pub struct OidcJwksVerifier {
+    config: OidcJwksVerifierConfig,
     client: reqwest::Client,
     jwks: RwLock<CachedJwks>,
     refresh_guard: Mutex<()>,
 }
 
-impl ExtProvider {
+impl OidcJwksVerifier {
     pub async fn from_env() -> Result<Arc<Self>, AccessTokenError> {
         debug!("Loading external identity provider configuration");
-        Self::from_config(ExtProviderConfig::from_env()?).await
+        Self::from_config(OidcJwksVerifierConfig::from_env()?).await
     }
 
-    pub async fn from_config(config: ExtProviderConfig) -> Result<Arc<Self>, AccessTokenError> {
+    pub async fn from_config(config: OidcJwksVerifierConfig) -> Result<Arc<Self>, AccessTokenError> {
         info!(
             issuer = %config.issuer,
             audience = %config.audience,
@@ -46,7 +46,7 @@ impl ExtProvider {
                 error!(error = %error, "External identity provider HTTP client initialization failed");
                 AccessTokenError::JwksUnavailable(error)
             })?;
-        let service: Arc<ExtProvider> = Arc::new(Self {
+        let service: Arc<OidcJwksVerifier> = Arc::new(Self {
             config,
             client,
             jwks: RwLock::new(CachedJwks::default()),
@@ -57,7 +57,7 @@ impl ExtProvider {
         Ok(service)
     }
 
-    pub fn config(&self) -> &ExtProviderConfig {
+    pub fn config(&self) -> &OidcJwksVerifierConfig {
         &self.config
     }
 
@@ -194,8 +194,8 @@ impl ExtProvider {
 }
 
 #[cfg(test)]
-impl ExtProvider {
-    fn with_jwks(config: ExtProviderConfig, set: JwkSet) -> Self {
+impl OidcJwksVerifier {
+    fn with_jwks(config: OidcJwksVerifierConfig, set: JwkSet) -> Self {
         let client: reqwest::Client = reqwest::Client::builder()
             .timeout(config.http_timeout)
             .build()
@@ -242,8 +242,8 @@ mod tests {
     use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, encode, jwk::JwkSet};
     use serde::Serialize;
 
-    use super::ExtProvider;
-    use crate::ext_foundation::ExtProviderConfig;
+    use super::OidcJwksVerifier;
+    use crate::ext_service::OidcJwksVerifierConfig;
 
     const ISSUER: &str = "https://identity.example/auth/v1";
     const AUDIENCE: &str = "authenticated";
@@ -260,8 +260,8 @@ mod tests {
         tid: Option<uuid::Uuid>,
     }
 
-    fn config() -> ExtProviderConfig {
-        ExtProviderConfig::new(
+    fn config() -> OidcJwksVerifierConfig {
+        OidcJwksVerifierConfig::new(
             ISSUER.to_owned(),
             AUDIENCE.to_owned(),
             "https://identity.example/auth/v1/.well-known/jwks.json".to_owned(),
@@ -273,13 +273,13 @@ mod tests {
         .expect("test configuration")
     }
 
-    fn service() -> ExtProvider {
+    fn service() -> OidcJwksVerifier {
         let decoding_key = DecodingKey::from_ed_pem(include_bytes!("../../../../security/jwtkey_dev/jwt_public.pem"))
             .expect("test public key");
         let mut jwk =
             jsonwebtoken::jwk::Jwk::from_decoding_key(&decoding_key, Some(Algorithm::EdDSA)).expect("test JWK");
         jwk.common.key_id = Some(KID.to_owned());
-        ExtProvider::with_jwks(config(), JwkSet { keys: vec![jwk] })
+        OidcJwksVerifier::with_jwks(config(), JwkSet { keys: vec![jwk] })
     }
 
     fn token(audience: &str) -> String {
@@ -327,7 +327,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires a reachable identity provider configured through environment variables"]
     async fn loads_configured_provider_jwks() {
-        let auth = ExtProvider::from_env().await.expect("reachable provider JWKS");
+        let auth = OidcJwksVerifier::from_env().await.expect("reachable provider JWKS");
 
         assert!(!auth.config().issuer.is_empty());
         assert!(!auth.config().audience.is_empty());

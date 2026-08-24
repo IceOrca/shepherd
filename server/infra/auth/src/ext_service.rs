@@ -22,18 +22,23 @@ mod service;
 
 pub use claims::{AccessTokenClaims, Audience, AuthenticatedPrincipal};
 pub use account_cache::AuthenticatedUserCacheConfigError;
-pub use config::ExtProviderConfig;
+pub use config::OidcJwksVerifierConfig;
 pub use error::AccessTokenError;
-pub use service::ExtProvider;
+pub use service::OidcJwksVerifier;
 
 pub fn identity_routes(auth: Arc<AuthService>) -> Router {
     account::identity_routes(auth)
 }
 
 pub fn routes(auth: Arc<AuthService>, policy: auth_admin::AuthAdminPolicy) -> Router {
+    let provisioner: Arc<dyn auth_admin::AuthAccountProvisioner> = Arc::new(auth_admin::NoopAuthAccountProvisioner);
     account::routes(Arc::clone(&auth))
-        .merge(auth_admin::routes(Arc::clone(&auth), policy.clone()))
-        .merge(access_control::routes(auth, policy))
+        .merge(auth_admin::routes_with_provisioner(
+            Arc::clone(&auth),
+            policy.clone(),
+            Arc::clone(&provisioner),
+        ))
+        .merge(access_control::routes(auth, policy, provisioner))
 }
 
 pub fn routes_with_provisioner(
@@ -45,7 +50,7 @@ pub fn routes_with_provisioner(
         .merge(auth_admin::routes_with_provisioner(
             Arc::clone(&auth),
             policy.clone(),
-            provisioner,
+            Arc::clone(&provisioner),
         ))
-        .merge(access_control::routes(auth, policy))
+        .merge(access_control::routes(auth, policy, provisioner))
 }

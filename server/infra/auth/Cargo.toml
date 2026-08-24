@@ -4,8 +4,8 @@ version.workspace = true
 edition.workspace = true
 
 [features]
-default = ["ext-foundation"]
-ext-foundation = [
+default = ["ext-service"]
+ext-service = [
     "dep:base64",
     "dep:async-trait",
     "dep:reqwest",
@@ -21,58 +21,13 @@ ext-foundation = [
     "dep:infra-redis",
     "dep:redis",
 ]
-jwt = ["dep:uuid"]
-jwks = ["jwt", "dep:base64"]
-password-auth = [
-    "dep:async-trait",
-    "dep:chrono",
-    "dep:infra-postgres",
-    "dep:sqlx",
-    "dep:tokio",
-    "dep:ts-rs",
-    "dep:uuid",
-    "dep:validator",
-]
-session = [
-    "dep:async-trait",
-    "dep:base64",
-    "dep:infra-redis",
-    "dep:redis",
-    "dep:serde_json",
-    "dep:sha2",
-    "dep:thiserror",
-    "dep:tokio",
-]
-brute-force = [
-    "password-auth",
-    "dep:infra-redis",
-    "dep:redis",
-    "dep:serde_json",
-]
-session-revocation = [
-    "session",
-    "dep:futures-util",
-    "dep:moka",
-]
-internal-api = [
-    "brute-force",
-    "jwks",
-    "password-auth",
-    "session",
-    "session-revocation",
-    "dep:rand",
-]
-full = ["internal-api"]
 
 [dependencies]
 async-trait = { workspace = true, optional = true }
 axum.workspace = true
 base64 = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
-futures-util = { workspace = true, optional = true }
 jsonwebtoken.workspace = true
-moka = { workspace = true, optional = true }
-rand = { workspace = true, optional = true }
 redis = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 serde.workspace = true
@@ -83,9 +38,7 @@ thiserror = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 tracing.workspace = true
 ts-rs = { workspace = true, optional = true }
-validator = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true }
-cfg-if.workspace = true
 infra-kernel = { workspace = true, features = ["debugging"] }
 infra-postgres = { workspace = true, optional = true }
 infra-redis = { workspace = true, optional = true }

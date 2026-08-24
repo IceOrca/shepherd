@@ -64,8 +64,8 @@ pub struct AuthenticatedPrincipal {
     pub token_id: Option<String>,
     pub issued_at: Option<u64>,
     pub expires_at: u64,
-    /// Tenant hint issued by the Shepherd custom access-token hook. The
-    /// application account mapping remains authoritative.
+    /// Optional tenant hint issued by an external token customization hook.
+    /// The application account mapping remains authoritative.
     pub tenant_id: Option<Uuid>,
 }
 
@@ -136,7 +136,7 @@ mod tests {
         AccessTokenClaims {
             iss: "https://identity.example/auth/v1".to_owned(),
             sub: "external-user-id".to_owned(),
-            aud: Audience::Many(vec!["account".to_owned(), "shepherd-api".to_owned()]),
+            aud: Audience::Many(vec!["account".to_owned(), "example-api".to_owned()]),
             exp: 2_000,
             nbf: None,
             iat: Some(1_000),

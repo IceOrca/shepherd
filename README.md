@@ -152,6 +152,31 @@ when exactly one active tenant membership exists. It removes `tid` for an
 unmapped or multi-tenant identity, so it never chooses an arbitrary tenant.
 Roles and branches are never embedded in the JWT.
 
+### Authentication dependency boundary
+
+Reusable authentication code is deliberately independent from GoTrue and from
+Shepherd's staffing domain. `server/infra/auth` owns provider-neutral
+issuer/subject principals, configurable OIDC/JWKS token verification,
+multi-tenant account resolution, authorization CRUD, Redis caching, and
+abstract identity-administration and account-lifecycle contracts. External
+subjects are opaque strings; reusable code and the provisioning ledger do not
+assume that a provider uses UUID user IDs.
+
+The concrete Supabase Auth admin API implementation lives in
+`server/infra/external-auth/supabase-auth` and is injected by `server/runtime`. It alone
+knows Supabase Auth's `/admin/users` endpoints, bearer administration token, JSON
+payloads, recovery metadata, ban representation, and HTTP errors. Replacing
+Supabase Auth with Zitadel, Keycloak, or another provider means implementing the same
+provider-neutral contract and changing runtime wiring; `infra-auth` and
+Shepherd business modules do not change.
+
+Application-specific account side effects use an injected lifecycle hook in
+the same tenant transaction. Shepherd owns the rule that a `staff` account has
+an `hr_employees` row and that changing its primary branch synchronizes that
+employee. Reusable access control does not know the `staff` role or query HR
+tables. The old `infra/auth/src/internal_api` implementation is retained only
+as uncompiled reference material and is not exported by `infra-auth`.
+
 ### Automatic database bootstrap
 
 Normal startup requires only:
@@ -279,7 +304,7 @@ The API validates signed access tokens locally. The identity-authenticated
 `GET /api/tenants` endpoint returns the active Shepherd memberships for the
 token's issuer and subject without pretending that tenant RLS context already
 exists. The browser persists the selected tenant and sends
-`X-Shepherd-Tenant-Id` on tenant-scoped calls. Middleware validates the exact
+`X-Tenant-Id` on tenant-scoped calls. Middleware validates the exact
 `issuer + subject + tenant_id` mapping in PostgreSQL before loading any
 tenant-owned account or setting RLS context.
 
@@ -292,7 +317,7 @@ default, so repeated requests avoid querying account and authorization tables
 without allowing Redis keys to grow indefinitely.
 
 The signed `tid` is a routing and consistency hint, not the authorization
-source of truth. An explicit `X-Shepherd-Tenant-Id` wins as the requested
+source of truth. An explicit `X-Tenant-Id` wins as the requested
 context only after PostgreSQL membership validation. Without that header,
 middleware may use a valid signed `tid` or the identity's sole active
 membership. A multi-tenant identity with no selection receives `400`; a
@@ -385,11 +410,11 @@ supervisors may create staff. Non-tenant-wide actors can assign only branches
 already in their authoritative access set.
 
 After login, the browser loads `/api/tenants`, stores one active tenant, and
-sends `X-Shepherd-Tenant-Id` on tenant-scoped Shepherd API calls. A multi-tenant
+sends `X-Tenant-Id` on tenant-scoped Shepherd API calls. A multi-tenant
 identity switches companies from the application header; switching clears the
 old branch, reloads `/api/me`, restores an authorized branch for the new tenant,
 and invalidates all cached queries. The browser also stores one active branch
-per tenant and sends `X-Shepherd-Branch-Id`. Multi-branch users switch branches
+per tenant and sends `X-Branch-Id`. Multi-branch users switch branches
 from the same header; switching invalidates cached queries. Middleware
 validates the requested branch against the PostgreSQL-resolved
 `AuthenticatedUser`, and tenant transactions set `app.branch_id` for RLS. JWTs

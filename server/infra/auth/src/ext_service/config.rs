@@ -10,7 +10,7 @@ const DEFAULT_CLOCK_SKEW_SECS: u64 = 30;
 
 /// Settings used to validate external access tokens locally.
 #[derive(Clone, Debug)]
-pub struct ExtProviderConfig {
+pub struct OidcJwksVerifierConfig {
     pub issuer: String,
     pub audience: String,
     pub jwks_url: String,
@@ -20,7 +20,7 @@ pub struct ExtProviderConfig {
     pub clock_skew: Duration,
 }
 
-impl ExtProviderConfig {
+impl OidcJwksVerifierConfig {
     pub fn from_env() -> Result<Self, AccessTokenError> {
         let issuer: String = required_env("AUTH_ISSUER_URL")?;
         let audience: String = required_env("AUTH_AUDIENCE")?;
@@ -131,14 +131,14 @@ mod tests {
 
     use jsonwebtoken::Algorithm;
 
-    use super::ExtProviderConfig;
+    use super::OidcJwksVerifierConfig;
 
     #[test]
     fn normalizes_urls_and_preserves_expected_audience() {
-        let config = ExtProviderConfig::new(
-            "https://identity.example/realms/shepherd/".to_owned(),
-            "shepherd-api".to_owned(),
-            "https://identity.example/realms/shepherd/certs/".to_owned(),
+        let config = OidcJwksVerifierConfig::new(
+            "https://identity.example/realms/example/".to_owned(),
+            "example-api".to_owned(),
+            "https://identity.example/realms/example/certs/".to_owned(),
             vec![Algorithm::RS256],
             Duration::from_secs(300),
             Duration::from_secs(5),
@@ -146,17 +146,17 @@ mod tests {
         )
         .expect("valid configuration");
 
-        assert_eq!(config.issuer, "https://identity.example/realms/shepherd");
-        assert_eq!(config.audience, "shepherd-api");
-        assert_eq!(config.jwks_url, "https://identity.example/realms/shepherd/certs");
+        assert_eq!(config.issuer, "https://identity.example/realms/example");
+        assert_eq!(config.audience, "example-api");
+        assert_eq!(config.jwks_url, "https://identity.example/realms/example/certs");
     }
 
     #[test]
     fn rejects_symmetric_algorithms_for_remote_jwks() {
-        let result = ExtProviderConfig::new(
-            "https://identity.example/realms/shepherd".to_owned(),
-            "shepherd-api".to_owned(),
-            "https://identity.example/realms/shepherd/certs".to_owned(),
+        let result = OidcJwksVerifierConfig::new(
+            "https://identity.example/realms/example".to_owned(),
+            "example-api".to_owned(),
+            "https://identity.example/realms/example/certs".to_owned(),
             vec![Algorithm::HS256],
             Duration::from_secs(300),
             Duration::from_secs(5),

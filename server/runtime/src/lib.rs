@@ -13,7 +13,10 @@ pub struct RuntimeParts {
 }
 
 pub async fn build() -> RuntimeParts {
-    let infra: Arc<HostInfa> = HostInfa::new_arc().await;
+    let identity_admin: Arc<supabase_auth::SupabaseAuthIdentityAdmin> =
+        supabase_auth::SupabaseAuthIdentityAdmin::from_env()
+            .unwrap_or_else(|error| panic!("failed to initialize Supabase Auth identity administration: {error}"));
+    let infra: Arc<HostInfa> = HostInfa::new_arc(identity_admin).await;
     let app: Arc<shepherd::AppContext> =
         shepherd::AppContext::new_arc(Arc::clone(&infra.auth), Arc::clone(&infra.database));
     let dispatcher: Arc<shepherd::notifications::NotificationDispatcher> = Arc::clone(&app.notifications);

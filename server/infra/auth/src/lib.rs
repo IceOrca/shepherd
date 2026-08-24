@@ -3,13 +3,9 @@
 mod codes;
 pub use codes::{AuthCodeError, PermissionCode, RoleCode};
 
-cfg_if::cfg_if!(
-    if #[cfg(feature = "internal-api")] {
-        pub mod internal_api;
-        pub use internal_api::*;
-    } else {
-        pub mod ext_foundation;
-        mod service;
-        pub use service::{AuthService, AuthServiceError};
-    }
-);
+#[cfg(feature = "ext-service")]
+pub mod ext_service;
+#[cfg(feature = "ext-service")]
+mod service;
+#[cfg(feature = "ext-service")]
+pub use service::{AuthService, AuthServiceError};

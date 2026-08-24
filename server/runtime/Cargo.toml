@@ -19,6 +19,7 @@ tracing.workspace = true
 infra-kernel = { workspace = true, features = ["debugging"] }
 infra-host.workspace = true
 infra-worker.workspace = true
+supabase-auth.workspace = true
 shepherd.workspace = true
 
 [lints]

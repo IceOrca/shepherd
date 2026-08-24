@@ -1,9 +1,10 @@
 use async_trait::async_trait;
-use infra_auth::ext_foundation::auth_admin::{
-    AuthAccountProvisioner, AuthAccountProvisioningContext, AuthAccountProvisioningError,
+use infra_auth::ext_service::auth_admin::{
+    AuthAccountAccessContext, AuthAccountProvisioner, AuthAccountProvisioningContext, AuthAccountProvisioningError,
 };
 use sqlx::{PgConnection, postgres::PgQueryResult};
 use tracing::{debug, error, trace};
+use uuid::Uuid;
 
 const STAFF_ROLE_CODE: &str = "staff";
 
@@ -90,6 +91,84 @@ impl AuthAccountProvisioner for ShepherdAuthAccountProvisioner {
         );
         Ok(())
     }
+
+    async fn update_access(
+        &self,
+        connection: &mut PgConnection,
+        context: &AuthAccountAccessContext,
+    ) -> Result<(), AuthAccountProvisioningError> {
+        if context.primary_role.as_str() != STAFF_ROLE_CODE {
+            trace!(
+                tenant_id = %context.tenant_id,
+                account_id = %context.account_id,
+                primary_role = %context.primary_role,
+                "Skipped HR employee branch synchronization for a non-staff account"
+            );
+            return Ok(());
+        }
+        let branch_id: Uuid = single_staff_branch(
+            context.tenant_id,
+            context.actor_account_id,
+            context.account_id,
+            &context.branch_ids,
+        )?;
+        let result: PgQueryResult = sqlx::query!(
+            "UPDATE hr_employees SET branch_id = $3, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = $1 AND account_id = $2",
+            context.tenant_id,
+            context.account_id,
+            branch_id,
+        )
+        .execute(connection)
+        .await
+        .map_err(|database_error: sqlx::Error| {
+            error!(
+                tenant_id = %context.tenant_id,
+                actor_id = %context.actor_account_id,
+                account_id = %context.account_id,
+                branch_id = %branch_id,
+                error = %database_error,
+                "Shepherd HR employee branch synchronization failed"
+            );
+            AuthAccountProvisioningError::new("hr_employee_branch_update_failed")
+        })?;
+        debug!(
+            tenant_id = %context.tenant_id,
+            actor_id = %context.actor_account_id,
+            account_id = %context.account_id,
+            branch_id = %branch_id,
+            rows_affected = result.rows_affected(),
+            "Shepherd HR employee branch synchronized after account access update"
+        );
+        Ok(())
+    }
+}
+
+fn single_staff_branch(
+    tenant_id: Uuid,
+    actor_account_id: Uuid,
+    account_id: Uuid,
+    branch_ids: &[Uuid],
+) -> Result<Uuid, AuthAccountProvisioningError> {
+    let branch_id: Uuid = branch_ids.first().copied().ok_or_else(|| {
+        error!(
+            tenant_id = %tenant_id,
+            actor_id = %actor_account_id,
+            account_id = %account_id,
+            "Staff account lifecycle received no branch assignment"
+        );
+        AuthAccountProvisioningError::new("staff_branch_assignment_missing")
+    })?;
+    if branch_ids.len() != 1 {
+        error!(
+            tenant_id = %tenant_id,
+            actor_id = %actor_account_id,
+            account_id = %account_id,
+            branch_count = branch_ids.len(),
+            "Staff account lifecycle received multiple branch assignments"
+        );
+        return Err(AuthAccountProvisioningError::new("staff_branch_assignment_invalid"));
+    }
+    Ok(branch_id)
 }
 
 fn generated_employee_code(username: &str, account_id: uuid::Uuid) -> String {

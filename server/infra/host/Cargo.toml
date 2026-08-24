@@ -36,7 +36,7 @@ time.workspace = true
 argon2.workspace = true
 # crates of the solution
 infra-kernel.workspace = true
-infra-auth = { path = "../auth", optional = true, default-features = false, features = ["ext-foundation"] }
+infra-auth = { path = "../auth", optional = true, default-features = false, features = ["ext-service"] }
 infra-postgres.workspace = true
 infra-redis.workspace = true
 # infra-ntree.workspace = true

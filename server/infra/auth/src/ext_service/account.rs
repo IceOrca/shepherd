@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use crate::{
     AuthCodeError, AuthService, PermissionCode, RoleCode,
-    ext_foundation::{AuthenticatedPrincipal, account_cache::AuthenticatedUserCacheError},
+    ext_service::{AuthenticatedPrincipal, account_cache::AuthenticatedUserCacheError},
 };
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
@@ -266,8 +266,8 @@ struct AccountBranch {
     pub branch_id: Uuid,
 }
 
-const ACTIVE_BRANCH_HEADER: &str = "x-shepherd-branch-id";
-const ACTIVE_TENANT_HEADER: &str = "x-shepherd-tenant-id";
+const ACTIVE_BRANCH_HEADER: &str = "x-branch-id";
+const ACTIVE_TENANT_HEADER: &str = "x-tenant-id";
 const MAX_TENANT_MEMBERSHIPS: i64 = 100;
 
 async fn list_tenant_memberships(
@@ -448,7 +448,7 @@ async fn resolve_active_tenant(
                 operation = "resolve_active_tenant",
                 issuer = %principal.issuer,
                 subject = %principal.subject,
-                "Authenticated identity has no active Shepherd tenant membership"
+                "Authenticated identity has no active application tenant membership"
             );
             Err(StatusCode::FORBIDDEN)
         }
@@ -939,7 +939,7 @@ mod tests {
             account_id: Uuid::from_u128(2),
             username: "scoped-user".to_owned(),
             email: Some("scoped-user@example.test".to_owned()),
-            primary_role: role("staff"),
+            primary_role: role("member"),
             roles: Vec::new(),
             permissions: Vec::new(),
             branch_ids: vec![first_branch_id, second_branch_id],

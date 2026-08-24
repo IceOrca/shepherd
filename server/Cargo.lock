@@ -1687,15 +1687,11 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.23.1",
- "cfg-if",
  "chrono",
- "futures-util",
  "infra-kernel",
  "infra-postgres",
  "infra-redis",
  "jsonwebtoken",
- "moka",
- "rand 0.10.2",
  "redis",
  "reqwest",
  "serde",
@@ -1707,7 +1703,6 @@ dependencies = [
  "tracing",
  "ts-rs",
  "uuid",
- "validator",
 ]
 
 [[package]]
@@ -3249,6 +3244,7 @@ dependencies = [
  "infra-kernel",
  "infra-worker",
  "shepherd",
+ "supabase-auth",
  "tokio",
  "tracing",
 ]
@@ -3755,6 +3751,22 @@ name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
+
+[[package]]
+name = "supabase-auth"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "infra-auth",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tracing",
+ "url",
+ "uuid",
+]
 
 [[package]]
 name = "syn"

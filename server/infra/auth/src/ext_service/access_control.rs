@@ -21,7 +21,7 @@ use crate::{AuthCodeError, AuthService, PermissionCode, RoleCode};
 use super::{
     account::{AccountStatus, AuthenticatedUser},
     account_cache::AuthenticatedUserCacheError,
-    auth_admin::AuthAdminPolicy,
+    auth_admin::{AuthAccountAccessContext, AuthAccountProvisioner, AuthAccountProvisioningError, AuthAdminPolicy},
 };
 
 const MAX_AUDIT_ROWS: i64 = 100;
@@ -30,6 +30,7 @@ const MAX_AUDIT_ROWS: i64 = 100;
 struct AccessControlContext {
     auth: Arc<AuthService>,
     policy: AuthAdminPolicy,
+    provisioner: Arc<dyn AuthAccountProvisioner>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
@@ -366,8 +367,12 @@ struct RoleRuleRow {
     max_assignments: Option<i16>,
 }
 
-pub fn routes(auth: Arc<AuthService>, policy: AuthAdminPolicy) -> Router {
-    let context: Arc<AccessControlContext> = Arc::new(AccessControlContext { auth, policy });
+pub fn routes(auth: Arc<AuthService>, policy: AuthAdminPolicy, provisioner: Arc<dyn AuthAccountProvisioner>) -> Router {
+    let context: Arc<AccessControlContext> = Arc::new(AccessControlContext {
+        auth,
+        policy,
+        provisioner,
+    });
     info!(
         operation = "register_access_control_routes",
         "Registering tenant access-control administration routes"
@@ -723,9 +728,9 @@ async fn update_user_access(
     require_permission(&actor, &context.policy.update_permission)?;
     require_permission(&actor, &context.policy.role_manage_permission)?;
     normalize_user_access_request(&mut request)?;
-    validate_self_owner_guard(&actor, account_id, &request)?;
     let tenant_id: Uuid = actor.tenant_id;
     let actor_id: Uuid = actor.account_id;
+    let provisioner: Arc<dyn AuthAccountProvisioner> = Arc::clone(&context.provisioner);
     let updated: bool = context
         .auth
         .db
@@ -844,23 +849,35 @@ async fn update_user_access(
                 .await?;
             }
 
-            let staff_branch_id: Option<Uuid> = request
+            let primary_branch_ids: Vec<Uuid> = request
                 .assignments
                 .iter()
-                .find(|assignment: &&AccountRoleAssignmentContract| assignment.role_code.as_str() == "staff")
-                .and_then(|assignment: &AccountRoleAssignmentContract| assignment.branch_id);
-            if request.primary_role.as_str() == "staff"
-                && let Some(staff_branch_id) = staff_branch_id
-            {
-                sqlx::query!(
-                    "UPDATE hr_employees SET branch_id = $3, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = $1 AND account_id = $2",
-                    tenant_id,
-                    account_id,
-                    staff_branch_id,
-                )
-                .execute(&mut *connection)
-                .await?;
-            }
+                .filter(|assignment: &&AccountRoleAssignmentContract| assignment.role_code == request.primary_role)
+                .filter_map(|assignment: &AccountRoleAssignmentContract| assignment.branch_id)
+                .collect();
+            let access_context: AuthAccountAccessContext = AuthAccountAccessContext {
+                tenant_id,
+                actor_account_id: actor_id,
+                account_id,
+                username: before.username.clone(),
+                email: before.email.clone(),
+                primary_role: request.primary_role.clone(),
+                branch_ids: primary_branch_ids,
+            };
+            provisioner
+                .update_access(connection, &access_context)
+                .await
+                .map_err(|provisioning_error: AuthAccountProvisioningError| {
+                    error!(
+                        operation = "access_control.account.application_hook",
+                        tenant_id = %tenant_id,
+                        actor_id = %actor_id,
+                        account_id = %account_id,
+                        provisioning_error_code = provisioning_error.code(),
+                        "Application-specific account access hook failed"
+                    );
+                    sqlx::Error::Protocol("application-specific account access hook failed".to_owned())
+                })?;
 
             let before_value: Value = json!({
                 "primary_role": before.primary_role_code,
@@ -1412,28 +1429,6 @@ fn normalize_user_access_request(request: &mut UpdateAccountAccessRequest) -> Re
         return Err(AccessControlError::Validation(
             "Permission override expiry must be in the future.".to_owned(),
         ));
-    }
-    Ok(())
-}
-
-fn validate_self_owner_guard(
-    actor: &AuthenticatedUser,
-    account_id: Uuid,
-    request: &UpdateAccountAccessRequest,
-) -> Result<(), AccessControlError> {
-    if actor.account_id == account_id && actor.primary_role.as_str() == "tenant_owner" {
-        let retains_owner: bool = request.primary_role.as_str() == "tenant_owner"
-            && request
-                .assignments
-                .iter()
-                .any(|assignment: &AccountRoleAssignmentContract| {
-                    assignment.role_code.as_str() == "tenant_owner" && assignment.branch_id.is_none()
-                });
-        if !retains_owner {
-            return Err(AccessControlError::Validation(
-                "The current tenant owner cannot remove their own owner assignment.".to_owned(),
-            ));
-        }
     }
     Ok(())
 }

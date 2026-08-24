@@ -193,7 +193,7 @@ CREATE TABLE auth_account_provisioning_requests (
     idempotency_key UUID NOT NULL,
     request_fingerprint TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'processing',
-    auth_user_id UUID,
+    auth_user_id TEXT,
     account_id UUID,
     requested_by_account_id UUID NOT NULL,
     locked_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -224,6 +224,12 @@ CREATE TABLE auth_account_provisioning_requests (
         last_error_code IS NULL OR (
             last_error_code = btrim(last_error_code)
             AND char_length(last_error_code) BETWEEN 1 AND 100
+        )
+    ),
+    CONSTRAINT auth_account_provisioning_subject_valid CHECK (
+        auth_user_id IS NULL OR (
+            auth_user_id = btrim(auth_user_id)
+            AND char_length(auth_user_id) BETWEEN 1 AND 255
         )
     ),
     CONSTRAINT auth_account_provisioning_updated_after_created CHECK (updated_at >= created_at)

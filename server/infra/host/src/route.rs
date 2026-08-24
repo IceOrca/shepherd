@@ -3,7 +3,7 @@ use std::{env, sync::Arc};
 use axum::{
     Router,
     http::{
-        HeaderValue, Method, StatusCode,
+        HeaderName, HeaderValue, Method, StatusCode,
         header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE},
     },
     response::IntoResponse,
@@ -26,9 +26,12 @@ use crate::ratelimiting::RateLimiter;
 const DEFAULT_CORS_ALLOWED_ORIGINS: &str = "http://localhost:5173,http://localhost:5174";
 const DEFAULT_HTTP_REQUEST_TIMEOUT_SECS: u64 = 20;
 
-pub async fn init() -> (Arc<HostContext>, Router) {
+#[cfg(feature = "auth")]
+pub async fn init(
+    identity_admin: Arc<dyn infra_auth::ext_service::auth_admin::ExternalIdentityAdmin>,
+) -> (Arc<HostContext>, Router) {
     info!("Starting infra host initialization");
-    let host_ctx: Arc<HostContext> = HostContext::new_arc().await;
+    let host_ctx: Arc<HostContext> = HostContext::new_arc(identity_admin).await;
     debug!("Infra host context initialized; building host routes");
     let host_router: Router = routes(Arc::clone(&host_ctx));
     let host_router: Router = apply_layers(host_router, Arc::clone(&host_ctx));
@@ -57,14 +60,14 @@ pub fn mount_app_routes(router: Router, routes: AppRoutes, host: Arc<HostContext
         .layer(RateLimiter::protected_route_layer())
         .route_layer(from_fn_with_state(
             Arc::clone(&host.auth),
-            infra_auth::ext_foundation::middleware::require_authenticated,
+            infra_auth::ext_service::middleware::require_authenticated,
         ));
     let admin: Router = routes
         .admin
         .layer(RateLimiter::protected_route_layer())
         .route_layer(from_fn_with_state(
             Arc::clone(&host.auth),
-            infra_auth::ext_foundation::middleware::require_authenticated,
+            infra_auth::ext_service::middleware::require_authenticated,
         ));
     let merged: Router = router.merge(public).merge(protected).merge(admin);
     debug!("Mounted public, protected, and admin application route groups");
@@ -114,7 +117,14 @@ fn cors_layer() -> CorsLayer {
     CorsLayer::new()
         .allow_origin(AllowOrigin::list(origins))
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-        .allow_headers([ACCEPT, AUTHORIZATION, CONTENT_TYPE])
+        .allow_headers([
+            ACCEPT,
+            AUTHORIZATION,
+            CONTENT_TYPE,
+            HeaderName::from_static("x-tenant-id"),
+            HeaderName::from_static("x-branch-id"),
+            HeaderName::from_static("idempotency-key"),
+        ])
 }
 
 pub async fn get_root() -> impl IntoResponse {

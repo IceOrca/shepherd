@@ -101,10 +101,10 @@ async function sendRequest(path: string, init: RequestInit): Promise<Response> {
     headers.set("Authorization", `Bearer ${accessToken}`);
   }
   if (activeTenantId) {
-    headers.set("X-Shepherd-Tenant-Id", activeTenantId);
+    headers.set("X-Tenant-Id", activeTenantId);
   }
   if (activeBranchId) {
-    headers.set("X-Shepherd-Branch-Id", activeBranchId);
+    headers.set("X-Branch-Id", activeBranchId);
   }
 
   logClientApiRequest({ path, method, hasAccessToken, hasBody, activeTenantId, activeBranchId });

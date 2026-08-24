@@ -1,3 +1,8 @@
+//! Legacy Shepherd internal-auth implementation retained as reference material.
+//!
+//! This module is intentionally not declared by `lib.rs` and has no Cargo
+//! feature. It is not part of the reusable `infra-auth` crate's compiled API.
+
 pub mod account;
 pub mod brute_force;
 pub mod dto;

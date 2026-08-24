@@ -15,6 +15,8 @@ pub use app_routes::AppRoutes;
 pub use infra_auth as auth;
 #[cfg(feature = "auth")]
 use infra_auth::AuthService;
+#[cfg(feature = "auth")]
+use infra_auth::ext_service::auth_admin::ExternalIdentityAdmin;
 use tracing::{error, warn, info, debug, trace};
 use infra_postgres::DatabaseAdapter;
 use infra_redis::RedisAdapter;
@@ -36,18 +38,17 @@ pub struct HostContext {
 }
 
 impl HostContext {
-    pub async fn new_arc() -> Arc<Self> {
+    #[cfg(feature = "auth")]
+    pub async fn new_arc(identity_admin: Arc<dyn ExternalIdentityAdmin>) -> Arc<Self> {
         let database: Arc<DatabaseAdapter> = DatabaseAdapter::new_arc().await;
         let redis: Arc<RedisAdapter> = RedisAdapter::new_arc();
-        #[cfg(feature = "auth")]
-        let auth: Arc<AuthService> = AuthService::new(database.clone(), redis.clone())
+        let auth: Arc<AuthService> = AuthService::new(database.clone(), redis.clone(), identity_admin)
             .await
             .unwrap_or_else(|error| panic!("failed to initialize access-token authentication: {error}"));
 
         Arc::new(Self {
             database,
             redis,
-            #[cfg(feature = "auth")]
             auth,
             ip: std::env::var("HOST_IP").unwrap_or_else(|_| {
                 warn!("HOST_IP not set, defaulting to 127.0.0.1");

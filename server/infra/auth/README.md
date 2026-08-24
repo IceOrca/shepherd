@@ -1,6 +1,6 @@
 # Authentication foundation
 
-The default `infra-auth` build enables `ext-foundation`, the reusable authentication and tenant-account boundary used by Shepherd. It provides:
+The default `infra-auth` build enables `ext-service`, the reusable authentication and tenant-account boundary used by Shepherd. It provides:
 
 - bearer-token extraction and provider-neutral JWT/JWKS validation;
 - external identity mapping through `account_identities`;
@@ -61,4 +61,4 @@ service-role token.
 
 ## Legacy internal API
 
-The old local password/session implementation is isolated under `src/internal_api/` and is disabled by default. Its optional Cargo features remain compatibility-only and target the archived legacy account schema; new applications should use `ext-foundation`.
+The old local password/session implementation is isolated under `src/internal_api/` and is disabled by default. Its optional Cargo features remain compatibility-only and target the archived legacy account schema; new applications should use `ext-service`.

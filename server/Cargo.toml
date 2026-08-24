@@ -12,6 +12,7 @@ members = [
     "infra/jobs",
     "infra/notifier",
     "infra/worker",
+    "infra/external-auth/supabase-auth",
     "applications/shepherd",
     "runtime",
 ]
@@ -39,6 +40,7 @@ sqlx-adapter = { version = "*", default-features = false, features = ["postgres"
 ed25519-dalek = { version = "*", features = ["rand_core"] }
 rand = { version = "*" }
 uuid = { version = "*", features = ["v4", "serde"] }
+url = { version = "*" }
 argon2 = { version = "*" }
 passphrase-hash = { version = "*" }
 validator = { version = "*", features = ["derive"] }
@@ -74,6 +76,7 @@ infra-app-sdk = { path = "infra/app-sdk" }
 infra-jobs = { path = "infra/jobs" }
 infra-notifier = { path = "infra/notifier" }
 infra-worker = { path = "infra/worker" }
+supabase-auth = { path = "infra/external-auth/supabase-auth" }
 # installed applications
 shepherd = { path = "applications/shepherd" }
 

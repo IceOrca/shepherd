@@ -1,11 +1,11 @@
 use std::{error::Error, fmt};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeserializeError};
-#[cfg(any(feature = "ext-foundation", feature = "password-auth"))]
+#[cfg(feature = "ext-service")]
 use ts_rs::TS;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-#[cfg_attr(any(feature = "ext-foundation", feature = "password-auth"), derive(TS))]
+#[cfg_attr(feature = "ext-service", derive(TS))]
 pub struct RoleCode(String);
 
 impl RoleCode {
@@ -69,7 +69,7 @@ impl TryFrom<&str> for RoleCode {
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-#[cfg_attr(any(feature = "ext-foundation", feature = "password-auth"), derive(TS))]
+#[cfg_attr(feature = "ext-service", derive(TS))]
 pub struct PermissionCode(String);
 
 impl PermissionCode {
@@ -194,7 +194,7 @@ mod tests {
 
     #[test]
     fn permission_codes_require_normalized_segments() {
-        assert!(PermissionCode::parse("business.staffing.read").is_ok());
+        assert!(PermissionCode::parse("records.items.read").is_ok());
         assert!(PermissionCode::parse("auth.accounts.disable").is_ok());
         assert!(PermissionCode::parse("accounts").is_err());
         assert!(PermissionCode::parse("auth..read").is_err());
