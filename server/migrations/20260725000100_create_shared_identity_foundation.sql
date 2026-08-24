@@ -118,15 +118,17 @@ CREATE UNIQUE INDEX accounts_tenant_email_normalized_uq
 CREATE INDEX accounts_tenant_status_idx ON accounts (tenant_id, status);
 CREATE INDEX accounts_tenant_primary_role_idx ON accounts (tenant_id, primary_role_code);
 
--- This small global registry resolves an opaque OIDC identity before the
--- tenant is known. All tenant-owned account data remains protected by RLS.
+-- This small global registry resolves an opaque OIDC identity to one or more
+-- tenant memberships before tenant RLS context exists. One provider identity
+-- may own a distinct Shepherd account in each tenant. All tenant-owned account
+-- data remains protected by RLS after the requested membership is validated.
 CREATE TABLE account_identities (
     issuer TEXT NOT NULL,
     subject TEXT NOT NULL,
     tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
     account_id UUID NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (issuer, subject),
+    PRIMARY KEY (issuer, subject, tenant_id),
     UNIQUE (tenant_id, account_id),
     CONSTRAINT account_identities_account_tenant_fk
         FOREIGN KEY (tenant_id, account_id)

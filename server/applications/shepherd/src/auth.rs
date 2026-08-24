@@ -3,7 +3,9 @@ use std::sync::Arc;
 use axum::Router;
 
 pub use infra_auth::{AuthService, PermissionCode, RoleCode};
-pub use infra_auth::ext_foundation::account::{AccountStatus, AuthenticatedUser, CurrentUserProfile};
+pub use infra_auth::ext_foundation::account::{
+    AccountStatus, AuthenticatedUser, CurrentUserProfile, TenantMembershipSummary,
+};
 pub use infra_auth::ext_foundation::access_control::{
     AccessControlAuditEntry, AccessControlBranch, AccessControlPermission, AccessControlRole, AccessControlSnapshot,
     AccessControlUser, AccessRoleScope, AccountPermissionOverrideContract, AccountRoleAssignmentContract,
@@ -32,4 +34,8 @@ pub fn routes(auth: Arc<AuthService>) -> Router {
     let provisioner: Arc<dyn infra_auth::ext_foundation::auth_admin::AuthAccountProvisioner> =
         Arc::new(crate::auth_provisioning::ShepherdAuthAccountProvisioner);
     infra_auth::ext_foundation::routes_with_provisioner(auth, admin_policy(), provisioner)
+}
+
+pub fn identity_routes(auth: Arc<AuthService>) -> Router {
+    infra_auth::ext_foundation::identity_routes(auth)
 }

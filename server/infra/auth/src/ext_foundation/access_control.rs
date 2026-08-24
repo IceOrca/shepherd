@@ -1280,8 +1280,10 @@ async fn invalidate_accounts(auth: &AuthService, tenant_id: Uuid, account_id: Op
         }
     };
     for identity in identities {
-        let result: Result<(), AuthenticatedUserCacheError> =
-            auth.account_cache.invalidate(&identity.issuer, &identity.subject).await;
+        let result: Result<(), AuthenticatedUserCacheError> = auth
+            .account_cache
+            .invalidate(&identity.issuer, &identity.subject, tenant_id)
+            .await;
         if let Err(cache_error) = result {
             warn!(operation = "access_control.invalidate_account", tenant_id = %tenant_id, account_id = ?account_id, reason = %cache_error, "Authenticated-user cache invalidation failed; bounded TTL remains in force");
         }

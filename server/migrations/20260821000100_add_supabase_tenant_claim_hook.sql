@@ -12,19 +12,22 @@ DECLARE
     claims JSONB := COALESCE(event -> 'claims', '{}'::JSONB);
     mapped_tenant_id UUID;
 BEGIN
-    SELECT identity.tenant_id
+    SELECT CASE
+               WHEN COUNT(*) = 1 THEN (array_agg(identity.tenant_id))[1]
+               ELSE NULL
+           END
     INTO mapped_tenant_id
     FROM public.account_identities AS identity
     INNER JOIN public.tenants AS tenant
         ON tenant.id = identity.tenant_id
        AND tenant.status = 'active'
     WHERE identity.issuer = claims ->> 'iss'
-      AND identity.subject = event ->> 'user_id'
-    LIMIT 1;
+      AND identity.subject = event ->> 'user_id';
 
     IF mapped_tenant_id IS NULL THEN
-        -- An authenticated provider identity is not an authorized Shepherd
-        -- account until the application mapping exists.
+        -- Zero memberships are unauthorized. Multiple memberships require an
+        -- explicit application tenant selection, so neither case may receive
+        -- an arbitrary tenant claim.
         claims := claims - 'tid';
     ELSE
         claims := jsonb_set(claims, '{tid}', to_jsonb(mapped_tenant_id::TEXT), TRUE);

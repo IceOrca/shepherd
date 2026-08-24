@@ -7,7 +7,7 @@ use crate::{
         AccountRoleAssignmentContract, AccountStatus, AuthProviderUserStatus, AuthUserSummary,
         CreateAccessControlBranchRequest, CreateAccessControlRoleRequest, CreateAuthUserRequest, CurrentUserProfile,
         PermissionCode, PermissionOverrideEffect, RoleCode, SetAuthUserStatusRequest, UpdateAccessControlBranchRequest,
-        UpdateAccessControlRoleRequest, UpdateAccountAccessRequest,
+        UpdateAccessControlRoleRequest, UpdateAccountAccessRequest, TenantMembershipSummary,
     },
     business::staffing::{
         core::{
@@ -76,6 +76,7 @@ pub fn contract() -> String {
     push::<AccountStatus>(&mut output, &config);
     push::<AuthProviderUserStatus>(&mut output, &config);
     push::<CurrentUserProfile>(&mut output, &config);
+    push::<TenantMembershipSummary>(&mut output, &config);
     push::<AuthUserSummary>(&mut output, &config);
     push::<CreateAuthUserRequest>(&mut output, &config);
     push::<SetAuthUserStatusRequest>(&mut output, &config);

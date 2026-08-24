@@ -182,9 +182,30 @@ pub struct CurrentUserProfile {
     pub active_branch_id: Option<Uuid>,
 }
 
+#[derive(Clone, Debug, Serialize, TS)]
+#[ts(export)]
+pub struct TenantMembershipSummary {
+    #[ts(type = "string")]
+    pub tenant_id: Uuid,
+    #[ts(type = "string")]
+    pub account_id: Uuid,
+    pub tenant_slug: String,
+    pub tenant_display_name: String,
+    pub username: String,
+    pub email: Option<String>,
+    pub primary_role: RoleCode,
+}
+
 pub fn routes(auth: Arc<AuthService>) -> Router {
     info!("Configured external authentication account routes");
     Router::new().route("/me", get(current_user)).with_state(auth)
+}
+
+pub fn identity_routes(auth: Arc<AuthService>) -> Router {
+    info!("Configured external identity tenant-membership routes");
+    Router::new()
+        .route("/tenants", get(list_tenant_memberships))
+        .with_state(auth)
 }
 
 async fn current_user(Extension(user): Extension<AuthenticatedUser>) -> Json<CurrentUserProfile> {
@@ -204,6 +225,21 @@ async fn current_user(Extension(user): Extension<AuthenticatedUser>) -> Json<Cur
 struct AccountIdentity {
     pub tenant_id: Uuid,
     pub account_id: Uuid,
+}
+
+struct TenantMembershipRow {
+    pub tenant_id: Uuid,
+    pub account_id: Uuid,
+}
+
+struct ActiveTenantMembershipRow {
+    pub tenant_id: Uuid,
+    pub account_id: Uuid,
+    pub tenant_slug: String,
+    pub tenant_display_name: String,
+    pub username: String,
+    pub email: Option<String>,
+    pub primary_role_code: String,
 }
 
 struct UserAccount {
@@ -231,6 +267,23 @@ struct AccountBranch {
 }
 
 const ACTIVE_BRANCH_HEADER: &str = "x-shepherd-branch-id";
+const ACTIVE_TENANT_HEADER: &str = "x-shepherd-tenant-id";
+const MAX_TENANT_MEMBERSHIPS: i64 = 100;
+
+async fn list_tenant_memberships(
+    State(ctx): State<Arc<AuthService>>,
+    Extension(principal): Extension<AuthenticatedPrincipal>,
+) -> Result<Json<Vec<TenantMembershipSummary>>, StatusCode> {
+    let memberships: Vec<TenantMembershipSummary> = load_tenant_memberships(&ctx.db, &principal).await?;
+    info!(
+        operation = "list_tenant_memberships",
+        issuer = %principal.issuer,
+        subject = %principal.subject,
+        membership_count = memberships.len(),
+        "Returned active tenant memberships for authenticated identity"
+    );
+    Ok(Json(memberships))
+}
 
 pub async fn resolve_application_account(
     State(ctx): State<Arc<AuthService>>,
@@ -250,8 +303,20 @@ pub async fn resolve_application_account(
         subject = %subject,
         "Resolving application account for authenticated external identity"
     );
+    let selected_tenant_id: Uuid = resolve_active_tenant(&ctx.db, request.headers(), &principal).await?;
+    if principal
+        .tenant_id
+        .is_some_and(|claimed_tenant_id: Uuid| claimed_tenant_id != selected_tenant_id)
+    {
+        info!(
+            operation = "resolve_application_account",
+            claimed_tenant_id = ?principal.tenant_id,
+            selected_tenant_id = %selected_tenant_id,
+            "Explicit validated tenant selection differs from the signed default tenant hint"
+        );
+    }
     let cache_result: Result<Option<AuthenticatedUser>, AuthenticatedUserCacheError> =
-        ctx.account_cache.get(&principal).await;
+        ctx.account_cache.get(&principal, selected_tenant_id).await;
     let cached_user: Option<AuthenticatedUser> = match cache_result {
         Ok(user) => user,
         Err(cache_error) => {
@@ -266,12 +331,12 @@ pub async fn resolve_application_account(
         }
     };
     let mut user: AuthenticatedUser = match cached_user {
-        Some(cached_user) if principal.tenant_id == Some(cached_user.tenant_id) => {
+        Some(cached_user) if cached_user.tenant_id == selected_tenant_id => {
             trace!(
                 operation = "resolve_application_account",
                 tenant_id = %cached_user.tenant_id,
                 account_id = %cached_user.account_id,
-                "Verified JWT tenant claim against cached application account"
+                "Resolved selected tenant membership from authenticated-user cache"
             );
             cached_user
         }
@@ -279,19 +344,19 @@ pub async fn resolve_application_account(
             if let Some(cached_user) = cached_user {
                 warn!(
                     operation = "resolve_application_account",
-                    claimed_tenant_id = ?principal.tenant_id,
+                    selected_tenant_id = %selected_tenant_id,
                     cached_tenant_id = %cached_user.tenant_id,
                     account_id = %cached_user.account_id,
-                    "JWT tenant claim does not match cached account; reloading PostgreSQL authority"
+                    "Cached account tenant does not match selection; reloading PostgreSQL authority"
                 );
             } else {
                 debug!(
                     operation = "resolve_application_account",
-                    claimed_tenant_id = ?principal.tenant_id,
+                    selected_tenant_id = %selected_tenant_id,
                     "Authenticated-user cache missed; loading PostgreSQL authority"
                 );
             }
-            let loaded_user: AuthenticatedUser = load_account(&ctx.db, &principal).await?;
+            let loaded_user: AuthenticatedUser = load_account(&ctx.db, &principal, selected_tenant_id).await?;
             let cache_write_result: Result<(), AuthenticatedUserCacheError> =
                 ctx.account_cache.put(&principal, &loaded_user).await;
             if let Err(cache_error) = cache_write_result {
@@ -306,18 +371,6 @@ pub async fn resolve_application_account(
             loaded_user
         }
     };
-    if principal.tenant_id != Some(user.tenant_id) {
-        warn!(
-            operation = "resolve_application_account",
-            issuer = %issuer,
-            subject = %subject,
-            claimed_tenant_id = ?principal.tenant_id,
-            authoritative_tenant_id = %user.tenant_id,
-            account_id = %user.account_id,
-            "JWT tenant claim is missing or stale; requesting a signed token refresh"
-        );
-        return Err(StatusCode::UNAUTHORIZED);
-    }
     let active_branch_id: Uuid = resolve_active_branch(request.headers(), &user)?;
     user.activate_branch(active_branch_id)?;
     let tenant_id: Uuid = user.tenant_id;
@@ -347,6 +400,69 @@ pub async fn resolve_application_account(
         "Protected request completed after application account resolution"
     );
     Ok(response)
+}
+
+async fn resolve_active_tenant(
+    db: &DatabaseAdapter,
+    headers: &HeaderMap,
+    principal: &AuthenticatedPrincipal,
+) -> Result<Uuid, StatusCode> {
+    let requested_tenant_id: Option<Uuid> = headers
+        .get(ACTIVE_TENANT_HEADER)
+        .map(|value| value.to_str().map_err(|_| StatusCode::BAD_REQUEST))
+        .transpose()?
+        .map(|value: &str| Uuid::parse_str(value).map_err(|_| StatusCode::BAD_REQUEST))
+        .transpose()?;
+    if let Some(tenant_id) = requested_tenant_id {
+        debug!(
+            operation = "resolve_active_tenant",
+            tenant_id = %tenant_id,
+            source = "request_header",
+            "Accepted explicit tenant selection for membership validation"
+        );
+        return Ok(tenant_id);
+    }
+    if let Some(tenant_id) = principal.tenant_id {
+        debug!(
+            operation = "resolve_active_tenant",
+            tenant_id = %tenant_id,
+            source = "signed_jwt_hint",
+            "Using signed tenant hint because no explicit selection was provided"
+        );
+        return Ok(tenant_id);
+    }
+
+    let memberships: Vec<TenantMembershipSummary> = load_tenant_memberships(db, principal).await?;
+    match memberships.as_slice() {
+        [membership] => {
+            debug!(
+                operation = "resolve_active_tenant",
+                tenant_id = %membership.tenant_id,
+                source = "single_active_membership",
+                "Selected the identity's only active tenant membership"
+            );
+            Ok(membership.tenant_id)
+        }
+        [] => {
+            warn!(
+                operation = "resolve_active_tenant",
+                issuer = %principal.issuer,
+                subject = %principal.subject,
+                "Authenticated identity has no active Shepherd tenant membership"
+            );
+            Err(StatusCode::FORBIDDEN)
+        }
+        memberships => {
+            warn!(
+                operation = "resolve_active_tenant",
+                issuer = %principal.issuer,
+                subject = %principal.subject,
+                membership_count = memberships.len(),
+                "Multi-tenant identity omitted the required active tenant selection"
+            );
+            Err(StatusCode::BAD_REQUEST)
+        }
+    }
 }
 
 fn resolve_active_branch(headers: &HeaderMap, user: &AuthenticatedUser) -> Result<Uuid, StatusCode> {
@@ -390,21 +506,151 @@ fn resolve_active_branch(headers: &HeaderMap, user: &AuthenticatedUser) -> Resul
     Ok(active_branch_id)
 }
 
+async fn load_tenant_memberships(
+    db: &DatabaseAdapter,
+    principal: &AuthenticatedPrincipal,
+) -> Result<Vec<TenantMembershipSummary>, StatusCode> {
+    let identity_rows: Vec<TenantMembershipRow> = sqlx::query_as!(
+        TenantMembershipRow,
+        r#"
+        SELECT identity.tenant_id, identity.account_id
+        FROM account_identities AS identity
+        INNER JOIN tenants AS tenant
+            ON tenant.id = identity.tenant_id
+           AND tenant.status = 'active'
+        WHERE identity.issuer = $1 AND identity.subject = $2
+        ORDER BY identity.tenant_id
+        LIMIT $3
+        "#,
+        principal.issuer,
+        principal.subject,
+        MAX_TENANT_MEMBERSHIPS + 1,
+    )
+    .fetch_all(db.global_pool())
+    .await
+    .map_err(|database_error: sqlx::Error| {
+        error!(
+            operation = "load_tenant_memberships",
+            issuer = %principal.issuer,
+            subject = %principal.subject,
+            reason = %database_error,
+            "Tenant membership registry lookup failed"
+        );
+        StatusCode::SERVICE_UNAVAILABLE
+    })?;
+    if i64::try_from(identity_rows.len()).unwrap_or(i64::MAX) > MAX_TENANT_MEMBERSHIPS {
+        error!(
+            operation = "load_tenant_memberships",
+            issuer = %principal.issuer,
+            subject = %principal.subject,
+            membership_count = identity_rows.len(),
+            max_membership_count = MAX_TENANT_MEMBERSHIPS,
+            "Authenticated identity exceeds the supported active tenant membership bound"
+        );
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    let mut memberships: Vec<TenantMembershipSummary> = Vec::with_capacity(identity_rows.len());
+    for identity in identity_rows {
+        let tenant_id: Uuid = identity.tenant_id;
+        let account_id: Uuid = identity.account_id;
+        let active_row: Option<ActiveTenantMembershipRow> = db
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                sqlx::query_as!(
+                    ActiveTenantMembershipRow,
+                    r#"
+                    SELECT tenant.id AS tenant_id, account.id AS account_id,
+                           tenant.slug AS tenant_slug, tenant.display_name AS tenant_display_name,
+                           account.username, account.email,
+                           account.primary_role_code
+                    FROM tenants AS tenant
+                    INNER JOIN accounts AS account
+                        ON account.tenant_id = tenant.id
+                    WHERE tenant.id = $1
+                      AND tenant.status = 'active'
+                      AND account.id = $2
+                      AND account.status = 'active'
+                    "#,
+                    tenant_id,
+                    account_id,
+                )
+                .fetch_optional(connection)
+                .await
+            })
+            .await
+            .map_err(|database_error: TenantDbErr| {
+                error!(
+                    operation = "load_tenant_memberships",
+                    tenant_id = %tenant_id,
+                    account_id = %account_id,
+                    reason = %database_error,
+                    "Tenant membership account validation failed"
+                );
+                StatusCode::SERVICE_UNAVAILABLE
+            })?;
+        let Some(row) = active_row else {
+            debug!(
+                operation = "load_tenant_memberships",
+                tenant_id = %tenant_id,
+                account_id = %account_id,
+                "Excluded inactive or incomplete tenant membership"
+            );
+            continue;
+        };
+        let primary_role: RoleCode = RoleCode::try_from(row.primary_role_code).map_err(|code_error| {
+            error!(
+                operation = "load_tenant_memberships",
+                tenant_id = %row.tenant_id,
+                account_id = %row.account_id,
+                reason = %code_error,
+                "Tenant membership has an invalid primary role code"
+            );
+            StatusCode::SERVICE_UNAVAILABLE
+        })?;
+        memberships.push(TenantMembershipSummary {
+            tenant_id: row.tenant_id,
+            account_id: row.account_id,
+            tenant_slug: row.tenant_slug,
+            tenant_display_name: row.tenant_display_name,
+            username: row.username,
+            email: row.email,
+            primary_role,
+        });
+    }
+    memberships.sort_by(|left: &TenantMembershipSummary, right: &TenantMembershipSummary| {
+        left.tenant_display_name
+            .to_lowercase()
+            .cmp(&right.tenant_display_name.to_lowercase())
+            .then_with(|| left.tenant_id.cmp(&right.tenant_id))
+    });
+    debug!(
+        operation = "load_tenant_memberships",
+        issuer = %principal.issuer,
+        subject = %principal.subject,
+        active_membership_count = memberships.len(),
+        "Loaded active tenant memberships"
+    );
+    Ok(memberships)
+}
+
 async fn load_account(
     db: &DatabaseAdapter,
     principal: &AuthenticatedPrincipal,
+    selected_tenant_id: Uuid,
 ) -> Result<AuthenticatedUser, StatusCode> {
     let identity: AccountIdentity = sqlx::query_as!(
         AccountIdentity,
         r#"
         SELECT tenant_id, account_id
         FROM account_identities
-        WHERE issuer = $1 AND subject = $2
+        WHERE issuer = $1 AND subject = $2 AND tenant_id = $3
         "#,
         principal.issuer,
         principal.subject,
+        selected_tenant_id,
     )
-    // The tenant is not known until this global identity mapping is resolved.
+    // The selected tenant has not entered RLS context yet, so validate the
+    // global identity-to-membership registry before loading tenant data.
     .fetch_optional(db.global_pool())
     .await
     .map_err(|database_error: sqlx::Error| {

@@ -101,11 +101,24 @@ impl InfraAppManifest for ShepherdApp {
 }
 
 pub fn routes(ctx: Arc<AppContext>) -> Router {
+    let identity_routes = authenticated_identity_routes(Arc::clone(&ctx), auth::identity_routes(Arc::clone(&ctx.auth)));
     let auth_routes = protected_routes(Arc::clone(&ctx), auth::routes(Arc::clone(&ctx.auth)));
     let hr_routes = protected_routes(Arc::clone(&ctx), hr::routes().with_state(Arc::clone(&ctx)));
     let business_routes = protected_routes(Arc::clone(&ctx), business::routes().with_state(Arc::clone(&ctx)));
 
-    Router::new().nest("/api", merge_api_domains(auth_routes, hr_routes, business_routes))
+    Router::new().nest(
+        "/api",
+        identity_routes.merge(merge_api_domains(auth_routes, hr_routes, business_routes)),
+    )
+}
+
+fn authenticated_identity_routes(context: Arc<AppContext>, routes: Router) -> Router {
+    routes
+        .layer(ratelimiting::RateLimiter::protected_route_layer())
+        .route_layer(from_fn_with_state(
+            Arc::clone(&context.auth),
+            auth::require_authenticated,
+        ))
 }
 
 fn merge_api_domains(auth_routes: Router, hr_routes: Router, business_routes: Router) -> Router {

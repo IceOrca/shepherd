@@ -17,12 +17,14 @@ interface ClientApiLogContext {
   hasBody: boolean;
   status?: number;
   refreshed?: boolean;
+  activeTenantId?: string | null;
   activeBranchId?: string | null;
 }
 
 let authenticationLostHandler: (() => void) | null = null;
 let authenticationRefreshHandler: (() => Promise<string | null>) | null = null;
 let accessToken: string | null = null;
+let activeTenantId: string | null = null;
 let activeBranchId: string | null = null;
 
 function requestMethod(init: RequestInit): string {
@@ -64,6 +66,11 @@ export function setApiActiveBranchId(branchId: string | null): void {
   console.info("Shepherd API active branch updated", { activeBranchId });
 }
 
+export function setApiActiveTenantId(tenantId: string | null): void {
+  activeTenantId = tenantId;
+  console.info("Shepherd API active tenant updated", { activeTenantId });
+}
+
 export function getApiActiveBranchId(): string | null {
   return activeBranchId;
 }
@@ -93,11 +100,14 @@ async function sendRequest(path: string, init: RequestInit): Promise<Response> {
   if (accessToken) {
     headers.set("Authorization", `Bearer ${accessToken}`);
   }
+  if (activeTenantId) {
+    headers.set("X-Shepherd-Tenant-Id", activeTenantId);
+  }
   if (activeBranchId) {
     headers.set("X-Shepherd-Branch-Id", activeBranchId);
   }
 
-  logClientApiRequest({ path, method, hasAccessToken, hasBody, activeBranchId });
+  logClientApiRequest({ path, method, hasAccessToken, hasBody, activeTenantId, activeBranchId });
   return fetchWithTimeout(path, {
     ...init,
     headers,
@@ -130,6 +140,7 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
     hasBody,
     status: response.status,
     refreshed,
+    activeTenantId,
     activeBranchId,
   };
   logClientApiResponse(logContext);

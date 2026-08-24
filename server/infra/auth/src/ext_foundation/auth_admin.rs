@@ -25,7 +25,6 @@ use crate::{
 };
 
 const DEFAULT_HTTP_TIMEOUT_SECS: u64 = 5;
-const DISABLED_DURATION: &str = "876000h";
 const IDEMPOTENCY_HEADER: &str = "idempotency-key";
 
 /// Application-owned permission codes required by the reusable account routes.
@@ -474,7 +473,8 @@ impl AuthAdminService {
         trace!(tenant_id = %tenant_id, idempotency_key = %idempotency_key, "Searching for recoverable Auth user");
         let response: reqwest::Response = self
             .client
-            .get(format!("{}/admin/users?page=1&per_page=1000", self.base_url))
+            .get(format!("{}/admin/users", self.base_url))
+            .query(&[("filter", email)])
             .bearer_auth(&self.admin_token)
             .send()
             .await
@@ -506,48 +506,26 @@ impl AuthAdminService {
         Ok(user)
     }
 
-    async fn set_disabled(&self, user_id: Uuid, disabled: bool) -> Result<ExtProviderUser, ProviderError> {
-        trace!(auth_user_id = %user_id, disabled, "Auth provider status change accepted");
+    async fn find_user_by_email(&self, email: &str) -> Result<Option<ExtProviderUser>, ProviderError> {
+        trace!("Searching Auth provider for an existing normalized email identity");
         let response: reqwest::Response = self
             .client
-            .put(format!("{}/admin/users/{user_id}", self.base_url))
+            .get(format!("{}/admin/users", self.base_url))
+            .query(&[("filter", email)])
             .bearer_auth(&self.admin_token)
-            .json(&json!({
-                "ban_duration": if disabled { DISABLED_DURATION } else { "none" }
-            }))
             .send()
             .await
             .map_err(ProviderError::Transport)?;
-        let user: ExtProviderUser = read_provider_response(response).await?;
-        info!(auth_user_id = %user_id, disabled, "Auth provider status changed");
+        let users: Vec<ExtProviderUser> = read_provider_response::<ExtProviderUserList>(response)
+            .await?
+            .into_users();
+        let user: Option<ExtProviderUser> = users.into_iter().find(|user: &ExtProviderUser| {
+            user.email
+                .as_deref()
+                .is_some_and(|candidate: &str| candidate.eq_ignore_ascii_case(email))
+        });
+        debug!(found = user.is_some(), "Existing Auth email identity search completed");
         Ok(user)
-    }
-
-    async fn delete_user_after_failed_link(&self, user_id: Uuid) -> Result<(), ProviderError> {
-        let response: reqwest::Response = self
-            .client
-            .delete(format!("{}/admin/users/{user_id}", self.base_url))
-            .bearer_auth(&self.admin_token)
-            .send()
-            .await
-            .map_err(ProviderError::Transport)?;
-        let status: reqwest::StatusCode = response.status();
-        if status.is_success() || status == reqwest::StatusCode::NOT_FOUND {
-            info!(auth_user_id = %user_id, status = status.as_u16(), "Compensated unlinked Auth user");
-            Ok(())
-        } else {
-            let message: String = response
-                .text()
-                .await
-                .map(|body: String| -> String { provider_message(&body) })
-                .unwrap_or_else(|_error: reqwest::Error| -> String {
-                    "Auth provider rejected compensation deletion".to_owned()
-                });
-            Err(ProviderError::Response {
-                status: status.as_u16(),
-                message,
-            })
-        }
     }
 }
 
@@ -686,7 +664,7 @@ async fn create_user(
         }
     };
     if let Err(error) = record_provisioned_auth_user(&context, &actor, idempotency_key, provider_user.id).await {
-        compensate_created_provider_user(
+        retain_provider_user_after_failed_link(
             &context,
             &actor,
             idempotency_key,
@@ -709,7 +687,7 @@ async fn create_user(
     {
         Ok(account) => account,
         Err(error) => {
-            compensate_created_provider_user(
+            retain_provider_user_after_failed_link(
                 &context,
                 &actor,
                 idempotency_key,
@@ -767,27 +745,13 @@ async fn set_user_status(
     }
 
     invalidate_account_cache(&context, &actor, &auth_user_id, "before_status_change").await;
-    let previously_disabled: bool = account.account_status == AccountStatus::Disabled;
     let provider_user: ExtProviderUser = context
         .admin
-        .set_disabled(user_id, request.disabled)
+        .get_user(user_id)
         .await
-        .map_err(|error| provider_failure("change Auth user status", &actor, error))?;
-    if let Err(error) = update_account_status(&context, &actor, account.account_id, request.disabled).await {
-        if let Err(compensation_error) = context.admin.set_disabled(user_id, previously_disabled).await {
-            error!(
-                "Failed to compensate Auth status change: auth_user_id={} error={}",
-                user_id, compensation_error
-            );
-        }
-        record_audit(
-            "auth.user.status.change",
-            "failed",
-            Some(actor.tenant_id),
-            Some(actor.account_id),
-        );
-        return Err(error);
-    }
+        .map_err(|error| provider_failure("load Auth user before tenant account status change", &actor, error))?
+        .ok_or_else(|| AdminApiError::NotFound("The identity-provider user was not found.".to_owned()))?;
+    update_account_status(&context, &actor, account.account_id, request.disabled).await?;
     invalidate_account_cache(&context, &actor, &auth_user_id, "after_status_change").await;
 
     record_audit(
@@ -808,7 +772,7 @@ async fn set_user_status(
         account_id = %updated_account.account_id,
         auth_user_id = %user_id,
         disabled = request.disabled,
-        "Auth user status request completed"
+        "Tenant-local application account status request completed without changing the shared provider identity"
     );
     Ok(Json(summary(updated_account, Some(provider_user))))
 }
@@ -1148,6 +1112,15 @@ async fn resolve_or_create_provider_user(
     {
         return Ok(user);
     }
+    if let Some(user) = context.admin.find_user_by_email(&request.email).await? {
+        info!(
+            tenant_id = %tenant_id,
+            auth_user_id = %user.id,
+            password_supplied_but_ignored = request.password.is_some(),
+            "Reusing existing Auth identity for an additional Shepherd tenant membership"
+        );
+        return Ok(user);
+    }
     context.admin.create_user(request, tenant_id, idempotency_key).await
 }
 
@@ -1236,30 +1209,21 @@ async fn mark_provisioning_failed(
     }
 }
 
-async fn compensate_created_provider_user(
+async fn retain_provider_user_after_failed_link(
     context: &AuthService,
     actor: &AuthenticatedUser,
     idempotency_key: Uuid,
     auth_user_id: Uuid,
     error_code: &'static str,
 ) {
-    let compensation_result: Result<(), ProviderError> =
-        context.admin.delete_user_after_failed_link(auth_user_id).await;
-    let retained_auth_user_id: Option<Uuid> = match compensation_result {
-        Ok(()) => None,
-        Err(error) => {
-            error!(
-                tenant_id = %actor.tenant_id,
-                actor_id = %actor.account_id,
-                idempotency_key = %idempotency_key,
-                auth_user_id = %auth_user_id,
-                error = %error,
-                "Failed to compensate unlinked Auth user"
-            );
-            Some(auth_user_id)
-        }
-    };
-    mark_provisioning_failed(context, actor, idempotency_key, error_code, retained_auth_user_id).await;
+    warn!(
+        tenant_id = %actor.tenant_id,
+        actor_id = %actor.account_id,
+        idempotency_key = %idempotency_key,
+        auth_user_id = %auth_user_id,
+        "Retaining Auth identity after application link failure because the identity may belong to other tenants"
+    );
+    mark_provisioning_failed(context, actor, idempotency_key, error_code, Some(auth_user_id)).await;
 }
 
 async fn ensure_username_available(
@@ -1628,7 +1592,7 @@ async fn link_created_user(
 async fn invalidate_account_cache(context: &AuthService, actor: &AuthenticatedUser, subject: &str, phase: &str) {
     let invalidation_result: Result<(), crate::ext_foundation::account_cache::AuthenticatedUserCacheError> = context
         .account_cache
-        .invalidate(&context.provider.config().issuer, subject)
+        .invalidate(&context.provider.config().issuer, subject, actor.tenant_id)
         .await;
     if let Err(cache_error) = invalidation_result {
         warn!(

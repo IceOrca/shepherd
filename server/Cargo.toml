@@ -33,7 +33,7 @@ axum = { version = "*", features = ["multipart"] }
 tower = { version = "*" }
 tower-http = { version = "*", features = ["cors", "timeout", "trace"] }
 jsonwebtoken = { version = "*", features = ["rust_crypto"] }
-reqwest = { version = "*", default-features = false, features = ["json", "rustls"] }
+reqwest = { version = "*", default-features = false, features = ["json", "query", "rustls"] }
 casbin = { version = "*", default-features = false, features = ["incremental", "cached", "runtime-tokio"] }
 sqlx-adapter = { version = "*", default-features = false, features = ["postgres", "runtime-tokio-rustls"] }
 ed25519-dalek = { version = "*", features = ["rand_core"] }

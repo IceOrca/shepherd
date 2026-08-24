@@ -18,7 +18,7 @@ acme	staff	acme_north_staff_1	acme.northstaff1@shepherd.local	01234567aA	north-b
 acme	staff	acme_north_staff_2	acme.northstaff2@shepherd.local	01234567aA	north-branch
 acme	staff	acme_north_staff_3	acme.northstaff3@shepherd.local	01234567aA	north-branch
 acme	staff	acme_north_staff_4	acme.northstaff4@shepherd.local	01234567aA	north-branch
-acme1	tenant_owner	acme1_owner	acme1.owner@shepherd.local	01234567aA	all
+acme1	tenant_owner	acme1_owner	iceorca@shepherd.local	01234567aA	all
 acme1	executive_manager	acme1_exec	acme1.exec@shepherd.local	01234567aA	all
 acme1	branch_manager	acme1_head_manager	acme1.headmanager@shepherd.local	01234567aA	head-office
 acme1	supervisor	acme1_head_supervisor_1	acme1.headsupervisor1@shepherd.local	01234567aA	head-office
@@ -34,7 +34,7 @@ acme1	staff	acme1_north_staff_1	acme1.northstaff1@shepherd.local	01234567aA	nort
 acme1	staff	acme1_north_staff_2	acme1.northstaff2@shepherd.local	01234567aA	north-branch
 acme1	staff	acme1_north_staff_3	acme1.northstaff3@shepherd.local	01234567aA	north-branch
 acme1	staff	acme1_north_staff_4	acme1.northstaff4@shepherd.local	01234567aA	north-branch
-acme2	tenant_owner	acme2_owner	acme2.owner@shepherd.local	01234567aA	all
+acme2	tenant_owner	acme2_owner	iceorca@shepherd.local	01234567aA	all
 acme2	executive_manager	acme2_exec	acme2.exec@shepherd.local	01234567aA	all
 acme2	branch_manager	acme2_head_manager	acme2.headmanager@shepherd.local	01234567aA	head-office
 acme2	supervisor	acme2_head_supervisor_1	acme2.headsupervisor1@shepherd.local	01234567aA	head-office

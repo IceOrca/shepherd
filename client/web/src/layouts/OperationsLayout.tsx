@@ -23,7 +23,7 @@ import { useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../features/auth/AuthProvider";
 import { listBranches, operationsQueryKeys } from "../features/operations/api";
-import type { BranchSummary } from "../api/generated/contracts";
+import type { BranchSummary, TenantMembershipSummary } from "../api/generated/contracts";
 import { friendlyApiError } from "../shared/api/client";
 import { formatToday, roleLabel } from "../shared/lib/format";
 import { useOnlineStatus } from "../shared/lib/useOnlineStatus";
@@ -165,7 +165,9 @@ export function OperationsLayout() {
   const isOnline = useOnlineStatus();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [switchingTenant, setSwitchingTenant] = useState(false);
   const [logoutError, setLogoutError] = useState<string | null>(null);
+  const [tenantSwitchError, setTenantSwitchError] = useState<string | null>(null);
   const profile = auth.profile;
   const heading = pageTitle(location.pathname);
   const branchesQuery = useQuery<BranchSummary[]>({
@@ -186,6 +188,26 @@ export function OperationsLayout() {
   const activeBranch: BranchSummary | undefined = branches.find(
     (branch: BranchSummary): boolean => branch.id === profile.active_branch_id,
   );
+  const activeTenant: TenantMembershipSummary | undefined = auth.memberships.find(
+    (membership: TenantMembershipSummary): boolean => membership.tenant_id === profile.tenant_id,
+  );
+
+  const switchTenant = async (tenantId: string): Promise<void> => {
+    if (tenantId === profile.tenant_id) {
+      return;
+    }
+    setSwitchingTenant(true);
+    setTenantSwitchError(null);
+    try {
+      await auth.selectTenant(tenantId);
+      await queryClient.invalidateQueries();
+      console.info("Shepherd UI tenant selection changed", { tenantId });
+    } catch (error: unknown) {
+      setTenantSwitchError(friendlyApiError(error, "Không thể chuyển doanh nghiệp lúc này. Vui lòng thử lại."));
+    } finally {
+      setSwitchingTenant(false);
+    }
+  };
 
   const switchBranch = async (branchId: string): Promise<void> => {
     if (branchId === profile.active_branch_id) {
@@ -333,6 +355,31 @@ export function OperationsLayout() {
             </div>
 
             <div className="ml-auto flex items-center gap-3">
+              {auth.memberships.length > 1 ? (
+                <label className="hidden items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 xl:flex">
+                  <BriefcaseBusiness className="size-4 text-indigo-600" />
+                  <span className="sr-only">Doanh nghiệp đang làm việc</span>
+                  <select
+                    className="min-h-0 border-0 bg-transparent py-0 pl-0 pr-7 text-sm font-semibold text-slate-700 focus:ring-0 disabled:opacity-60"
+                    disabled={switchingTenant}
+                    onChange={(event): void => {
+                      void switchTenant(event.target.value);
+                    }}
+                    value={profile.tenant_id}
+                  >
+                    {auth.memberships.map((membership: TenantMembershipSummary) => (
+                      <option key={membership.tenant_id} value={membership.tenant_id}>
+                        {membership.tenant_display_name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : activeTenant ? (
+                <div className="hidden items-center gap-2 rounded-xl bg-indigo-50 px-3 py-2 text-sm font-semibold text-indigo-800 xl:flex">
+                  <BriefcaseBusiness className="size-4 text-indigo-600" />
+                  {activeTenant.tenant_display_name}
+                </div>
+              ) : null}
               {branches.length > 1 ? (
                 <label className="hidden items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 lg:flex">
                   <Building2 className="size-4 text-blue-600" />
@@ -374,6 +421,12 @@ export function OperationsLayout() {
             </div>
           </div>
         </header>
+
+        {tenantSwitchError ? (
+          <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-center text-sm font-medium text-red-700">
+            {tenantSwitchError}
+          </div>
+        ) : null}
 
         {!isOnline ? (
           <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-sm font-medium text-amber-800">

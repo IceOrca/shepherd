@@ -80,6 +80,7 @@ users_json="$(curl --fail --silent --show-error \
     --header "Authorization: Bearer ${auth_admin_token}" \
     "${auth_admin_url}/admin/users?page=1&per_page=1000")"
 auth_identities_json='{}'
+auth_subjects_by_email_json='{}'
 seeded_auth_account_count=0
 tab_character="$(printf '\t')"
 
@@ -93,8 +94,12 @@ while IFS="${tab_character}" read -r tenant_slug business_role username email pa
         exit 2
     fi
 
-    auth_subject="$(printf '%s' "${users_json}" | jq --raw-output --arg email "${email}" \
-        '(.users // .) | map(select(.email == $email)) | first | .id // empty')"
+    auth_subject="$(printf '%s' "${auth_subjects_by_email_json}" | jq --raw-output --arg email "${email}" \
+        '.[$email] // empty')"
+    if [ -z "${auth_subject}" ]; then
+        auth_subject="$(printf '%s' "${users_json}" | jq --raw-output --arg email "${email}" \
+            '(.users // .) | map(select(.email == $email)) | first | .id // empty')"
+    fi
     if [ -z "${auth_subject}" ]; then
         create_payload="$(jq --null-input --compact-output \
             --arg email "${email}" \
@@ -127,6 +132,11 @@ while IFS="${tab_character}" read -r tenant_slug business_role username email pa
             "${auth_admin_url}/admin/users/${auth_subject}"
     fi
 
+    auth_subjects_by_email_json="$(printf '%s' "${auth_subjects_by_email_json}" | jq --compact-output \
+        --arg email "${email}" \
+        --arg auth_subject "${auth_subject}" \
+        '. + {($email): $auth_subject}')"
+
     if ! printf '%s' "${auth_subject}" | grep -Eq '^[0-9a-fA-F-]{36}$'; then
         echo >&2 "Supabase Auth did not return a valid UUID for ${tenant_slug}/${username}"
         exit 2
@@ -153,12 +163,13 @@ docker compose exec -T -e AUTH_DEV_IDENTITIES_JSON="${auth_identities_json}" ser
 # UUIDs. Remove only the bounded application-principal cache namespace;
 # unrelated Redis sessions, rate limits, and queues remain untouched.
 docker compose exec -T redis-cache sh -c \
-    'redis-cli --scan --pattern "auth:application-user:v1:*" |
+    'redis-cli --scan --pattern "auth:application-user:v2:*" |
         while IFS= read -r cache_key; do
             if [ -n "$cache_key" ]; then
                 redis-cli UNLINK "$cache_key" >/dev/null
             fi
         done'
 
-echo "Development data is ready for ${seeded_auth_account_count} Auth accounts"
+unique_auth_identity_count="$(printf '%s' "${auth_subjects_by_email_json}" | jq 'length')"
+echo "Development data is ready for ${seeded_auth_account_count} tenant accounts linked to ${unique_auth_identity_count} Auth identities"
 echo "Login catalog: ${dev_accounts_file}"

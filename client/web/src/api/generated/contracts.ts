@@ -10,6 +10,8 @@ export type AuthProviderUserStatus = "active" | "disabled" | "missing";
 
 export type CurrentUserProfile = { tenant_id: string, account_id: string, username: string, email: string | null, primary_role: RoleCode, roles: Array<RoleCode>, permissions: Array<PermissionCode>, branch_ids: Array<string>, active_branch_id: string | null, };
 
+export type TenantMembershipSummary = { tenant_id: string, account_id: string, tenant_slug: string, tenant_display_name: string, username: string, email: string | null, primary_role: RoleCode, };
+
 export type AuthUserSummary = { auth_user_id: string, account_id: string, username: string, email: string | null, primary_role: RoleCode, branch_ids: Array<string>, account_status: AccountStatus, provider_status: AuthProviderUserStatus, email_confirmed: boolean, created_at: string | null, last_sign_in_at: string | null, };
 
 export type CreateAuthUserRequest = { username: string, email: string, password: string | null, primary_role: RoleCode, branch_ids: Array<string>, };

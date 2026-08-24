@@ -5,10 +5,11 @@ use infra_redis::RedisAdapter;
 use redis::{AsyncCommands, RedisError};
 use sha2::{Digest, Sha256};
 use tracing::{debug, error, info, trace, warn};
+use uuid::Uuid;
 
 use super::{AuthenticatedPrincipal, account::AuthenticatedUser};
 
-const CACHE_KEY_PREFIX: &str = "auth:application-user:v1";
+const CACHE_KEY_PREFIX: &str = "auth:application-user:v2";
 const DEFAULT_CACHE_TTL_SECS: u64 = 60;
 const MAX_CACHE_TTL_SECS: u64 = 3_600;
 
@@ -56,8 +57,9 @@ impl AuthenticatedUserCache {
     pub(crate) async fn get(
         &self,
         principal: &AuthenticatedPrincipal,
+        tenant_id: Uuid,
     ) -> Result<Option<AuthenticatedUser>, AuthenticatedUserCacheError> {
-        let cache_key: String = cache_key(&principal.issuer, &principal.subject);
+        let cache_key: String = cache_key(&principal.issuer, &principal.subject, tenant_id);
         trace!(
             operation = "get_authenticated_user_cache",
             cache_key = %cache_key,
@@ -117,7 +119,7 @@ impl AuthenticatedUserCache {
         principal: &AuthenticatedPrincipal,
         user: &AuthenticatedUser,
     ) -> Result<(), AuthenticatedUserCacheError> {
-        let cache_key: String = cache_key(&principal.issuer, &principal.subject);
+        let cache_key: String = cache_key(&principal.issuer, &principal.subject, user.tenant_id);
         let serialized_user: String =
             serde_json::to_string(user).map_err(|serialization_error: serde_json::Error| {
                 error!(
@@ -155,8 +157,13 @@ impl AuthenticatedUserCache {
         Ok(())
     }
 
-    pub(crate) async fn invalidate(&self, issuer: &str, subject: &str) -> Result<(), AuthenticatedUserCacheError> {
-        let cache_key: String = cache_key(issuer, subject);
+    pub(crate) async fn invalidate(
+        &self,
+        issuer: &str,
+        subject: &str,
+        tenant_id: Uuid,
+    ) -> Result<(), AuthenticatedUserCacheError> {
+        let cache_key: String = cache_key(issuer, subject, tenant_id);
         let mut connection: redis::aio::MultiplexedConnection = self.redis.connection().await?;
         let deleted_count: usize = connection.del(&cache_key).await.map_err(|cache_error: RedisError| {
             error!(
@@ -177,11 +184,13 @@ impl AuthenticatedUserCache {
     }
 }
 
-fn cache_key(issuer: &str, subject: &str) -> String {
+fn cache_key(issuer: &str, subject: &str, tenant_id: Uuid) -> String {
     let mut hasher: Sha256 = Sha256::new();
     hasher.update(issuer.as_bytes());
     hasher.update([0_u8]);
     hasher.update(subject.as_bytes());
+    hasher.update([0_u8]);
+    hasher.update(tenant_id.as_bytes());
     let identity_hash: String = URL_SAFE_NO_PAD.encode(hasher.finalize());
     format!("{CACHE_KEY_PREFIX}:{identity_hash}")
 }
@@ -189,17 +198,22 @@ fn cache_key(issuer: &str, subject: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::cache_key;
+    use uuid::Uuid;
 
     #[test]
-    fn cache_key_is_deterministic_and_separates_issuer_from_subject() {
-        let first_key: String = cache_key("https://auth.example.test", "subject-1");
-        let repeated_key: String = cache_key("https://auth.example.test", "subject-1");
-        let other_subject_key: String = cache_key("https://auth.example.test", "subject-2");
-        let ambiguous_parts_key: String = cache_key("https://auth.example.testsubject-", "1");
+    fn cache_key_is_deterministic_and_separates_identity_and_tenant() {
+        let first_tenant_id: Uuid = Uuid::from_u128(1);
+        let second_tenant_id: Uuid = Uuid::from_u128(2);
+        let first_key: String = cache_key("https://auth.example.test", "subject-1", first_tenant_id);
+        let repeated_key: String = cache_key("https://auth.example.test", "subject-1", first_tenant_id);
+        let other_subject_key: String = cache_key("https://auth.example.test", "subject-2", first_tenant_id);
+        let other_tenant_key: String = cache_key("https://auth.example.test", "subject-1", second_tenant_id);
+        let ambiguous_parts_key: String = cache_key("https://auth.example.testsubject-", "1", first_tenant_id);
 
         assert_eq!(first_key, repeated_key);
         assert_ne!(first_key, other_subject_key);
+        assert_ne!(first_key, other_tenant_key);
         assert_ne!(first_key, ambiguous_parts_key);
-        assert!(first_key.starts_with("auth:application-user:v1:"));
+        assert!(first_key.starts_with("auth:application-user:v2:"));
     }
 }

@@ -26,6 +26,10 @@ pub use config::ExtProviderConfig;
 pub use error::AccessTokenError;
 pub use service::ExtProvider;
 
+pub fn identity_routes(auth: Arc<AuthService>) -> Router {
+    account::identity_routes(auth)
+}
+
 pub fn routes(auth: Arc<AuthService>, policy: auth_admin::AuthAdminPolicy) -> Router {
     account::routes(Arc::clone(&auth))
         .merge(auth_admin::routes(Arc::clone(&auth), policy.clone()))

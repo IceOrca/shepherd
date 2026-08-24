@@ -1,5 +1,10 @@
-import type { CurrentUserProfile } from "../../api/generated/contracts";
-import { apiRequest, setApiAccessToken } from "../../shared/api/client";
+import type { CurrentUserProfile, TenantMembershipSummary } from "../../api/generated/contracts";
+import {
+  apiRequest,
+  setApiAccessToken,
+  setApiActiveBranchId,
+  setApiActiveTenantId,
+} from "../../shared/api/client";
 
 const configuredAuthUrl: string | undefined = import.meta.env.VITE_SHEPHERD_AUTH_URL;
 const AUTH_URL: string = (configuredAuthUrl ?? "/auth/v1").replace(/\/$/, "");
@@ -26,6 +31,11 @@ interface AuthErrorPayload {
 export interface AuthSettings {
   external?: Record<string, boolean>;
   disable_signup?: boolean;
+}
+
+export interface ApplicationSessionContext {
+  memberships: TenantMembershipSummary[];
+  profile: CurrentUserProfile;
 }
 
 export type OAuthProvider = "google" | "facebook";
@@ -240,16 +250,17 @@ export function consumeAuthCallbackError(): string | null {
 export async function signInWithPassword(
   email: string,
   password: string,
-): Promise<CurrentUserProfile> {
+  preferredTenantId: string | null,
+): Promise<ApplicationSessionContext> {
   console.info("Password sign-in requested without logging credentials");
   await tokenRequest("password", { email, password });
   try {
-    const profile: CurrentUserProfile = await apiRequest<CurrentUserProfile>("/api/me");
+    const context: ApplicationSessionContext = await resolveApplicationSession(preferredTenantId);
     console.info("Password sign-in completed after application account resolution", {
-      tenantId: profile.tenant_id,
-      accountId: profile.account_id,
+      tenantId: context.profile.tenant_id,
+      accountId: context.profile.account_id,
     });
-    return profile;
+    return context;
   } catch (error: unknown) {
     storeSession(null);
     console.warn("Password sign-in authentication succeeded but application account resolution failed", {
@@ -293,19 +304,59 @@ export async function refreshAccessToken(force: boolean = false): Promise<string
   return refreshedSession?.access_token ?? null;
 }
 
-export async function restoreSession(): Promise<CurrentUserProfile> {
+export async function restoreSession(preferredTenantId: string | null): Promise<ApplicationSessionContext> {
   console.info("Restoring browser authentication session");
   const token: string | null = await refreshAccessToken();
   if (!token) {
     console.warn("Browser authentication session restore failed because no usable access token exists");
     throw new AuthenticationError("Không có phiên đăng nhập.");
   }
-  const profile: CurrentUserProfile = await apiRequest<CurrentUserProfile>("/api/me");
+  const context: ApplicationSessionContext = await resolveApplicationSession(preferredTenantId);
   console.info("Browser authentication session restored", {
-    tenantId: profile.tenant_id,
-    accountId: profile.account_id,
+    tenantId: context.profile.tenant_id,
+    accountId: context.profile.account_id,
   });
-  return profile;
+  return context;
+}
+
+export async function selectTenantSession(tenantId: string): Promise<CurrentUserProfile> {
+  setApiActiveTenantId(tenantId);
+  setApiActiveBranchId(null);
+  try {
+    const profile: CurrentUserProfile = await apiRequest<CurrentUserProfile>("/api/me");
+    console.info("Shepherd tenant context switch resolved", {
+      tenantId: profile.tenant_id,
+      accountId: profile.account_id,
+    });
+    return profile;
+  } catch (error: unknown) {
+    setApiActiveTenantId(null);
+    console.warn("Shepherd tenant context switch was rejected", {
+      tenantId,
+      errorType: error instanceof Error ? error.name : typeof error,
+    });
+    throw error;
+  }
+}
+
+async function resolveApplicationSession(preferredTenantId: string | null): Promise<ApplicationSessionContext> {
+  setApiActiveTenantId(null);
+  setApiActiveBranchId(null);
+  const memberships: TenantMembershipSummary[] = await apiRequest<TenantMembershipSummary[]>("/api/tenants");
+  if (memberships.length === 0) {
+    console.warn("Authenticated GoTrue identity has no active Shepherd tenant membership");
+    throw new AuthenticationError("Tài khoản chưa được cấp quyền vào doanh nghiệp nào.");
+  }
+  const selectedMembership: TenantMembershipSummary =
+    memberships.find(
+      (membership: TenantMembershipSummary): boolean => membership.tenant_id === preferredTenantId,
+    ) ?? memberships[0];
+  const profile: CurrentUserProfile = await selectTenantSession(selectedMembership.tenant_id);
+  console.info("Shepherd application session context resolved", {
+    selectedTenantId: selectedMembership.tenant_id,
+    membershipCount: memberships.length,
+  });
+  return { memberships, profile };
 }
 
 export async function logoutSession(): Promise<void> {

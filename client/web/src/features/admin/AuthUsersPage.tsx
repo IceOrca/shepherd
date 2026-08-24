@@ -93,7 +93,7 @@ function formatOptionalDate(value: string | null): string {
 }
 
 function userIsDisabled(user: AuthUserSummary): boolean {
-  return user.account_status === "disabled" || user.provider_status === "disabled";
+  return user.account_status === "disabled";
 }
 
 export function AuthUsersPage() {
@@ -241,7 +241,7 @@ export function AuthUsersPage() {
     if (
       !disabled &&
       !window.confirm(
-        `Vô hiệu hóa ${user.username}? Người dùng sẽ bị đăng xuất và không thể đăng nhập lại.`,
+        `Vô hiệu hóa ${user.username} trong doanh nghiệp này? Danh tính đăng nhập và quyền ở doanh nghiệp khác không bị thay đổi.`,
       )
     ) {
       return;
@@ -396,6 +396,7 @@ export function AuthUsersPage() {
                     statusMutation.isPending &&
                     statusMutation.variables?.authUserId === user.auth_user_id;
                   const providerMissing: boolean = user.provider_status === "missing";
+                  const providerDisabled: boolean = user.provider_status === "disabled";
                   const assignedBranchNames: string[] = user.branch_ids.map(
                     (branchId: string): string =>
                       branches.find((branch: BranchSummary): boolean => branch.id === branchId)?.name ?? branchId,
@@ -437,7 +438,7 @@ export function AuthUsersPage() {
                           className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-bold ${
                             providerMissing
                               ? "bg-amber-50 text-amber-700"
-                              : disabled
+                              : disabled || providerDisabled
                                 ? "bg-red-50 text-red-700"
                                 : "bg-emerald-50 text-emerald-700"
                           }`}
@@ -445,8 +446,10 @@ export function AuthUsersPage() {
                           <span className="size-1.5 rounded-full bg-current" />
                           {providerMissing
                             ? "Thiếu danh tính"
+                            : providerDisabled
+                              ? "Danh tính bị khóa toàn cục"
                             : disabled
-                              ? "Đã vô hiệu"
+                              ? "Đã vô hiệu trong doanh nghiệp"
                               : "Đang hoạt động"}
                         </span>
                       </td>
@@ -468,7 +471,9 @@ export function AuthUsersPage() {
                             }
                             onClick={() => toggleStatus(user)}
                             title={
-                              isSelf && !disabled
+                              providerDisabled
+                                ? "Danh tính đăng nhập đang bị khóa ở cấp nền tảng"
+                                : isSelf && !disabled
                                 ? "Không thể vô hiệu hóa tài khoản đang sử dụng"
                                 : undefined
                             }
@@ -604,7 +609,7 @@ export function AuthUsersPage() {
                   </button>
                 </span>
                 <span className="mt-2 block text-xs leading-5 text-slate-500">
-                  Để trống cho tài khoản chỉ đăng nhập bằng Google hoặc Facebook. Email từ nhà cung cấp phải khớp chính xác.
+                  Chỉ dùng khi tạo danh tính mới. Nếu email đã có trong hệ thống, Shepherd liên kết danh tính đó vào doanh nghiệp này và không đổi mật khẩu hiện tại. Có thể để trống cho Google hoặc Facebook; email từ nhà cung cấp phải khớp chính xác.
                 </span>
               </label>
               <label className="block">

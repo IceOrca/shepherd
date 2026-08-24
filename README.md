@@ -132,9 +132,11 @@ same work twice.
 
 Supabase Auth (GoTrue) owns credentials, external identities, login sessions,
 JWT signing, and account recovery. Shepherd separately owns application
-accounts, tenant membership, account status, email, roles, permissions, and
+accounts, tenant memberships, account status, email, roles, permissions, and
 employee links. A valid GoTrue login therefore does not by itself grant access:
-the JWT issuer and subject must map to an active Shepherd account.
+the JWT issuer and subject must map to an active Shepherd account in the tenant
+selected for the request. One GoTrue identity may map to a different Shepherd
+account, role, branch set, and employee link in each tenant.
 
 Both services use one PostgreSQL database, following Supabase's native schema
 layout while keeping separate ownership boundaries. GoTrue connects as
@@ -145,9 +147,10 @@ does not merge the two user models: application code never reads or writes
 
 Before signing an access token, GoTrue calls
 `public.shepherd_custom_access_token_hook`. The hook maps the token issuer and
-subject through `account_identities` and adds the active tenant UUID as the
-signed `tid` claim. Unmapped identities receive no `tid` and still cannot enter
-the application.
+subject through `account_identities` and adds a signed `tid` default hint only
+when exactly one active tenant membership exists. It removes `tid` for an
+unmapped or multi-tenant identity, so it never chooses an arbitrary tenant.
+Roles and branches are never embedded in the JWT.
 
 ### Automatic database bootstrap
 
@@ -272,20 +275,28 @@ cutover. Rebuild the frontend and recreate GoTrue and Shepherd together before
 loading the new edge configuration. Existing access and refresh sessions may
 no longer match the configured issuer, so users should expect to sign in again.
 
-The API validates signed access tokens locally and caches each successfully
-resolved `AuthenticatedUser` in Redis. The cache contains the Shepherd tenant
+The API validates signed access tokens locally. The identity-authenticated
+`GET /api/tenants` endpoint returns the active Shepherd memberships for the
+token's issuer and subject without pretending that tenant RLS context already
+exists. The browser persists the selected tenant and sends
+`X-Shepherd-Tenant-Id` on tenant-scoped calls. Middleware validates the exact
+`issuer + subject + tenant_id` mapping in PostgreSQL before loading any
+tenant-owned account or setting RLS context.
+
+Each successfully resolved `AuthenticatedUser` is cached separately in Redis
+per identity and tenant. The cache contains the selected Shepherd tenant
 and account IDs, username, application-owned email, raw tenant/branch-scoped
 role and permission grants, and PostgreSQL-authoritative accessible branch IDs. Middleware validates the requested branch before deriving effective roles and permissions, so grants from another branch are never unioned into the active request. It
-uses a deterministic hashed identity key and a mandatory 60-second expiry by
+uses a deterministic hashed identity-plus-tenant key and a mandatory 60-second expiry by
 default, so repeated requests avoid querying account and authorization tables
 without allowing Redis keys to grow indefinitely.
 
 The signed `tid` is a routing and consistency hint, not the authorization
-source of truth. Middleware compares it with the tenant resolved from the
-active Shepherd account. A matching cache entry avoids the global account
-lookup. If `tid` is absent or stale, middleware reloads PostgreSQL authority
-and returns `401`; the existing browser API client refreshes the GoTrue session
-once and retries with the newly signed claim. Shepherd cannot update an
+source of truth. An explicit `X-Shepherd-Tenant-Id` wins as the requested
+context only after PostgreSQL membership validation. Without that header,
+middleware may use a valid signed `tid` or the identity's sole active
+membership. A multi-tenant identity with no selection receives `400`; a
+selected tenant without a mapping receives `403`. Shepherd cannot update an
 already-signed JWT in place and never signs a replacement itself.
 
 ### Branch-aware account provisioning
@@ -295,7 +306,10 @@ The frontend never calls the GoTrue admin API. It sends a persistent UUID
 primary role, and explicit `branch_ids` to
 `POST /api/admin/auth-users`. The backend validates data-driven role delegation,
 branch cardinality, active branch status, and actor branch authority before
-creating the provider user. The password is neither logged nor included in a
+resolving the provider identity. The backend reuses an existing normalized-email
+GoTrue identity when present and creates one only when absent. An initial
+password applies only to a newly created identity; tenant membership never
+resets credentials for an existing identity. The password is neither logged nor included in a
 recoverable ledger; only a SHA-256 request fingerprint is persisted, and that
 fingerprint covers the selected branches.
 
@@ -303,16 +317,20 @@ After GoTrue accepts the identity, Shepherd commits the application account,
 primary role, branch assignments, issuer/subject mapping, provisioning ledger,
 and application-specific records in one tenant transaction. A new `staff`
 account receives its active HR employee row in its single selected branch.
-Failure compensates the provider user when possible, while a retry with the
-same idempotency key recovers or returns the original result. Branch managers
+If tenant-local linking fails, Shepherd retains the provider identity because
+it may already serve another tenant; a retry with the same idempotency key
+recovers or returns the original result. Branch managers
 and supervisors cannot use a crafted request to provision accounts outside
 their authorized branches or above their database grant.
 
 PostgreSQL remains authoritative. Cache misses and Redis outages fall back to
 the application database, while missing or disabled accounts remain rejected.
 Account status and future identity, email, role, or permission changes must
-invalidate the affected cache entry. Disabling an account therefore forces an
-already-issued GoTrue JWT through the current Shepherd account-status check.
+invalidate the affected tenant-membership cache entry. Disabling an account is
+tenant-local: it forces the current tenant back through Shepherd's account-status
+check but does not ban the shared GoTrue identity or interrupt access to another
+tenant. Provider-global bans, deletion, and credential lifecycle require a
+separate platform-level authority.
 Business queries still establish tenant context through SQLx transactions so
 PostgreSQL RLS remains the final tenant-isolation boundary.
 
@@ -325,7 +343,7 @@ The tenant-owner console at `/admin/access-control` manages four related areas:
 - **Branches:** create branches and update their name, IANA time zone, or active/disabled status. Branches are disabled rather than deleted through this workflow.
 - **Audit:** review immutable access-control changes with actor, target, before/after data, and server timestamp.
 
-The console uses `GET /api/admin/access-control` for its snapshot and the scoped `POST`/`PUT` routes below `/api/admin/access-control/branches`, `/roles`, and `/users/{account_id}` for mutations. `/admin/auth-users` remains the provider-account workflow for creating or disabling GoTrue users and links back to the access console.
+The console uses `GET /api/admin/access-control` for its snapshot and the scoped `POST`/`PUT` routes below `/api/admin/access-control/branches`, `/roles`, and `/users/{account_id}` for mutations. `/admin/auth-users` remains the provider-link and tenant-account workflow; its status action enables or disables only the account in the active tenant.
 
 PostgreSQL stores tenant configuration in `tenant_roles`, `tenant_role_permissions`, `account_role_assignments`, and `account_permission_overrides`. The application-wide `roles` and `role_permissions` tables seed new tenant catalogs; they are not the runtime source after bootstrapping. The global `permissions` catalog is intentionally read-only to tenants so a tenant cannot invent a permission that no server route understands.
 
@@ -366,13 +384,17 @@ supervisors, and staff; branch managers may create supervisors and staff; and
 supervisors may create staff. Non-tenant-wide actors can assign only branches
 already in their authoritative access set.
 
-The browser stores one active branch per tenant and sends
-`X-Shepherd-Branch-Id` on Shepherd API calls. Multi-branch users switch branches
-from the application header; switching invalidates cached queries. Middleware
+After login, the browser loads `/api/tenants`, stores one active tenant, and
+sends `X-Shepherd-Tenant-Id` on tenant-scoped Shepherd API calls. A multi-tenant
+identity switches companies from the application header; switching clears the
+old branch, reloads `/api/me`, restores an authorized branch for the new tenant,
+and invalidates all cached queries. The browser also stores one active branch
+per tenant and sends `X-Shepherd-Branch-Id`. Multi-branch users switch branches
+from the same header; switching invalidates cached queries. Middleware
 validates the requested branch against the PostgreSQL-resolved
 `AuthenticatedUser`, and tenant transactions set `app.branch_id` for RLS. JWTs
-continue to carry only the `tid` tenant hint—roles and branch access are never
-trusted from JWT claims or browser headers.
+carry at most the optional single-membership `tid` hint—tenant selection, roles,
+and branch access are never trusted from JWT claims or browser headers.
 
 Notification destinations are configured per branch. Accepted work actions
 write branch-owned outbox rows in the same transaction, and delivery
@@ -414,8 +436,10 @@ Each development tenant receives two branches: `head-office` and
 `north-branch`. Above them are one `tenant_owner` and one
 `executive_manager`; the executive manager is assigned to both branches. Each
 branch has exactly one `branch_manager`, two `supervisor` accounts, and four
-`staff` accounts, for 16 accounts per tenant and 48 GoTrue/application accounts
-in total. The full six-column copy/paste catalog—tenant, role, username, email,
+`staff` accounts, for 16 accounts per tenant and 48 application accounts.
+There are 46 GoTrue identities because `iceorca@shepherd.local` is deliberately
+linked to a separate `tenant_owner` account in all three tenants; use it with
+password `01234567aA` to test the tenant selector. The full six-column copy/paste catalog—tenant, role, username, email,
 password, and branch code—is `scripts/dev-auth-accounts.tsv`. The seeding script
 parses all six columns, provisions credentials through the GoTrue admin API,
 and passes identity subjects to the Rust application seeder; it never writes
