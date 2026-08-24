@@ -1521,13 +1521,15 @@ async fn seed_hr_infra(
 
     seed_payroll_configuration(
         &mut transaction,
-        tenant_id,
-        tenant,
-        accounts,
-        &employee_ids,
-        &employee_branch_ids,
-        owner_account_id,
-        effective_date,
+        DevPayrollSeedContext {
+            tenant_id,
+            tenant,
+            accounts,
+            employee_ids: &employee_ids,
+            employee_branch_ids: &employee_branch_ids,
+            owner_account_id,
+            effective_date,
+        },
     )
     .await?;
 
@@ -1555,16 +1557,29 @@ async fn seed_hr_infra(
     Ok(())
 }
 
-async fn seed_payroll_configuration(
-    transaction: &mut infra_postgres::TenantTransaction,
+struct DevPayrollSeedContext<'a> {
     tenant_id: Uuid,
-    tenant: &DevTenant,
-    accounts: &[SeedAccount],
-    employee_ids: &HashMap<Uuid, Uuid>,
-    employee_branch_ids: &HashMap<Uuid, Uuid>,
+    tenant: &'a DevTenant,
+    accounts: &'a [SeedAccount],
+    employee_ids: &'a HashMap<Uuid, Uuid>,
+    employee_branch_ids: &'a HashMap<Uuid, Uuid>,
     owner_account_id: Uuid,
     effective_date: NaiveDate,
+}
+
+async fn seed_payroll_configuration(
+    transaction: &mut infra_postgres::TenantTransaction,
+    context: DevPayrollSeedContext<'_>,
 ) -> Result<(), io::Error> {
+    let DevPayrollSeedContext {
+        tenant_id,
+        tenant,
+        accounts,
+        employee_ids,
+        employee_branch_ids,
+        owner_account_id,
+        effective_date,
+    }: DevPayrollSeedContext<'_> = context;
     for account in accounts {
         let employee_id: Uuid = employee_ids
             .get(&account.id)
@@ -2158,7 +2173,11 @@ async fn seed_branches(
                     .iter()
                     .position(|branch: &DevBranch| branch.code == branch_code)
                     .ok_or_else(|| io::Error::other(format!("unknown development branch code '{branch_code}'")))?;
-                vec![branch_ids[branch_index]]
+                let branch_id: Uuid = branch_ids
+                    .get(branch_index)
+                    .copied()
+                    .ok_or_else(|| io::Error::other("development branch ID mapping was not found"))?;
+                vec![branch_id]
             }
         };
         for branch_id in assigned_branch_ids {

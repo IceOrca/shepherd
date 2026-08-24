@@ -2,8 +2,12 @@ use ts_rs::{Config, TS};
 
 use crate::{
     auth::{
-        AccountStatus, AuthProviderUserStatus, AuthUserSummary, CreateAuthUserRequest, CurrentUserProfile,
-        PermissionCode, RoleCode, SetAuthUserStatusRequest,
+        AccessControlAuditEntry, AccessControlBranch, AccessControlPermission, AccessControlRole,
+        AccessControlSnapshot, AccessControlUser, AccessRoleScope, AccountPermissionOverrideContract,
+        AccountRoleAssignmentContract, AccountStatus, AuthProviderUserStatus, AuthUserSummary,
+        CreateAccessControlBranchRequest, CreateAccessControlRoleRequest, CreateAuthUserRequest, CurrentUserProfile,
+        PermissionCode, PermissionOverrideEffect, RoleCode, SetAuthUserStatusRequest, UpdateAccessControlBranchRequest,
+        UpdateAccessControlRoleRequest, UpdateAccountAccessRequest,
     },
     business::staffing::{
         core::{
@@ -75,6 +79,21 @@ pub fn contract() -> String {
     push::<AuthUserSummary>(&mut output, &config);
     push::<CreateAuthUserRequest>(&mut output, &config);
     push::<SetAuthUserStatusRequest>(&mut output, &config);
+    push::<AccessRoleScope>(&mut output, &config);
+    push::<PermissionOverrideEffect>(&mut output, &config);
+    push::<AccessControlBranch>(&mut output, &config);
+    push::<AccessControlPermission>(&mut output, &config);
+    push::<AccessControlRole>(&mut output, &config);
+    push::<AccountRoleAssignmentContract>(&mut output, &config);
+    push::<AccountPermissionOverrideContract>(&mut output, &config);
+    push::<AccessControlUser>(&mut output, &config);
+    push::<AccessControlAuditEntry>(&mut output, &config);
+    push::<AccessControlSnapshot>(&mut output, &config);
+    push::<CreateAccessControlBranchRequest>(&mut output, &config);
+    push::<UpdateAccessControlBranchRequest>(&mut output, &config);
+    push::<CreateAccessControlRoleRequest>(&mut output, &config);
+    push::<UpdateAccessControlRoleRequest>(&mut output, &config);
+    push::<UpdateAccountAccessRequest>(&mut output, &config);
 
     push::<BranchSummary>(&mut output, &config);
     push::<BusinessRecordStatus>(&mut output, &config);

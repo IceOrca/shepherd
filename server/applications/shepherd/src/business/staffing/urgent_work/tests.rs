@@ -122,6 +122,21 @@ impl Fixture {
         .await?;
         sqlx::query!(
             r#"
+            INSERT INTO account_branch_assignments (
+                tenant_id, account_id, branch_id, assigned_by_account_id
+            )
+            VALUES ($1, $2, $5, $2), ($1, $3, $5, $2), ($1, $4, $5, $2)
+            "#,
+            tenant_id,
+            actor_account_id,
+            peer_account_id,
+            coordinator_account_id,
+            branch_id,
+        )
+        .execute(setup.connection())
+        .await?;
+        sqlx::query!(
+            r#"
             INSERT INTO hr_employees (
                 id, tenant_id, branch_id, account_id, employee_code, display_name, status, hire_date
             ) VALUES
@@ -398,6 +413,12 @@ impl Fixture {
         let job_delete: PgQueryResult = sqlx::query!("DELETE FROM hr_jobs WHERE tenant_id = $1", self.tenant_id)
             .execute(transaction.connection())
             .await?;
+        let account_branch_assignment_delete: PgQueryResult = sqlx::query!(
+            "DELETE FROM account_branch_assignments WHERE tenant_id = $1",
+            self.tenant_id,
+        )
+        .execute(transaction.connection())
+        .await?;
         let account_delete: PgQueryResult = sqlx::query!("DELETE FROM accounts WHERE tenant_id = $1", self.tenant_id)
             .execute(transaction.connection())
             .await?;
@@ -425,6 +446,7 @@ impl Fixture {
             customer_rows = customer_delete.rows_affected(),
             employee_rows = employee_delete.rows_affected(),
             job_rows = job_delete.rows_affected(),
+            account_branch_assignment_rows = account_branch_assignment_delete.rows_affected(),
             account_rows = account_delete.rows_affected(),
             branch_rows = branch_delete.rows_affected(),
             tenant_rows = tenant_delete.rows_affected(),

@@ -260,6 +260,8 @@ mod tests {
             permissions: vec![],
             branch_ids: vec![branch_id],
             active_branch_id: Some(branch_id),
+            authorization_roles: vec![],
+            authorization_permissions: vec![],
         }
     }
 

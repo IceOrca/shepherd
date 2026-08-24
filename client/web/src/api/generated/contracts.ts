@@ -16,6 +16,36 @@ export type CreateAuthUserRequest = { username: string, email: string, password:
 
 export type SetAuthUserStatusRequest = { disabled: boolean, };
 
+export type AccessRoleScope = "tenant" | "branch";
+
+export type PermissionOverrideEffect = "allow" | "deny";
+
+export type AccessControlBranch = { id: string, code: string, name: string, time_zone: string, status: string, version: number, };
+
+export type AccessControlPermission = { code: PermissionCode, description: string, };
+
+export type AccessControlRole = { code: RoleCode, display_name: string, description: string | null, scope: AccessRoleScope, is_system: boolean, is_active: boolean, version: number, permission_codes: Array<PermissionCode>, assigned_account_count: number, };
+
+export type AccountRoleAssignmentContract = { role_code: RoleCode, branch_id: string | null, };
+
+export type AccountPermissionOverrideContract = { permission_code: PermissionCode, branch_id: string | null, effect: PermissionOverrideEffect, expires_at: string | null, };
+
+export type AccessControlUser = { account_id: string, username: string, email: string | null, status: AccountStatus, primary_role: RoleCode, authorization_version: number, assignments: Array<AccountRoleAssignmentContract>, permission_overrides: Array<AccountPermissionOverrideContract>, };
+
+export type AccessControlAuditEntry = { id: string, actor_account_id: string, action: string, object_type: string, object_id: string, branch_id: string | null, before_value: unknown, after_value: unknown, created_at: string, };
+
+export type AccessControlSnapshot = { branches: Array<AccessControlBranch>, permissions: Array<AccessControlPermission>, roles: Array<AccessControlRole>, users: Array<AccessControlUser>, audit: Array<AccessControlAuditEntry>, };
+
+export type CreateAccessControlBranchRequest = { code: string, name: string, time_zone: string, };
+
+export type UpdateAccessControlBranchRequest = { name: string, time_zone: string, status: string, expected_version: number, };
+
+export type CreateAccessControlRoleRequest = { code: RoleCode, display_name: string, description: string | null, scope: AccessRoleScope, permission_codes: Array<PermissionCode>, };
+
+export type UpdateAccessControlRoleRequest = { display_name: string, description: string | null, is_active: boolean, expected_version: number, permission_codes: Array<PermissionCode>, };
+
+export type UpdateAccountAccessRequest = { primary_role: RoleCode, expected_version: number, assignments: Array<AccountRoleAssignmentContract>, permission_overrides: Array<AccountPermissionOverrideContract>, };
+
 export type BranchSummary = { id: string, code: string, name: string, time_zone: string, };
 
 export type BusinessRecordStatus = "active" | "disabled";

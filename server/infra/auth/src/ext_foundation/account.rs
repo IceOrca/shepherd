@@ -17,7 +17,7 @@ use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::{
-    AuthService, PermissionCode, RoleCode,
+    AuthCodeError, AuthService, PermissionCode, RoleCode,
     ext_foundation::{AuthenticatedPrincipal, account_cache::AuthenticatedUserCacheError},
 };
 
@@ -45,7 +45,7 @@ impl AccountStatus {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 enum PermissionEffect {
     Allow,
     Deny,
@@ -72,6 +72,10 @@ pub struct AuthenticatedUser {
     pub permissions: Vec<PermissionCode>,
     pub branch_ids: Vec<Uuid>,
     pub active_branch_id: Option<Uuid>,
+    #[serde(default)]
+    pub authorization_roles: Vec<ScopedRoleGrant>,
+    #[serde(default)]
+    pub authorization_permissions: Vec<ScopedPermissionGrant>,
 }
 
 impl AuthenticatedUser {
@@ -94,6 +98,70 @@ impl AuthenticatedUser {
             active_branch_id: self.active_branch_id,
         }
     }
+
+    fn activate_branch(&mut self, branch_id: Uuid) -> Result<(), StatusCode> {
+        if !self.branch_ids.contains(&branch_id) {
+            warn!(
+                operation = "activate_authenticated_branch",
+                tenant_id = %self.tenant_id,
+                account_id = %self.account_id,
+                branch_id = %branch_id,
+                "Cannot activate a branch outside the account authorization scope"
+            );
+            return Err(StatusCode::FORBIDDEN);
+        }
+
+        let mut role_set: BTreeSet<RoleCode> = BTreeSet::new();
+        for role_grant in &self.authorization_roles {
+            if role_grant.branch_id.is_none() || role_grant.branch_id == Some(branch_id) {
+                role_set.insert(role_grant.role_code.clone());
+            }
+        }
+
+        let mut allowed_permissions: BTreeSet<PermissionCode> = BTreeSet::new();
+        let mut denied_permissions: BTreeSet<PermissionCode> = BTreeSet::new();
+        for permission_grant in &self.authorization_permissions {
+            if permission_grant.branch_id.is_some() && permission_grant.branch_id != Some(branch_id) {
+                continue;
+            }
+            match permission_grant.effect {
+                PermissionEffect::Allow => {
+                    allowed_permissions.insert(permission_grant.permission_code.clone());
+                }
+                PermissionEffect::Deny => {
+                    denied_permissions.insert(permission_grant.permission_code.clone());
+                }
+            }
+        }
+        allowed_permissions.retain(|permission_code: &PermissionCode| !denied_permissions.contains(permission_code));
+
+        self.roles = role_set.into_iter().collect();
+        self.permissions = allowed_permissions.into_iter().collect();
+        self.active_branch_id = Some(branch_id);
+        debug!(
+            operation = "activate_authenticated_branch",
+            tenant_id = %self.tenant_id,
+            account_id = %self.account_id,
+            branch_id = %branch_id,
+            role_count = self.roles.len(),
+            permission_count = self.permissions.len(),
+            "Resolved branch-specific effective roles and permissions"
+        );
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ScopedRoleGrant {
+    pub branch_id: Option<Uuid>,
+    pub role_code: RoleCode,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ScopedPermissionGrant {
+    pub branch_id: Option<Uuid>,
+    pub permission_code: PermissionCode,
+    effect: PermissionEffect,
 }
 
 #[derive(Clone, Debug, Serialize, TS)]
@@ -148,10 +216,12 @@ struct UserAccount {
 }
 
 struct AccountRole {
+    pub branch_id: Option<Uuid>,
     pub role_code: String,
 }
 
 struct AccountPermission {
+    pub branch_id: Option<Uuid>,
     pub permission_code: String,
     pub effect: String,
 }
@@ -249,7 +319,7 @@ pub async fn resolve_application_account(
         return Err(StatusCode::UNAUTHORIZED);
     }
     let active_branch_id: Uuid = resolve_active_branch(request.headers(), &user)?;
-    user.active_branch_id = Some(active_branch_id);
+    user.activate_branch(active_branch_id)?;
     let tenant_id: Uuid = user.tenant_id;
     let account_id: Uuid = user.account_id;
     debug!(
@@ -385,10 +455,14 @@ async fn load_account(
             let role_rows: Vec<AccountRole> = sqlx::query_as!(
                 AccountRole,
                 r#"
-                SELECT role_code
-                FROM account_roles
-                WHERE tenant_id = $1 AND account_id = $2
-                ORDER BY role_code
+                SELECT assignment.branch_id, assignment.role_code
+                FROM account_role_assignments AS assignment
+                INNER JOIN tenant_roles AS tenant_role
+                    ON tenant_role.tenant_id = assignment.tenant_id
+                   AND tenant_role.code = assignment.role_code
+                   AND tenant_role.is_active
+                WHERE assignment.tenant_id = $1 AND assignment.account_id = $2
+                ORDER BY assignment.branch_id NULLS FIRST, assignment.role_code
                 "#,
                 tenant_id,
                 account_id,
@@ -398,19 +472,28 @@ async fn load_account(
             let permission_rows: Vec<AccountPermission> = sqlx::query_as!(
                 AccountPermission,
                 r#"
-                SELECT permission_code AS "permission_code!", effect AS "effect!"
+                SELECT branch_id, permission_code AS "permission_code!", effect AS "effect!"
                 FROM (
-                    SELECT role_permission.permission_code, 'allow'::TEXT AS effect, 0 AS precedence
-                    FROM account_roles AS account_role
-                    INNER JOIN role_permissions AS role_permission ON role_permission.role_code = account_role.role_code
-                    WHERE account_role.tenant_id = $1 AND account_role.account_id = $2
+                    SELECT
+                        assignment.branch_id,
+                        role_permission.permission_code,
+                        'allow'::TEXT AS effect
+                    FROM account_role_assignments AS assignment
+                    INNER JOIN tenant_roles AS tenant_role
+                        ON tenant_role.tenant_id = assignment.tenant_id
+                       AND tenant_role.code = assignment.role_code
+                       AND tenant_role.is_active
+                    INNER JOIN tenant_role_permissions AS role_permission
+                        ON role_permission.tenant_id = assignment.tenant_id
+                       AND role_permission.role_code = assignment.role_code
+                    WHERE assignment.tenant_id = $1 AND assignment.account_id = $2
                     UNION ALL
-                    SELECT permission_code AS "permission_code!", effect AS "effect!", 1 AS precedence
-                    FROM account_permissions
+                    SELECT branch_id, permission_code, effect
+                    FROM account_permission_overrides
                     WHERE tenant_id = $1 AND account_id = $2
                       AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
                 ) AS grants
-                ORDER BY permission_code, precedence
+                ORDER BY branch_id NULLS FIRST, permission_code, effect
                 "#,
                 tenant_id,
                 account_id,
@@ -422,20 +505,23 @@ async fn load_account(
                 r#"
                 SELECT branch.id AS branch_id
                 FROM branches AS branch
-                INNER JOIN accounts AS account
-                    ON account.tenant_id = branch.tenant_id
-                   AND account.id = $2
-                INNER JOIN auth_role_branch_assignment_rules AS branch_rule
-                    ON branch_rule.role_code = account.primary_role_code
-                LEFT JOIN account_branch_assignments AS assignment
-                    ON assignment.tenant_id = account.tenant_id
-                   AND assignment.account_id = account.id
-                   AND assignment.branch_id = branch.id
                 WHERE branch.tenant_id = $1
                   AND branch.status = 'active'
                   AND (
-                      branch_rule.max_assignments = 0
-                      OR assignment.branch_id IS NOT NULL
+                      EXISTS (
+                          SELECT 1
+                          FROM account_role_assignments AS tenant_assignment
+                          WHERE tenant_assignment.tenant_id = $1
+                            AND tenant_assignment.account_id = $2
+                            AND tenant_assignment.branch_id IS NULL
+                      )
+                      OR EXISTS (
+                          SELECT 1
+                          FROM account_role_assignments AS branch_assignment
+                          WHERE branch_assignment.tenant_id = $1
+                            AND branch_assignment.account_id = $2
+                            AND branch_assignment.branch_id = branch.id
+                      )
                   )
                 ORDER BY lower(branch.name), branch.id
                 "#,
@@ -514,10 +600,15 @@ async fn load_account(
         );
         StatusCode::SERVICE_UNAVAILABLE
     })?;
-    let roles: Vec<RoleCode> = role_rows
+    let authorization_roles: Vec<ScopedRoleGrant> = role_rows
         .into_iter()
-        .map(|row: AccountRole| RoleCode::try_from(row.role_code))
-        .collect::<Result<Vec<RoleCode>, _>>()
+        .map(|row: AccountRole| -> Result<ScopedRoleGrant, AuthCodeError> {
+            Ok(ScopedRoleGrant {
+                branch_id: row.branch_id,
+                role_code: RoleCode::try_from(row.role_code)?,
+            })
+        })
+        .collect::<Result<Vec<ScopedRoleGrant>, _>>()
         .map_err(|code_error| {
             error!(
                 tenant_id = %account.tenant_id,
@@ -527,7 +618,7 @@ async fn load_account(
             );
             StatusCode::SERVICE_UNAVAILABLE
         })?;
-    let mut permission_set: BTreeSet<PermissionCode> = BTreeSet::new();
+    let mut authorization_permissions: Vec<ScopedPermissionGrant> = Vec::with_capacity(permission_rows.len());
     for row in permission_rows {
         let permission_code: PermissionCode = PermissionCode::try_from(row.permission_code).map_err(|code_error| {
             error!(
@@ -547,13 +638,14 @@ async fn load_account(
             );
             StatusCode::SERVICE_UNAVAILABLE
         })?;
-        if permission_effect == PermissionEffect::Deny {
-            permission_set.remove(&permission_code);
-        } else {
-            permission_set.insert(permission_code);
-        }
+        authorization_permissions.push(ScopedPermissionGrant {
+            branch_id: row.branch_id,
+            permission_code,
+            effect: permission_effect,
+        });
     }
-    let permissions: Vec<PermissionCode> = permission_set.into_iter().collect();
+    let roles: Vec<RoleCode> = Vec::new();
+    let permissions: Vec<PermissionCode> = Vec::new();
     let branch_ids: Vec<Uuid> = branch_rows
         .into_iter()
         .map(|row: AccountBranch| row.branch_id)
@@ -562,8 +654,8 @@ async fn load_account(
         operation = "load_application_account",
         tenant_id = %account.tenant_id,
         account_id = %account.id,
-        role_count = roles.len(),
-        permission_count = permissions.len(),
+        scoped_role_count = authorization_roles.len(),
+        scoped_permission_count = authorization_permissions.len(),
         accessible_branch_count = branch_ids.len(),
         "Resolved effective application authorization"
     );
@@ -578,5 +670,103 @@ async fn load_account(
         permissions,
         branch_ids,
         active_branch_id: None,
+        authorization_roles,
+        authorization_permissions,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn role(code: &str) -> RoleCode {
+        RoleCode::try_from(code).expect("test role code must be valid")
+    }
+
+    fn permission(code: &str) -> PermissionCode {
+        PermissionCode::try_from(code).expect("test permission code must be valid")
+    }
+
+    fn scoped_user(first_branch_id: Uuid, second_branch_id: Uuid) -> AuthenticatedUser {
+        AuthenticatedUser {
+            tenant_id: Uuid::from_u128(1),
+            account_id: Uuid::from_u128(2),
+            username: "scoped-user".to_owned(),
+            email: Some("scoped-user@example.test".to_owned()),
+            primary_role: role("staff"),
+            roles: Vec::new(),
+            permissions: Vec::new(),
+            branch_ids: vec![first_branch_id, second_branch_id],
+            active_branch_id: None,
+            authorization_roles: vec![
+                ScopedRoleGrant {
+                    branch_id: None,
+                    role_code: role("tenant_auditor"),
+                },
+                ScopedRoleGrant {
+                    branch_id: Some(first_branch_id),
+                    role_code: role("first_branch_dispatcher"),
+                },
+                ScopedRoleGrant {
+                    branch_id: Some(second_branch_id),
+                    role_code: role("second_branch_dispatcher"),
+                },
+            ],
+            authorization_permissions: vec![
+                ScopedPermissionGrant {
+                    branch_id: None,
+                    permission_code: permission("business.shared.read"),
+                    effect: PermissionEffect::Allow,
+                },
+                ScopedPermissionGrant {
+                    branch_id: Some(first_branch_id),
+                    permission_code: permission("business.first.manage"),
+                    effect: PermissionEffect::Allow,
+                },
+                ScopedPermissionGrant {
+                    branch_id: Some(second_branch_id),
+                    permission_code: permission("business.second.manage"),
+                    effect: PermissionEffect::Allow,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn active_branch_excludes_other_branch_roles_and_permissions() {
+        let first_branch_id: Uuid = Uuid::from_u128(10);
+        let second_branch_id: Uuid = Uuid::from_u128(11);
+        let mut user: AuthenticatedUser = scoped_user(first_branch_id, second_branch_id);
+
+        user.activate_branch(first_branch_id)
+            .expect("authorized branch must activate");
+
+        assert_eq!(user.active_branch_id, Some(first_branch_id));
+        assert!(user.roles.contains(&role("tenant_auditor")));
+        assert!(user.roles.contains(&role("first_branch_dispatcher")));
+        assert!(!user.roles.contains(&role("second_branch_dispatcher")));
+        assert!(user.has_permission("business.shared.read"));
+        assert!(user.has_permission("business.first.manage"));
+        assert!(!user.has_permission("business.second.manage"));
+    }
+
+    #[test]
+    fn applicable_deny_override_wins_without_leaking_to_another_branch() {
+        let first_branch_id: Uuid = Uuid::from_u128(20);
+        let second_branch_id: Uuid = Uuid::from_u128(21);
+        let mut user: AuthenticatedUser = scoped_user(first_branch_id, second_branch_id);
+        user.authorization_permissions.push(ScopedPermissionGrant {
+            branch_id: Some(first_branch_id),
+            permission_code: permission("business.shared.read"),
+            effect: PermissionEffect::Deny,
+        });
+
+        user.activate_branch(first_branch_id)
+            .expect("authorized branch must activate");
+        assert!(!user.has_permission("business.shared.read"));
+
+        user.activate_branch(second_branch_id)
+            .expect("authorized branch must activate");
+        assert!(user.has_permission("business.shared.read"));
+    }
 }

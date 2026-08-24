@@ -1,6 +1,7 @@
 import { LoaderCircle } from "lucide-react";
 import { Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
 import { AuthUsersPage } from "../features/admin/AuthUsersPage";
+import { AccessControlPage } from "../features/admin/AccessControlPage";
 import { LoginPage } from "../features/auth/LoginPage";
 import { useAuth } from "../features/auth/AuthProvider";
 import { MyAssignmentsPage } from "../features/operations/MyAssignmentsPage";
@@ -64,7 +65,8 @@ export function AppRouter() {
           <Route path="/operations/reconciliation" element={<UrgentReconciliationPage />} />
           <Route path="/operations/reconciliation/planned" element={<ReconciliationPage />} />
           <Route path="/admin/auth-users" element={<AuthUsersPage />} />
-          <Route path="/admin/*" element={<Navigate to="/admin/auth-users" replace />} />
+          <Route path="/admin/access-control" element={<AccessControlPage />} />
+          <Route path="/admin/*" element={<Navigate to="/admin/access-control" replace />} />
           <Route path="*" element={<NotFoundPage />} />
         </Route>
       </Route>

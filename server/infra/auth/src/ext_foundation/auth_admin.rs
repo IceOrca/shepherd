@@ -33,19 +33,31 @@ const IDEMPOTENCY_HEADER: &str = "idempotency-key";
 pub struct AuthAdminPolicy {
     pub read_permission: PermissionCode,
     pub create_permission: PermissionCode,
+    pub update_permission: PermissionCode,
     pub disable_permission: PermissionCode,
+    pub role_read_permission: PermissionCode,
+    pub role_manage_permission: PermissionCode,
+    pub branch_manage_permission: PermissionCode,
 }
 
 impl AuthAdminPolicy {
     pub fn try_new(
         read_permission: impl Into<String>,
         create_permission: impl Into<String>,
+        update_permission: impl Into<String>,
         disable_permission: impl Into<String>,
+        role_read_permission: impl Into<String>,
+        role_manage_permission: impl Into<String>,
+        branch_manage_permission: impl Into<String>,
     ) -> Result<Self, AuthCodeError> {
         Ok(Self {
             read_permission: PermissionCode::parse(read_permission)?,
             create_permission: PermissionCode::parse(create_permission)?,
+            update_permission: PermissionCode::parse(update_permission)?,
             disable_permission: PermissionCode::parse(disable_permission)?,
+            role_read_permission: PermissionCode::parse(role_read_permission)?,
+            role_manage_permission: PermissionCode::parse(role_manage_permission)?,
+            branch_manage_permission: PermissionCode::parse(branch_manage_permission)?,
         })
     }
 }
@@ -551,7 +563,11 @@ pub fn routes_with_provisioner(
     debug!(
         read_permission = %policy.read_permission,
         create_permission = %policy.create_permission,
+        update_permission = %policy.update_permission,
         disable_permission = %policy.disable_permission,
+        role_read_permission = %policy.role_read_permission,
+        role_manage_permission = %policy.role_manage_permission,
+        branch_manage_permission = %policy.branch_manage_permission,
         "Registering Auth administration routes"
     );
     let state: Arc<AuthAdminContext> = Arc::new(AuthAdminContext {
@@ -1886,7 +1902,7 @@ mod tests {
         assert_eq!(request.username, "Linh Nguyen");
         assert_eq!(request.email, "linh@example.com");
         assert_eq!(request.branch_ids.len(), 2);
-        assert!(request.branch_ids[0] < request.branch_ids[1]);
+        assert!(request.branch_ids.is_sorted());
     }
 
     #[test]

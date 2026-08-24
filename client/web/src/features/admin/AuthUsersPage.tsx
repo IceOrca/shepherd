@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
+import { Link } from "react-router-dom";
 import type {
   AuthUserSummary,
   BranchSummary,
@@ -270,9 +271,12 @@ export function AuthUsersPage() {
               </p>
             </div>
           </div>
+          <Link className="action-secondary lg:ml-auto" to="/admin/access-control">
+            Phân quyền chi tiết
+          </Link>
           {canCreate ? (
             <button
-              className="action-primary lg:ml-auto"
+              className="action-primary"
               onClick={() => {
                 setFeedback(null);
                 setCreateRequest({

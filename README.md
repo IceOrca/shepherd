@@ -274,8 +274,8 @@ no longer match the configured issuer, so users should expect to sign in again.
 
 The API validates signed access tokens locally and caches each successfully
 resolved `AuthenticatedUser` in Redis. The cache contains the Shepherd tenant
-and account IDs, username, application-owned email, roles, permissions, and
-PostgreSQL-authoritative accessible branch IDs. It
+and account IDs, username, application-owned email, raw tenant/branch-scoped
+role and permission grants, and PostgreSQL-authoritative accessible branch IDs. Middleware validates the requested branch before deriving effective roles and permissions, so grants from another branch are never unioned into the active request. It
 uses a deterministic hashed identity key and a mandatory 60-second expiry by
 default, so repeated requests avoid querying account and authorization tables
 without allowing Redis keys to grow indefinitely.
@@ -316,6 +316,21 @@ already-issued GoTrue JWT through the current Shepherd account-status check.
 Business queries still establish tenant context through SQLx transactions so
 PostgreSQL RLS remains the final tenant-isolation boundary.
 
+### Tenant access-control administration
+
+The tenant-owner console at `/admin/access-control` manages four related areas:
+
+- **Users and scope:** choose the protected primary organizational role, assign additional tenant- or branch-scoped roles, and add per-user allow/deny permission exceptions.
+- **Roles and permissions:** edit the tenant's permission set for protected system roles or create additional tenant- or branch-scoped operational roles from the application permission catalog.
+- **Branches:** create branches and update their name, IANA time zone, or active/disabled status. Branches are disabled rather than deleted through this workflow.
+- **Audit:** review immutable access-control changes with actor, target, before/after data, and server timestamp.
+
+The console uses `GET /api/admin/access-control` for its snapshot and the scoped `POST`/`PUT` routes below `/api/admin/access-control/branches`, `/roles`, and `/users/{account_id}` for mutations. `/admin/auth-users` remains the provider-account workflow for creating or disabling GoTrue users and links back to the access console.
+
+PostgreSQL stores tenant configuration in `tenant_roles`, `tenant_role_permissions`, `account_role_assignments`, and `account_permission_overrides`. The application-wide `roles` and `role_permissions` tables seed new tenant catalogs; they are not the runtime source after bootstrapping. The global `permissions` catalog is intentionally read-only to tenants so a tenant cannot invent a permission that no server route understands.
+
+System organizational roles cannot be deleted, renamed, rescoped, disabled, or replaced by a custom primary role. Custom roles are additional operational grants. `tenant_owner` is tenant-scoped; the other organizational roles are branch-scoped with data-driven cardinality. Applicable per-user deny exceptions override role permissions and allow exceptions. Each mutation is tenant-RLS protected, uses optimistic versions to reject stale browser edits, writes an audit record in the same transaction, and invalidates only affected identity-cache entries. Deferred database guards preserve at least one active owner and protect the owner's essential account, role, and branch administration permissions.
+
 Authorization codes and lifecycle states deliberately use different type
 models. Roles and permissions remain database-driven and open-ended, so Rust
 uses validated string-backed `RoleCode` and `PermissionCode` newtypes and the
@@ -339,7 +354,7 @@ Shepherd defines five organizational role codes:
 The arrow describes business reporting rank, not automatic permission
 inheritance:
 
-- `tenant_owner` is tenant-wide and has no branch-assignment rows.
+- `tenant_owner` has one tenant-scoped role assignment and therefore receives access to every active branch.
 - `executive_manager` receives one or more branches selected by the owner.
 - `branch_manager`, `supervisor`, and `staff` each belong to exactly one branch.
 - Coordination roles do not receive staff-only clocking permissions. `staff`

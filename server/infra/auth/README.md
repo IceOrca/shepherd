@@ -4,7 +4,7 @@ The default `infra-auth` build enables `ext-foundation`, the reusable authentica
 
 - bearer-token extraction and provider-neutral JWT/JWKS validation;
 - external identity mapping through `account_identities`;
-- tenant-scoped `accounts`, `account_roles`, and `account_permissions` resolution;
+- tenant-owned roles, branch-scoped role assignments, and allow/deny permission overrides;
 - `AuthenticatedUser` and the `/me` profile route;
 - account administration routes backed by the Supabase Auth/GoTrue admin API.
 
@@ -18,9 +18,20 @@ Role and permission codes are data, not Rust enums in the reusable layer. Applic
 let admin_policy: AuthAdminPolicy = AuthAdminPolicy::try_new(
     "auth.accounts.read",
     "auth.accounts.create",
+    "auth.accounts.update",
     "auth.accounts.disable",
+    "auth.roles.read",
+    "auth.roles.manage",
+    "business.branches.manage",
 )?;
 ```
+
+The reusable access-control routes are mounted under `/api/admin/access-control`. PostgreSQL owns the
+tenant role catalog, scoped account assignments, per-account overrides, optimistic versions, RLS,
+last-owner protection, and immutable audit records. An effective request identity contains only
+tenant-wide grants plus grants for its validated active branch; an applicable deny override wins.
+The identity cache stores bounded raw scoped grants and resolves the active branch after the request
+header is validated, so a cached identity cannot leak authority from another branch.
 
 Creating an account accepts only a role granted to one of the actor's roles by
 `auth_role_assignment_grants`. Database foreign keys ensure the primary role is assigned to that

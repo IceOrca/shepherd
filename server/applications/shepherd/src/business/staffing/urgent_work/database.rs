@@ -301,43 +301,11 @@ impl UrgentWorkRepo for UrgentWorkDb {
                     WHERE employee.tenant_id = $1
                       AND employee.status = 'active'
                       AND account.status = 'active'
-                      AND (
-                          EXISTS (
-                              SELECT 1
-                              FROM account_roles AS account_role
-                              INNER JOIN roles AS role
-                                  ON role.code = account_role.role_code
-                                 AND role.is_active
-                              INNER JOIN role_permissions AS role_permission
-                                  ON role_permission.role_code = account_role.role_code
-                              WHERE account_role.tenant_id = employee.tenant_id
-                                AND account_role.account_id = employee.account_id
-                                AND role_permission.permission_code = 'business.urgent_work.start'
-                          )
-                          OR EXISTS (
-                              SELECT 1
-                              FROM account_permissions AS account_permission
-                              WHERE account_permission.tenant_id = employee.tenant_id
-                                AND account_permission.account_id = employee.account_id
-                                AND account_permission.permission_code = 'business.urgent_work.start'
-                                AND account_permission.effect = 'allow'
-                                AND (
-                                    account_permission.expires_at IS NULL
-                                    OR account_permission.expires_at > CURRENT_TIMESTAMP
-                                )
-                          )
-                      )
-                      AND NOT EXISTS (
-                          SELECT 1
-                          FROM account_permissions AS account_permission
-                          WHERE account_permission.tenant_id = employee.tenant_id
-                            AND account_permission.account_id = employee.account_id
-                            AND account_permission.permission_code = 'business.urgent_work.start'
-                            AND account_permission.effect = 'deny'
-                            AND (
-                                account_permission.expires_at IS NULL
-                                OR account_permission.expires_at > CURRENT_TIMESTAMP
-                            )
+                      AND shepherd_account_has_permission(
+                          employee.tenant_id,
+                          employee.account_id,
+                          employee.branch_id,
+                          'business.urgent_work.start'
                       )
                     ORDER BY (employee.account_id = $2) DESC, lower(employee.display_name), employee.id
                     "#,
@@ -467,43 +435,11 @@ impl UrgentWorkRepo for UrgentWorkDb {
               AND employee.id = ANY($2)
               AND employee.status = 'active'
               AND account.status = 'active'
-              AND (
-                  EXISTS (
-                      SELECT 1
-                      FROM account_roles AS account_role
-                      INNER JOIN roles AS role
-                          ON role.code = account_role.role_code
-                         AND role.is_active
-                      INNER JOIN role_permissions AS role_permission
-                          ON role_permission.role_code = account_role.role_code
-                      WHERE account_role.tenant_id = employee.tenant_id
-                        AND account_role.account_id = employee.account_id
-                        AND role_permission.permission_code = 'business.urgent_work.start'
-                  )
-                  OR EXISTS (
-                      SELECT 1
-                      FROM account_permissions AS account_permission
-                      WHERE account_permission.tenant_id = employee.tenant_id
-                        AND account_permission.account_id = employee.account_id
-                        AND account_permission.permission_code = 'business.urgent_work.start'
-                        AND account_permission.effect = 'allow'
-                        AND (
-                            account_permission.expires_at IS NULL
-                            OR account_permission.expires_at > CURRENT_TIMESTAMP
-                        )
-                  )
-              )
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM account_permissions AS account_permission
-                  WHERE account_permission.tenant_id = employee.tenant_id
-                    AND account_permission.account_id = employee.account_id
-                    AND account_permission.permission_code = 'business.urgent_work.start'
-                    AND account_permission.effect = 'deny'
-                    AND (
-                        account_permission.expires_at IS NULL
-                        OR account_permission.expires_at > CURRENT_TIMESTAMP
-                    )
+              AND shepherd_account_has_permission(
+                  employee.tenant_id,
+                  employee.account_id,
+                  employee.branch_id,
+                  'business.urgent_work.start'
               )
             ORDER BY employee.id
             FOR UPDATE OF employee

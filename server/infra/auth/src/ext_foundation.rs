@@ -10,6 +10,7 @@ use axum::Router;
 
 use crate::AuthService;
 
+pub mod access_control;
 pub mod account;
 pub(crate) mod account_cache;
 pub mod auth_admin;
@@ -26,7 +27,9 @@ pub use error::AccessTokenError;
 pub use service::ExtProvider;
 
 pub fn routes(auth: Arc<AuthService>, policy: auth_admin::AuthAdminPolicy) -> Router {
-    account::routes(Arc::clone(&auth)).merge(auth_admin::routes(auth, policy))
+    account::routes(Arc::clone(&auth))
+        .merge(auth_admin::routes(Arc::clone(&auth), policy.clone()))
+        .merge(access_control::routes(auth, policy))
 }
 
 pub fn routes_with_provisioner(
@@ -34,5 +37,11 @@ pub fn routes_with_provisioner(
     policy: auth_admin::AuthAdminPolicy,
     provisioner: Arc<dyn auth_admin::AuthAccountProvisioner>,
 ) -> Router {
-    account::routes(Arc::clone(&auth)).merge(auth_admin::routes_with_provisioner(auth, policy, provisioner))
+    account::routes(Arc::clone(&auth))
+        .merge(auth_admin::routes_with_provisioner(
+            Arc::clone(&auth),
+            policy.clone(),
+            provisioner,
+        ))
+        .merge(access_control::routes(auth, policy))
 }

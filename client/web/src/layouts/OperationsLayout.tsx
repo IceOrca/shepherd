@@ -81,10 +81,10 @@ const navigation: NavigationItem[] = [
     soon: true,
   },
   {
-    label: "Tài khoản",
-    to: "/admin/auth-users",
+    label: "Phân quyền",
+    to: "/admin/access-control",
     icon: UserRoundCog,
-    permission: "auth.accounts.read",
+    permission: "auth.roles.manage",
   },
 ];
 
@@ -93,6 +93,13 @@ function pageTitle(pathname: string): { title: string; description: string } {
     return {
       title: "Quản trị tài khoản",
       description: "Cấp tài khoản và kiểm soát quyền đăng nhập cho doanh nghiệp.",
+    };
+  }
+
+  if (pathname === "/admin/access-control") {
+    return {
+      title: "Phân quyền doanh nghiệp",
+      description: "Quản lý chi nhánh, vai trò, người dùng và quyền theo phạm vi.",
     };
   }
 
