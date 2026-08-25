@@ -97,6 +97,8 @@ struct ExistingBatchRow {
 #[derive(Debug)]
 struct WorkItemRow {
     report_id: Uuid,
+    branch_id: Uuid,
+    branch_name: String,
     employee_id: Uuid,
     employee_code: String,
     employee_name: String,
@@ -107,8 +109,10 @@ struct WorkItemRow {
     ended_at: Option<DateTime<Utc>>,
     worked_seconds: Option<i64>,
     started_by_account_id: Uuid,
+    started_by_username: String,
     start_source: String,
     ended_by_account_id: Option<Uuid>,
+    ended_by_username: Option<String>,
     end_source: Option<String>,
     reconciled_assignment_id: Option<Uuid>,
     created_at: DateTime<Utc>,
@@ -125,6 +129,8 @@ impl TryFrom<WorkItemRow> for UrgentWorkItem {
         };
         Ok(Self {
             report_id: row.report_id,
+            branch_id: row.branch_id,
+            branch_name: row.branch_name,
             employee_id: row.employee_id,
             employee_code: row.employee_code,
             employee_name: row.employee_name,
@@ -135,9 +141,11 @@ impl TryFrom<WorkItemRow> for UrgentWorkItem {
             ended_at: row.ended_at,
             worked_seconds: row.worked_seconds,
             started_by_account_id: row.started_by_account_id,
+            started_by_username: row.started_by_username,
             start_source: UrgentWorkActionSource::from_code(&row.start_source)
                 .ok_or(UrgentWorkError::BackendUnavailable)?,
             ended_by_account_id: row.ended_by_account_id,
+            ended_by_username: row.ended_by_username,
             end_source,
             reconciled_assignment_id: row.reconciled_assignment_id,
             created_at: row.created_at,
@@ -180,6 +188,8 @@ impl From<CustomerRecordRow> for UrgentCustomerWorkRecord {
 #[derive(Debug)]
 struct ReconciliationRow {
     report_id: Uuid,
+    branch_id: Uuid,
+    branch_name: String,
     employee_id: Uuid,
     employee_code: String,
     employee_name: String,
@@ -190,8 +200,10 @@ struct ReconciliationRow {
     ended_at: Option<DateTime<Utc>>,
     worked_seconds: Option<i64>,
     started_by_account_id: Uuid,
+    started_by_username: String,
     start_source: String,
     ended_by_account_id: Option<Uuid>,
+    ended_by_username: Option<String>,
     end_source: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
@@ -826,12 +838,14 @@ async fn load_work_items(
     sqlx::query_as!(
         WorkItemRow,
         r#"
-        SELECT report.id AS report_id, report.employee_id, employee.employee_code,
+        SELECT report.id AS report_id, report.branch_id, branch.name AS branch_name,
+               report.employee_id, employee.employee_code,
                employee.display_name AS employee_name,
                report.claimed_customer_id, customer.name AS customer_name, report.status,
                session.started_at, session.ended_at, session.worked_seconds,
-               session.started_by_account_id, session.start_source,
-               session.ended_by_account_id, session.end_source,
+               session.started_by_account_id, started_actor.username AS started_by_username,
+               session.start_source, session.ended_by_account_id,
+               ended_actor.username AS "ended_by_username?", session.end_source,
                assignment.id AS "reconciled_assignment_id?",
                report.created_at, report.updated_at
         FROM business_urgent_work_reports AS report
@@ -841,6 +855,12 @@ async fn load_work_items(
             ON employee.tenant_id = report.tenant_id AND employee.id = report.employee_id
         INNER JOIN business_customers AS customer
             ON customer.tenant_id = report.tenant_id AND customer.id = report.claimed_customer_id
+        INNER JOIN branches AS branch
+            ON branch.tenant_id = report.tenant_id AND branch.id = report.branch_id
+        INNER JOIN accounts AS started_actor
+            ON started_actor.tenant_id = session.tenant_id AND started_actor.id = session.started_by_account_id
+        LEFT JOIN accounts AS ended_actor
+            ON ended_actor.tenant_id = session.tenant_id AND ended_actor.id = session.ended_by_account_id
         LEFT JOIN business_shift_assignments AS assignment
             ON assignment.tenant_id = report.tenant_id AND assignment.urgent_work_report_id = report.id
         WHERE report.tenant_id = $1
@@ -875,12 +895,14 @@ async fn load_batch_items(
     sqlx::query_as!(
         WorkItemRow,
         r#"
-        SELECT report.id AS report_id, report.employee_id, employee.employee_code,
+        SELECT report.id AS report_id, report.branch_id, branch.name AS branch_name,
+               report.employee_id, employee.employee_code,
                employee.display_name AS employee_name,
                report.claimed_customer_id, customer.name AS customer_name, report.status,
                session.started_at, session.ended_at, session.worked_seconds,
-               session.started_by_account_id, session.start_source,
-               session.ended_by_account_id, session.end_source,
+               session.started_by_account_id, started_actor.username AS started_by_username,
+               session.start_source, session.ended_by_account_id,
+               ended_actor.username AS "ended_by_username?", session.end_source,
                assignment.id AS "reconciled_assignment_id?",
                report.created_at, report.updated_at
         FROM business_urgent_work_reports AS report
@@ -890,6 +912,12 @@ async fn load_batch_items(
             ON employee.tenant_id = report.tenant_id AND employee.id = report.employee_id
         INNER JOIN business_customers AS customer
             ON customer.tenant_id = report.tenant_id AND customer.id = report.claimed_customer_id
+        INNER JOIN branches AS branch
+            ON branch.tenant_id = report.tenant_id AND branch.id = report.branch_id
+        INNER JOIN accounts AS started_actor
+            ON started_actor.tenant_id = session.tenant_id AND started_actor.id = session.started_by_account_id
+        LEFT JOIN accounts AS ended_actor
+            ON ended_actor.tenant_id = session.tenant_id AND ended_actor.id = session.ended_by_account_id
         LEFT JOIN business_shift_assignments AS assignment
             ON assignment.tenant_id = report.tenant_id AND assignment.urgent_work_report_id = report.id
         WHERE report.tenant_id = $1 AND report.start_batch_id = $2
@@ -911,12 +939,14 @@ async fn load_work_item(
     sqlx::query_as!(
         WorkItemRow,
         r#"
-        SELECT report.id AS report_id, report.employee_id, employee.employee_code,
+        SELECT report.id AS report_id, report.branch_id, branch.name AS branch_name,
+               report.employee_id, employee.employee_code,
                employee.display_name AS employee_name,
                report.claimed_customer_id, customer.name AS customer_name, report.status,
                session.started_at, session.ended_at, session.worked_seconds,
-               session.started_by_account_id, session.start_source,
-               session.ended_by_account_id, session.end_source,
+               session.started_by_account_id, started_actor.username AS started_by_username,
+               session.start_source, session.ended_by_account_id,
+               ended_actor.username AS "ended_by_username?", session.end_source,
                assignment.id AS "reconciled_assignment_id?",
                report.created_at, report.updated_at
         FROM business_urgent_work_reports AS report
@@ -926,6 +956,12 @@ async fn load_work_item(
             ON employee.tenant_id = report.tenant_id AND employee.id = report.employee_id
         INNER JOIN business_customers AS customer
             ON customer.tenant_id = report.tenant_id AND customer.id = report.claimed_customer_id
+        INNER JOIN branches AS branch
+            ON branch.tenant_id = report.tenant_id AND branch.id = report.branch_id
+        INNER JOIN accounts AS started_actor
+            ON started_actor.tenant_id = session.tenant_id AND started_actor.id = session.started_by_account_id
+        LEFT JOIN accounts AS ended_actor
+            ON ended_actor.tenant_id = session.tenant_id AND ended_actor.id = session.ended_by_account_id
         LEFT JOIN business_shift_assignments AS assignment
             ON assignment.tenant_id = report.tenant_id AND assignment.urgent_work_report_id = report.id
         WHERE report.tenant_id = $1 AND report.id = $2
@@ -948,12 +984,14 @@ async fn load_by_end_key(
     sqlx::query_as!(
         WorkItemRow,
         r#"
-        SELECT report.id AS report_id, report.employee_id, employee.employee_code,
+        SELECT report.id AS report_id, report.branch_id, branch.name AS branch_name,
+               report.employee_id, employee.employee_code,
                employee.display_name AS employee_name,
                report.claimed_customer_id, customer.name AS customer_name, report.status,
                session.started_at, session.ended_at, session.worked_seconds,
-               session.started_by_account_id, session.start_source,
-               session.ended_by_account_id, session.end_source,
+               session.started_by_account_id, started_actor.username AS started_by_username,
+               session.start_source, session.ended_by_account_id,
+               ended_actor.username AS "ended_by_username?", session.end_source,
                assignment.id AS "reconciled_assignment_id?",
                report.created_at, report.updated_at
         FROM business_urgent_work_sessions AS session
@@ -963,6 +1001,12 @@ async fn load_by_end_key(
             ON employee.tenant_id = report.tenant_id AND employee.id = report.employee_id
         INNER JOIN business_customers AS customer
             ON customer.tenant_id = report.tenant_id AND customer.id = report.claimed_customer_id
+        INNER JOIN branches AS branch
+            ON branch.tenant_id = report.tenant_id AND branch.id = report.branch_id
+        INNER JOIN accounts AS started_actor
+            ON started_actor.tenant_id = session.tenant_id AND started_actor.id = session.started_by_account_id
+        LEFT JOIN accounts AS ended_actor
+            ON ended_actor.tenant_id = session.tenant_id AND ended_actor.id = session.ended_by_account_id
         LEFT JOIN business_shift_assignments AS assignment
             ON assignment.tenant_id = report.tenant_id AND assignment.urgent_work_report_id = report.id
         WHERE session.tenant_id = $1 AND session.ended_by_account_id = $2
@@ -1012,13 +1056,15 @@ async fn load_reconciliation_rows(
     sqlx::query_as!(
         ReconciliationRow,
         r#"
-        SELECT report.id AS report_id, report.employee_id, employee.employee_code,
+        SELECT report.id AS report_id, report.branch_id, branch.name AS branch_name,
+               report.employee_id, employee.employee_code,
                employee.display_name AS employee_name,
                report.claimed_customer_id, claimed_customer.name AS customer_name,
                report.status AS report_status,
                session.started_at, session.ended_at, session.worked_seconds,
-               session.started_by_account_id, session.start_source,
-               session.ended_by_account_id, session.end_source,
+               session.started_by_account_id, started_actor.username AS started_by_username,
+               session.start_source, session.ended_by_account_id,
+               ended_actor.username AS "ended_by_username?", session.end_source,
                report.created_at, report.updated_at,
                assignment.id AS "assignment_id?",
                final_shift.customer_id AS "final_customer_id?",
@@ -1043,6 +1089,12 @@ async fn load_reconciliation_rows(
         INNER JOIN business_customers AS claimed_customer
             ON claimed_customer.tenant_id = report.tenant_id
            AND claimed_customer.id = report.claimed_customer_id
+        INNER JOIN branches AS branch
+            ON branch.tenant_id = report.tenant_id AND branch.id = report.branch_id
+        INNER JOIN accounts AS started_actor
+            ON started_actor.tenant_id = session.tenant_id AND started_actor.id = session.started_by_account_id
+        LEFT JOIN accounts AS ended_actor
+            ON ended_actor.tenant_id = session.tenant_id AND ended_actor.id = session.ended_by_account_id
         LEFT JOIN business_urgent_customer_work_records AS customer_record
             ON customer_record.tenant_id = report.tenant_id AND customer_record.report_id = report.id
         LEFT JOIN business_customers AS confirmed_customer
@@ -1128,6 +1180,8 @@ fn reconciliation_from_row(row: ReconciliationRow) -> Result<UrgentWorkReconcili
     Ok(UrgentWorkReconciliation {
         work: UrgentWorkItem {
             report_id: row.report_id,
+            branch_id: row.branch_id,
+            branch_name: row.branch_name,
             employee_id: row.employee_id,
             employee_code: row.employee_code,
             employee_name: row.employee_name,
@@ -1138,8 +1192,10 @@ fn reconciliation_from_row(row: ReconciliationRow) -> Result<UrgentWorkReconcili
             ended_at: row.ended_at,
             worked_seconds: row.worked_seconds,
             started_by_account_id: row.started_by_account_id,
+            started_by_username: row.started_by_username,
             start_source,
             ended_by_account_id: row.ended_by_account_id,
+            ended_by_username: row.ended_by_username,
             end_source,
             reconciled_assignment_id: row.assignment_id,
             created_at: row.created_at,

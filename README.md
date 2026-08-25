@@ -62,6 +62,19 @@ time against the customer's confirmation, bill, or time record:
 - Only an explicit supervisor reconciliation locks the final customer, job,
   duration, billing rate, worker pay, company profit, and payroll snapshot.
 
+Coordination dashboards, planned shifts, and reconciliation views include
+separate result filters for all/one authorized branch and all/one customer.
+"All branches" does not bypass branch RLS: the browser makes one bounded,
+explicitly branch-scoped request per authorized branch and aggregates those
+read results. Any mutation from an aggregated result is sent with that result's
+authoritative branch. This reporting scope is deliberately separate from the
+active branch used when creating operational data.
+
+Staff urgent-work history displays the branch, customer, server check-in and
+check-out timestamps, worked interval, and the usernames that pressed Start and
+Finish, including self/peer provenance. These actor names are resolved by the
+server from the immutable actor account IDs rather than inferred in the UI.
+
 This separation of evidence and mandatory human conclusion is the heart of the
 product. Scheduling, HR, payroll, authentication, and administration support
 that workflow; they are not the product's primary purpose.
@@ -174,7 +187,7 @@ Application-specific account side effects use an injected lifecycle hook in
 the same tenant transaction. Shepherd owns the rule that a `staff` account has
 an `hr_employees` row and that changing its primary branch synchronizes that
 employee. Reusable access control does not know the `staff` role or query HR
-tables. The old `infra/auth/src/internal_api` implementation is retained only
+tables. The old `infra/auth/src/legacy_api` implementation is retained only
 as uncompiled reference material and is not exported by `infra-auth`.
 
 ### Automatic database bootstrap

@@ -1,19 +1,51 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarPlus2, CircleAlert, RefreshCw, UserPlus, UsersRound } from "lucide-react";
-import { useMemo, useState, type FormEvent } from "react";
-import type { StaffingShiftCreateRequest } from "../../api/generated/contracts";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+import type {
+  Customer,
+  ShiftAssignment,
+  StaffingCandidate,
+  StaffingShift,
+  StaffingShiftCreateRequest,
+} from "../../api/generated/contracts";
 import { friendlyApiError } from "../../shared/api/client";
 import { formatDateTime, shiftStatusLabel } from "../../shared/lib/format";
 import { useAuth } from "../auth/AuthProvider";
 import {
-  createShiftAssignment,
+  createShiftAssignmentForBranch,
   createStaffingShift,
   listCustomers,
   listJobs,
-  listShiftCandidates,
-  listStaffingShifts,
+  listShiftCandidatesForBranch,
+  listStaffingShiftsForBranch,
   operationsQueryKeys,
 } from "./api";
+import {
+  useOperationsScope,
+  type OperationsScopeCustomer,
+} from "./OperationsScopeProvider";
+
+interface ScopedStaffingShift extends StaffingShift {
+  branch_id: string;
+}
+
+interface AssignShiftInput {
+  branchId: string;
+  shiftId: string;
+  employeeId: string;
+}
+
+async function loadScopedShifts(branchIds: string[]): Promise<ScopedStaffingShift[]> {
+  const groups: ScopedStaffingShift[][] = await Promise.all(
+    branchIds.map(async (branchId: string): Promise<ScopedStaffingShift[]> => {
+      const shifts: StaffingShift[] = await listStaffingShiftsForBranch(branchId);
+      return shifts.map(
+        (shift: StaffingShift): ScopedStaffingShift => ({ ...shift, branch_id: branchId }),
+      );
+    }),
+  );
+  return groups.flat();
+}
 
 interface ShiftDraft {
   customerId: string;
@@ -33,32 +65,68 @@ const emptyDraft: ShiftDraft = {
   notes: "",
 };
 
-export function ShiftCoordinationPage() {
-  const auth = useAuth();
-  const queryClient = useQueryClient();
-  const permissions = auth.profile?.permissions ?? [];
-  const canManage = permissions.includes("business.shifts.manage");
+export function ShiftCoordinationPage(): React.JSX.Element {
+  const auth: ReturnType<typeof useAuth> = useAuth();
+  const scope: ReturnType<typeof useOperationsScope> = useOperationsScope();
+  const queryClient: ReturnType<typeof useQueryClient> = useQueryClient();
+  const canManage: boolean = auth.profile?.permissions.includes("business.shifts.manage") ?? false;
   const [draft, setDraft] = useState<ShiftDraft>(emptyDraft);
   const [selectedShiftId, setSelectedShiftId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
-  const customersQuery = useQuery({ queryKey: operationsQueryKeys.customers, queryFn: listCustomers });
+  const customersQuery = useQuery<Customer[], Error>({
+    queryKey: operationsQueryKeys.customers,
+    queryFn: listCustomers,
+  });
   const jobsQuery = useQuery({ queryKey: operationsQueryKeys.jobs, queryFn: listJobs });
-  const shiftsQuery = useQuery({ queryKey: operationsQueryKeys.shifts, queryFn: listStaffingShifts });
+  const shiftsQuery = useQuery<ScopedStaffingShift[], Error>({
+    queryKey: [...operationsQueryKeys.shifts, "scope", scope.scopeKey],
+    queryFn: (): Promise<ScopedStaffingShift[]> => loadScopedShifts(scope.branchIds),
+    enabled: scope.branchIds.length > 0,
+  });
+  const shifts: ScopedStaffingShift[] = useMemo<ScopedStaffingShift[]>(
+    (): ScopedStaffingShift[] =>
+      [...(shiftsQuery.data ?? [])]
+        .filter(
+          (shift: ScopedStaffingShift): boolean =>
+            scope.selectedCustomerId === null || shift.customer_id === scope.selectedCustomerId,
+        )
+        .sort(
+          (left: ScopedStaffingShift, right: ScopedStaffingShift): number =>
+            new Date(left.starts_at).getTime() - new Date(right.starts_at).getTime(),
+        ),
+    [scope.selectedCustomerId, shiftsQuery.data],
+  );
+  const selectedShift: ScopedStaffingShift | null =
+    shifts.find((shift: ScopedStaffingShift): boolean => shift.id === selectedShiftId) ?? null;
   const candidatesQuery = useQuery({
-    queryKey: operationsQueryKeys.candidates(selectedShiftId ?? ""),
-    queryFn: () => listShiftCandidates(selectedShiftId ?? ""),
-    enabled: Boolean(selectedShiftId),
+    queryKey: [
+      ...operationsQueryKeys.candidates(selectedShiftId ?? ""),
+      selectedShift?.branch_id ?? "none",
+    ],
+    queryFn: (): Promise<StaffingCandidate[]> =>
+      listShiftCandidatesForBranch(selectedShift?.branch_id ?? "", selectedShiftId ?? ""),
+    enabled: selectedShift !== null,
   });
 
-  const customerNames = useMemo(
-    () => new Map((customersQuery.data ?? []).map((customer) => [customer.id, customer.name])),
-    [customersQuery.data],
+  const customerNames: Map<string, string> = useMemo<Map<string, string>>(
+    (): Map<string, string> =>
+      new Map(
+        scope.customers.map(
+          (customer: OperationsScopeCustomer): [string, string] => [
+            customer.customer_id,
+            customer.customer_name,
+          ],
+        ),
+      ),
+    [scope.customers],
   );
-  const shifts = useMemo(
-    () => [...(shiftsQuery.data ?? [])].sort((a, b) => new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime()),
-    [shiftsQuery.data],
-  );
+
+  useEffect((): void => {
+    if (selectedShiftId !== null && selectedShift === null) {
+      setSelectedShiftId(null);
+    }
+  }, [selectedShift, selectedShiftId]);
 
   const createMutation = useMutation({
     mutationFn: createStaffingShift,
@@ -72,9 +140,9 @@ export function ShiftCoordinationPage() {
   });
 
   const assignMutation = useMutation({
-    mutationFn: ({ shiftId, employeeId }: { shiftId: string; employeeId: string }) =>
-      createShiftAssignment(shiftId, { employee_id: employeeId }),
-    onSuccess: () => {
+    mutationFn: ({ branchId, shiftId, employeeId }: AssignShiftInput): Promise<ShiftAssignment> =>
+      createShiftAssignmentForBranch(branchId, shiftId, { employee_id: employeeId }),
+    onSuccess: (): void => {
       setMessage("Đã phân công nhân viên vào ca.");
       void queryClient.invalidateQueries({ queryKey: operationsQueryKeys.all });
     },
@@ -135,15 +203,15 @@ export function ShiftCoordinationPage() {
         <section className="panel overflow-hidden">
           <div className="border-b border-slate-200 px-5 py-4"><h2 className="font-bold text-slate-950">Chọn ca để phân công</h2><p className="mt-1 text-sm text-slate-500">Hệ thống tự loại nhân viên sai vị trí hoặc trùng lịch.</p></div>
           {shiftsQuery.error ? <p className="p-5 text-sm text-red-600"><CircleAlert className="mr-2 inline size-4" />{friendlyApiError(shiftsQuery.error, "Không tải được danh sách ca.")}</p> : (
-            <div className="max-h-72 divide-y divide-slate-100 overflow-y-auto">{shifts.map((shift) => <button className={`grid w-full gap-1 px-5 py-3 text-left hover:bg-slate-50 ${selectedShiftId === shift.id ? "bg-blue-50" : ""}`} key={shift.id} onClick={() => setSelectedShiftId(shift.id)} type="button"><span className="font-bold text-slate-900">{customerNames.get(shift.customer_id) ?? "Khách hàng"} · {formatDateTime(shift.starts_at)}</span><span className="text-xs text-slate-500">Cần {shift.required_workers} người · {shiftStatusLabel(shift.status)}</span></button>)}</div>
+          <div className="max-h-72 divide-y divide-slate-100 overflow-y-auto">{shifts.map((shift: ScopedStaffingShift): React.JSX.Element => <button className={`grid w-full gap-1 px-5 py-3 text-left hover:bg-slate-50 ${selectedShiftId === shift.id ? "bg-blue-50" : ""}`} key={shift.id} onClick={(): void => setSelectedShiftId(shift.id)} type="button"><span className="font-bold text-slate-900">{customerNames.get(shift.customer_id) ?? "Khách hàng"} · {formatDateTime(shift.starts_at)}</span><span className="text-xs text-slate-500">{scope.branches.find((branch): boolean => branch.id === shift.branch_id)?.name ?? "Chi nhánh"} · Cần {shift.required_workers} người · {shiftStatusLabel(shift.status)}</span></button>)}</div>
           )}
         </section>
 
         {selectedShiftId ? <section className="panel overflow-hidden">
           <div className="flex items-center gap-3 border-b border-slate-200 px-5 py-4"><UsersRound className="size-5 text-blue-600" /><div><h2 className="font-bold text-slate-950">Nhân viên có thể phân công</h2><p className="text-sm text-slate-500">Phù hợp dựa trên vị trí chính có hiệu lực tại ngày làm.</p></div></div>
-          <div className="divide-y divide-slate-100">{candidatesQuery.data?.map((candidate) => {
-            const eligible = candidate.suitable && candidate.available && !candidate.already_assigned;
-            return <div className="flex items-center justify-between gap-3 px-5 py-4" key={candidate.employee_id}><div><p className="font-bold text-slate-900">{candidate.display_name}</p><p className="text-xs text-slate-500">{candidate.employee_code} · {!candidate.suitable ? "Không đúng vị trí" : !candidate.available ? "Trùng lịch" : candidate.already_assigned ? "Đã phân công" : "Sẵn sàng"}</p></div><button className="action-secondary min-h-9 px-3" disabled={!eligible || assignMutation.isPending} onClick={() => assignMutation.mutate({ shiftId: selectedShiftId, employeeId: candidate.employee_id })} type="button"><UserPlus className="size-4" />Phân công</button></div>;
+          <div className="divide-y divide-slate-100">{candidatesQuery.data?.map((candidate: StaffingCandidate): React.JSX.Element => {
+            const eligible: boolean = candidate.suitable && candidate.available && !candidate.already_assigned;
+            return <div className="flex items-center justify-between gap-3 px-5 py-4" key={candidate.employee_id}><div><p className="font-bold text-slate-900">{candidate.display_name}</p><p className="text-xs text-slate-500">{candidate.employee_code} · {!candidate.suitable ? "Không đúng vị trí" : !candidate.available ? "Trùng lịch" : candidate.already_assigned ? "Đã phân công" : "Sẵn sàng"}</p></div><button className="action-secondary min-h-9 px-3" disabled={!eligible || assignMutation.isPending || selectedShift === null} onClick={(): void => assignMutation.mutate({ branchId: selectedShift?.branch_id ?? "", shiftId: selectedShiftId, employeeId: candidate.employee_id })} type="button"><UserPlus className="size-4" />Phân công</button></div>;
           })}{candidatesQuery.data?.length === 0 ? <p className="p-6 text-center text-sm text-slate-500">Chưa có nhân viên hoạt động.</p> : null}</div>
         </section> : null}
       </div>

@@ -67,6 +67,8 @@ pub struct UrgentWorkEmployee {
 #[derive(Clone, Debug, Serialize, TS)]
 pub struct UrgentWorkItem {
     pub report_id: Uuid,
+    pub branch_id: Uuid,
+    pub branch_name: String,
     pub employee_id: Uuid,
     pub employee_code: String,
     pub employee_name: String,
@@ -77,8 +79,10 @@ pub struct UrgentWorkItem {
     pub ended_at: Option<DateTime<Utc>>,
     pub worked_seconds: Option<i64>,
     pub started_by_account_id: Uuid,
+    pub started_by_username: String,
     pub start_source: UrgentWorkActionSource,
     pub ended_by_account_id: Option<Uuid>,
+    pub ended_by_username: Option<String>,
     pub end_source: Option<UrgentWorkActionSource>,
     pub reconciled_assignment_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,

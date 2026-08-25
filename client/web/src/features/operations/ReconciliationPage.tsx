@@ -1,17 +1,43 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, CircleAlert, GitCompareArrows, RefreshCw, Save } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import type { ReconciliationStatus, StaffingReconciliation } from "../../api/generated/contracts";
+import type {
+  Customer,
+  ReconciliationStatus,
+  StaffingReconciliation,
+} from "../../api/generated/contracts";
 import { friendlyApiError } from "../../shared/api/client";
 import { formatDateTime, formatDuration } from "../../shared/lib/format";
 import { useAuth } from "../auth/AuthProvider";
 import {
-  listCustomers,
-  listReconciliations,
+  listCustomersForBranch,
+  listReconciliationsForBranch,
   operationsQueryKeys,
-  reconcileAssignment,
-  saveCustomerWorkRecord,
+  reconcileAssignmentForBranch,
+  saveCustomerWorkRecordForBranch,
 } from "./api";
+import { useOperationsScope } from "./OperationsScopeProvider";
+
+interface ScopedStaffingReconciliation extends StaffingReconciliation {
+  branch_id: string;
+}
+
+async function loadScopedReconciliations(
+  branchIds: string[],
+): Promise<ScopedStaffingReconciliation[]> {
+  const groups: ScopedStaffingReconciliation[][] = await Promise.all(
+    branchIds.map(async (branchId: string): Promise<ScopedStaffingReconciliation[]> => {
+      const items: StaffingReconciliation[] = await listReconciliationsForBranch(branchId);
+      return items.map(
+        (item: StaffingReconciliation): ScopedStaffingReconciliation => ({
+          ...item,
+          branch_id: branchId,
+        }),
+      );
+    }),
+  );
+  return groups.flat();
+}
 
 function localDateTime(value: string | null | undefined): string {
   if (!value) return "";
@@ -45,12 +71,12 @@ interface EvidenceDraft {
   notes: string;
 }
 
-export function ReconciliationPage() {
-  const auth = useAuth();
-  const queryClient = useQueryClient();
-  const permissions = auth.profile?.permissions ?? [];
-  const canRead = permissions.includes("business.reconciliation.read");
-  const canManage = permissions.includes("business.reconciliation.manage");
+export function ReconciliationPage(): React.JSX.Element {
+  const auth: ReturnType<typeof useAuth> = useAuth();
+  const scope: ReturnType<typeof useOperationsScope> = useOperationsScope();
+  const queryClient: ReturnType<typeof useQueryClient> = useQueryClient();
+  const canRead: boolean = auth.profile?.permissions.includes("business.reconciliation.read") ?? false;
+  const canManage: boolean = auth.profile?.permissions.includes("business.reconciliation.manage") ?? false;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [evidence, setEvidence] = useState<EvidenceDraft>({
     customerId: "",
@@ -63,22 +89,38 @@ export function ReconciliationPage() {
   const [resolution, setResolution] = useState("");
   const [message, setMessage] = useState<string | null>(null);
 
-  const query = useQuery({
-    queryKey: operationsQueryKeys.reconciliations,
-    queryFn: listReconciliations,
-    enabled: canRead,
+  const query = useQuery<ScopedStaffingReconciliation[], Error>({
+    queryKey: [...operationsQueryKeys.reconciliations, "scope", scope.scopeKey],
+    queryFn: (): Promise<ScopedStaffingReconciliation[]> =>
+      loadScopedReconciliations(scope.branchIds),
+    enabled: canRead && scope.branchIds.length > 0,
   });
-  const items = useMemo(() => query.data ?? [], [query.data]);
-  const selected = items.find((item) => item.assignment_id === selectedId) ?? null;
+  const items: ScopedStaffingReconciliation[] = useMemo<ScopedStaffingReconciliation[]>(
+    (): ScopedStaffingReconciliation[] =>
+      (query.data ?? []).filter(
+        (item: ScopedStaffingReconciliation): boolean =>
+          scope.selectedCustomerId === null || item.customer_id === scope.selectedCustomerId,
+      ),
+    [query.data, scope.selectedCustomerId],
+  );
+  const selected: ScopedStaffingReconciliation | null =
+    items.find(
+      (item: ScopedStaffingReconciliation): boolean => item.assignment_id === selectedId,
+    ) ?? null;
 
-  const customersQuery = useQuery({
-    queryKey: operationsQueryKeys.customers,
-    queryFn: listCustomers,
-    enabled: canRead,
+  const customersQuery = useQuery<Customer[], Error>({
+    queryKey: [...operationsQueryKeys.customers, "branch", selected?.branch_id ?? "none"],
+    queryFn: (): Promise<Customer[]> => listCustomersForBranch(selected?.branch_id ?? ""),
+    enabled: canRead && selected !== null,
   });
 
-  useEffect(() => {
-    if (!selectedId && items.length > 0) setSelectedId(items[0].assignment_id);
+  useEffect((): void => {
+    const selectionRemainsVisible: boolean = items.some(
+      (item: ScopedStaffingReconciliation): boolean => item.assignment_id === selectedId,
+    );
+    if (!selectionRemainsVisible) {
+      setSelectedId(items.at(0)?.assignment_id ?? null);
+    }
   }, [items, selectedId]);
 
   useEffect(() => {
@@ -97,7 +139,7 @@ export function ReconciliationPage() {
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: operationsQueryKeys.reconciliations });
   const evidenceMutation = useMutation({
-    mutationFn: () => saveCustomerWorkRecord(selectedId ?? "", {
+    mutationFn: () => saveCustomerWorkRecordForBranch(selected?.branch_id ?? "", selectedId ?? "", {
       confirmed_customer_id: evidence.customerId,
       confirmed_started_at: new Date(evidence.startedAt).toISOString(),
       confirmed_ended_at: new Date(evidence.endedAt).toISOString(),
@@ -108,7 +150,7 @@ export function ReconciliationPage() {
     onError: (error) => setMessage(friendlyApiError(error, "Không thể lưu dữ liệu khách hàng.")),
   });
   const reconcileMutation = useMutation({
-    mutationFn: () => reconcileAssignment(selectedId ?? "", {
+    mutationFn: () => reconcileAssignmentForBranch(selected?.branch_id ?? "", selectedId ?? "", {
       worked_seconds: Math.round(Number(finalHours) * 3600),
       adjustment_reason: resolution.trim() || null,
     }),
@@ -131,7 +173,7 @@ export function ReconciliationPage() {
       <section className="panel overflow-hidden">
         <div className="border-b border-slate-200 px-5 py-4"><h2 className="font-bold text-slate-950">Ca cần đối soát</h2><p className="mt-1 text-sm text-slate-500">So sánh dữ liệu nhân viên với xác nhận khách hàng.</p></div>
         <div className="max-h-[70vh] divide-y divide-slate-100 overflow-y-auto">
-          {items.map((item) => <button className={`w-full px-5 py-4 text-left hover:bg-slate-50 ${selectedId === item.assignment_id ? "bg-blue-50" : ""}`} key={item.assignment_id} onClick={() => setSelectedId(item.assignment_id)} type="button"><div className="flex items-start justify-between gap-2"><div><p className="font-bold text-slate-900">{item.employee_name}</p><p className="mt-1 text-xs text-slate-500">{item.customer_name}</p></div><span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold ${statusTone(item.reconciliation_status)}`}>{statusLabel(item.reconciliation_status)}</span></div><p className="mt-2 text-xs text-slate-500">{formatDateTime(item.scheduled_starts_at)}</p></button>)}
+          {items.map((item: ScopedStaffingReconciliation): React.JSX.Element => <button className={`w-full px-5 py-4 text-left hover:bg-slate-50 ${selectedId === item.assignment_id ? "bg-blue-50" : ""}`} key={item.assignment_id} onClick={(): void => setSelectedId(item.assignment_id)} type="button"><div className="flex items-start justify-between gap-2"><div><p className="font-bold text-slate-900">{item.employee_name}</p><p className="mt-1 text-xs text-slate-500">{item.customer_name} · {scope.branches.find((branch): boolean => branch.id === item.branch_id)?.name ?? "Chi nhánh"}</p></div><span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold ${statusTone(item.reconciliation_status)}`}>{statusLabel(item.reconciliation_status)}</span></div><p className="mt-2 text-xs text-slate-500">{formatDateTime(item.scheduled_starts_at)}</p></button>)}
           {items.length === 0 ? <p className="p-8 text-center text-sm text-slate-500">Chưa có ca được phân công.</p> : null}
         </div>
       </section>

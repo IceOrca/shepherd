@@ -8,7 +8,7 @@ COPY . .
 ARG VITE_SHEPHERD_AUTH_URL
 ENV VITE_SHEPHERD_AUTH_URL=${VITE_SHEPHERD_AUTH_URL}
 RUN test -n "${VITE_SHEPHERD_AUTH_URL}"
-RUN npm run build
+RUN npm run lint && npm run build
 
 # BuildKit can export this target directly to the host for Caddy to serve:
 # docker build --file Dockerfile.prod --target export --output type=local,dest=dist .

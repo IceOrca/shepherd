@@ -22,13 +22,14 @@ import { friendlyApiError } from "../../shared/api/client";
 import { formatDateTime, formatDuration } from "../../shared/lib/format";
 import { useAuth } from "../auth/AuthProvider";
 import {
-  listJobs,
-  listUrgentCustomers,
-  listUrgentReconciliations,
+  listJobsForBranch,
+  listUrgentCustomersForBranch,
+  listUrgentReconciliationsForBranch,
   operationsQueryKeys,
-  reconcileUrgentWork,
-  saveUrgentCustomerWorkRecord,
+  reconcileUrgentWorkForBranch,
+  saveUrgentCustomerWorkRecordForBranch,
 } from "./api";
+import { useOperationsScope } from "./OperationsScopeProvider";
 
 interface EvidenceDraft {
   customerId: string;
@@ -112,8 +113,26 @@ function initialFinal(item: UrgentWorkReconciliation): FinalDraft {
   };
 }
 
+async function loadScopedReconciliations(
+  branchIds: string[],
+): Promise<UrgentWorkReconciliation[]> {
+  const groups: UrgentWorkReconciliation[][] = await Promise.all(
+    branchIds.map(
+      (branchId: string): Promise<UrgentWorkReconciliation[]> =>
+        listUrgentReconciliationsForBranch(branchId),
+    ),
+  );
+  return groups
+    .flat()
+    .sort(
+      (left: UrgentWorkReconciliation, right: UrgentWorkReconciliation): number =>
+        new Date(right.work.started_at).getTime() - new Date(left.work.started_at).getTime(),
+    );
+}
+
 export function UrgentReconciliationPage(): React.JSX.Element {
   const auth: ReturnType<typeof useAuth> = useAuth();
+  const scope: ReturnType<typeof useOperationsScope> = useOperationsScope();
   const queryClient: QueryClient = useQueryClient();
   const permissions: PermissionCode[] = auth.profile?.permissions ?? [];
   const canRead: boolean = permissions.includes("business.reconciliation.read");
@@ -141,36 +160,47 @@ export function UrgentReconciliationPage(): React.JSX.Element {
   const [message, setMessage] = useState<string | null>(null);
 
   const reconciliationQuery: UseQueryResult<UrgentWorkReconciliation[], Error> = useQuery({
-    queryKey: operationsQueryKeys.urgentReconciliations,
-    queryFn: listUrgentReconciliations,
-    enabled: canRead,
-  });
-  const customersQuery: UseQueryResult<UrgentWorkCustomer[], Error> = useQuery({
-    queryKey: operationsQueryKeys.urgentCustomers,
-    queryFn: listUrgentCustomers,
-    enabled: canRead,
-  });
-  const jobsQuery: UseQueryResult<JobPosition[], Error> = useQuery({
-    queryKey: operationsQueryKeys.jobs,
-    queryFn: listJobs,
-    enabled: canRead,
+    queryKey: [...operationsQueryKeys.urgentReconciliations, "scope", scope.scopeKey],
+    queryFn: (): Promise<UrgentWorkReconciliation[]> =>
+      loadScopedReconciliations(scope.branchIds),
+    enabled: canRead && scope.branchIds.length > 0,
   });
 
   const items: UrgentWorkReconciliation[] = useMemo<UrgentWorkReconciliation[]>(
-    (): UrgentWorkReconciliation[] => reconciliationQuery.data ?? [],
-    [reconciliationQuery.data],
+    (): UrgentWorkReconciliation[] =>
+      (reconciliationQuery.data ?? []).filter(
+        (item: UrgentWorkReconciliation): boolean =>
+          scope.selectedCustomerId === null ||
+          item.work.claimed_customer_id === scope.selectedCustomerId ||
+          item.customer_record?.confirmed_customer_id === scope.selectedCustomerId ||
+          item.final_customer_id === scope.selectedCustomerId,
+      ),
+    [reconciliationQuery.data, scope.selectedCustomerId],
   );
   const selected: UrgentWorkReconciliation | null =
     items.find((item: UrgentWorkReconciliation): boolean => item.work.report_id === selectedId) ?? null;
 
   useEffect((): void => {
-    if (!selectedId) {
-      const firstItem: UrgentWorkReconciliation | undefined = items.at(0);
-      if (firstItem) {
-        setSelectedId(firstItem.work.report_id);
-      }
+    const selectionRemainsVisible: boolean = items.some(
+      (item: UrgentWorkReconciliation): boolean => item.work.report_id === selectedId,
+    );
+    if (!selectionRemainsVisible) {
+      setSelectedId(items.at(0)?.work.report_id ?? null);
     }
   }, [items, selectedId]);
+
+  const selectedBranchId: string | null = selected?.work.branch_id ?? null;
+  const customersQuery: UseQueryResult<UrgentWorkCustomer[], Error> = useQuery({
+    queryKey: [...operationsQueryKeys.urgentCustomers, "branch", selectedBranchId],
+    queryFn: (): Promise<UrgentWorkCustomer[]> =>
+      listUrgentCustomersForBranch(selectedBranchId ?? ""),
+    enabled: canRead && selectedBranchId !== null,
+  });
+  const jobsQuery: UseQueryResult<JobPosition[], Error> = useQuery({
+    queryKey: [...operationsQueryKeys.jobs, "branch", selectedBranchId],
+    queryFn: (): Promise<JobPosition[]> => listJobsForBranch(selectedBranchId ?? ""),
+    enabled: canRead && selectedBranchId !== null,
+  });
 
   useEffect((): void => {
     if (!selected) {
@@ -190,10 +220,10 @@ export function UrgentReconciliationPage(): React.JSX.Element {
     void
   >({
     mutationFn: (): Promise<UrgentCustomerWorkRecord> => {
-      if (!selectedId) {
+      if (!selectedId || !selected) {
         return Promise.reject(new Error("urgent report is not selected"));
       }
-      return saveUrgentCustomerWorkRecord(selectedId, {
+      return saveUrgentCustomerWorkRecordForBranch(selected.work.branch_id, selectedId, {
         confirmed_customer_id: evidence.customerId,
         confirmed_started_at: new Date(evidence.startedAt).toISOString(),
         confirmed_ended_at: new Date(evidence.endedAt).toISOString(),
@@ -216,7 +246,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
     void
   >({
     mutationFn: (): Promise<UrgentWorkReconciliation> => {
-      if (!selectedId) {
+      if (!selectedId || !selected) {
         return Promise.reject(new Error("urgent report is not selected"));
       }
       const manualRate: ManualRateOverrideRequest | null = finalDraft.useManualRate
@@ -227,7 +257,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
             worker_hourly_rate: finalDraft.workerRate.trim(),
           }
         : null;
-      return reconcileUrgentWork(selectedId, {
+      return reconcileUrgentWorkForBranch(selected.work.branch_id, selectedId, {
         final_customer_id: finalDraft.customerId,
         job_id: finalDraft.jobId,
         worked_seconds: Math.round(Number(finalDraft.hours) * 3600),
@@ -257,7 +287,9 @@ export function UrgentReconciliationPage(): React.JSX.Element {
     return <section className="panel p-8 text-center text-sm text-slate-500">Bạn chưa có quyền xem đối soát.</section>;
   }
 
-  const isPending: boolean = reconciliationQuery.isPending || customersQuery.isPending || jobsQuery.isPending;
+  const isPending: boolean =
+    reconciliationQuery.isPending ||
+    (selectedBranchId !== null && (customersQuery.isPending || jobsQuery.isPending));
   const firstError: unknown = reconciliationQuery.error ?? customersQuery.error ?? jobsQuery.error;
   if (isPending) {
     return (
@@ -303,7 +335,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                   <div>
                     <p className="font-bold text-slate-900">{item.work.employee_name}</p>
                     <p className="mt-1 text-xs text-slate-500">
-                      {item.work.customer_name}
+                      {item.work.customer_name} · {item.work.branch_name}
                     </p>
                   </div>
                   <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold ${statusTone(item.reconciliation_status)}`}>
@@ -332,7 +364,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                 <div>
                   <h2 className="text-lg font-black text-slate-950">{selected.work.employee_name}</h2>
                   <p className="mt-1 text-sm text-slate-500">
-                    {selected.work.employee_code} · {selected.work.customer_name}
+                    {selected.work.employee_code} · {selected.work.customer_name} · {selected.work.branch_name}
                   </p>
                 </div>
                 <span className={`rounded-full px-3 py-1 text-xs font-bold ${statusTone(selected.reconciliation_status)}`}>

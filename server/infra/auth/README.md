@@ -61,4 +61,4 @@ service-role token.
 
 ## Legacy internal API
 
-The old local password/session implementation is isolated under `src/internal_api/` and is disabled by default. Its optional Cargo features remain compatibility-only and target the archived legacy account schema; new applications should use `ext-service`.
+The old local password/session implementation is isolated under `src/legacy_api/` and is disabled by default. Its optional Cargo features remain compatibility-only and target the archived legacy account schema; new applications should use `ext-service`.

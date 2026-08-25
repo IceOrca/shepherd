@@ -47,6 +47,9 @@ interface Feedback {
 }
 
 function sourceLabel(source: UrgentWorkItem["start_source"] | UrgentWorkItem["end_source"]): string {
+  if (source === null) {
+    return "Chưa có nguồn kết thúc";
+  }
   return source === "peer" ? "Đồng nghiệp ghi hộ" : "Tự ghi nhận";
 }
 
@@ -334,7 +337,7 @@ export function UrgentWorkPage(): React.JSX.Element {
                       {work.customer_name}
                     </p>
                     <p className="mt-1 text-xs text-slate-500">
-                      Bắt đầu {formatDateTime(work.started_at)} · {sourceLabel(work.start_source)}
+                      Bắt đầu {formatDateTime(work.started_at)} · {work.started_by_username} · {sourceLabel(work.start_source)}
                     </p>
                   </div>
                   <button
@@ -439,20 +442,60 @@ export function UrgentWorkPage(): React.JSX.Element {
         <section className="panel overflow-hidden">
           <div className="border-b border-slate-200 px-5 py-4">
             <h2 className="font-bold text-slate-950">Lịch sử của tôi</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Chi tiết nơi làm việc, người bấm bắt đầu/kết thúc và thời gian do máy chủ ghi nhận.
+            </p>
           </div>
           <div className="divide-y divide-slate-100">
             {ownWork.slice(0, 20).map((work: UrgentWorkItem): React.JSX.Element => (
-              <article className="grid gap-2 px-5 py-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center" key={work.report_id}>
-                <div>
-                  <p className="font-semibold text-slate-900">{work.customer_name}</p>
-                  <p className="mt-1 text-xs text-slate-500">
-                    {formatDateTime(work.started_at)} · {sourceLabel(work.start_source)}
+              <article className="px-5 py-5" key={work.report_id}>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="flex items-center gap-2 font-bold text-slate-950">
+                      <MapPin className="size-4 text-blue-600" />
+                      {work.customer_name}
+                    </p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">
+                      Chi nhánh: {work.branch_name}
+                    </p>
+                  </div>
+                  <p className="flex items-center gap-2 rounded-full bg-violet-50 px-3 py-1.5 text-sm font-bold text-violet-800">
+                    <Clock3 className="size-4 text-violet-600" />
+                    {work.worked_seconds === null ? "Đang làm" : formatDuration(work.worked_seconds)}
                   </p>
                 </div>
-                <p className="flex items-center gap-2 text-sm font-bold text-slate-700">
-                  <Clock3 className="size-4 text-violet-600" />
-                  {work.worked_seconds === null ? "Đang làm" : formatDuration(work.worked_seconds)}
-                </p>
+
+                <dl className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <div className="rounded-xl bg-emerald-50 p-3">
+                    <dt className="text-[11px] font-bold uppercase tracking-wide text-emerald-700">Check-in</dt>
+                    <dd className="mt-1 text-sm font-bold text-emerald-950">
+                      {formatDateTime(work.started_at)}
+                    </dd>
+                    <dd className="mt-1 text-xs text-emerald-800">
+                      Bấm bởi {work.started_by_username} · {sourceLabel(work.start_source)}
+                    </dd>
+                  </div>
+                  <div className="rounded-xl bg-amber-50 p-3">
+                    <dt className="text-[11px] font-bold uppercase tracking-wide text-amber-700">Check-out</dt>
+                    <dd className="mt-1 text-sm font-bold text-amber-950">
+                      {work.ended_at === null ? "Chưa kết thúc" : formatDateTime(work.ended_at)}
+                    </dd>
+                    <dd className="mt-1 text-xs text-amber-800">
+                      {work.ended_by_username === null
+                        ? "Chưa có người kết thúc"
+                        : `Bấm bởi ${work.ended_by_username} · ${sourceLabel(work.end_source)}`}
+                    </dd>
+                  </div>
+                  <div className="rounded-xl bg-slate-50 p-3 sm:col-span-2">
+                    <dt className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Khoảng làm việc</dt>
+                    <dd className="mt-1 text-sm font-bold text-slate-900">
+                      {formatDateTime(work.started_at)} → {work.ended_at === null ? "đang làm" : formatDateTime(work.ended_at)}
+                    </dd>
+                    <dd className="mt-1 text-xs text-slate-600">
+                      Tổng thời gian: {work.worked_seconds === null ? "chưa hoàn tất" : formatDuration(work.worked_seconds)}
+                    </dd>
+                  </div>
+                </dl>
               </article>
             ))}
           </div>

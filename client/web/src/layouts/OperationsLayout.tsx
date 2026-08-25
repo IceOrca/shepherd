@@ -23,6 +23,10 @@ import { useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../features/auth/AuthProvider";
 import { listBranches, operationsQueryKeys } from "../features/operations/api";
+import {
+  OperationsScopeProvider,
+  OperationsScopeToolbar,
+} from "../features/operations/OperationsScopeProvider";
 import type { BranchSummary, TenantMembershipSummary } from "../api/generated/contracts";
 import { friendlyApiError } from "../shared/api/client";
 import { formatToday, roleLabel } from "../shared/lib/format";
@@ -170,6 +174,10 @@ export function OperationsLayout() {
   const [tenantSwitchError, setTenantSwitchError] = useState<string | null>(null);
   const profile = auth.profile;
   const heading = pageTitle(location.pathname);
+  const showResultFilters: boolean =
+    location.pathname === "/dashboard" ||
+    location.pathname === "/operations/shifts" ||
+    location.pathname.startsWith("/operations/reconciliation");
   const branchesQuery = useQuery<BranchSummary[]>({
     queryKey: operationsQueryKeys.branches,
     queryFn: listBranches,
@@ -434,13 +442,16 @@ export function OperationsLayout() {
           </div>
         ) : null}
 
-        <main className="mx-auto w-full max-w-[1480px] p-4 sm:p-6 lg:p-8">
-          <div className="mb-6 flex items-center gap-2 text-sm capitalize text-slate-500">
-            <PanelLeftClose className="size-4 text-blue-600" />
-            {formatToday()}
-          </div>
-          <Outlet />
-        </main>
+        <OperationsScopeProvider branches={branches}>
+          <main className="mx-auto w-full max-w-[1480px] p-4 sm:p-6 lg:p-8">
+            <div className="mb-6 flex items-center gap-2 text-sm capitalize text-slate-500">
+              <PanelLeftClose className="size-4 text-blue-600" />
+              {formatToday()}
+            </div>
+            {showResultFilters ? <OperationsScopeToolbar /> : null}
+            <Outlet />
+          </main>
+        </OperationsScopeProvider>
       </div>
     </div>
   );

@@ -88,7 +88,7 @@ async function readPayload(response: Response): Promise<unknown> {
 }
 
 async function sendRequest(path: string, init: RequestInit): Promise<Response> {
-  const headers: Headers = new Headers(init.headers);
+    const headers: Headers = new Headers(init.headers);
   const hasBody: boolean = typeof init.body === "string";
   const hasAccessToken: boolean = accessToken !== null;
   const method: string = requestMethod(init);
@@ -100,14 +100,23 @@ async function sendRequest(path: string, init: RequestInit): Promise<Response> {
   if (accessToken) {
     headers.set("Authorization", `Bearer ${accessToken}`);
   }
-  if (activeTenantId) {
+  if (activeTenantId && !headers.has("X-Tenant-Id")) {
     headers.set("X-Tenant-Id", activeTenantId);
   }
-  if (activeBranchId) {
+  if (activeBranchId && !headers.has("X-Branch-Id")) {
     headers.set("X-Branch-Id", activeBranchId);
   }
 
-  logClientApiRequest({ path, method, hasAccessToken, hasBody, activeTenantId, activeBranchId });
+  const requestTenantId: string | null = headers.get("X-Tenant-Id");
+  const requestBranchId: string | null = headers.get("X-Branch-Id");
+  logClientApiRequest({
+    path,
+    method,
+    hasAccessToken,
+    hasBody,
+    activeTenantId: requestTenantId,
+    activeBranchId: requestBranchId,
+  });
   return fetchWithTimeout(path, {
     ...init,
     headers,
@@ -152,6 +161,20 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
     throw new ApiError(response.status, payload);
   }
   return payload as T;
+}
+
+export function apiRequestForBranch<T>(
+  path: string,
+  branchId: string,
+  init: RequestInit = {},
+): Promise<T> {
+  const headers: Headers = new Headers(init.headers);
+  headers.set("X-Branch-Id", branchId);
+  console.debug("Shepherd API request assigned an explicit branch context", {
+    path,
+    branchId,
+  });
+  return apiRequest<T>(path, { ...init, headers });
 }
 
 function apiErrorMessage(payload: unknown): string | null {

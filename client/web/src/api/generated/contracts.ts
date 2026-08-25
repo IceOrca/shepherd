@@ -108,7 +108,7 @@ export type UrgentWorkCustomer = { customer_id: string, customer_name: string, a
 
 export type UrgentWorkEmployee = { employee_id: string, employee_code: string, display_name: string, is_self: boolean, has_open_work: boolean, };
 
-export type UrgentWorkItem = { report_id: string, employee_id: string, employee_code: string, employee_name: string, claimed_customer_id: string, customer_name: string, status: UrgentWorkStatus, started_at: string, ended_at: string | null, worked_seconds: number | null, started_by_account_id: string, start_source: UrgentWorkActionSource, ended_by_account_id: string | null, end_source: UrgentWorkActionSource | null, reconciled_assignment_id: string | null, created_at: string, updated_at: string, };
+export type UrgentWorkItem = { report_id: string, branch_id: string, branch_name: string, employee_id: string, employee_code: string, employee_name: string, claimed_customer_id: string, customer_name: string, status: UrgentWorkStatus, started_at: string, ended_at: string | null, worked_seconds: number | null, started_by_account_id: string, started_by_username: string, start_source: UrgentWorkActionSource, ended_by_account_id: string | null, ended_by_username: string | null, end_source: UrgentWorkActionSource | null, reconciled_assignment_id: string | null, created_at: string, updated_at: string, };
 
 export type UrgentCustomerWorkRecord = { id: string, report_id: string, confirmed_customer_id: string, confirmed_customer_name: string, confirmed_started_at: string, confirmed_ended_at: string, confirmed_worked_seconds: number, customer_reference: string | null, notes: string | null, updated_at: string, };
 

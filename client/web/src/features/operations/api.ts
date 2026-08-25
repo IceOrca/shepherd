@@ -30,7 +30,7 @@ import type {
   UrgentWorkReconciliation,
   UrgentWorkStartRequest,
 } from "../../api/generated/contracts";
-import { apiRequest } from "../../shared/api/client";
+import { apiRequest, apiRequestForBranch } from "../../shared/api/client";
 
 export const operationsQueryKeys = {
   all: ["operations"] as const,
@@ -77,6 +77,10 @@ export function listCustomers(): Promise<Customer[]> {
   return apiRequest<Customer[]>("/api/business/customers");
 }
 
+export function listCustomersForBranch(branchId: string): Promise<Customer[]> {
+  return apiRequestForBranch<Customer[]>("/api/business/customers", branchId);
+}
+
 export function createCustomer(payload: CustomerUpsertRequest): Promise<Customer> {
   return apiRequest<Customer>("/api/business/customers", {
     method: "POST",
@@ -93,6 +97,10 @@ export function updateCustomer(customerId: string, payload: CustomerUpsertReques
 
 export function listJobs(): Promise<JobPosition[]> {
   return apiRequest<JobPosition[]>("/api/hr/jobs");
+}
+
+export function listJobsForBranch(branchId: string): Promise<JobPosition[]> {
+  return apiRequestForBranch<JobPosition[]>("/api/hr/jobs", branchId);
 }
 
 export function listEmployees(): Promise<Employee[]> {
@@ -127,6 +135,10 @@ export function listStaffingShifts(): Promise<StaffingShift[]> {
   return apiRequest<StaffingShift[]>("/api/business/staffing/shifts");
 }
 
+export function listStaffingShiftsForBranch(branchId: string): Promise<StaffingShift[]> {
+  return apiRequestForBranch<StaffingShift[]>("/api/business/staffing/shifts", branchId);
+}
+
 export function createStaffingShift(payload: StaffingShiftCreateRequest): Promise<StaffingShift> {
   return apiRequest<StaffingShift>("/api/business/staffing/shifts", {
     method: "POST",
@@ -136,6 +148,16 @@ export function createStaffingShift(payload: StaffingShiftCreateRequest): Promis
 
 export function listShiftCandidates(shiftId: string): Promise<StaffingCandidate[]> {
   return apiRequest<StaffingCandidate[]>(`/api/business/staffing/shifts/${shiftId}/candidates`);
+}
+
+export function listShiftCandidatesForBranch(
+  branchId: string,
+  shiftId: string,
+): Promise<StaffingCandidate[]> {
+  return apiRequestForBranch<StaffingCandidate[]>(
+    `/api/business/staffing/shifts/${shiftId}/candidates`,
+    branchId,
+  );
 }
 
 export function createShiftAssignment(
@@ -148,8 +170,29 @@ export function createShiftAssignment(
   });
 }
 
+export function createShiftAssignmentForBranch(
+  branchId: string,
+  shiftId: string,
+  payload: ShiftAssignmentCreateRequest,
+): Promise<ShiftAssignment> {
+  return apiRequestForBranch<ShiftAssignment>(
+    `/api/business/staffing/shifts/${shiftId}/assignments`,
+    branchId,
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+}
+
 export function listReconciliations(): Promise<StaffingReconciliation[]> {
   return apiRequest<StaffingReconciliation[]>("/api/business/staffing/reconciliations");
+}
+
+export function listReconciliationsForBranch(
+  branchId: string,
+): Promise<StaffingReconciliation[]> {
+  return apiRequestForBranch<StaffingReconciliation[]>(
+    "/api/business/staffing/reconciliations",
+    branchId,
+  );
 }
 
 export function saveCustomerWorkRecord(
@@ -162,6 +205,18 @@ export function saveCustomerWorkRecord(
   );
 }
 
+export function saveCustomerWorkRecordForBranch(
+  branchId: string,
+  assignmentId: string,
+  payload: CustomerWorkRecordUpsertRequest,
+): Promise<CustomerWorkRecord> {
+  return apiRequestForBranch<CustomerWorkRecord>(
+    `/api/business/staffing/assignments/${assignmentId}/customer-record`,
+    branchId,
+    { method: "PUT", body: JSON.stringify(payload) },
+  );
+}
+
 export function reconcileAssignment(
   assignmentId: string,
   payload: ShiftAssignmentApproveRequest,
@@ -170,6 +225,18 @@ export function reconcileAssignment(
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function reconcileAssignmentForBranch(
+  branchId: string,
+  assignmentId: string,
+  payload: ShiftAssignmentApproveRequest,
+): Promise<ShiftAssignment> {
+  return apiRequestForBranch<ShiftAssignment>(
+    `/api/business/staffing/assignments/${assignmentId}/reconcile`,
+    branchId,
+    { method: "POST", body: JSON.stringify(payload) },
+  );
 }
 
 export function listOwnAssignments(): Promise<OwnStaffingAssignment[]> {
@@ -189,6 +256,10 @@ export function executeWorkAction(input: WorkActionInput): Promise<ShiftWorkSess
 
 export function listUrgentCustomers(): Promise<UrgentWorkCustomer[]> {
   return apiRequest<UrgentWorkCustomer[]>("/api/business/staffing/urgent-work/customers");
+}
+
+export function listUrgentCustomersForBranch(branchId: string): Promise<UrgentWorkCustomer[]> {
+  return apiRequestForBranch<UrgentWorkCustomer[]>("/api/business/staffing/urgent-work/customers", branchId);
 }
 
 export function listUrgentEmployees(): Promise<UrgentWorkEmployee[]> {
@@ -223,12 +294,33 @@ export function listUrgentReconciliations(): Promise<UrgentWorkReconciliation[]>
   return apiRequest<UrgentWorkReconciliation[]>("/api/business/staffing/urgent-work/reconciliations");
 }
 
+export function listUrgentReconciliationsForBranch(
+  branchId: string,
+): Promise<UrgentWorkReconciliation[]> {
+  return apiRequestForBranch<UrgentWorkReconciliation[]>(
+    "/api/business/staffing/urgent-work/reconciliations",
+    branchId,
+  );
+}
+
 export function saveUrgentCustomerWorkRecord(
   reportId: string,
   payload: UrgentCustomerWorkRecordUpsertRequest,
 ): Promise<UrgentCustomerWorkRecord> {
   return apiRequest<UrgentCustomerWorkRecord>(
     `/api/business/staffing/urgent-work/${reportId}/customer-record`,
+    { method: "PUT", body: JSON.stringify(payload) },
+  );
+}
+
+export function saveUrgentCustomerWorkRecordForBranch(
+  branchId: string,
+  reportId: string,
+  payload: UrgentCustomerWorkRecordUpsertRequest,
+): Promise<UrgentCustomerWorkRecord> {
+  return apiRequestForBranch<UrgentCustomerWorkRecord>(
+    `/api/business/staffing/urgent-work/${reportId}/customer-record`,
+    branchId,
     { method: "PUT", body: JSON.stringify(payload) },
   );
 }
@@ -241,4 +333,16 @@ export function reconcileUrgentWork(
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function reconcileUrgentWorkForBranch(
+  branchId: string,
+  reportId: string,
+  payload: UrgentWorkReconcileRequest,
+): Promise<UrgentWorkReconciliation> {
+  return apiRequestForBranch<UrgentWorkReconciliation>(
+    `/api/business/staffing/urgent-work/${reportId}/reconcile`,
+    branchId,
+    { method: "POST", body: JSON.stringify(payload) },
+  );
 }

@@ -11,7 +11,7 @@ FROM base AS builder
 
 COPY . .
 ENV SQLX_OFFLINE=true
-RUN cargo build --release -p shepherd-runtime --bin shepherd-srv
+RUN cargo clippy --all --workspace && cargo build --release -p shepherd-runtime --bin shepherd-srv
 
 
 FROM debian:bookworm-slim AS runner

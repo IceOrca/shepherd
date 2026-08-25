@@ -10,16 +10,35 @@ import {
 } from "lucide-react";
 import { useMemo } from "react";
 import { Link } from "react-router-dom";
-import type { Customer, PermissionCode, StaffingShift, UrgentWorkItem } from "../../api/generated/contracts";
+import type { PermissionCode, StaffingShift, UrgentWorkItem } from "../../api/generated/contracts";
 import { useAuth } from "../auth/AuthProvider";
 import { friendlyApiError } from "../../shared/api/client";
 import { formatDateTime, formatDuration, shiftStatusLabel } from "../../shared/lib/format";
 import {
-  listCustomers,
   listOwnUrgentWork,
-  listStaffingShifts,
+  listStaffingShiftsForBranch,
   operationsQueryKeys,
 } from "./api";
+import {
+  useOperationsScope,
+  type OperationsScopeCustomer,
+} from "./OperationsScopeProvider";
+
+interface ScopedStaffingShift extends StaffingShift {
+  branch_id: string;
+}
+
+async function loadScopedShifts(branchIds: string[]): Promise<ScopedStaffingShift[]> {
+  const shiftGroups: ScopedStaffingShift[][] = await Promise.all(
+    branchIds.map(async (branchId: string): Promise<ScopedStaffingShift[]> => {
+      const shifts: StaffingShift[] = await listStaffingShiftsForBranch(branchId);
+      return shifts.map(
+        (shift: StaffingShift): ScopedStaffingShift => ({ ...shift, branch_id: branchId }),
+      );
+    }),
+  );
+  return shiftGroups.flat();
+}
 
 type MetricTone = "blue" | "emerald" | "amber" | "violet";
 
@@ -109,20 +128,15 @@ function statusClass(status: StaffingShift["status"]): string {
 
 export function OperationsOverviewPage(): React.JSX.Element {
   const auth: ReturnType<typeof useAuth> = useAuth();
+  const scope: ReturnType<typeof useOperationsScope> = useOperationsScope();
   const permissions: PermissionCode[] = auth.profile?.permissions ?? [];
   const canReadShifts: boolean = permissions.includes("business.shifts.read");
-  const canReadCustomers: boolean = permissions.includes("business.customers.read");
   const canReadUrgentWork: boolean = permissions.includes("business.urgent_work.read");
 
-  const shiftsQuery: UseQueryResult<StaffingShift[], Error> = useQuery({
-    queryKey: operationsQueryKeys.shifts,
-    queryFn: listStaffingShifts,
-    enabled: canReadShifts,
-  });
-  const customersQuery: UseQueryResult<Customer[], Error> = useQuery({
-    queryKey: operationsQueryKeys.customers,
-    queryFn: listCustomers,
-    enabled: canReadCustomers,
+  const shiftsQuery: UseQueryResult<ScopedStaffingShift[], Error> = useQuery({
+    queryKey: [...operationsQueryKeys.shifts, "scope", scope.scopeKey],
+    queryFn: (): Promise<ScopedStaffingShift[]> => loadScopedShifts(scope.branchIds),
+    enabled: canReadShifts && scope.branchIds.length > 0,
   });
   const ownUrgentWorkQuery: UseQueryResult<UrgentWorkItem[], Error> = useQuery({
     queryKey: operationsQueryKeys.urgentOwnWork,
@@ -131,33 +145,51 @@ export function OperationsOverviewPage(): React.JSX.Element {
   });
 
   const relevantQueries: QueryLifecycle[] = canReadShifts
-    ? [shiftsQuery, ...(canReadCustomers ? [customersQuery] : [])]
+    ? [shiftsQuery]
     : canReadUrgentWork
       ? [ownUrgentWorkQuery]
       : [];
   const isPending: boolean = relevantQueries.some((query: QueryLifecycle): boolean => query.isPending);
   const firstError: unknown = relevantQueries.find((query: QueryLifecycle): boolean => Boolean(query.error))?.error;
 
-  const upcomingShifts: StaffingShift[] = useMemo<StaffingShift[]>(
-    (): StaffingShift[] =>
+  const shifts: ScopedStaffingShift[] = useMemo<ScopedStaffingShift[]>(
+    (): ScopedStaffingShift[] =>
       [...(shiftsQuery.data ?? [])]
         .filter(
-          (shift: StaffingShift): boolean =>
+          (shift: ScopedStaffingShift): boolean =>
+            scope.selectedCustomerId === null || shift.customer_id === scope.selectedCustomerId,
+        )
+        .sort(
+          (left: ScopedStaffingShift, right: ScopedStaffingShift): number =>
+            new Date(left.starts_at).getTime() - new Date(right.starts_at).getTime(),
+        ),
+    [scope.selectedCustomerId, shiftsQuery.data],
+  );
+  const upcomingShifts: ScopedStaffingShift[] = useMemo<ScopedStaffingShift[]>(
+    (): ScopedStaffingShift[] =>
+      shifts
+        .filter(
+          (shift: ScopedStaffingShift): boolean =>
             shift.status !== "cancelled" && new Date(shift.ends_at).getTime() >= Date.now(),
         )
         .sort(
-          (left: StaffingShift, right: StaffingShift): number =>
+          (left: ScopedStaffingShift, right: ScopedStaffingShift): number =>
             new Date(left.starts_at).getTime() - new Date(right.starts_at).getTime(),
         )
         .slice(0, 6),
-    [shiftsQuery.data],
+    [shifts],
   );
   const customerNames: Map<string, string> = useMemo<Map<string, string>>(
     (): Map<string, string> =>
       new Map(
-        (customersQuery.data ?? []).map((customer: Customer): [string, string] => [customer.id, customer.name]),
+        scope.customers.map(
+          (customer: OperationsScopeCustomer): [string, string] => [
+            customer.customer_id,
+            customer.customer_name,
+          ],
+        ),
       ),
-    [customersQuery.data],
+    [scope.customers],
   );
 
   if (isPending) {
@@ -221,10 +253,9 @@ export function OperationsOverviewPage(): React.JSX.Element {
     );
   }
 
-  const shifts: StaffingShift[] = shiftsQuery.data ?? [];
-  const openCount: number = shifts.filter((shift: StaffingShift): boolean => shift.status === "open").length;
+  const openCount: number = shifts.filter((shift: ScopedStaffingShift): boolean => shift.status === "open").length;
   const inProgressCount: number = shifts.filter(
-    (shift: StaffingShift): boolean => shift.status === "in_progress",
+    (shift: ScopedStaffingShift): boolean => shift.status === "in_progress",
   ).length;
 
   return (
@@ -233,7 +264,7 @@ export function OperationsOverviewPage(): React.JSX.Element {
         <MetricCard icon={BriefcaseBusiness} label="Tổng ca làm" value={shifts.length} note="Trong dữ liệu hiện có" tone="blue" />
         <MetricCard icon={UsersRound} label="Đang cần người" value={openCount} note="Cần điều phối nhân sự" tone="amber" />
         <MetricCard icon={Clock3} label="Đang diễn ra" value={inProgressCount} note="Ca đang hoạt động" tone="emerald" />
-        <MetricCard icon={Building2} label="Khách hàng" value={customersQuery.data?.length ?? "—"} note="Đơn vị đang quản lý" tone="violet" />
+        <MetricCard icon={Building2} label="Khách hàng" value={scope.selectedCustomerId === null ? scope.customers.length : 1} note="Trong phạm vi đang lọc" tone="violet" />
       </div>
 
       <section className="panel overflow-hidden">
@@ -267,7 +298,7 @@ export function OperationsOverviewPage(): React.JSX.Element {
           </div>
         ) : (
           <div className="divide-y divide-slate-100">
-            {upcomingShifts.map((shift: StaffingShift): React.JSX.Element => (
+            {upcomingShifts.map((shift: ScopedStaffingShift): React.JSX.Element => (
               <article className="grid gap-3 px-5 py-4 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center sm:px-6" key={shift.id}>
                 <div className="min-w-0">
                   <p className="truncate font-bold text-slate-900">
@@ -275,6 +306,9 @@ export function OperationsOverviewPage(): React.JSX.Element {
                   </p>
                   <p className="mt-1 text-sm text-slate-500">
                     {formatDateTime(shift.starts_at)} – {formatDateTime(shift.ends_at)}
+                  </p>
+                  <p className="mt-1 text-xs font-medium text-slate-400">
+                    {scope.branches.find((branch): boolean => branch.id === shift.branch_id)?.name ?? "Chi nhánh"}
                   </p>
                 </div>
                 <p className="text-sm font-semibold text-slate-600">Cần {shift.required_workers} người</p>
