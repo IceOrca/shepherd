@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE hr_employees SET branch_id = $3, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = $1 AND account_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a75dfb9230013bc03fea92f661bd8ae22430d9ee77d642456c99d7aca1c8f158"
+}

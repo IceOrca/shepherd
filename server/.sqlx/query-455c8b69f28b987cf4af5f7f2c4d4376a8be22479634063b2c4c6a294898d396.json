@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE platform_tenant_bootstrap_requests\n        SET auth_subjects = $2, updated_at = CURRENT_TIMESTAMP\n        WHERE idempotency_key = $1 AND status = 'processing'\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "455c8b69f28b987cf4af5f7f2c4d4376a8be22479634063b2c4c6a294898d396"
+}

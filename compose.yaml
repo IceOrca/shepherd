@@ -35,7 +35,7 @@ services:
       SHEPHERD_POSTGRES_BOOTSTRAP_JOB: "1"
     volumes:
       - ./scripts/bootstrap-postgres.sh:/usr/local/bin/bootstrap-postgres.sh:ro
-    command: ["sh", "/usr/local/bin/bootstrap-postgres.sh"]
+    command: [ "sh", "/usr/local/bin/bootstrap-postgres.sh" ]
     depends_on:
       postgres-db:
         condition: service_healthy
@@ -64,7 +64,7 @@ services:
     ports:
       - "127.0.0.1:${BACKEND_PORT:-8000}:${BACKEND_PORT:-8000}"
     env_file:
-      - ./env_file_server
+      - ./server.env
       - ./deploy/supabase/dev/auth-admin.env
     environment:
       APP_ENV: development
@@ -93,6 +93,7 @@ services:
       NOTIFICATION_RETRY_MAX_DELAY_SECS: ${NOTIFICATION_RETRY_MAX_DELAY_SECS:-300}
     volumes:
       - ./server:/app/shepherd_server
+      - ./scripts/dev-auth-accounts.tsv:/run/config/dev-auth-accounts.tsv:ro
       - cargo_registry:/usr/local/cargo/registry
       - cargo_git:/usr/local/cargo/git
       - server_target:/app/shepherd_server/target
@@ -102,6 +103,47 @@ services:
         condition: service_completed_successfully
       redis-cache:
         condition: service_healthy
+      supabase-auth:
+        condition: service_healthy
+
+  tenant-bootstrap:
+    profiles: [ "tools" ]
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+      target: builder
+    image: iceorca/shepherd-srv:0.1.0_dev
+    restart: "no"
+    working_dir: /app/shepherd_server
+    env_file:
+      - ./server.env
+      - ./deploy/supabase/dev/auth-admin.env
+    environment:
+      APP_ENV: development
+      DATABASE_URL: ${DATABASE_URL}
+      AUTH_ADMIN_URL: http://supabase-auth:9999
+      AUTH_ISSUER_URL: ${AUTH_ISSUER_URL}
+      TENANT_BOOTSTRAP_ADMIN_ACCOUNT: ${TENANT_BOOTSTRAP_ADMIN_ACCOUNT:-}
+      TENANT_BOOTSTRAP_ADMIN_EMAIL: ${TENANT_BOOTSTRAP_ADMIN_EMAIL:-}
+      TENANT_BOOTSTRAP_ADMIN_SECRET: ${TENANT_BOOTSTRAP_ADMIN_SECRET:-}
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - ./server:/app/shepherd_server
+      - cargo_registry:/usr/local/cargo/registry
+      - cargo_git:/usr/local/cargo/git
+      - server_target:/app/shepherd_server/target
+    entrypoint:
+      - cargo
+      - run
+      - --quiet
+      - -p
+      - shepherd-runtime
+      - --bin
+      - shepherd-tenant-bootstrap
+      - --
+    depends_on:
+      postgres-bootstrap:
+        condition: service_completed_successfully
       supabase-auth:
         condition: service_healthy
 
@@ -117,7 +159,7 @@ services:
     ports:
       - "127.0.0.1:${FRONTEND_DEV_PORT:-5173}:${FRONTEND_DEV_PORT:-5173}"
     env_file:
-      - ./env_file_client
+      - ./client.env
     environment:
       VITE_SHEPHERD_DEV_PROXY_TARGET: http://server:${BACKEND_PORT:-8000}
       VITE_SHEPHERD_AUTH_DEV_PROXY_TARGET: http://supabase-auth:9999
@@ -175,7 +217,7 @@ services:
       - "127.0.0.1:${AUTH_PORT:-9999}:9999"
     volumes:
       - ./scripts/start-supabase-auth.sh:/usr/local/bin/start-supabase-auth.sh:ro
-    entrypoint: ["sh", "/usr/local/bin/start-supabase-auth.sh"]
+    entrypoint: [ "sh", "/usr/local/bin/start-supabase-auth.sh" ]
     command: []
     healthcheck:
       test: [ "CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9999/health" ]

@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT NULLIF(current_setting('app.branch_id', true), '')::UUID AS \"branch_id?\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "branch_id?",
+        "type_info": "Uuid",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "dca9d4efbffa495ec8af2bb2b6b9c0d64c22c47e838c34b0464e1f55d7f8e4a6"
+}

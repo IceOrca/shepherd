@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO business_customers (\n                id, tenant_id, branch_id, code, name, created_by_account_id, updated_by_account_id\n            )\n            VALUES ($1, $2, $3, 'staffing-work-customer', 'Staffing Work Customer', $4, $4)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9cb6aa5945334bcf28b1a894fa794806421b59c2713b7cbd6c5d3c9c582d304c"
+}

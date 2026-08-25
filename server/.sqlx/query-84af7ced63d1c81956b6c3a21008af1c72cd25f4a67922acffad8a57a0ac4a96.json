@@ -1,0 +1,88 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT employee_id, worked_seconds,\n               base_amount::TEXT AS \"base_amount!\",\n               branch_amount::TEXT AS \"branch_amount!\",\n               time_amount::TEXT AS \"time_amount!\",\n               overtime_amount::TEXT AS \"overtime_amount!\",\n               gross_amount::TEXT AS \"gross_amount!\",\n               currency\n        FROM payroll_employee_results\n        WHERE tenant_id = $1 AND payroll_run_id = $2\n        ORDER BY employee_id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "employee_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "payroll_employee_results",
+            "name": "employee_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "worked_seconds",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "payroll_employee_results",
+            "name": "worked_seconds"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "base_amount!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "branch_amount!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "time_amount!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "overtime_amount!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "gross_amount!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "currency",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "payroll_employee_results",
+            "name": "currency"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      null,
+      null,
+      null,
+      null,
+      false
+    ]
+  },
+  "hash": "84af7ced63d1c81956b6c3a21008af1c72cd25f4a67922acffad8a57a0ac4a96"
+}

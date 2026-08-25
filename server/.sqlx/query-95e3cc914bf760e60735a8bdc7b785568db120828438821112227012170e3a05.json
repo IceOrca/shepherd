@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO business_staffing_shifts (\n                id, tenant_id, branch_id, customer_id, job_id,\n                starts_at, ends_at, required_workers, created_by_account_id, updated_by_account_id\n            )\n            VALUES (\n                $1, $2, $3, $4, $5, CURRENT_TIMESTAMP - INTERVAL '1 hour',\n                CURRENT_TIMESTAMP + INTERVAL '8 hours', 1, $6, $6\n            )\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "95e3cc914bf760e60735a8bdc7b785568db120828438821112227012170e3a05"
+}

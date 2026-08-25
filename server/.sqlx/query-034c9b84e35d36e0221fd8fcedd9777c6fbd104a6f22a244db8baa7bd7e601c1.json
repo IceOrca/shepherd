@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO business_shift_assignments (\n            id, tenant_id, branch_id, shift_id, employee_id, customer_bill_rate_id, worker_pay_rate_id,\n            rate_source, currency, bill_hourly_rate_snapshot, worker_hourly_rate_snapshot,\n            created_by_account_id\n        )\n        VALUES ($1, $2, $3, $4, $5, $6, $7, 'configured', 'VND', 180000, 145000, $8)\n        ON CONFLICT (id) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "034c9b84e35d36e0221fd8fcedd9777c6fbd104a6f22a244db8baa7bd7e601c1"
+}

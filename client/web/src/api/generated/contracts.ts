@@ -24,7 +24,7 @@ export type PermissionOverrideEffect = "allow" | "deny";
 
 export type AccessControlBranch = { id: string, code: string, name: string, time_zone: string, status: string, version: number, };
 
-export type AccessControlPermission = { code: PermissionCode, description: string, };
+export type AccessControlPermission = { code: PermissionCode, display_name: string, description: string, };
 
 export type AccessControlRole = { code: RoleCode, display_name: string, description: string | null, scope: AccessRoleScope, is_system: boolean, is_active: boolean, version: number, permission_codes: Array<PermissionCode>, assigned_account_count: number, };
 

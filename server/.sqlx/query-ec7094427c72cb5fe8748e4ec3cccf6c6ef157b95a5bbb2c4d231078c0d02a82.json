@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    INSERT INTO hr_employee_compensations (\n                        id, tenant_id, branch_id, employee_id, currency, pay_basis, monthly_rate,\n                        standard_monthly_hours, effective_from, created_by_account_id\n                    )\n                    VALUES ($1, $2, $3, $4, 'VND', 'monthly', $5::TEXT::NUMERIC, 160, $6, $7)\n                    ON CONFLICT (tenant_id, branch_id, employee_id, effective_from) DO UPDATE\n                    SET currency = 'VND',\n                        pay_basis = 'monthly',\n                        hourly_rate = NULL,\n                        monthly_rate = EXCLUDED.monthly_rate,\n                        standard_monthly_hours = 160,\n                        effective_to = NULL,\n                        created_by_account_id = EXCLUDED.created_by_account_id\n                    ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Date",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ec7094427c72cb5fe8748e4ec3cccf6c6ef157b95a5bbb2c4d231078c0d02a82"
+}

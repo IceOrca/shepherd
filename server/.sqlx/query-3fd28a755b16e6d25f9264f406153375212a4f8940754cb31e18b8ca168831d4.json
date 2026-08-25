@@ -1,0 +1,122 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    SELECT id, employee_id, currency, pay_basis,\n                           hourly_rate::TEXT AS hourly_rate,\n                           monthly_rate::TEXT AS monthly_rate,\n                           standard_monthly_hours::TEXT AS standard_monthly_hours,\n                           effective_from, effective_to, created_at\n                    FROM hr_employee_compensations\n                    WHERE tenant_id = $1 AND employee_id = $2\n                    ORDER BY effective_from DESC, id\n                    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "hr_employee_compensations",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "employee_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "hr_employee_compensations",
+            "name": "employee_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "currency",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hr_employee_compensations",
+            "name": "currency"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "pay_basis",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hr_employee_compensations",
+            "name": "pay_basis"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "hourly_rate",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "monthly_rate",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "standard_monthly_hours",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "effective_from",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "hr_employee_compensations",
+            "name": "effective_from"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "effective_to",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "hr_employee_compensations",
+            "name": "effective_to"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "hr_employee_compensations",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "3fd28a755b16e6d25f9264f406153375212a4f8940754cb31e18b8ca168831d4"
+}

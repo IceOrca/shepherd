@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE hr_departments\n        SET manager_employee_id = CASE\n                WHEN branch_id = $2 AND code = 'administration' THEN $3\n                WHEN branch_id = $2 AND code = 'operations' THEN $4\n                WHEN branch_id = $5 THEN $6\n                ELSE manager_employee_id\n            END,\n            updated_at = CURRENT_TIMESTAMP,\n            updated_by_account_id = $7\n        WHERE tenant_id = $1\n          AND code IN ('administration', 'operations')\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e00675f2b9c7a07b956719c7af36e0166d7bc63d9f932f4ba50a7238647b312f"
+}

@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT branch_id, permission_code AS \"permission_code!\", effect AS \"effect!\"\n                FROM (\n                    SELECT\n                        assignment.branch_id,\n                        role_permission.permission_code,\n                        'allow'::TEXT AS effect\n                    FROM account_role_assignments AS assignment\n                    INNER JOIN tenant_roles AS tenant_role\n                        ON tenant_role.tenant_id = assignment.tenant_id\n                       AND tenant_role.code = assignment.role_code\n                       AND tenant_role.is_active\n                    INNER JOIN tenant_role_permissions AS role_permission\n                        ON role_permission.tenant_id = assignment.tenant_id\n                       AND role_permission.role_code = assignment.role_code\n                    WHERE assignment.tenant_id = $1 AND assignment.account_id = $2\n                    UNION ALL\n                    SELECT branch_id, permission_code, effect\n                    FROM account_permission_overrides\n                    WHERE tenant_id = $1 AND account_id = $2\n                      AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)\n                ) AS grants\n                ORDER BY branch_id NULLS FIRST, permission_code, effect\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "branch_id",
+        "type_info": "Uuid",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "permission_code!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "effect!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "ab31ab2c63b2713ca198ea692d9d23636c0320767cb8a9da0f2915b169c64f4a"
+}

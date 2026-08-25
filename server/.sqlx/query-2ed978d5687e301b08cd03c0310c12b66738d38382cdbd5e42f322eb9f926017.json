@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO access_control_audit_log (\n            tenant_id, actor_account_id, action, object_type, object_id,\n            branch_id, before_value, after_value\n        )\n        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Uuid",
+        "Jsonb",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2ed978d5687e301b08cd03c0310c12b66738d38382cdbd5e42f322eb9f926017"
+}

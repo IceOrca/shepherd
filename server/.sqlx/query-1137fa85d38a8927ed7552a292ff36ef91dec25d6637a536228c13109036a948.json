@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO notification_outbox (\n            id, tenant_id, branch_id, event_type, aggregate_id, channel, destination, message\n        )\n        SELECT gen_random_uuid(), $1, destination.branch_id, $2, $3, destination.channel, destination.destination,\n               'Urgent staffing work updated; report ' || $4::UUID::TEXT\n        FROM notification_destinations AS destination\n        WHERE destination.tenant_id = $1 AND destination.enabled\n        ON CONFLICT (tenant_id, branch_id, event_type, aggregate_id, channel, destination) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1137fa85d38a8927ed7552a292ff36ef91dec25d6637a536228c13109036a948"
+}

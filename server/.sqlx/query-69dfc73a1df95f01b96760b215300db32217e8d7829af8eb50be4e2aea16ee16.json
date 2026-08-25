@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO hr_working_schedules (\n            id, tenant_id, branch_id, code, name, time_zone, status,\n            created_by_account_id, updated_by_account_id\n        )\n        VALUES ($1, $2, $3, 'standard-40', 'Standard 40 Hours', 'Asia/Bangkok', 'active', $4, $4)\n        ON CONFLICT (tenant_id, branch_id, lower(code)) DO UPDATE\n        SET name = EXCLUDED.name,\n            time_zone = EXCLUDED.time_zone,\n            status = 'active',\n            updated_at = CURRENT_TIMESTAMP,\n            updated_by_account_id = EXCLUDED.updated_by_account_id\n        RETURNING id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "hr_working_schedules",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "69dfc73a1df95f01b96760b215300db32217e8d7829af8eb50be4e2aea16ee16"
+}

@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT (\n                worked_seconds = observed_worked_seconds\n                AND customer_amount >= worker_amount\n                AND margin_amount = customer_amount - worker_amount\n            ) AS \"consistent!\"\n            FROM business_shift_assignments\n            WHERE tenant_id = $1 AND id = $2\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "consistent!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "8507fc1d76c100f7681b8c2ab88398d76bf5e0b59ff4d838b99f1b924f73ac6d"
+}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO branches (id, tenant_id, code, name, time_zone)\n            VALUES ($1, $2, 'staffing-work-branch', 'Staffing Work Branch', 'Asia/Bangkok')\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f756d99259a9a458bdc6e7ada50f476ec112abd3662979292eb5bb956a76c864"
+}

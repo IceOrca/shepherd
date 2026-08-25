@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT assignment.branch_id, assignment.role_code\n                FROM account_role_assignments AS assignment\n                INNER JOIN tenant_roles AS tenant_role\n                    ON tenant_role.tenant_id = assignment.tenant_id\n                   AND tenant_role.code = assignment.role_code\n                   AND tenant_role.is_active\n                WHERE assignment.tenant_id = $1 AND assignment.account_id = $2\n                ORDER BY assignment.branch_id NULLS FIRST, assignment.role_code\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "branch_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "account_role_assignments",
+            "name": "branch_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "role_code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "account_role_assignments",
+            "name": "role_code"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "2eeda02b54939f9a252b8cf79071512db85ac3a25f487900d8a5487cbc7e9a59"
+}

@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO hr_employees (\n                id, tenant_id, branch_id, account_id, employee_code, display_name, status, hire_date\n            ) VALUES\n                ($1, $4, $5, $6, 'worker-actor', 'Test Worker Actor', 'active', CURRENT_DATE),\n                ($2, $4, $5, $7, 'worker-peer', 'Test Worker Peer', 'active', CURRENT_DATE),\n                ($3, $4, $5, $8, 'coordinator-manager', 'Test Coordinator Manager', 'active', CURRENT_DATE)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8f53c1811537e02b4176986c782db1d5f4e58ba6f07ad06d0346ff0c1054fd00"
+}

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO account_branch_assignments (\n                    tenant_id, account_id, branch_id, assigned_by_account_id\n                ) VALUES ($1, $2, $3, $4)\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "66188245e91589a03ea4afe66dc684ffa42c7e453191ab74d4cc678875e5cd0e"
+}

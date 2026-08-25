@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM tenant_role_permissions WHERE tenant_id = $1 AND role_code = $2 AND NOT (permission_code = ANY($3))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8aab6cad6608c8047f11bcb88277645e1f3cf7df1312c0fc42e435ce24ddbd1b"
+}

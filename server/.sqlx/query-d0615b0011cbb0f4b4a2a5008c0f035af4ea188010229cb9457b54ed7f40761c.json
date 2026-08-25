@@ -1,0 +1,137 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT record.id, record.report_id, record.confirmed_customer_id,\n               customer.name AS confirmed_customer_name,\n               record.confirmed_started_at, record.confirmed_ended_at,\n               record.confirmed_worked_seconds AS \"confirmed_worked_seconds!\",\n               record.customer_reference, record.notes, record.updated_at\n        FROM business_urgent_customer_work_records AS record\n        INNER JOIN business_customers AS customer\n            ON customer.tenant_id = record.tenant_id AND customer.id = record.confirmed_customer_id\n        WHERE record.tenant_id = $1 AND record.report_id = $2\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_customer_work_records",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "report_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_customer_work_records",
+            "name": "report_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "confirmed_customer_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_customer_work_records",
+            "name": "confirmed_customer_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "confirmed_customer_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_customers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "confirmed_started_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_customer_work_records",
+            "name": "confirmed_started_at"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "confirmed_ended_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_customer_work_records",
+            "name": "confirmed_ended_at"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "confirmed_worked_seconds!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_customer_work_records",
+            "name": "confirmed_worked_seconds"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "customer_reference",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_customer_work_records",
+            "name": "customer_reference"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "notes",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_customer_work_records",
+            "name": "notes"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_customer_work_records",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "d0615b0011cbb0f4b4a2a5008c0f035af4ea188010229cb9457b54ed7f40761c"
+}

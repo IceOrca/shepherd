@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    UPDATE notification_outbox\n                    SET status = 'sent', sent_at = CURRENT_TIMESTAMP, locked_at = NULL,\n                        provider_message_id = $3, last_error = NULL\n                    WHERE tenant_id = $1 AND id = $2 AND status = 'processing'\n                    ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9bb04e86d201e1788410cda55d7e4aa24a2c5b47b97ec332d0044e8761ea2fc0"
+}

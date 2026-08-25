@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO payroll_run_lines (\n            id, tenant_id, payroll_run_id, employee_id, attendance_session_id,\n            staffing_assignment_id, branch_id, work_date, component, rule_code,\n            worked_seconds, base_hourly_rate, multiplier, hourly_adjustment, amount, description\n        )\n        SELECT\n            MD5($2::UUID::TEXT || ':' || assignment.id::TEXT || ':staffing')::UUID,\n            $1,\n            $2,\n            assignment.employee_id,\n            assignment.branch_id,\n            assignment.id,\n            NULL,\n            (customer_record.confirmed_started_at AT TIME ZONE $5)::DATE,\n            'staffing',\n            worker_pay_rate.code,\n            assignment.worked_seconds,\n            assignment.worker_hourly_rate_snapshot,\n            0,\n            0,\n            assignment.worker_amount,\n            'Approved customer staffing assignment'\n        FROM business_shift_assignments AS assignment\n        INNER JOIN business_customer_work_records AS customer_record\n            ON customer_record.tenant_id = assignment.tenant_id\n           AND customer_record.assignment_id = assignment.id\n        LEFT JOIN business_staffing_rates AS worker_pay_rate\n            ON worker_pay_rate.tenant_id = assignment.tenant_id\n           AND worker_pay_rate.id = assignment.worker_pay_rate_id\n        WHERE assignment.tenant_id = $1\n          AND assignment.status = 'approved'\n          AND assignment.currency = $6\n          AND (customer_record.confirmed_started_at AT TIME ZONE $5)::DATE >= $3\n          AND (customer_record.confirmed_started_at AT TIME ZONE $5)::DATE < $4\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Date",
+        "Date",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c71a959e8d3084a78229077e897289fdffd2a0c3b35ea250c124073d743a6b9c"
+}

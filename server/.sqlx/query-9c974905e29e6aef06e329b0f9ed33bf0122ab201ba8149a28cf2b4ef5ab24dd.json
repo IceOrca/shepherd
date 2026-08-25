@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO notification_destinations (id, tenant_id, branch_id, channel, destination)\n            VALUES ($1, $2, $3, 'telegram', '-1000000000001')\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9c974905e29e6aef06e329b0f9ed33bf0122ab201ba8149a28cf2b4ef5ab24dd"
+}

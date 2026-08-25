@@ -1,0 +1,107 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT role.code, role.display_name, role.description, role.scope_type,\n                       role.is_system, role.is_active, role.version,\n                       COUNT(DISTINCT assignment.account_id)::BIGINT AS \"assigned_account_count!\"\n                FROM tenant_roles AS role\n                LEFT JOIN account_role_assignments AS assignment\n                    ON assignment.tenant_id = role.tenant_id\n                   AND assignment.role_code = role.code\n                WHERE role.tenant_id = $1\n                GROUP BY role.tenant_id, role.code\n                ORDER BY role.is_system DESC, lower(role.display_name), role.code\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tenant_roles",
+            "name": "code"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "display_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tenant_roles",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "description",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tenant_roles",
+            "name": "description"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "scope_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tenant_roles",
+            "name": "scope_type"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "is_system",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "tenant_roles",
+            "name": "is_system"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "is_active",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "tenant_roles",
+            "name": "is_active"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "version",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "tenant_roles",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "assigned_account_count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "7fe0db13a761faec12d944f6949f3c14e257d8d6b5ee85635cc3f6aa0770fc32"
+}

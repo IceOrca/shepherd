@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO business_urgent_customer_work_records (\n                id, tenant_id, report_id, confirmed_customer_id,\n                confirmed_started_at, confirmed_ended_at, customer_reference,\n                notes, recorded_by_account_id\n            )\n            SELECT $1, $2, report.id, $4, $5, $6, $7, $8, $9\n            FROM business_urgent_work_reports AS report\n            INNER JOIN business_customers AS customer\n                ON customer.tenant_id = report.tenant_id AND customer.id = $4\n            WHERE report.tenant_id = $2 AND report.id = $3 AND report.status = 'completed'\n              AND customer.status = 'active'\n            ON CONFLICT (tenant_id, report_id) DO UPDATE\n            SET confirmed_customer_id = EXCLUDED.confirmed_customer_id,\n                confirmed_started_at = EXCLUDED.confirmed_started_at,\n                confirmed_ended_at = EXCLUDED.confirmed_ended_at,\n                customer_reference = EXCLUDED.customer_reference,\n                notes = EXCLUDED.notes,\n                recorded_by_account_id = EXCLUDED.recorded_by_account_id,\n                updated_at = CURRENT_TIMESTAMP\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz",
+        "Text",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b3fdc00c8e2590e7eeaebd874165eef1c21d5ed64ac0c9fa9e822bfd81c22183"
+}

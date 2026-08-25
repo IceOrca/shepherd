@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO business_shift_assignments (\n                id, tenant_id, branch_id, shift_id, employee_id, rate_source, manual_rate_reason, currency,\n                bill_hourly_rate_snapshot, worker_hourly_rate_snapshot, created_by_account_id\n            )\n            VALUES ($1, $2, $3, $4, $5, 'manual', 'isolated staffing test rate', 'VND', 150000, 120000, $6)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a42420a0c89bdd16bdabcd6a429a8098ea0d29fde8ac6db4ee2ac1a7a186edf3"
+}

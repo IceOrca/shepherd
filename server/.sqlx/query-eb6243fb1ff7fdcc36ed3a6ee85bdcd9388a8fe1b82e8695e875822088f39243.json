@@ -1,0 +1,191 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE business_shift_work_sessions AS session\n            SET ended_at = CURRENT_TIMESTAMP,\n                end_idempotency_key = $4,\n                ended_latitude = $5,\n                ended_longitude = $6,\n                ended_accuracy_meters = $7,\n                ended_by_account_id = $3,\n                updated_at = CURRENT_TIMESTAMP\n            WHERE session.tenant_id = $1\n              AND session.assignment_id = $2\n              AND session.employee_id = $8\n              AND session.ended_at IS NULL\n            RETURNING session.id, session.assignment_id, session.employee_id, session.started_at,\n                      session.ended_at, session.worked_seconds, session.started_latitude,\n                      session.started_longitude, session.started_accuracy_meters, session.ended_latitude,\n                      session.ended_longitude, session.ended_accuracy_meters, session.created_at,\n                      session.updated_at\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_shift_work_sessions",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "assignment_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_shift_work_sessions",
+            "name": "assignment_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "employee_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_shift_work_sessions",
+            "name": "employee_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "started_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_shift_work_sessions",
+            "name": "started_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "ended_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_shift_work_sessions",
+            "name": "ended_at"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "worked_seconds",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "business_shift_work_sessions",
+            "name": "worked_seconds"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "started_latitude",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "business_shift_work_sessions",
+            "name": "started_latitude"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "started_longitude",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "business_shift_work_sessions",
+            "name": "started_longitude"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "started_accuracy_meters",
+        "type_info": "Float4",
+        "origin": {
+          "Table": {
+            "table": "business_shift_work_sessions",
+            "name": "started_accuracy_meters"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "ended_latitude",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "business_shift_work_sessions",
+            "name": "ended_latitude"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "ended_longitude",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "business_shift_work_sessions",
+            "name": "ended_longitude"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "ended_accuracy_meters",
+        "type_info": "Float4",
+        "origin": {
+          "Table": {
+            "table": "business_shift_work_sessions",
+            "name": "ended_accuracy_meters"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_shift_work_sessions",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_shift_work_sessions",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Float8",
+        "Float8",
+        "Float4",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "eb6243fb1ff7fdcc36ed3a6ee85bdcd9388a8fe1b82e8695e875822088f39243"
+}

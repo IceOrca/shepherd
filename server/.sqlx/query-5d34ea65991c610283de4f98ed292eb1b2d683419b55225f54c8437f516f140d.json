@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO business_customer_work_records (\n            id, tenant_id, assignment_id, confirmed_customer_id,\n            confirmed_started_at, confirmed_ended_at, customer_reference, notes,\n            recorded_by_account_id\n        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz",
+        "Text",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5d34ea65991c610283de4f98ed292eb1b2d683419b55225f54c8437f516f140d"
+}

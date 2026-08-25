@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT EXISTS (\n                SELECT 1 FROM business_urgent_work_reports AS report\n                INNER JOIN business_urgent_work_sessions AS session\n                    ON session.tenant_id = report.tenant_id AND session.report_id = report.id\n                WHERE report.tenant_id = $1 AND report.employee_id = $2\n                  AND report.claimed_customer_id = $3\n                  AND report.status = 'active' AND session.ended_at IS NULL\n            ) AS \"exists!\"\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d55fa31045bccd116e37ab9093300e5a6f3e86f72aca3cbb1b6006e74f5ed684"
+}

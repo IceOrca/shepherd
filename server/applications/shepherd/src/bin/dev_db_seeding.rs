@@ -1,6 +1,12 @@
 #![cfg_attr(debug_assertions, allow(unused))]
 
-use std::{collections::HashMap, error::Error, io, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    error::Error,
+    fs, io,
+    path::Path,
+    sync::Arc,
+};
 
 use chrono::{NaiveDate, NaiveTime};
 use tracing::{error, warn, info, debug, trace};
@@ -8,9 +14,7 @@ use infra_kernel::debug::Debugging;
 use infra_postgres::DatabaseAdapter;
 use uuid::Uuid;
 
-const ACME_TENANT_ID: &str = "00000000-0000-4000-8000-000000000001";
-const ACME1_TENANT_ID: &str = "00000000-0000-4000-8000-000000000002";
-const ACME2_TENANT_ID: &str = "00000000-0000-4000-8000-000000000003";
+const DEFAULT_DEV_ACCOUNT_CATALOG: &str = "/run/config/dev-auth-accounts.tsv";
 const DEV_ATTENDANCE_ID_NAMESPACE: u128 = 0xd3a7_7e00_0000_4000_8000_0000_0000_0000;
 const DEV_STAFFING_SHIFT_ID_NAMESPACE: u128 = 0x51f7_0000_0000_4000_8000_0000_0000_0000;
 const DEV_STAFFING_ASSIGNMENT_ID_NAMESPACE: u128 = 0xa551_0000_0000_4000_8000_0000_0000_0000;
@@ -30,10 +34,10 @@ struct ExistingDevAccountRow {
 }
 
 struct DevTenant {
-    id: &'static str,
-    slug: &'static str,
-    display_name: &'static str,
-    accounts: &'static [DevAccount],
+    id: Uuid,
+    slug: String,
+    display_name: String,
+    accounts: Vec<DevAccount>,
 }
 
 struct DevBranch {
@@ -43,9 +47,10 @@ struct DevBranch {
 }
 
 struct DevAccount {
-    username: &'static str,
+    username: String,
+    email: String,
     role: DevRole,
-    branch_code: Option<&'static str>,
+    branch_code: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,17 +72,19 @@ impl DevRole {
             Self::Staff => "staff",
         }
     }
-}
 
-fn dev_auth_email(tenant_slug: &str, username: &str) -> String {
-    if username == "iceorca" {
-        return "iceorca@shepherd.local".to_owned();
+    fn parse(value: &str) -> Result<Self, io::Error> {
+        match value {
+            "tenant_owner" => Ok(Self::TenantOwner),
+            "executive_manager" => Ok(Self::ExecutiveManager),
+            "branch_manager" => Ok(Self::BranchManager),
+            "supervisor" => Ok(Self::Supervisor),
+            "staff" => Ok(Self::Staff),
+            unsupported => Err(io::Error::other(format!(
+                "unsupported development role '{unsupported}'"
+            ))),
+        }
     }
-    let local_suffix: String = username
-        .strip_prefix(&format!("{tenant_slug}_"))
-        .unwrap_or(username)
-        .replace('_', "");
-    format!("{tenant_slug}.{local_suffix}@shepherd.local")
 }
 
 #[derive(Clone, Debug)]
@@ -85,7 +92,7 @@ struct SeedAccount {
     id: Uuid,
     username: String,
     role: DevRole,
-    branch_code: Option<&'static str>,
+    branch_code: Option<String>,
 }
 
 const DEV_BRANCHES: &[DevBranch] = &[
@@ -100,289 +107,24 @@ const DEV_BRANCHES: &[DevBranch] = &[
         time_zone: "Asia/Bangkok",
     },
 ];
-
-const ACME_ACCOUNTS: &[DevAccount] = &[
-    DevAccount {
-        username: "iceorca",
-        role: DevRole::TenantOwner,
-        branch_code: None,
-    },
-    DevAccount {
-        username: "acme_exec",
-        role: DevRole::ExecutiveManager,
-        branch_code: None,
-    },
-    DevAccount {
-        username: "acme_head_manager",
-        role: DevRole::BranchManager,
-        branch_code: Some("head-office"),
-    },
-    DevAccount {
-        username: "acme_head_supervisor_1",
-        role: DevRole::Supervisor,
-        branch_code: Some("head-office"),
-    },
-    DevAccount {
-        username: "acme_head_supervisor_2",
-        role: DevRole::Supervisor,
-        branch_code: Some("head-office"),
-    },
-    DevAccount {
-        username: "acme_head_staff_1",
-        role: DevRole::Staff,
-        branch_code: Some("head-office"),
-    },
-    DevAccount {
-        username: "acme_head_staff_2",
-        role: DevRole::Staff,
-        branch_code: Some("head-office"),
-    },
-    DevAccount {
-        username: "acme_head_staff_3",
-        role: DevRole::Staff,
-        branch_code: Some("head-office"),
-    },
-    DevAccount {
-        username: "acme_head_staff_4",
-        role: DevRole::Staff,
-        branch_code: Some("head-office"),
-    },
-    DevAccount {
-        username: "acme_north_manager",
-        role: DevRole::BranchManager,
-        branch_code: Some("north-branch"),
-    },
-    DevAccount {
-        username: "acme_north_supervisor_1",
-        role: DevRole::Supervisor,
-        branch_code: Some("north-branch"),
-    },
-    DevAccount {
-        username: "acme_north_supervisor_2",
-        role: DevRole::Supervisor,
-        branch_code: Some("north-branch"),
-    },
-    DevAccount {
-        username: "acme_north_staff_1",
-        role: DevRole::Staff,
-        branch_code: Some("north-branch"),
-    },
-    DevAccount {
-        username: "acme_north_staff_2",
-        role: DevRole::Staff,
-        branch_code: Some("north-branch"),
-    },
-    DevAccount {
-        username: "acme_north_staff_3",
-        role: DevRole::Staff,
-        branch_code: Some("north-branch"),
-    },
-    DevAccount {
-        username: "acme_north_staff_4",
-        role: DevRole::Staff,
-        branch_code: Some("north-branch"),
-    },
-];
-
-const ACME1_ACCOUNTS: &[DevAccount] = &[
-    DevAccount {
-        username: "acme1_owner",
-        role: DevRole::TenantOwner,
-        branch_code: None,
-    },
-    DevAccount {
-        username: "acme1_exec",
-        role: DevRole::ExecutiveManager,
-        branch_code: None,
-    },
-    DevAccount {
-        username: "acme1_head_manager",
-        role: DevRole::BranchManager,
-        branch_code: Some("head-office"),
-    },
-    DevAccount {
-        username: "acme1_head_supervisor_1",
-        role: DevRole::Supervisor,
-        branch_code: Some("head-office"),
-    },
-    DevAccount {
-        username: "acme1_head_supervisor_2",
-        role: DevRole::Supervisor,
-        branch_code: Some("head-office"),
-    },
-    DevAccount {
-        username: "acme1_head_staff_1",
-        role: DevRole::Staff,
-        branch_code: Some("head-office"),
-    },
-    DevAccount {
-        username: "acme1_head_staff_2",
-        role: DevRole::Staff,
-        branch_code: Some("head-office"),
-    },
-    DevAccount {
-        username: "acme1_head_staff_3",
-        role: DevRole::Staff,
-        branch_code: Some("head-office"),
-    },
-    DevAccount {
-        username: "acme1_head_staff_4",
-        role: DevRole::Staff,
-        branch_code: Some("head-office"),
-    },
-    DevAccount {
-        username: "acme1_north_manager",
-        role: DevRole::BranchManager,
-        branch_code: Some("north-branch"),
-    },
-    DevAccount {
-        username: "acme1_north_supervisor_1",
-        role: DevRole::Supervisor,
-        branch_code: Some("north-branch"),
-    },
-    DevAccount {
-        username: "acme1_north_supervisor_2",
-        role: DevRole::Supervisor,
-        branch_code: Some("north-branch"),
-    },
-    DevAccount {
-        username: "acme1_north_staff_1",
-        role: DevRole::Staff,
-        branch_code: Some("north-branch"),
-    },
-    DevAccount {
-        username: "acme1_north_staff_2",
-        role: DevRole::Staff,
-        branch_code: Some("north-branch"),
-    },
-    DevAccount {
-        username: "acme1_north_staff_3",
-        role: DevRole::Staff,
-        branch_code: Some("north-branch"),
-    },
-    DevAccount {
-        username: "acme1_north_staff_4",
-        role: DevRole::Staff,
-        branch_code: Some("north-branch"),
-    },
-];
-
-const ACME2_ACCOUNTS: &[DevAccount] = &[
-    DevAccount {
-        username: "acme2_owner",
-        role: DevRole::TenantOwner,
-        branch_code: None,
-    },
-    DevAccount {
-        username: "acme2_exec",
-        role: DevRole::ExecutiveManager,
-        branch_code: None,
-    },
-    DevAccount {
-        username: "acme2_head_manager",
-        role: DevRole::BranchManager,
-        branch_code: Some("head-office"),
-    },
-    DevAccount {
-        username: "acme2_head_supervisor_1",
-        role: DevRole::Supervisor,
-        branch_code: Some("head-office"),
-    },
-    DevAccount {
-        username: "acme2_head_supervisor_2",
-        role: DevRole::Supervisor,
-        branch_code: Some("head-office"),
-    },
-    DevAccount {
-        username: "acme2_head_staff_1",
-        role: DevRole::Staff,
-        branch_code: Some("head-office"),
-    },
-    DevAccount {
-        username: "acme2_head_staff_2",
-        role: DevRole::Staff,
-        branch_code: Some("head-office"),
-    },
-    DevAccount {
-        username: "acme2_head_staff_3",
-        role: DevRole::Staff,
-        branch_code: Some("head-office"),
-    },
-    DevAccount {
-        username: "acme2_head_staff_4",
-        role: DevRole::Staff,
-        branch_code: Some("head-office"),
-    },
-    DevAccount {
-        username: "acme2_north_manager",
-        role: DevRole::BranchManager,
-        branch_code: Some("north-branch"),
-    },
-    DevAccount {
-        username: "acme2_north_supervisor_1",
-        role: DevRole::Supervisor,
-        branch_code: Some("north-branch"),
-    },
-    DevAccount {
-        username: "acme2_north_supervisor_2",
-        role: DevRole::Supervisor,
-        branch_code: Some("north-branch"),
-    },
-    DevAccount {
-        username: "acme2_north_staff_1",
-        role: DevRole::Staff,
-        branch_code: Some("north-branch"),
-    },
-    DevAccount {
-        username: "acme2_north_staff_2",
-        role: DevRole::Staff,
-        branch_code: Some("north-branch"),
-    },
-    DevAccount {
-        username: "acme2_north_staff_3",
-        role: DevRole::Staff,
-        branch_code: Some("north-branch"),
-    },
-    DevAccount {
-        username: "acme2_north_staff_4",
-        role: DevRole::Staff,
-        branch_code: Some("north-branch"),
-    },
-];
-
-const DEV_TENANTS: &[DevTenant] = &[
-    DevTenant {
-        id: ACME_TENANT_ID,
-        slug: "acme",
-        display_name: "Acme Corporation",
-        accounts: ACME_ACCOUNTS,
-    },
-    DevTenant {
-        id: ACME1_TENANT_ID,
-        slug: "acme1",
-        display_name: "Acme 1 Corporation",
-        accounts: ACME1_ACCOUNTS,
-    },
-    DevTenant {
-        id: ACME2_TENANT_ID,
-        slug: "acme2",
-        display_name: "Acme 2 Corporation",
-        accounts: ACME2_ACCOUNTS,
-    },
-];
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     Debugging::init();
-    info!("Development seed started: configured_tenants={}", DEV_TENANTS.len());
     require_development_environment()?;
+    let catalog_path: String =
+        std::env::var("DEV_AUTH_ACCOUNTS_FILE").unwrap_or_else(|_| DEFAULT_DEV_ACCOUNT_CATALOG.to_owned());
+    let dev_tenants: Vec<DevTenant> = load_dev_tenants(Path::new(&catalog_path))?;
+    info!(
+        configured_tenants = dev_tenants.len(),
+        catalog_path, "Development seed started from account catalog"
+    );
     let auth_issuer: String = std::env::var("AUTH_ISSUER_URL")
         .map_err(|_| io::Error::other("AUTH_ISSUER_URL is required for development seeding"))?;
     let auth_identities_json: String = std::env::var("AUTH_DEV_IDENTITIES_JSON")
         .map_err(|_| io::Error::other("AUTH_DEV_IDENTITIES_JSON is required for development seeding"))?;
     let auth_identities: HashMap<String, Uuid> = serde_json::from_str(&auth_identities_json)
         .map_err(|error: serde_json::Error| io::Error::other(format!("parse Auth identity map: {error}")))?;
-    let expected_account_count: usize = DEV_TENANTS
+    let expected_account_count: usize = dev_tenants
         .iter()
         .map(|tenant: &DevTenant| -> usize { tenant.accounts.len() })
         .sum();
@@ -397,7 +139,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     info!("Connecting to PostgreSQL; migrations must already be applied with the SQLx CLI");
     let db: Arc<DatabaseAdapter> = DatabaseAdapter::new_arc().await;
-    for tenant in DEV_TENANTS {
+    for tenant in &dev_tenants {
         if let Err(error) = seed_tenant(&db, tenant, &auth_issuer, &auth_identities).await {
             error!(
                 "Development tenant seed failed: tenant_slug={} tenant_id={} error={}",
@@ -410,15 +152,145 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let account_count: usize = expected_account_count;
     info!(
         "Development seed completed successfully: tenants={} accounts={}",
-        DEV_TENANTS.len(),
+        dev_tenants.len(),
         account_count
     );
     println!("Development data seeded successfully");
-    println!("tenant_slugs=acme,acme1,acme2");
+    let tenant_slugs: String = dev_tenants
+        .iter()
+        .map(|tenant: &DevTenant| tenant.slug.as_str())
+        .collect::<Vec<&str>>()
+        .join(",");
+    println!("tenant_slugs={tenant_slugs}");
     println!("accounts_created_or_verified={account_count}");
     println!("auth_identity_issuer={auth_issuer}");
     println!("auth_identity_linked=true");
     Ok(())
+}
+
+fn load_dev_tenants(path: &Path) -> Result<Vec<DevTenant>, io::Error> {
+    let contents: String = fs::read_to_string(path)
+        .map_err(|error: io::Error| io::Error::other(format!("read {}: {error}", path.display())))?;
+    let mut tenants: Vec<DevTenant> = Vec::new();
+    let mut seen_emails: HashSet<String> = HashSet::new();
+    for (line_index, raw_line) in contents.lines().enumerate() {
+        let line_number: usize = line_index + 1;
+        if raw_line.trim().is_empty() || raw_line.starts_with('#') {
+            continue;
+        }
+        let columns: Vec<&str> = raw_line.split('\t').collect();
+        let [
+            tenant_id_raw,
+            tenant_slug_raw,
+            display_name_raw,
+            role_raw,
+            username_raw,
+            email_raw,
+            password,
+            branch_raw,
+        ] = columns.as_slice()
+        else {
+            return Err(io::Error::other(format!(
+                "{}:{line_number} must contain 8 tab-separated columns",
+                path.display()
+            )));
+        };
+        let tenant_id: Uuid = Uuid::parse_str(tenant_id_raw).map_err(|error: uuid::Error| {
+            io::Error::other(format!(
+                "{}:{line_number} has invalid tenant UUID: {error}",
+                path.display()
+            ))
+        })?;
+        let tenant_slug: String = tenant_slug_raw.trim().to_owned();
+        let display_name: String = display_name_raw.trim().to_owned();
+        let role: DevRole = DevRole::parse(role_raw.trim())?;
+        let username: String = username_raw.trim().to_owned();
+        let email: String = email_raw.trim().to_lowercase();
+        let raw_branch: &str = branch_raw.trim();
+        if tenant_slug.is_empty()
+            || display_name.is_empty()
+            || username.is_empty()
+            || email.is_empty()
+            || password.is_empty()
+        {
+            return Err(io::Error::other(format!(
+                "{}:{line_number} contains a blank required value",
+                path.display()
+            )));
+        }
+        if !seen_emails.insert(email.clone()) {
+            return Err(io::Error::other(format!(
+                "{}:{line_number} reuses email '{email}'; development identities are single-tenant",
+                path.display()
+            )));
+        }
+        let branch_code: Option<String> = match role {
+            DevRole::TenantOwner | DevRole::ExecutiveManager => {
+                if raw_branch != "all" {
+                    return Err(io::Error::other(format!(
+                        "{}:{line_number} tenant-wide role branch must be 'all'",
+                        path.display()
+                    )));
+                }
+                None
+            }
+            DevRole::BranchManager | DevRole::Supervisor | DevRole::Staff => {
+                if raw_branch.is_empty() || raw_branch == "all" {
+                    return Err(io::Error::other(format!(
+                        "{}:{line_number} branch-scoped role requires one branch code",
+                        path.display()
+                    )));
+                }
+                Some(raw_branch.to_owned())
+            }
+        };
+        let account: DevAccount = DevAccount {
+            username,
+            email,
+            role,
+            branch_code,
+        };
+        match tenants
+            .iter_mut()
+            .find(|tenant: &&mut DevTenant| tenant.slug == tenant_slug)
+        {
+            Some(tenant) => {
+                if tenant.id != tenant_id || tenant.display_name != display_name {
+                    return Err(io::Error::other(format!(
+                        "{}:{line_number} conflicts with earlier metadata for tenant '{tenant_slug}'",
+                        path.display()
+                    )));
+                }
+                tenant.accounts.push(account);
+            }
+            None => tenants.push(DevTenant {
+                id: tenant_id,
+                slug: tenant_slug,
+                display_name,
+                accounts: vec![account],
+            }),
+        }
+    }
+    if tenants.is_empty() {
+        return Err(io::Error::other(format!(
+            "{} contains no development accounts",
+            path.display()
+        )));
+    }
+    for tenant in &tenants {
+        let owner_count: usize = tenant
+            .accounts
+            .iter()
+            .filter(|account: &&DevAccount| account.role == DevRole::TenantOwner)
+            .count();
+        if owner_count != 1 {
+            return Err(io::Error::other(format!(
+                "tenant '{}' must contain exactly one development tenant owner, found {owner_count}",
+                tenant.slug
+            )));
+        }
+    }
+    Ok(tenants)
 }
 
 async fn seed_tenant(
@@ -427,7 +299,7 @@ async fn seed_tenant(
     auth_issuer: &str,
     auth_identities: &HashMap<String, Uuid>,
 ) -> Result<(), io::Error> {
-    let tenant_id: Uuid = Uuid::parse_str(tenant.id).map_err(io::Error::other)?;
+    let tenant_id: Uuid = tenant.id;
     info!(
         "Provisioning development tenant: tenant_slug={} tenant_id={} display_name={} expected_accounts={}",
         tenant.slug,
@@ -435,7 +307,7 @@ async fn seed_tenant(
         tenant.display_name,
         tenant.accounts.len()
     );
-    db.provision_tenant(tenant_id, tenant.slug, tenant.display_name)
+    db.provision_tenant(tenant_id, &tenant.slug, &tenant.display_name)
         .await
         .map_err(io::Error::other)?;
     info!(
@@ -448,14 +320,13 @@ async fn seed_tenant(
         .iter()
         .find(|account: &&DevAccount| account.role == DevRole::TenantOwner)
         .ok_or_else(|| io::Error::other(format!("tenant '{}' has no owner seed definition", tenant.slug)))?;
-    let owner_email: String = dev_auth_email(tenant.slug, owner_definition.username);
     let owner: SeedAccount = ensure_account(
         db,
         tenant_id,
-        owner_definition.username,
-        &owner_email,
+        &owner_definition.username,
+        &owner_definition.email,
         owner_definition.role,
-        owner_definition.branch_code,
+        owner_definition.branch_code.as_deref(),
         None,
     )
     .await?;
@@ -476,14 +347,13 @@ async fn seed_tenant(
         .iter()
         .filter(|account: &&DevAccount| account.role != DevRole::TenantOwner)
     {
-        let account_email: String = dev_auth_email(tenant.slug, account_definition.username);
         let account: SeedAccount = ensure_account(
             db,
             tenant_id,
-            account_definition.username,
-            &account_email,
+            &account_definition.username,
+            &account_definition.email,
             account_definition.role,
-            account_definition.branch_code,
+            account_definition.branch_code.as_deref(),
             Some(owner.id),
         )
         .await?;
@@ -1258,7 +1128,8 @@ async fn seed_hr_infra(
         accounts
             .iter()
             .find(|account: &&SeedAccount| {
-                account.role == role && branch_code.is_none_or(|code: &str| account.branch_code == Some(code))
+                account.role == role
+                    && branch_code.is_none_or(|code: &str| account.branch_code.as_deref() == Some(code))
             })
             .and_then(|account: &SeedAccount| employee_ids.get(&account.id).copied())
     };
@@ -2163,7 +2034,7 @@ async fn seed_branches(
             DevRole::TenantOwner => Vec::new(),
             DevRole::ExecutiveManager => branch_ids.clone(),
             DevRole::BranchManager | DevRole::Supervisor | DevRole::Staff => {
-                let branch_code: &str = account.branch_code.ok_or_else(|| {
+                let branch_code: &str = account.branch_code.as_deref().ok_or_else(|| {
                     io::Error::other(format!(
                         "branch-scoped development account '{}' has no branch code",
                         account.username
@@ -2229,7 +2100,7 @@ async fn ensure_account(
     username: &str,
     email: &str,
     role: DevRole,
-    branch_code: Option<&'static str>,
+    branch_code: Option<&str>,
     audit_account_id: Option<Uuid>,
 ) -> Result<SeedAccount, io::Error> {
     let mut transaction: infra_postgres::TenantTransaction =
@@ -2313,7 +2184,7 @@ async fn ensure_account(
         id: account_id,
         username: username.to_owned(),
         role,
-        branch_code,
+        branch_code: branch_code.map(str::to_owned),
     })
 }
 

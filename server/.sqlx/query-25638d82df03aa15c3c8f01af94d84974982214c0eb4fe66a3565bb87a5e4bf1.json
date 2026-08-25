@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT min_assignments, max_assignments FROM auth_role_branch_assignment_rules WHERE role_code = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "min_assignments",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "auth_role_branch_assignment_rules",
+            "name": "min_assignments"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "max_assignments",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "auth_role_branch_assignment_rules",
+            "name": "max_assignments"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "25638d82df03aa15c3c8f01af94d84974982214c0eb4fe66a3565bb87a5e4bf1"
+}

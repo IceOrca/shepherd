@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT EXISTS (\n                    SELECT 1 FROM business_urgent_work_reports AS actor_report\n                    INNER JOIN business_urgent_work_sessions AS actor_session\n                        ON actor_session.tenant_id = actor_report.tenant_id\n                       AND actor_session.report_id = actor_report.id\n                    WHERE actor_report.tenant_id = $1\n                      AND actor_report.employee_id = $2\n                      AND actor_report.claimed_customer_id = $3\n                      AND actor_report.status <> 'cancelled'\n                      AND actor_session.started_at <= CURRENT_TIMESTAMP\n                      AND (actor_session.ended_at IS NULL OR actor_session.ended_at >= $4)\n                ) AS \"exists!\"\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "5bcdea19d8f21da9bce77c15a8cafee355a4ba936474a458e32653ab952b6903"
+}

@@ -9,9 +9,14 @@ RUN apt-get update \
 
 FROM base AS builder
 
+RUN rustup component add clippy
+
 COPY . .
 ENV SQLX_OFFLINE=true
-RUN cargo clippy --all --workspace && cargo build --release -p shepherd-runtime --bin shepherd-srv
+RUN cargo clippy --all --workspace \
+    && cargo build --release -p shepherd-runtime \
+        --bin shepherd-srv \
+        --bin shepherd-tenant-bootstrap
 
 
 FROM debian:bookworm-slim AS runner
@@ -19,6 +24,7 @@ WORKDIR /app
 
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=builder /app/shepherd_server/target/linux-amd64/release/shepherd-srv /app/shepherd-srv
+COPY --from=builder /app/shepherd_server/target/linux-amd64/release/shepherd-tenant-bootstrap /app/shepherd-tenant-bootstrap
 
 EXPOSE 8000
 CMD ["/app/shepherd-srv"]

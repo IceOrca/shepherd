@@ -35,7 +35,7 @@ services:
 
   redis-cache:
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    command: [ "redis-server", "--appendonly", "yes" ]
     ports: !reset []
     volumes:
       - redis_data:/data
@@ -79,7 +79,7 @@ services:
 
   client:
     # Production assets are exported from Dockerfile.prod and served by host Caddy.
-    profiles: ["build-only"]
+    profiles: [ "build-only" ]
     build:
       context: ./client/web
       dockerfile: Dockerfile.prod
@@ -133,9 +133,39 @@ services:
     pids_limit: ${AUTH_PIDS_LIMIT:-128}
     stop_grace_period: 15s
 
+  tenant-bootstrap:
+    build:
+      context: ./server
+      dockerfile: Dockerfile.prod
+      target: runner
+    image: iceorca/shepherd-srv:0.1.0
+    working_dir: /app
+    env_file: !reset []
+    environment:
+      APP_ENV: production
+      DATABASE_URL: !reset null
+      AUTH_ADMIN_URL: !reset null
+      AUTH_ISSUER_URL: !reset null
+      AUTH_ADMIN_TOKEN: !reset null
+      TENANT_BOOTSTRAP_ADMIN_ACCOUNT: ${TENANT_BOOTSTRAP_ADMIN_ACCOUNT_PROD:?required}
+      TENANT_BOOTSTRAP_ADMIN_EMAIL: ${TENANT_BOOTSTRAP_ADMIN_EMAIL_PROD:?required}
+      TENANT_BOOTSTRAP_ADMIN_SECRET: !reset null
+      TENANT_BOOTSTRAP_ADMIN_SECRET_FILE: /run/secrets/tenant_bootstrap_admin_secret
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes: !reset []
+    entrypoint: [ "/app/shepherd-tenant-bootstrap" ]
+    secrets:
+      - source: server_prod_env
+        target: server_prod_env
+      - source: tenant_bootstrap_admin_secret
+        target: tenant_bootstrap_admin_secret
+    mem_limit: ${TENANT_BOOTSTRAP_MEMORY_LIMIT:-256m}
+    cpus: ${TENANT_BOOTSTRAP_CPU_LIMIT:-0.5}
+    pids_limit: ${TENANT_BOOTSTRAP_PIDS_LIMIT:-64}
+
   # Development Caddy is replaced by the host edge in production.
   caddy:
-    profiles: ["development-edge-disabled"]
+    profiles: [ "development-edge-disabled" ]
     ports: !reset []
     volumes: !reset []
     depends_on: !reset {}
@@ -151,3 +181,5 @@ secrets:
     file: ${SVR_SECRETS_DIR:?SVR_SECRETS_DIR_must_be_set}/server.prod.env
   auth_db_password:
     file: ${SVR_SECRETS_DIR:?SVR_SECRETS_DIR_must_be_set}/auth_db_password
+  tenant_bootstrap_admin_secret:
+    file: ${SVR_SECRETS_DIR:?SVR_SECRETS_DIR_must_be_set}/tenant_bootstrap_admin_secret

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO notification_outbox (\n            id, tenant_id, branch_id, event_type, aggregate_id, channel, destination, message\n        )\n        SELECT MD5($3::UUID::TEXT || ':' || destination.id::TEXT || ':' || $2)::UUID,\n               $1, destination.branch_id, $2, $3, destination.channel, destination.destination, $4\n        FROM notification_destinations AS destination\n        WHERE destination.tenant_id = $1 AND destination.enabled\n        ON CONFLICT (tenant_id, branch_id, event_type, aggregate_id, channel, destination) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "355e09f76ae240a75ae0a1c3f7bb5d76b47f5d68a0bef4e2fc9fc8831e4368da"
+}

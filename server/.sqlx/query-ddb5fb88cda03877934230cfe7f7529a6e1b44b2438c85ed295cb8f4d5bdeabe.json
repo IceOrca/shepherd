@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO business_customer_work_records (\n                id, tenant_id, branch_id, assignment_id, confirmed_customer_id,\n                confirmed_started_at, confirmed_ended_at, customer_reference,\n                recorded_by_account_id\n            )\n            SELECT $1, $2, assignment.branch_id, $3, shift.customer_id,\n                   observed.started_at, observed.ended_at,\n                   'test-customer-record', $4\n            FROM business_shift_assignments AS assignment\n            INNER JOIN business_staffing_shifts AS shift\n                ON shift.tenant_id = assignment.tenant_id\n               AND shift.id = assignment.shift_id\n            CROSS JOIN LATERAL (\n                SELECT MIN(started_at) FILTER (WHERE ended_at IS NOT NULL) AS started_at,\n                       MAX(ended_at) AS ended_at,\n                       COALESCE(SUM(worked_seconds), 0)::BIGINT AS total\n                FROM business_shift_work_sessions\n                WHERE tenant_id = $2 AND assignment_id = $3 AND ended_at IS NOT NULL\n            ) AS observed\n            WHERE assignment.tenant_id = $2\n              AND assignment.id = $3\n              AND observed.total > 0\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ddb5fb88cda03877934230cfe7f7529a6e1b44b2438c85ed295cb8f4d5bdeabe"
+}

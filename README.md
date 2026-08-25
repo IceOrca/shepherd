@@ -383,6 +383,8 @@ The tenant-owner console at `/admin/access-control` manages four related areas:
 
 The console uses `GET /api/admin/access-control` for its snapshot and the scoped `POST`/`PUT` routes below `/api/admin/access-control/branches`, `/roles`, and `/users/{account_id}` for mutations. `/admin/auth-users` remains the provider-link and tenant-account workflow; its status action enables or disables only the account in the active tenant.
 
+Permission codes such as `business.customers.manage` are stable internal authorization identifiers. The global `permissions` catalog also owns a required Vietnamese `display_name` and explanatory `description`; the access-control snapshot returns both, and the UI shows these friendly values in role permission lists, selectors, and account override summaries instead of presenting technical codes.
+
 PostgreSQL stores tenant configuration in `tenant_roles`, `tenant_role_permissions`, `account_role_assignments`, and `account_permission_overrides`. The application-wide `roles` and `role_permissions` tables seed new tenant catalogs; they are not the runtime source after bootstrapping. The global `permissions` catalog is intentionally read-only to tenants so a tenant cannot invent a permission that no server route understands.
 
 System organizational roles cannot be deleted, renamed, rescoped, disabled, or replaced by a custom primary role. Custom roles are additional operational grants. `tenant_owner` is tenant-scoped; the other organizational roles are branch-scoped with data-driven cardinality. Applicable per-user deny exceptions override role permissions and allow exceptions. Each mutation is tenant-RLS protected, uses optimistic versions to reject stale browser edits, writes an audit record in the same transaction, and invalidates only affected identity-cache entries. Deferred database guards preserve at least one active owner and protect the owner's essential account, role, and branch administration permissions.
@@ -475,15 +477,66 @@ Each development tenant receives two branches: `head-office` and
 `executive_manager`; the executive manager is assigned to both branches. Each
 branch has exactly one `branch_manager`, two `supervisor` accounts, and four
 `staff` accounts, for 16 accounts per tenant and 48 application accounts.
-There are 46 GoTrue identities because `iceorca@shepherd.local` is deliberately
-linked to a separate `tenant_owner` account in all three tenants; use it with
-password `01234567aA` to test the tenant selector. The full six-column copy/paste catalog—tenant, role, username, email,
-password, and branch code—is `scripts/dev-auth-accounts.tsv`. The seeding script
-parses all six columns, provisions credentials through the GoTrue admin API,
-and passes identity subjects to the Rust application seeder; it never writes
-GoTrue tables directly. After changing the role catalog or
+There are 48 distinct GoTrue identities. The development owners are
+`acme_owner` / `acme.owner@shepherd.local`, `acme1_owner` /
+`acme1.owner@shepherd.local`, and `acme2_owner` /
+`acme2.owner@shepherd.local`; no identity is currently shared by development
+tenants. The system bootstrap operator is `iceorca` /
+`iceorca.admin@shepherd.local`, configured in `.env`, and is not a tenant login
+or application account. The full eight-column copy/paste catalog—tenant UUID,
+tenant slug, tenant name, role, username, email, password, and branch code—is
+`scripts/dev-auth-accounts.tsv`. It is the single source of truth for
+development tenants and accounts: the shell provisions credentials through the
+GoTrue admin API, and the Rust seeder reads the same mounted TSV for tenant and
+application-account data. Neither path writes GoTrue tables directly. After changing the role catalog or
 grants, rerun `sh scripts/dev-data-seeding.sh`; the reset recreates Auth users,
 so sign in again afterward.
+
+### Tenant and initial-owner bootstrap
+
+The first owner cannot use `/admin/auth-users` because no tenant membership
+exists yet. Shepherd therefore packages `shepherd-tenant-bootstrap` as the
+profile-gated, one-shot `tenant-bootstrap` Compose service. It is an operator
+tool, not a public HTTP endpoint and not a long-lived container. Use the
+documented wrapper from the repository root:
+
+```bash
+scripts/bootstrap-tenant.sh \
+  --slug customer-a \
+  --name "Customer A" \
+  --owner alice:alice@example.com
+```
+
+Repeat `--owner username:email` to establish multiple initial owners. The
+wrapper prompts for every owner password and for the platform administrator
+secret, generates a tenant UUID and persistent idempotency UUID, mounts a
+temporary owner file read-only, and invokes `docker compose --profile tools run
+--rm tenant-bootstrap`. It also supports `--owners-file` for protected
+non-interactive input; see the comments and `--help` in
+`scripts/bootstrap-tenant.sh`. Preserve the printed UUIDs and reuse both with
+identical input after any failure.
+
+The tool authenticates the operator against
+`TENANT_BOOTSTRAP_ADMIN_ACCOUNT`, `TENANT_BOOTSTRAP_ADMIN_EMAIL`, and the
+bootstrap secret. Development keeps these in the ignored `.env`. Production
+keeps the account/email in the deployment environment and mounts
+`${SVR_SECRETS_DIR}/tenant_bootstrap_admin_secret`; copy the placeholder from
+`deploy/secrets_example/tenant_bootstrap_admin_secret.example`. The production
+server secret environment must also provide `DATABASE_URL`, `AUTH_ADMIN_URL`,
+`AUTH_ADMIN_TOKEN`, and `AUTH_ISSUER_URL` as shown in
+`deploy/secrets_example/server.prod.env.example`.
+
+Each request is fingerprinted without storing a plaintext password and claimed
+in `platform_tenant_bootstrap_requests`. The tool creates or reuses each
+normalized-email Supabase identity through the Admin API, rejects an identity
+already mapped to another tenant under the current single-tenant-account
+operating policy, and then atomically creates the tenant, copied role/permission
+catalog, tenant-local owner accounts, identity mappings, tenant-scoped
+`tenant_owner` assignments, and audit row. Provider identities survive an
+application transaction failure and the same idempotency key recovers them.
+Completed replay returns the original successful result without creating new
+rows. The database schema remains capable of future multi-tenant identity
+membership even though this onboarding path currently rejects it.
 
 Database integration tests create isolated temporary tenants and must remove
 all of their transactional and master data when they finish. Passing tests must

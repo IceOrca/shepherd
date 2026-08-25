@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE business_staffing_shifts AS shift\n            SET status = CASE\n                    WHEN (\n                        SELECT COUNT(*)\n                        FROM business_shift_assignments AS assignment\n                        WHERE assignment.tenant_id = shift.tenant_id\n                          AND assignment.shift_id = shift.id\n                          AND assignment.status <> 'cancelled'\n                    ) >= shift.required_workers\n                    THEN 'filled'\n                    ELSE 'open'\n                END,\n                updated_at = CURRENT_TIMESTAMP,\n                updated_by_account_id = $3\n            WHERE shift.tenant_id = $1 AND shift.id = $2\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "40f7c4b4353464112a2326dd9e4f6d0f6f1259c7ca4cfb4dd00d805d8dae2e34"
+}

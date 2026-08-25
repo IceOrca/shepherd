@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO auth_account_provisioning_requests (\n            tenant_id, idempotency_key, request_fingerprint, requested_by_account_id\n        ) VALUES ($1, $2, $3, $4)\n        ON CONFLICT (tenant_id, idempotency_key) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5cec52bf111ffd8a95750f7d9a51d51d3efa7e733da6d867b924bcd28a269b52"
+}

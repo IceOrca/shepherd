@@ -3,9 +3,7 @@ use std::sync::Arc;
 use axum::Router;
 
 pub use infra_auth::{AuthService, PermissionCode, RoleCode};
-pub use infra_auth::ext_service::account::{
-    AccountStatus, AuthenticatedUser, CurrentUserProfile, TenantMembershipSummary,
-};
+pub use infra_auth::ext_service::account::{AccountStatus, AuthenticatedUser, CurrentUserProfile, TenantMembershipSummary};
 pub use infra_auth::ext_service::access_control::{
     AccessControlAuditEntry, AccessControlBranch, AccessControlPermission, AccessControlRole, AccessControlSnapshot,
     AccessControlUser, AccessRoleScope, AccountPermissionOverrideContract, AccountRoleAssignmentContract,

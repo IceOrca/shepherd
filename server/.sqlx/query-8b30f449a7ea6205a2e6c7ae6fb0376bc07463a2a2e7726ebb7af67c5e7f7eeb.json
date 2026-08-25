@@ -1,0 +1,117 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT assignment.id AS assignment_id, assignment.shift_id,\n                   customer.name AS customer_name,\n                   shift.starts_at, shift.ends_at, assignment.status,\n                   COALESCE((\n                       SELECT SUM(session.worked_seconds)\n                       FROM business_shift_work_sessions AS session\n                       WHERE session.tenant_id = assignment.tenant_id\n                         AND session.assignment_id = assignment.id\n                         AND session.ended_at IS NOT NULL\n                   ), 0)::BIGINT AS \"observed_worked_seconds!\",\n                   EXISTS (\n                       SELECT 1\n                       FROM business_shift_work_sessions AS session\n                       WHERE session.tenant_id = assignment.tenant_id\n                         AND session.assignment_id = assignment.id\n                         AND session.ended_at IS NULL\n                   ) AS \"is_working!\"\n                   ,(\n                       SELECT MIN(session.started_at)\n                       FROM business_shift_work_sessions AS session\n                       WHERE session.tenant_id = assignment.tenant_id\n                         AND session.assignment_id = assignment.id\n                   ) AS staff_started_at\n                   ,(\n                       SELECT MAX(session.ended_at)\n                       FROM business_shift_work_sessions AS session\n                       WHERE session.tenant_id = assignment.tenant_id\n                         AND session.assignment_id = assignment.id\n                   ) AS staff_ended_at\n            FROM business_shift_assignments AS assignment\n            INNER JOIN hr_employees AS employee\n                ON employee.tenant_id = assignment.tenant_id\n               AND employee.id = assignment.employee_id\n            INNER JOIN business_staffing_shifts AS shift\n                ON shift.tenant_id = assignment.tenant_id\n               AND shift.id = assignment.shift_id\n            INNER JOIN business_customers AS customer\n                ON customer.tenant_id = shift.tenant_id\n               AND customer.id = shift.customer_id\n            WHERE assignment.tenant_id = $1\n              AND employee.account_id = $2\n              AND assignment.status <> 'cancelled'\n            ORDER BY shift.starts_at DESC, assignment.id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "assignment_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "shift_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "shift_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "customer_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_customers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "starts_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_shifts",
+            "name": "starts_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "ends_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_shifts",
+            "name": "ends_at"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "observed_worked_seconds!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "is_working!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "staff_started_at",
+        "type_info": "Timestamptz",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "staff_ended_at",
+        "type_info": "Timestamptz",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "8b30f449a7ea6205a2e6c7ae6fb0376bc07463a2a2e7726ebb7af67c5e7f7eeb"
+}

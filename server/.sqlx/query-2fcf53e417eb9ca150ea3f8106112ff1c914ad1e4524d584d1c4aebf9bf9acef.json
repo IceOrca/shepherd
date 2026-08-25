@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO hr_employees (\n                id, tenant_id, branch_id, account_id, employee_code, display_name, status, hire_date\n            )\n            VALUES ($1, $2, $3, $4, 'staffing-work-cases', 'Staffing Work Cases', 'active', CURRENT_DATE)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2fcf53e417eb9ca150ea3f8106112ff1c914ad1e4524d584d1c4aebf9bf9acef"
+}

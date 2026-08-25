@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT NOT EXISTS (\n                SELECT 1\n                FROM business_shift_assignments AS existing_assignment\n                INNER JOIN business_staffing_shifts AS existing_shift\n                    ON existing_shift.tenant_id = existing_assignment.tenant_id\n                   AND existing_shift.id = existing_assignment.shift_id\n                WHERE existing_assignment.tenant_id = $1\n                  AND existing_assignment.employee_id = $2\n                  AND existing_assignment.status <> 'cancelled'\n                  AND existing_shift.id <> $3\n                  AND existing_shift.starts_at < $4\n                  AND existing_shift.ends_at > $5\n            ) AS \"available!\"\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "available!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "f68a26e312f143501b8288afcef363afb37edc3c4fd205787d3099617a93c062"
+}

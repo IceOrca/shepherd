@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT COUNT(*) AS \"count!\"\n            FROM business_urgent_work_sessions\n            WHERE tenant_id = $1 AND (\n                started_latitude IS NOT NULL OR started_longitude IS NOT NULL\n                OR started_accuracy_meters IS NOT NULL OR ended_latitude IS NOT NULL\n                OR ended_longitude IS NOT NULL OR ended_accuracy_meters IS NOT NULL\n            )\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "4258a3db840c623cdb7dcc82139b281cc4fd6c77fff437f37a314b88d65d67f0"
+}

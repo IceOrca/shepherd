@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    INSERT INTO account_permission_overrides (\n                        tenant_id, account_id, permission_code, branch_id,\n                        effect, expires_at, granted_by_account_id\n                    )\n                    VALUES ($1, $2, $3, $4, $5, $6, $7)\n                    ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Text",
+        "Timestamptz",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b60db3b16aa97c8b358a96c39cfca96fdd9f9f77fb662e825b7b65e25cd3609b"
+}

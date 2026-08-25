@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT branch.id AS branch_id\n                FROM branches AS branch\n                WHERE branch.tenant_id = $1\n                  AND branch.status = 'active'\n                  AND (\n                      EXISTS (\n                          SELECT 1\n                          FROM account_role_assignments AS tenant_assignment\n                          WHERE tenant_assignment.tenant_id = $1\n                            AND tenant_assignment.account_id = $2\n                            AND tenant_assignment.branch_id IS NULL\n                      )\n                      OR EXISTS (\n                          SELECT 1\n                          FROM account_role_assignments AS branch_assignment\n                          WHERE branch_assignment.tenant_id = $1\n                            AND branch_assignment.account_id = $2\n                            AND branch_assignment.branch_id = branch.id\n                      )\n                  )\n                ORDER BY lower(branch.name), branch.id\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "branch_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "branches",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "3f60209b75973d1572d6dc590a119258b776101278a3f0ee3f406a04f521408c"
+}

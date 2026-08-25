@@ -1,0 +1,179 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    SELECT id, rate_kind, code, name, customer_id, employee_id, job_id, currency,\n                           hourly_rate::TEXT AS \"hourly_rate!\",\n                           priority, effective_from, effective_to, is_active, created_at\n                    FROM business_staffing_rates\n                    WHERE tenant_id = $1\n                    ORDER BY rate_kind, lower(name), effective_from DESC, priority DESC\n                    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "rate_kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "rate_kind"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "code"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "customer_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "customer_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "employee_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "employee_id"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "job_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "job_id"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "currency",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "currency"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "hourly_rate!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "priority",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "priority"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "effective_from",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "effective_from"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "effective_to",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "effective_to"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "is_active",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "is_active"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      null,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "bdbcbfa622b8c0f8d0ab8ed63a436559e91dcfd192d8556e8cc2fe28fc18ed62"
+}

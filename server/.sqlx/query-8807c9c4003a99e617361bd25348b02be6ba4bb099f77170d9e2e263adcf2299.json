@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE auth_account_provisioning_requests\n        SET status = 'completed', auth_user_id = $3, account_id = $4,\n            completed_at = CURRENT_TIMESTAMP, last_error_code = NULL,\n            updated_at = CURRENT_TIMESTAMP\n        WHERE tenant_id = $1 AND idempotency_key = $2\n          AND request_fingerprint = $5 AND status = 'processing'\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8807c9c4003a99e617361bd25348b02be6ba4bb099f77170d9e2e263adcf2299"
+}

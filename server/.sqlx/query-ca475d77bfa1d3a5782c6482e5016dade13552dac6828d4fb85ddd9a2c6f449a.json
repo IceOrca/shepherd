@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH bounds AS (\n            SELECT\n                ($2::DATE::TIMESTAMP AT TIME ZONE $4) AS start_at,\n                ($3::DATE::TIMESTAMP AT TIME ZONE $4) AS end_at\n        )\n        SELECT EXISTS (\n            SELECT 1\n            FROM hr_attendance_sessions AS attendance\n            CROSS JOIN bounds\n            INNER JOIN business_shift_assignments AS assignment\n                ON assignment.tenant_id = attendance.tenant_id\n               AND assignment.employee_id = attendance.employee_id\n               AND assignment.status = 'approved'\n            INNER JOIN business_customer_work_records AS customer_record\n                ON customer_record.tenant_id = assignment.tenant_id\n               AND customer_record.assignment_id = assignment.id\n               AND customer_record.confirmed_started_at < attendance.check_out_at\n               AND customer_record.confirmed_ended_at > attendance.check_in_at\n            WHERE attendance.tenant_id = $1\n              AND attendance.check_out_at IS NOT NULL\n              AND attendance.check_in_at < bounds.end_at\n              AND attendance.check_out_at > bounds.start_at\n        ) AS \"exists!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date",
+        "Date",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ca475d77bfa1d3a5782c6482e5016dade13552dac6828d4fb85ddd9a2c6f449a"
+}

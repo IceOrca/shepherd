@@ -97,6 +97,7 @@ pub struct AccessControlBranch {
 #[ts(export)]
 pub struct AccessControlPermission {
     pub code: PermissionCode,
+    pub display_name: String,
     pub description: String,
 }
 
@@ -283,6 +284,7 @@ struct BranchRow {
 
 struct PermissionRow {
     code: String,
+    display_name: String,
     description: String,
 }
 
@@ -923,7 +925,7 @@ async fn load_snapshot(auth: &AuthService, tenant_id: Uuid) -> Result<AccessCont
         .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
             let branches: Vec<BranchRow> = sqlx::query_as!(BranchRow, "SELECT id, code, name, time_zone, status, version FROM branches WHERE tenant_id = $1 ORDER BY lower(name), id", tenant_id)
                 .fetch_all(&mut *connection).await?;
-            let permissions: Vec<PermissionRow> = sqlx::query_as!(PermissionRow, "SELECT code, description FROM permissions ORDER BY code")
+            let permissions: Vec<PermissionRow> = sqlx::query_as!(PermissionRow, "SELECT code, display_name, description FROM permissions ORDER BY lower(display_name), code")
                 .fetch_all(&mut *connection).await?;
             let roles: Vec<RoleRow> = sqlx::query_as!(
                 RoleRow,
@@ -1024,6 +1026,7 @@ fn snapshot_from_rows(rows: AccessControlSnapshotRows) -> Result<AccessControlSn
             |row: PermissionRow| -> Result<AccessControlPermission, AccessControlError> {
                 Ok(AccessControlPermission {
                     code: parse_permission(row.code)?,
+                    display_name: row.display_name,
                     description: row.description,
                 })
             },

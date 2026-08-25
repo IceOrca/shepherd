@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO business_urgent_work_sessions (\n                    id, tenant_id, report_id, employee_id,\n                    started_latitude, started_longitude, started_accuracy_meters,\n                    started_by_account_id, start_source\n                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Float8",
+        "Float8",
+        "Float4",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "adfc0a6d0ba9d1120137972163748d7bcce2996709b7cc77196e6802cf8f8e1d"
+}

@@ -3240,13 +3240,19 @@ version = "0.0.1"
 dependencies = [
  "axum",
  "dotenvy",
+ "infra-auth",
  "infra-host",
  "infra-kernel",
+ "infra-postgres",
  "infra-worker",
+ "serde_json",
+ "sha2 0.10.9",
  "shepherd",
+ "sqlx 0.9.0",
  "supabase-auth",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

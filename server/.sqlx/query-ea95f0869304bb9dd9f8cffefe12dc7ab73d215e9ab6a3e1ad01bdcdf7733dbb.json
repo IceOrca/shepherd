@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT EXISTS (\n                SELECT 1 FROM business_staffing_employee_eligibilities\n                WHERE tenant_id = $1\n                  AND employee_id = $2\n                  AND job_id = $3\n                  AND effective_from <= $4\n                  AND (effective_to IS NULL OR effective_to >= $4)\n            ) AS \"exists!\"\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Date"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ea95f0869304bb9dd9f8cffefe12dc7ab73d215e9ab6a3e1ad01bdcdf7733dbb"
+}

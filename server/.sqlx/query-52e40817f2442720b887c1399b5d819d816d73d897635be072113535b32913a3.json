@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE accounts\n        SET created_by_account_id = $2, updated_by_account_id = $2,\n            updated_at = CURRENT_TIMESTAMP\n        WHERE tenant_id = $1\n          AND id = ANY($3::UUID[])\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "52e40817f2442720b887c1399b5d819d816d73d897635be072113535b32913a3"
+}

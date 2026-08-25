@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT id, claimed_customer_id\n            FROM business_urgent_work_batches\n            WHERE tenant_id = $1 AND actor_account_id = $2 AND idempotency_key = $3\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_work_batches",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "claimed_customer_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_work_batches",
+            "name": "claimed_customer_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "adb6f6fa81add5ff264880a5d63846ba005cda71d40829c5ab0a37af983f6561"
+}

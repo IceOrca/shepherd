@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO platform_tenant_bootstrap_requests (\n            idempotency_key, request_fingerprint, tenant_id, tenant_slug,\n            tenant_display_name, operator_account, operator_email, owner_count\n        )\n        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)\n        ON CONFLICT (idempotency_key) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9b8ca377e7a1aa5d0492c3b02975d3e24c46c92abd956a45649a54bcd2ff0a2b"
+}

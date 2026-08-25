@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO business_urgent_work_sessions (\n            id, tenant_id, branch_id, report_id, employee_id, started_at, ended_at,\n            end_idempotency_key, started_by_account_id, start_source,\n            ended_by_account_id, end_source\n        ) VALUES (\n            $1, $2, $3, $4, $5, CURRENT_TIMESTAMP - INTERVAL '5 hours',\n            CURRENT_TIMESTAMP - INTERVAL '1 hour', $1, $6, 'self', $6, 'self'\n        )\n        ON CONFLICT (id) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1f8ddbcea59d264faccaa6c161bfb57367f576e6ff34a4635c345e48857a3a51"
+}

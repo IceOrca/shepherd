@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO hr_attendance_sessions (id, tenant_id, branch_id, employee_id, check_in_by_account_id)\n            VALUES ($1, $2, $3, $4, $5)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f226989994eaa6cdba537cd71d414fddb1d355e78cad8f57781a4d8e9823aa62"
+}

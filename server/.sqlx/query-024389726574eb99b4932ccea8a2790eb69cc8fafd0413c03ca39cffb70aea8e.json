@@ -1,0 +1,165 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, employee_id, attendance_session_id, staffing_assignment_id, branch_id, work_date,\n               component, rule_code, worked_seconds,\n               base_hourly_rate::TEXT AS \"base_hourly_rate!\",\n               multiplier::TEXT AS \"multiplier!\",\n               hourly_adjustment::TEXT AS \"hourly_adjustment!\",\n               amount::TEXT AS \"amount!\",\n               description\n        FROM payroll_run_lines\n        WHERE tenant_id = $1 AND payroll_run_id = $2\n        ORDER BY work_date, employee_id, component, id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "payroll_run_lines",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "employee_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "payroll_run_lines",
+            "name": "employee_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "attendance_session_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "payroll_run_lines",
+            "name": "attendance_session_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "staffing_assignment_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "payroll_run_lines",
+            "name": "staffing_assignment_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "branch_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "payroll_run_lines",
+            "name": "branch_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "work_date",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "payroll_run_lines",
+            "name": "work_date"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "component",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "payroll_run_lines",
+            "name": "component"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "rule_code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "payroll_run_lines",
+            "name": "rule_code"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "worked_seconds",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "payroll_run_lines",
+            "name": "worked_seconds"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "base_hourly_rate!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 10,
+        "name": "multiplier!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 11,
+        "name": "hourly_adjustment!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 12,
+        "name": "amount!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 13,
+        "name": "description",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "payroll_run_lines",
+            "name": "description"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      true,
+      false,
+      null,
+      null,
+      null,
+      null,
+      false
+    ]
+  },
+  "hash": "024389726574eb99b4932ccea8a2790eb69cc8fafd0413c03ca39cffb70aea8e"
+}

@@ -1,0 +1,81 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            WITH target AS (\n                SELECT shift.id, shift.job_id, shift.starts_at, shift.ends_at,\n                       (shift.starts_at AT TIME ZONE customer.time_zone)::DATE AS work_date\n                FROM business_staffing_shifts AS shift\n                INNER JOIN business_customers AS customer\n                    ON customer.tenant_id = shift.tenant_id\n                   AND customer.id = shift.customer_id\n                WHERE shift.tenant_id = $1 AND shift.id = $2\n            )\n            SELECT employee.id AS employee_id, employee.employee_code, employee.display_name,\n                   EXISTS (\n                       SELECT 1 FROM business_staffing_employee_eligibilities AS employee_assignment\n                       WHERE employee_assignment.tenant_id = employee.tenant_id\n                         AND employee_assignment.employee_id = employee.id\n                         AND employee_assignment.job_id = target.job_id\n                         AND employee_assignment.effective_from <= target.work_date\n                         AND (employee_assignment.effective_to IS NULL\n                              OR employee_assignment.effective_to >= target.work_date)\n                   ) AS \"suitable!\",\n                   NOT EXISTS (\n                       SELECT 1\n                       FROM business_shift_assignments AS existing_assignment\n                       INNER JOIN business_staffing_shifts AS existing_shift\n                           ON existing_shift.tenant_id = existing_assignment.tenant_id\n                          AND existing_shift.id = existing_assignment.shift_id\n                       WHERE existing_assignment.tenant_id = employee.tenant_id\n                         AND existing_assignment.employee_id = employee.id\n                         AND existing_assignment.status <> 'cancelled'\n                         AND existing_shift.id <> target.id\n                         AND existing_shift.starts_at < target.ends_at\n                         AND existing_shift.ends_at > target.starts_at\n                   ) AS \"available!\",\n                   EXISTS (\n                       SELECT 1 FROM business_shift_assignments AS current_assignment\n                       WHERE current_assignment.tenant_id = employee.tenant_id\n                         AND current_assignment.shift_id = target.id\n                         AND current_assignment.employee_id = employee.id\n                         AND current_assignment.status <> 'cancelled'\n                   ) AS \"already_assigned!\",\n                   (\n                       SELECT existing_shift.id\n                       FROM business_shift_assignments AS existing_assignment\n                       INNER JOIN business_staffing_shifts AS existing_shift\n                           ON existing_shift.tenant_id = existing_assignment.tenant_id\n                          AND existing_shift.id = existing_assignment.shift_id\n                       WHERE existing_assignment.tenant_id = employee.tenant_id\n                         AND existing_assignment.employee_id = employee.id\n                         AND existing_assignment.status <> 'cancelled'\n                         AND existing_shift.id <> target.id\n                         AND existing_shift.starts_at < target.ends_at\n                         AND existing_shift.ends_at > target.starts_at\n                       ORDER BY existing_shift.starts_at, existing_shift.id\n                       LIMIT 1\n                   ) AS conflict_shift_id\n            FROM hr_employees AS employee\n            CROSS JOIN target\n            WHERE employee.tenant_id = $1 AND employee.status = 'active'\n            ORDER BY \"suitable!\" DESC, \"available!\" DESC, lower(employee.display_name), employee.employee_code\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "employee_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "employee_code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "employee_code"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "display_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "suitable!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "available!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "already_assigned!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "conflict_shift_id",
+        "type_info": "Uuid",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "7ae54b102256a002020ef58b179474a8bb94caeee42e1f95309f0ac0f226d803"
+}

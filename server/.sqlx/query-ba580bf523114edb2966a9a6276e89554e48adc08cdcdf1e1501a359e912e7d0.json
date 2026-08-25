@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE platform_tenant_bootstrap_requests\n        SET status = 'completed', last_error_code = NULL,\n            completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP\n        WHERE idempotency_key = $1 AND status = 'processing'\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ba580bf523114edb2966a9a6276e89554e48adc08cdcdf1e1501a359e912e7d0"
+}

@@ -84,12 +84,12 @@ auth_subjects_by_email_json='{}'
 seeded_auth_account_count=0
 tab_character="$(printf '\t')"
 
-while IFS="${tab_character}" read -r tenant_slug business_role username email password branch_code; do
-    case "${tenant_slug}" in
+while IFS="${tab_character}" read -r tenant_id tenant_slug tenant_name business_role username email password branch_code; do
+    case "${tenant_id}" in
         ''|'#'*) continue ;;
     esac
 
-    if [ -z "${business_role}" ] || [ -z "${username}" ] || [ -z "${email}" ] || [ -z "${password}" ] || [ -z "${branch_code}" ]; then
+    if [ -z "${tenant_slug}" ] || [ -z "${tenant_name}" ] || [ -z "${business_role}" ] || [ -z "${username}" ] || [ -z "${email}" ] || [ -z "${password}" ] || [ -z "${branch_code}" ]; then
         echo >&2 "Invalid development Auth account row for tenant '${tenant_slug}'"
         exit 2
     fi
@@ -105,10 +105,11 @@ while IFS="${tab_character}" read -r tenant_slug business_role username email pa
             --arg email "${email}" \
             --arg password "${password}" \
             --arg username "${username}" \
+            --arg tenant_id "${tenant_id}" \
             --arg tenant_slug "${tenant_slug}" \
             --arg business_role "${business_role}" \
             --arg branch_code "${branch_code}" \
-            '{email: $email, password: $password, email_confirm: true, role: "authenticated", user_metadata: {username: $username}, app_metadata: {managed_by: "dev-seed", tenant_slug: $tenant_slug, business_role: $business_role, branch_code: $branch_code}}')"
+            '{email: $email, password: $password, email_confirm: true, role: "authenticated", user_metadata: {username: $username}, app_metadata: {managed_by: "dev-seed", tenant_id: $tenant_id, tenant_slug: $tenant_slug, business_role: $business_role, branch_code: $branch_code}}')"
         created_user="$(curl --fail --silent --show-error \
             --request POST \
             --header "Authorization: Bearer ${auth_admin_token}" \
@@ -120,10 +121,11 @@ while IFS="${tab_character}" read -r tenant_slug business_role username email pa
         update_payload="$(jq --null-input --compact-output \
             --arg password "${password}" \
             --arg username "${username}" \
+            --arg tenant_id "${tenant_id}" \
             --arg tenant_slug "${tenant_slug}" \
             --arg business_role "${business_role}" \
             --arg branch_code "${branch_code}" \
-            '{password: $password, email_confirm: true, user_metadata: {username: $username}, app_metadata: {managed_by: "dev-seed", tenant_slug: $tenant_slug, business_role: $business_role, branch_code: $branch_code}}')"
+            '{password: $password, email_confirm: true, user_metadata: {username: $username}, app_metadata: {managed_by: "dev-seed", tenant_id: $tenant_id, tenant_slug: $tenant_slug, business_role: $business_role, branch_code: $branch_code}}')"
         curl --fail --silent --show-error --output /dev/null \
             --request PUT \
             --header "Authorization: Bearer ${auth_admin_token}" \

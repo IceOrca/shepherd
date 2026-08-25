@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT request_fingerprint, tenant_id, tenant_slug, status\n        FROM platform_tenant_bootstrap_requests\n        WHERE idempotency_key = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "request_fingerprint",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "platform_tenant_bootstrap_requests",
+            "name": "request_fingerprint"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "platform_tenant_bootstrap_requests",
+            "name": "tenant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "tenant_slug",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "platform_tenant_bootstrap_requests",
+            "name": "tenant_slug"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "platform_tenant_bootstrap_requests",
+            "name": "status"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "133af9df35ed3bcaae170cf1ea0967ec07aad2bfce06dfdd93409991e6d44e54"
+}

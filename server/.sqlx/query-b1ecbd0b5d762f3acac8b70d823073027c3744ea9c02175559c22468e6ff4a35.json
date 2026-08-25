@@ -1,0 +1,122 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT status, urgent_work_report_id, rate_source, manual_rate_reason,\n                   eligibility_exception_reason, worked_seconds, observed_worked_seconds,\n                   customer_amount::TEXT AS customer_amount,\n                   worker_amount::TEXT AS worker_amount,\n                   (margin_amount = customer_amount - worker_amount) AS \"profit_consistent!\"\n            FROM business_shift_assignments\n            WHERE tenant_id = $1 AND urgent_work_report_id = $2\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "urgent_work_report_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "urgent_work_report_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "rate_source",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "rate_source"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "manual_rate_reason",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "manual_rate_reason"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "eligibility_exception_reason",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "eligibility_exception_reason"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "worked_seconds",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "worked_seconds"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "observed_worked_seconds",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "observed_worked_seconds"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "customer_amount",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "worker_amount",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "profit_consistent!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "b1ecbd0b5d762f3acac8b70d823073027c3744ea9c02175559c22468e6ff4a35"
+}
