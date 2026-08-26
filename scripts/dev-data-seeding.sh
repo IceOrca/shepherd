@@ -25,11 +25,16 @@ fi
 
 auth_admin_url="http://127.0.0.1:${AUTH_PORT:-9999}"
 dev_accounts_file="scripts/dev-auth-accounts.tsv"
+dev_customers_file="scripts/dev-customers.tsv"
 auth_health_max_attempts="${AUTH_DEV_HEALTH_MAX_ATTEMPTS:-30}"
 auth_health_interval_secs="${AUTH_DEV_HEALTH_INTERVAL_SECS:-1}"
 
 if [ ! -f "${dev_accounts_file}" ]; then
     echo >&2 "Development Auth account catalog is missing: ${dev_accounts_file}"
+    exit 2
+fi
+if [ ! -f "${dev_customers_file}" ]; then
+    echo >&2 "Development customer catalog is missing: ${dev_customers_file}"
     exit 2
 fi
 

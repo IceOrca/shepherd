@@ -185,6 +185,16 @@ function apiErrorMessage(payload: unknown): string | null {
   return typeof message === "string" && message.length <= 300 ? message : null;
 }
 
+function apiRetryAfterSeconds(payload: unknown): number | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const retryAfter: unknown = (payload as { retry_after?: unknown }).retry_after;
+  return typeof retryAfter === "number" && Number.isFinite(retryAfter) && retryAfter > 0
+    ? Math.ceil(retryAfter)
+    : null;
+}
+
 export function friendlyApiError(error: unknown, fallback: string): string {
   if (!navigator.onLine) {
     return "Thiết bị đang ngoại tuyến. Vui lòng kiểm tra kết nối mạng.";
@@ -207,8 +217,12 @@ export function friendlyApiError(error: unknown, fallback: string): string {
         return serverMessage ?? "Dữ liệu vừa thay đổi ở nơi khác. Hệ thống đã giữ nguyên trạng thái an toàn.";
       case 422:
         return serverMessage ?? "Dữ liệu chưa đáp ứng điều kiện nghiệp vụ.";
-      case 429:
-        return "Bạn thao tác quá nhanh. Vui lòng chờ một chút.";
+      case 429: {
+        const retryAfterSeconds: number | null = apiRetryAfterSeconds(error.payload);
+        return retryAfterSeconds === null
+          ? "Hệ thống đang nhận quá nhiều yêu cầu. Vui lòng thử lại sau."
+          : `Hệ thống đang nhận quá nhiều yêu cầu. Vui lòng thử lại sau ${retryAfterSeconds} giây.`;
+      }
       case 503:
         return "Dịch vụ đang tạm gián đoạn. Vui lòng thử lại sau.";
       default:

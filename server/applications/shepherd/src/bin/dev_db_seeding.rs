@@ -15,6 +15,7 @@ use infra_postgres::DatabaseAdapter;
 use uuid::Uuid;
 
 const DEFAULT_DEV_ACCOUNT_CATALOG: &str = "/run/config/dev-auth-accounts.tsv";
+const DEFAULT_DEV_CUSTOMER_CATALOG: &str = "/run/config/dev-customers.tsv";
 const DEV_ATTENDANCE_ID_NAMESPACE: u128 = 0xd3a7_7e00_0000_4000_8000_0000_0000_0000;
 const DEV_STAFFING_SHIFT_ID_NAMESPACE: u128 = 0x51f7_0000_0000_4000_8000_0000_0000_0000;
 const DEV_STAFFING_ASSIGNMENT_ID_NAMESPACE: u128 = 0xa551_0000_0000_4000_8000_0000_0000_0000;
@@ -44,6 +45,15 @@ struct DevBranch {
     code: &'static str,
     name: &'static str,
     time_zone: &'static str,
+}
+
+#[derive(Clone, Debug)]
+struct DevCustomer {
+    branch_code: String,
+    code: String,
+    name: String,
+    address: String,
+    time_zone: String,
 }
 
 struct DevAccount {
@@ -98,13 +108,18 @@ struct SeedAccount {
 const DEV_BRANCHES: &[DevBranch] = &[
     DevBranch {
         code: "head-office",
-        name: "Head Office",
-        time_zone: "Asia/Bangkok",
+        name: "Trụ sở chính",
+        time_zone: "Asia/Ho_Chi_Minh",
     },
     DevBranch {
         code: "north-branch",
-        name: "North Branch",
-        time_zone: "Asia/Bangkok",
+        name: "Chi nhánh miền Bắc",
+        time_zone: "Asia/Ho_Chi_Minh",
+    },
+    DevBranch {
+        code: "south-branch",
+        name: "Chi nhánh miền Trung",
+        time_zone: "Asia/Ho_Chi_Minh",
     },
 ];
 #[tokio::main]
@@ -114,9 +129,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let catalog_path: String =
         std::env::var("DEV_AUTH_ACCOUNTS_FILE").unwrap_or_else(|_| DEFAULT_DEV_ACCOUNT_CATALOG.to_owned());
     let dev_tenants: Vec<DevTenant> = load_dev_tenants(Path::new(&catalog_path))?;
+    let customer_catalog_path: String =
+        std::env::var("DEV_CUSTOMERS_FILE").unwrap_or_else(|_| DEFAULT_DEV_CUSTOMER_CATALOG.to_owned());
+    let dev_customers: Vec<DevCustomer> = load_dev_customers(Path::new(&customer_catalog_path))?;
     info!(
         configured_tenants = dev_tenants.len(),
-        catalog_path, "Development seed started from account catalog"
+        configured_customers_per_tenant = dev_customers.len(),
+        catalog_path,
+        customer_catalog_path,
+        "Development seed started from external catalogs"
     );
     let auth_issuer: String = std::env::var("AUTH_ISSUER_URL")
         .map_err(|_| io::Error::other("AUTH_ISSUER_URL is required for development seeding"))?;
@@ -140,7 +161,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     info!("Connecting to PostgreSQL; migrations must already be applied with the SQLx CLI");
     let db: Arc<DatabaseAdapter> = DatabaseAdapter::new_arc().await;
     for tenant in &dev_tenants {
-        if let Err(error) = seed_tenant(&db, tenant, &auth_issuer, &auth_identities).await {
+        if let Err(error) = seed_tenant(&db, tenant, &dev_customers, &auth_issuer, &auth_identities).await {
             error!(
                 "Development tenant seed failed: tenant_slug={} tenant_id={} error={}",
                 tenant.slug, tenant.id, error
@@ -166,6 +187,72 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("auth_identity_issuer={auth_issuer}");
     println!("auth_identity_linked=true");
     Ok(())
+}
+
+fn load_dev_customers(path: &Path) -> Result<Vec<DevCustomer>, io::Error> {
+    let contents: String = fs::read_to_string(path)
+        .map_err(|error: io::Error| io::Error::other(format!("read {}: {error}", path.display())))?;
+    let known_branches: HashSet<&str> = DEV_BRANCHES.iter().map(|branch: &DevBranch| branch.code).collect();
+    let mut customers: Vec<DevCustomer> = Vec::new();
+    let mut seen_scopes: HashSet<(String, String)> = HashSet::new();
+
+    for (line_index, raw_line) in contents.lines().enumerate() {
+        let line_number: usize = line_index + 1;
+        if raw_line.trim().is_empty() || raw_line.starts_with('#') {
+            continue;
+        }
+        let columns: Vec<&str> = raw_line.split('\t').collect();
+        let [branch_code_raw, code_raw, name_raw, address_raw, time_zone_raw] = columns.as_slice() else {
+            return Err(io::Error::other(format!(
+                "{}:{line_number} must contain 5 tab-separated columns",
+                path.display()
+            )));
+        };
+        let branch_code: String = branch_code_raw.trim().to_owned();
+        let code: String = code_raw.trim().to_owned();
+        let name: String = name_raw.trim().to_owned();
+        let address: String = address_raw.trim().to_owned();
+        let time_zone: String = time_zone_raw.trim().to_owned();
+        if branch_code.is_empty() || code.is_empty() || name.is_empty() || address.is_empty() || time_zone.is_empty() {
+            return Err(io::Error::other(format!(
+                "{}:{line_number} contains a blank required value",
+                path.display()
+            )));
+        }
+        if !known_branches.contains(branch_code.as_str()) {
+            return Err(io::Error::other(format!(
+                "{}:{line_number} references unknown branch code '{branch_code}'",
+                path.display()
+            )));
+        }
+        if !seen_scopes.insert((branch_code.clone(), code.to_lowercase())) {
+            return Err(io::Error::other(format!(
+                "{}:{line_number} duplicates customer code '{code}' in branch '{branch_code}'",
+                path.display()
+            )));
+        }
+        customers.push(DevCustomer {
+            branch_code,
+            code,
+            name,
+            address,
+            time_zone,
+        });
+    }
+
+    for branch in DEV_BRANCHES {
+        let customer_count: usize = customers
+            .iter()
+            .filter(|customer: &&DevCustomer| customer.branch_code == branch.code)
+            .count();
+        if customer_count != 3 {
+            return Err(io::Error::other(format!(
+                "development branch '{}' must contain exactly 3 customers, found {customer_count}",
+                branch.code
+            )));
+        }
+    }
+    Ok(customers)
 }
 
 fn load_dev_tenants(path: &Path) -> Result<Vec<DevTenant>, io::Error> {
@@ -296,6 +383,7 @@ fn load_dev_tenants(path: &Path) -> Result<Vec<DevTenant>, io::Error> {
 async fn seed_tenant(
     db: &Arc<DatabaseAdapter>,
     tenant: &DevTenant,
+    dev_customers: &[DevCustomer],
     auth_issuer: &str,
     auth_identities: &HashMap<String, Uuid>,
 ) -> Result<(), io::Error> {
@@ -372,7 +460,7 @@ async fn seed_tenant(
 
     seed_branches(db, tenant_id, tenant, &seeded_accounts, owner.id).await?;
     seed_hr_infra(db, tenant_id, tenant, &seeded_accounts, owner.id).await?;
-    seed_staffing_business(db, tenant_id, tenant, owner.id).await?;
+    seed_staffing_business(db, tenant_id, tenant, dev_customers, owner.id).await?;
 
     info!(
         "Development tenant seed completed: tenant_slug={} tenant_id={} accounts={} branches={} employees={}",
@@ -420,6 +508,7 @@ async fn seed_staffing_business(
     db: &DatabaseAdapter,
     tenant_id: Uuid,
     tenant: &DevTenant,
+    dev_customers: &[DevCustomer],
     owner_account_id: Uuid,
 ) -> Result<(), io::Error> {
     let mut transaction = db.begin_tenant(tenant_id).await.map_err(io::Error::other)?;
@@ -480,63 +569,70 @@ async fn seed_staffing_business(
     .map_err(io::Error::other)?;
     let staff_account_id: Uuid = staff_account.id;
 
-    let karaoke_a_id = ensure_staffing_customer(
-        &mut transaction,
+    let branch_rows = sqlx::query!(
+        "SELECT id, code FROM branches WHERE tenant_id = $1 AND status = 'active'",
         tenant_id,
-        branch_id,
-        "karaoke-a-main",
-        "Karaoke A Main",
-        "12 Sukhumvit Road",
-        owner_account_id,
     )
-    .await?;
-    let karaoke_b_id = ensure_staffing_customer(
-        &mut transaction,
-        tenant_id,
-        branch_id,
-        "karaoke-b-main",
-        "Karaoke B Main",
-        "24 Silom Road",
-        owner_account_id,
-    )
-    .await?;
+    .fetch_all(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    let branch_ids_by_code: HashMap<String, Uuid> =
+        branch_rows.into_iter().map(|branch| (branch.code, branch.id)).collect();
+    let mut customer_ids: Vec<(String, Uuid)> = Vec::with_capacity(dev_customers.len());
+    for customer in dev_customers {
+        let customer_branch_id: Uuid = branch_ids_by_code.get(&customer.branch_code).copied().ok_or_else(|| {
+            io::Error::other(format!(
+                "development customer '{}' references missing branch '{}'",
+                customer.code, customer.branch_code
+            ))
+        })?;
+        let customer_id: Uuid = ensure_staffing_customer(
+            &mut transaction,
+            tenant_id,
+            customer_branch_id,
+            &customer.code,
+            &customer.name,
+            &customer.address,
+            &customer.time_zone,
+            owner_account_id,
+        )
+        .await?;
+        customer_ids.push((customer.branch_code.clone(), customer_id));
+        ensure_staffing_rate(
+            &mut transaction,
+            tenant_id,
+            customer_branch_id,
+            &format!("{}-default", customer.code),
+            &format!("Đơn giá mặc định cho {}", customer.name),
+            customer_id,
+            None,
+            "150000.0000",
+            "120000.0000",
+            0,
+            effective_date,
+            owner_account_id,
+        )
+        .await?;
+    }
+    let head_customer_ids: Vec<Uuid> = customer_ids
+        .iter()
+        .filter_map(|(branch_code, customer_id): &(String, Uuid)| {
+            (branch_code == "head-office").then_some(*customer_id)
+        })
+        .collect();
+    let karaoke_a_id: Uuid = *head_customer_ids
+        .first()
+        .ok_or_else(|| io::Error::other("head office development customer was not found"))?;
+    let karaoke_b_id: Uuid = *head_customer_ids
+        .get(1)
+        .ok_or_else(|| io::Error::other("second head office development customer was not found"))?;
 
-    ensure_staffing_rate(
-        &mut transaction,
-        tenant_id,
-        branch_id,
-        "karaoke-a-default",
-        "Karaoke A default staff rate",
-        karaoke_a_id,
-        None,
-        "150000.0000",
-        "120000.0000",
-        0,
-        effective_date,
-        owner_account_id,
-    )
-    .await?;
-    ensure_staffing_rate(
-        &mut transaction,
-        tenant_id,
-        branch_id,
-        "karaoke-b-default",
-        "Karaoke B default staff rate",
-        karaoke_b_id,
-        None,
-        "180000.0000",
-        "135000.0000",
-        0,
-        effective_date,
-        owner_account_id,
-    )
-    .await?;
     let (customer_bill_rate_id, worker_pay_rate_id) = ensure_staffing_rate(
         &mut transaction,
         tenant_id,
         branch_id,
         "karaoke-b-worker-special",
-        "Karaoke B worker-specific rate",
+        "Đơn giá riêng theo nhân viên",
         karaoke_b_id,
         Some(employee_id),
         "180000.0000",
@@ -558,7 +654,7 @@ async fn seed_staffing_business(
             employee.id,
             $2,
             $3,
-            'Development staffing eligibility',
+            'Dữ liệu mẫu về khả năng phân công',
             $4
         FROM hr_employees AS employee
         INNER JOIN account_roles AS account_role
@@ -591,7 +687,7 @@ async fn seed_staffing_business(
         VALUES (
             $1, $2, $3, $4, $5, CURRENT_TIMESTAMP - INTERVAL '15 minutes',
             CURRENT_TIMESTAMP + INTERVAL '6 hours', 1, 'filled',
-            'Development shift for testing employee start and end actions', $6, $6
+            'Ca làm việc mẫu để kiểm tra thao tác bắt đầu và kết thúc', $6, $6
         )
         ON CONFLICT (id) DO NOTHING
         "#,
@@ -698,7 +794,7 @@ async fn seed_staffing_business(
             notes, recorded_by_account_id
         )
         SELECT $1, $2, $3, $4, $5, session.started_at, session.ended_at,
-               'DEV-MATCHED-001', 'Development matched urgent evidence', $6
+               'DEV-MATCHED-001', 'Bằng chứng công việc phát sinh mẫu đã khớp', $6
         FROM business_urgent_work_sessions AS session
         WHERE session.tenant_id = $2 AND session.report_id = $3 AND session.ended_at IS NOT NULL
         ON CONFLICT (id) DO NOTHING
@@ -732,6 +828,7 @@ async fn seed_staffing_business(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn ensure_staffing_customer(
     transaction: &mut infra_postgres::TenantTransaction,
     tenant_id: Uuid,
@@ -739,6 +836,7 @@ async fn ensure_staffing_customer(
     code: &str,
     name: &str,
     address: &str,
+    time_zone: &str,
     owner_account_id: Uuid,
 ) -> Result<Uuid, io::Error> {
     sqlx::query_scalar!(
@@ -747,7 +845,7 @@ async fn ensure_staffing_customer(
             id, tenant_id, branch_id, code, name, address, time_zone, status,
             created_by_account_id, updated_by_account_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, 'Asia/Bangkok', 'active', $7, $7)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $8)
         ON CONFLICT (tenant_id, branch_id, lower(code)) DO UPDATE
         SET name = EXCLUDED.name,
             address = EXCLUDED.address,
@@ -763,6 +861,7 @@ async fn ensure_staffing_customer(
         code,
         name,
         address,
+        time_zone,
         owner_account_id,
     )
     .fetch_one(transaction.connection())
@@ -911,7 +1010,7 @@ async fn seed_hr_infra(
         INSERT INTO hr_departments (
             id, tenant_id, branch_id, code, name, status, created_by_account_id, updated_by_account_id
         )
-        VALUES ($1, $2, $3, 'administration', 'Administration', 'active', $4, $4)
+        VALUES ($1, $2, $3, 'administration', 'Hành chính', 'active', $4, $4)
         ON CONFLICT (tenant_id, branch_id, lower(code)) DO UPDATE
         SET name = EXCLUDED.name,
             status = 'active',
@@ -932,7 +1031,7 @@ async fn seed_hr_infra(
         INSERT INTO hr_departments (
             id, tenant_id, branch_id, code, name, status, created_by_account_id, updated_by_account_id
         )
-        VALUES ($1, $2, $3, 'operations', 'Operations', 'active', $4, $4)
+        VALUES ($1, $2, $3, 'operations', 'Vận hành', 'active', $4, $4)
         ON CONFLICT (tenant_id, branch_id, lower(code)) DO UPDATE
         SET name = EXCLUDED.name,
             status = 'active',
@@ -952,7 +1051,7 @@ async fn seed_hr_infra(
         r#"
         INSERT INTO hr_departments (
             id, tenant_id, branch_id, code, name, status, created_by_account_id, updated_by_account_id
-        ) VALUES ($1, $2, $3, 'operations', 'Operations', 'active', $4, $4)
+        ) VALUES ($1, $2, $3, 'operations', 'Vận hành', 'active', $4, $4)
         ON CONFLICT (tenant_id, branch_id, lower(code)) DO UPDATE
         SET name = EXCLUDED.name, status = 'active', updated_at = CURRENT_TIMESTAMP,
             updated_by_account_id = EXCLUDED.updated_by_account_id
@@ -972,7 +1071,7 @@ async fn seed_hr_infra(
         tenant_id,
         head_office_branch_id,
         "supervisor",
-        "Supervisor",
+        "Điều phối viên",
         operations_department_id,
         owner_account_id,
     )
@@ -982,7 +1081,7 @@ async fn seed_hr_infra(
         tenant_id,
         head_office_branch_id,
         "employee",
-        "Employee",
+        "Nhân viên",
         operations_department_id,
         owner_account_id,
     )
@@ -992,7 +1091,7 @@ async fn seed_hr_infra(
         tenant_id,
         north_branch_id,
         "supervisor",
-        "Supervisor",
+        "Điều phối viên",
         north_operations_department_id,
         owner_account_id,
     )
@@ -1002,7 +1101,7 @@ async fn seed_hr_infra(
         tenant_id,
         north_branch_id,
         "employee",
-        "Employee",
+        "Nhân viên",
         north_operations_department_id,
         owner_account_id,
     )
@@ -1224,7 +1323,7 @@ async fn seed_hr_infra(
             id, tenant_id, branch_id, code, name, time_zone, status,
             created_by_account_id, updated_by_account_id
         )
-        VALUES ($1, $2, $3, 'standard-40', 'Standard 40 Hours', 'Asia/Bangkok', 'active', $4, $4)
+        VALUES ($1, $2, $3, 'standard-40', 'Lịch chuẩn 40 giờ', 'Asia/Ho_Chi_Minh', 'active', $4, $4)
         ON CONFLICT (tenant_id, branch_id, lower(code)) DO UPDATE
         SET name = EXCLUDED.name,
             time_zone = EXCLUDED.time_zone,
@@ -1247,7 +1346,7 @@ async fn seed_hr_infra(
             id, tenant_id, branch_id, code, name, time_zone, status,
             created_by_account_id, updated_by_account_id
         )
-        VALUES ($1, $2, $3, 'standard-40', 'Standard 40 Hours', 'Asia/Bangkok', 'active', $4, $4)
+        VALUES ($1, $2, $3, 'standard-40', 'Lịch chuẩn 40 giờ', 'Asia/Ho_Chi_Minh', 'active', $4, $4)
         ON CONFLICT (tenant_id, branch_id, lower(code)) DO UPDATE
         SET name = EXCLUDED.name, time_zone = EXCLUDED.time_zone, status = 'active',
             updated_at = CURRENT_TIMESTAMP,
@@ -1506,7 +1605,7 @@ async fn seed_payroll_configuration(
                 id, tenant_id, code, name, branch_id, base_multiplier, hourly_adjustment,
                 priority, effective_from, is_active, created_by_account_id
             )
-            VALUES ($1, $2, $3, 'Branch premium', $4, 1.15, 0, 10, $5, TRUE, $6)
+            VALUES ($1, $2, $3, 'Phụ cấp chi nhánh', $4, 1.15, 0, 10, $5, TRUE, $6)
             ON CONFLICT (tenant_id, code, effective_from) DO UPDATE
             SET name = EXCLUDED.name,
                 branch_id = EXCLUDED.branch_id,
@@ -1538,7 +1637,7 @@ async fn seed_payroll_configuration(
             created_by_account_id
         )
         VALUES (
-            $1, $2, $3, 'night-shift', 'Night shift premium', ARRAY[1, 2, 3, 4, 5, 6, 7]::SMALLINT[],
+            $1, $2, $3, 'night-shift', 'Phụ cấp ca đêm', ARRAY[1, 2, 3, 4, 5, 6, 7]::SMALLINT[],
             TIME '22:00', TIME '06:00', TRUE, 0.25, 0, 10, $4, TRUE, $5
         )
         ON CONFLICT (tenant_id, branch_id, code, effective_from) DO UPDATE

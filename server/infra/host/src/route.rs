@@ -21,7 +21,7 @@ use crate::logging;
 #[cfg(feature = "auth")]
 use crate::AppRoutes;
 #[cfg(feature = "auth")]
-use crate::ratelimiting::RateLimiter;
+use crate::ratelimiting::{RateLimitPolicy, RateLimiter};
 
 const DEFAULT_CORS_ALLOWED_ORIGINS: &str = "http://localhost:5173,http://localhost:5174";
 const DEFAULT_HTTP_REQUEST_TIMEOUT_SECS: u64 = 20;
@@ -57,14 +57,14 @@ pub fn mount_app_routes(router: Router, routes: AppRoutes, host: Arc<HostContext
     let public: Router = RateLimiter::public_layer(routes.public);
     let protected: Router = routes
         .protected
-        .layer(RateLimiter::protected_route_layer())
+        .layer(RateLimiter::protected_route_layer(RateLimitPolicy::generic_protected()))
         .route_layer(from_fn_with_state(
             Arc::clone(&host.auth),
             infra_auth::ext_service::middleware::require_authenticated,
         ));
     let admin: Router = routes
         .admin
-        .layer(RateLimiter::protected_route_layer())
+        .layer(RateLimiter::protected_route_layer(RateLimitPolicy::generic_protected()))
         .route_layer(from_fn_with_state(
             Arc::clone(&host.auth),
             infra_auth::ext_service::middleware::require_authenticated,

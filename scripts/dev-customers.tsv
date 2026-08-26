@@ -1,0 +1,12 @@
+# Development-only customer catalog. Columns are tab-separated.
+# Each branch has exactly three distinct Vietnamese customer workplaces.
+# branch_code	customer_code	customer_name	address	time_zone
+head-office	nha-hang-sen-viet	Nhà hàng Sen Việt	18 đường Nguyễn Huệ, phường Sài Gòn, Thành phố Hồ Chí Minh	Asia/Ho_Chi_Minh
+head-office	karaoke-anh-duong	Karaoke Ánh Dương	42 đường Cách Mạng Tháng Tám, phường Bàn Cờ, Thành phố Hồ Chí Minh	Asia/Ho_Chi_Minh
+head-office	khach-san-ben-thanh	Khách sạn Bến Thành	76 đường Lê Lai, phường Bến Thành, Thành phố Hồ Chí Minh	Asia/Ho_Chi_Minh
+north-branch	nha-hang-ho-guom	Nhà hàng Hồ Gươm	15 phố Hàng Khay, phường Hoàn Kiếm, Hà Nội	Asia/Ho_Chi_Minh
+north-branch	karaoke-truc-bach	Karaoke Trúc Bạch	31 phố Trúc Bạch, phường Ba Đình, Hà Nội	Asia/Ho_Chi_Minh
+north-branch	khach-san-tay-ho	Khách sạn Tây Hồ	88 đường Xuân Diệu, phường Tây Hồ, Hà Nội	Asia/Ho_Chi_Minh
+south-branch	nha-hang-song-han	Nhà hàng Sông Hàn	26 đường Bạch Đằng, phường Hải Châu, Đà Nẵng	Asia/Ho_Chi_Minh
+south-branch	karaoke-bien-xanh	Karaoke Biển Xanh	54 đường Nguyễn Văn Linh, phường Hải Châu, Đà Nẵng	Asia/Ho_Chi_Minh
+south-branch	khach-san-my-khe	Khách sạn Mỹ Khê	102 đường Võ Nguyên Giáp, phường An Hải, Đà Nẵng	Asia/Ho_Chi_Minh

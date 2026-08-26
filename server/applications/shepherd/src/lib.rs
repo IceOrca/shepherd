@@ -7,6 +7,7 @@ pub mod business;
 pub mod features;
 pub mod hr;
 pub mod notifications;
+pub mod rate_limits;
 pub mod typescript;
 
 use std::sync::Arc;
@@ -102,9 +103,21 @@ impl InfraAppManifest for ShepherdApp {
 
 pub fn routes(ctx: Arc<AppContext>) -> Router {
     let identity_routes = authenticated_identity_routes(Arc::clone(&ctx), auth::identity_routes(Arc::clone(&ctx.auth)));
-    let auth_routes = protected_routes(Arc::clone(&ctx), auth::routes(Arc::clone(&ctx.auth)));
-    let hr_routes = protected_routes(Arc::clone(&ctx), hr::routes().with_state(Arc::clone(&ctx)));
-    let business_routes = protected_routes(Arc::clone(&ctx), business::routes().with_state(Arc::clone(&ctx)));
+    let auth_routes = protected_routes(
+        Arc::clone(&ctx),
+        auth::routes(Arc::clone(&ctx.auth)),
+        rate_limits::ShepherdRouteGroup::Administration,
+    );
+    let hr_routes = protected_routes(
+        Arc::clone(&ctx),
+        hr::routes().with_state(Arc::clone(&ctx)),
+        rate_limits::ShepherdRouteGroup::HumanResources,
+    );
+    let business_routes = protected_routes(
+        Arc::clone(&ctx),
+        business::routes().with_state(Arc::clone(&ctx)),
+        rate_limits::ShepherdRouteGroup::Operations,
+    );
 
     Router::new().nest(
         "/api",
@@ -114,7 +127,9 @@ pub fn routes(ctx: Arc<AppContext>) -> Router {
 
 fn authenticated_identity_routes(context: Arc<AppContext>, routes: Router) -> Router {
     routes
-        .layer(ratelimiting::RateLimiter::protected_route_layer())
+        .layer(ratelimiting::RateLimiter::protected_route_layer(rate_limits::policy(
+            rate_limits::ShepherdRouteGroup::Identity,
+        )))
         .route_layer(from_fn_with_state(
             Arc::clone(&context.auth),
             auth::require_authenticated,
@@ -128,9 +143,15 @@ fn merge_api_domains(auth_routes: Router, hr_routes: Router, business_routes: Ro
         .merge(Router::new().nest("/business", business_routes))
 }
 
-fn protected_routes(context: Arc<AppContext>, routes: Router) -> Router {
+fn protected_routes(
+    context: Arc<AppContext>,
+    routes: Router,
+    rate_limit_group: rate_limits::ShepherdRouteGroup,
+) -> Router {
     routes
-        .layer(ratelimiting::RateLimiter::protected_route_layer())
+        .layer(ratelimiting::RateLimiter::protected_route_layer(rate_limits::policy(
+            rate_limit_group,
+        )))
         .route_layer(from_fn_with_state(
             Arc::clone(&context.auth),
             auth::resolve_application_account,
