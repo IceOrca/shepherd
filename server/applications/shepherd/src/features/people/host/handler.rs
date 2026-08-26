@@ -6,14 +6,16 @@ use axum::{
     http::StatusCode,
 };
 use tracing::{error, warn, info, debug, trace};
-use crate::features::people::core::{AttendanceSession, Department, Employee, EmployeeAssignment, HrError, JobPosition};
+use crate::features::people::core::{
+    AttendanceSession, Department, Employee, EmployeeAssignment, EmployeeSensitiveProfile, HrError, JobPosition,
+};
 use uuid::Uuid;
 
 use crate::{AppContext, auth::AuthenticatedUser};
 
 use super::dto::{
-    AttendanceCheckInRequest, DepartmentUpsertRequest, EmployeeAssignmentCreateRequest, EmployeeUpsertRequest,
-    JobPositionUpsertRequest,
+    AttendanceCheckInRequest, DepartmentUpsertRequest, EmployeeAssignmentCreateRequest, EmployeeCitizenIdUpdateRequest,
+    EmployeeUpsertRequest, JobPositionUpsertRequest,
 };
 
 pub async fn list_employees(
@@ -35,13 +37,28 @@ pub async fn create_employee(
     Json(payload): Json<EmployeeUpsertRequest>,
 ) -> Result<(StatusCode, Json<Employee>), StatusCode> {
     require_permission(&user, "hr.employees.manage")?;
+    let branch_id: Uuid = user.active_branch_id.ok_or(StatusCode::BAD_REQUEST)?;
     let employee: Employee = host
         .core
         .people
-        .create_employee(user.tenant_id, payload.into(), user.account_id)
+        .create_employee(user.tenant_id, branch_id, payload.into(), user.account_id)
         .await
         .map_err(|error| hr_status("create employee", &user, error))?;
     Ok((StatusCode::CREATED, Json(employee)))
+}
+
+pub async fn get_own_employee_citizen_id(
+    State(host): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> Result<Json<EmployeeSensitiveProfile>, StatusCode> {
+    require_permission(&user, "hr.employees.self.sensitive.read")?;
+    host.core
+        .people
+        .find_employee_sensitive_profile_by_account(user.tenant_id, user.account_id)
+        .await
+        .map_err(|error| hr_status("find own employee citizen ID", &user, error))?
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
 }
 
 pub async fn get_own_employee(
@@ -162,6 +179,36 @@ pub async fn update_employee(
         .await
         .map(Json)
         .map_err(|error| hr_status("update employee", &user, error))
+}
+
+pub async fn get_employee_citizen_id(
+    State(host): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(employee_id): Path<Uuid>,
+) -> Result<Json<EmployeeSensitiveProfile>, StatusCode> {
+    require_permission(&user, "hr.employees.sensitive.read")?;
+    host.core
+        .people
+        .find_employee_sensitive_profile(user.tenant_id, employee_id)
+        .await
+        .map_err(|error| hr_status("find employee citizen ID", &user, error))?
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+pub async fn update_employee_citizen_id(
+    State(host): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(employee_id): Path<Uuid>,
+    Json(payload): Json<EmployeeCitizenIdUpdateRequest>,
+) -> Result<Json<EmployeeSensitiveProfile>, StatusCode> {
+    require_permission(&user, "hr.employees.sensitive.manage")?;
+    host.core
+        .people
+        .update_employee_citizen_id(user.tenant_id, employee_id, payload.into(), user.account_id)
+        .await
+        .map(Json)
+        .map_err(|error| hr_status("update employee citizen ID", &user, error))
 }
 
 pub async fn list_employee_assignments(

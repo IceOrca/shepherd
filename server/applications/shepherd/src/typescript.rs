@@ -12,13 +12,13 @@ use crate::{
     business::staffing::{
         core::{
             BusinessRecordStatus, Customer, CustomerWorkRecord, RateSource, ReconciliationStatus, ShiftAssignment,
-            ShiftAssignmentStatus, StaffingCandidate, StaffingEligibility, StaffingRate, StaffingRateKind,
-            StaffingReconciliation, StaffingShift, StaffingShiftStatus,
+            ShiftAssignmentStatus, StaffingCandidate, StaffingEligibility, StaffingPriceSet, StaffingRate,
+            StaffingRateKind, StaffingReconciliation, StaffingShift, StaffingShiftStatus, StaffingStaff,
         },
         host::{
             CustomerUpsertRequest, CustomerWorkRecordUpsertRequest, ManualRateOverrideRequest,
             ShiftAssignmentApproveRequest, ShiftAssignmentCreateRequest, StaffingEligibilityCreateRequest,
-            StaffingRateCreateRequest, StaffingShiftCreateRequest,
+            StaffingPriceSetRequest, StaffingShiftCreateRequest,
         },
         urgent_work::{
             core::{
@@ -49,12 +49,12 @@ use crate::{
         },
         people::{
             core::{
-                AttendanceSession, Department, Employee, EmployeeAssignment, EmployeeStatus, HrRecordStatus,
-                JobPosition,
+                AttendanceSession, Department, Employee, EmployeeAssignment, EmployeeSensitiveProfile, EmployeeStatus,
+                Gender, HrRecordStatus, JobPosition,
             },
             host::dto::{
                 AttendanceCheckInRequest, DepartmentUpsertRequest, EmployeeAssignmentCreateRequest,
-                EmployeeUpsertRequest, JobPositionUpsertRequest,
+                EmployeeCitizenIdUpdateRequest, EmployeeUpsertRequest, JobPositionUpsertRequest,
             },
         },
         working_schedule::{
@@ -104,6 +104,8 @@ pub fn contract() -> String {
     push::<StaffingRateKind>(&mut output, &config);
     push::<Customer>(&mut output, &config);
     push::<StaffingRate>(&mut output, &config);
+    push::<StaffingStaff>(&mut output, &config);
+    push::<StaffingPriceSet>(&mut output, &config);
     push::<StaffingShift>(&mut output, &config);
     push::<ShiftAssignment>(&mut output, &config);
     push::<StaffingCandidate>(&mut output, &config);
@@ -113,7 +115,7 @@ pub fn contract() -> String {
     push::<StaffingReconciliation>(&mut output, &config);
     push::<CustomerWorkRecordUpsertRequest>(&mut output, &config);
     push::<CustomerUpsertRequest>(&mut output, &config);
-    push::<StaffingRateCreateRequest>(&mut output, &config);
+    push::<StaffingPriceSetRequest>(&mut output, &config);
     push::<StaffingEligibilityCreateRequest>(&mut output, &config);
     push::<StaffingShiftCreateRequest>(&mut output, &config);
     push::<ManualRateOverrideRequest>(&mut output, &config);
@@ -148,14 +150,17 @@ pub fn contract() -> String {
     push::<OvertimeRuleCreateRequest>(&mut output, &config);
     push::<PayrollCalculateRequest>(&mut output, &config);
     push::<EmployeeStatus>(&mut output, &config);
+    push::<Gender>(&mut output, &config);
     push::<HrRecordStatus>(&mut output, &config);
     push::<Employee>(&mut output, &config);
+    push::<EmployeeSensitiveProfile>(&mut output, &config);
     push::<Department>(&mut output, &config);
     push::<JobPosition>(&mut output, &config);
     push::<EmployeeAssignment>(&mut output, &config);
     push::<AttendanceSession>(&mut output, &config);
     push::<AttendanceCheckInRequest>(&mut output, &config);
     push::<EmployeeUpsertRequest>(&mut output, &config);
+    push::<EmployeeCitizenIdUpdateRequest>(&mut output, &config);
     push::<DepartmentUpsertRequest>(&mut output, &config);
     push::<JobPositionUpsertRequest>(&mut output, &config);
     push::<EmployeeAssignmentCreateRequest>(&mut output, &config);

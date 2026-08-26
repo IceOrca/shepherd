@@ -778,7 +778,6 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
                     job_id: fixture.job_id,
                     worked_seconds,
                     adjustment_reason: None,
-                    eligibility_exception_reason: Some("urgent dispatch before eligibility setup".to_owned()),
                     manual_rate: Some(ManualRateOverride {
                         reason: "isolated urgent reconciliation pricing".to_owned(),
                         currency: "VND".to_owned(),
@@ -816,7 +815,6 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
                     job_id: fixture.job_id,
                     worked_seconds,
                     adjustment_reason: None,
-                    eligibility_exception_reason: Some("urgent dispatch before eligibility setup".to_owned()),
                     manual_rate: Some(ManualRateOverride {
                         reason: "isolated urgent reconciliation pricing".to_owned(),
                         currency: "VND".to_owned(),
@@ -857,7 +855,6 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
                         job_id: fixture.job_id,
                         worked_seconds,
                         adjustment_reason: None,
-                        eligibility_exception_reason: Some("urgent dispatch before eligibility setup".to_owned()),
                         manual_rate: Some(ManualRateOverride {
                             reason: "isolated urgent reconciliation pricing".to_owned(),
                             currency: "VND".to_owned(),
@@ -880,10 +877,7 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
             snapshot.manual_rate_reason.as_deref(),
             Some("isolated urgent reconciliation pricing")
         );
-        assert_eq!(
-            snapshot.eligibility_exception_reason.as_deref(),
-            Some("urgent dispatch before eligibility setup")
-        );
+        assert_eq!(snapshot.eligibility_exception_reason, None);
         assert_eq!(snapshot.worked_seconds, Some(worked_seconds));
         assert_eq!(snapshot.observed_worked_seconds, Some(worked_seconds));
         assert!(snapshot.customer_amount.is_some());

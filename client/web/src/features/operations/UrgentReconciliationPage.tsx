@@ -44,7 +44,6 @@ interface FinalDraft {
   jobId: string;
   hours: string;
   reason: string;
-  eligibilityExceptionReason: string;
   useManualRate: boolean;
   currency: string;
   billRate: string;
@@ -104,7 +103,6 @@ function initialFinal(item: UrgentWorkReconciliation): FinalDraft {
     jobId: item.final_job_id ?? "",
     hours: seconds > 0 ? (seconds / 3600).toFixed(2) : "",
     reason: item.adjustment_reason ?? "",
-    eligibilityExceptionReason: item.eligibility_exception_reason ?? "",
     useManualRate: false,
     currency: "VND",
     billRate: "",
@@ -150,7 +148,6 @@ export function UrgentReconciliationPage(): React.JSX.Element {
     jobId: "",
     hours: "",
     reason: "",
-    eligibilityExceptionReason: "",
     useManualRate: false,
     currency: "VND",
     billRate: "",
@@ -262,7 +259,6 @@ export function UrgentReconciliationPage(): React.JSX.Element {
         job_id: finalDraft.jobId,
         worked_seconds: Math.round(Number(finalDraft.hours) * 3600),
         adjustment_reason: finalDraft.reason.trim() || null,
-        eligibility_exception_reason: finalDraft.eligibilityExceptionReason.trim() || null,
         manual_rate: manualRate,
       });
     },
@@ -555,22 +551,6 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                   />
                 </label>
               </div>
-
-              <label className="mt-4 block text-sm font-semibold text-slate-700">
-                Lý do ngoại lệ năng lực
-                <input
-                  className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5"
-                  disabled={selected.reconciliation_status === "reconciled"}
-                  onChange={(event: React.ChangeEvent<HTMLInputElement>): void =>
-                    setFinalDraft((current: FinalDraft): FinalDraft => ({
-                      ...current,
-                      eligibilityExceptionReason: event.target.value,
-                    }))
-                  }
-                  placeholder="Bắt buộc nếu nhân viên chưa được cấu hình năng lực cho công việc này"
-                  value={finalDraft.eligibilityExceptionReason}
-                />
-              </label>
 
               <label className="mt-4 flex items-center gap-3 text-sm font-semibold text-slate-700">
                 <input

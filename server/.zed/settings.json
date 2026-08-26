@@ -20,10 +20,20 @@
     "rust-analyzer": {
       "initialization_options": {
         "cargo": {
+          "targetDir": "target/rust-analyzer",
           "extraEnv": {
             "SQLX_OFFLINE": "false",
             "DATABASE_URL": "postgres://shepherdapp:01234567@postgres-db:5432/shepherd_dev",
+            "RUST_ANALYZER_TARGET_DIR": "target/rust-analyzer",
+            "RUST_ANALYZER_TARGET_MAX_MIB": "8192",
+            "RUST_ANALYZER_TARGET_CHECK_INTERVAL_SECS": "86400",
           },
+        },
+        "check": {
+          "overrideCommand": [
+            "sh",
+            "scripts/rust-analyzer-check.sh",
+          ],
         },
       },
     },

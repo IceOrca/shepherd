@@ -54,10 +54,12 @@ recover and finish the same operation instead of creating another identity.
 
 Access-token validation requires `AUTH_ISSUER_URL`, `AUTH_AUDIENCE`, and `AUTH_JWKS_URL`. `AUTH_JWT_ALGORITHMS` defaults to `EdDSA`. `AUTH_JWKS_REFRESH_SECS`, `AUTH_HTTP_TIMEOUT_SECS`, and `AUTH_CLOCK_SKEW_SECS` tune validation.
 
-Account administration requires `AUTH_ADMIN_URL` and `AUTH_ADMIN_TOKEN`; `AUTH_ADMIN_HTTP_TIMEOUT_SECS` defaults to five seconds. Browser, mobile, and other API clients send `Authorization: Bearer ...`.
-
-`AUTH_ADMIN_TOKEN` is server-only. Frontend code must never call the GoTrue admin API or receive its
-service-role token.
+Account administration is supplied through the provider-neutral
+`ExternalIdentityAdmin` contract. Concrete provider URLs, credentials, token
+formats, and HTTP behavior belong to the injected adapter under
+`infra/external-auth`; they are not configuration or dependencies of
+`infra-auth`. Browser, mobile, and other API clients send their own access
+tokens through `Authorization: Bearer ...`.
 
 ## Legacy internal API
 

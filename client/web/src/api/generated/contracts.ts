@@ -62,7 +62,11 @@ export type StaffingRateKind = "customer_bill" | "worker_pay";
 
 export type Customer = { id: string, code: string, name: string, address: string | null, time_zone: string, billing_email: string | null, status: BusinessRecordStatus, created_at: string, updated_at: string, };
 
-export type StaffingRate = { id: string, rate_kind: StaffingRateKind, code: string, name: string, customer_id: string | null, employee_id: string | null, job_id: string, currency: string, hourly_rate: string, priority: number, effective_from: string, effective_to: string | null, is_active: boolean, created_at: string, };
+export type StaffingRate = { id: string, rate_kind: StaffingRateKind, code: string, name: string, customer_id: string | null, employee_id: string | null, currency: string, hourly_rate: string, priority: number, effective_from: string, effective_to: string | null, is_active: boolean, created_at: string, };
+
+export type StaffingStaff = { employee_id: string, employee_code: string, display_name: string, };
+
+export type StaffingPriceSet = { customer_bill_rate: StaffingRate, worker_pay_rate: StaffingRate, };
 
 export type StaffingShift = { id: string, customer_id: string, job_id: string, starts_at: string, ends_at: string, required_workers: number, status: StaffingShiftStatus, notes: string | null, created_at: string, updated_at: string, };
 
@@ -82,7 +86,7 @@ export type CustomerWorkRecordUpsertRequest = { confirmed_customer_id: string, c
 
 export type CustomerUpsertRequest = { code: string, name: string, address?: string | null, time_zone: string, billing_email?: string | null, status: BusinessRecordStatus, };
 
-export type StaffingRateCreateRequest = { rate_kind: StaffingRateKind, code: string, name: string, customer_id?: string | null, employee_id?: string | null, job_id: string, currency: string, hourly_rate: string, priority: number, effective_from: string, effective_to?: string | null, is_active: boolean, };
+export type StaffingPriceSetRequest = { customer_id: string, employee_id?: string | null, currency: string, customer_hourly_rate: string, worker_hourly_rate: string, effective_from: string, };
 
 export type StaffingEligibilityCreateRequest = { employee_id: string, job_id: string, effective_from: string, effective_to?: string | null, notes?: string | null, };
 
@@ -120,7 +124,7 @@ export type UrgentWorkEndRequest = { latitude: number | null, longitude: number 
 
 export type UrgentCustomerWorkRecordUpsertRequest = { confirmed_customer_id: string, confirmed_started_at: string, confirmed_ended_at: string, customer_reference?: string | null, notes?: string | null, };
 
-export type UrgentWorkReconcileRequest = { final_customer_id: string, job_id: string, worked_seconds: number, adjustment_reason?: string | null, eligibility_exception_reason?: string | null, manual_rate?: ManualRateOverrideRequest | null, };
+export type UrgentWorkReconcileRequest = { final_customer_id: string, job_id: string, worked_seconds: number, adjustment_reason?: string | null, manual_rate?: ManualRateOverrideRequest | null, };
 
 export type PayBasis = "hourly" | "monthly";
 
@@ -152,9 +156,13 @@ export type PayrollCalculateRequest = { year: number, month: number, time_zone: 
 
 export type EmployeeStatus = "active" | "on_leave" | "terminated";
 
+export type Gender = "female" | "male" | "other" | "unspecified";
+
 export type HrRecordStatus = "active" | "archived";
 
-export type Employee = { id: string, account_id: string | null, employee_code: string, display_name: string, work_email: string | null, work_phone: string | null, badge_id: string | null, status: EmployeeStatus, hire_date: string, termination_date: string | null, created_at: string, updated_at: string, };
+export type Employee = { id: string, branch_id: string, account_id: string | null, employee_code: string, display_name: string, legal_first_name: string | null, legal_middle_name: string | null, legal_last_name: string | null, work_email: string | null, work_phone: string | null, personal_phone_e164: string | null, gender: Gender | null, badge_id: string | null, citizen_id_country_code: string | null, citizen_id_last4: string | null, profile_complete: boolean, status: EmployeeStatus, hire_date: string, termination_date: string | null, version: number, created_at: string, updated_at: string, };
+
+export type EmployeeSensitiveProfile = { employee_id: string, citizen_id_country_code: string | null, citizen_id: string | null, version: number, };
 
 export type Department = { id: string, code: string, name: string, parent_department_id: string | null, manager_employee_id: string | null, status: HrRecordStatus, created_at: string, updated_at: string, };
 
@@ -166,7 +174,9 @@ export type AttendanceSession = { id: string, employee_id: string, branch_id: st
 
 export type AttendanceCheckInRequest = { branch_id: string, };
 
-export type EmployeeUpsertRequest = { account_id?: string | null, employee_code: string, display_name: string, work_email?: string | null, work_phone?: string | null, badge_id?: string | null, status: EmployeeStatus, hire_date: string, termination_date?: string | null, };
+export type EmployeeUpsertRequest = { account_id?: string | null, employee_code: string, display_name: string, legal_first_name?: string | null, legal_middle_name?: string | null, legal_last_name?: string | null, work_email?: string | null, work_phone?: string | null, personal_phone_e164?: string | null, gender?: Gender | null, badge_id?: string | null, status: EmployeeStatus, hire_date: string, termination_date?: string | null, expected_version?: number | null, };
+
+export type EmployeeCitizenIdUpdateRequest = { citizen_id_country_code?: string | null, citizen_id?: string | null, expected_version: number, };
 
 export type DepartmentUpsertRequest = { code: string, name: string, parent_department_id?: string | null, manager_employee_id?: string | null, status: HrRecordStatus, };
 

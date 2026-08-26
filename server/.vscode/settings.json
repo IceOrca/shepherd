@@ -2,6 +2,9 @@
   "rust-analyzer.cargo.extraEnv": {
     "SQLX_OFFLINE": "false",
     "DATABASE_URL": "postgres://shepherdapp:01234567@postgres-db:5432/shepherd_dev",
+    "RUST_ANALYZER_TARGET_DIR": "target/rust-analyzer",
+    "RUST_ANALYZER_TARGET_MAX_MIB": "8192",
+    "RUST_ANALYZER_TARGET_CHECK_INTERVAL_SECS": "86400",
   },
   "rust-analyzer.check.extraEnv": {
     "SQLX_OFFLINE": "false",
@@ -24,7 +27,11 @@
       "source.organizeImports": "never",
     },
   },
-  "rust-analyzer.cargo.targetDir": null,
+  "rust-analyzer.cargo.targetDir": "target/rust-analyzer",
+  "rust-analyzer.check.overrideCommand": [
+    "sh",
+    "scripts/rust-analyzer-check.sh",
+  ],
   "rust-analyzer.diagnostics.disabled": [
     "inactive-code"
   ],

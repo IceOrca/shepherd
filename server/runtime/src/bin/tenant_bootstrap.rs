@@ -1,6 +1,6 @@
 #![cfg_attr(debug_assertions, allow(unused))]
 
-use std::{error::Error, fs, io, path::Path};
+use std::{error::Error, fmt::Write as _, fs, io, path::Path};
 
 use infra_auth::ext_service::auth_admin::{
     CreateExternalIdentityRequest, ExternalIdentity, ExternalIdentityAdmin, ExternalIdentityStatus,
@@ -610,7 +610,12 @@ fn fingerprint_request(args: &BootstrapArgs, owners: &[OwnerInput]) -> String {
         update_fingerprint(&mut digest, &owner.email);
         update_fingerprint(&mut digest, &owner.password);
     }
-    format!("{:x}", digest.finalize())
+    let bytes = digest.finalize();
+    let mut fingerprint = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        write!(&mut fingerprint, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    fingerprint
 }
 
 fn update_fingerprint(digest: &mut Sha256, value: &str) {

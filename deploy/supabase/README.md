@@ -17,11 +17,16 @@ and include `?search_path=auth`.
 
 ## Development
 
-Generate the gitignored Ed25519 signing configuration and the separate server-only administration token once:
+Generate the gitignored Ed25519 access-token key and separate ES256
+administration key:
 
 ```sh
 sh scripts/generate-auth-dev-env.sh
 ```
+
+Existing HS256-based development files are not modified implicitly. Run the
+same command with `--force` once to migrate both generated files, then
+recreate `supabase-auth`, `server`, and any one-shot bootstrap container.
 
 Start the development stack normally:
 
@@ -42,9 +47,13 @@ user can be created without a password; on first sign-in, Supabase Auth links a
 Google or Facebook identity only when its verified email exactly matches the
 pre-provisioned email.
 
-The generated auth-admin.env is loaded only by the Shepherd server and is
-never sent to the browser. It can create or disable Supabase Auth users only
-through Shepherd permission checks and tenant mapping.
+The generated `auth.env` gives GoTrue one Ed25519 signing key and the ES256
+administration public verification key. The generated `auth-admin.env` gives
+only Shepherd the corresponding ES256 private key. Shepherd mints a fresh
+administration JWT for each GoTrue Admin API request; its algorithm, role,
+issuer, audience, and lifetime come from `AUTH_ADMIN_JWT_*` settings. The
+development policy sets a 600-second lifetime. Neither the private key nor a
+minted token is sent to the browser.
 
 The `public.shepherd_custom_access_token_hook` runs before GoTrue signs each
 access token. It maps the stable JWT issuer and `sub` through
@@ -76,9 +85,29 @@ never run it in production.
 
 ## Production
 
-Set `AUTH_DATABASE_URL_PROD`, `AUTH_JWT_SECRET_PROD`, and
-`AUTH_JWT_KEYS_PROD` in the protected VPS environment file. Generate a new
-private Ed25519 JWK for production; never copy `deploy/supabase/dev/auth.env`.
+Set `AUTH_DATABASE_URL_PROD`, `AUTH_JWT_SECRET_PROD`,
+`AUTH_JWT_KEYS_PROD`, and `AUTH_JWT_VALID_METHODS_PROD` in the protected
+VPS environment file. Generate independent production material; never copy
+`deploy/supabase/dev/auth.env`. The helper writes private material only to
+new mode-0600 files and refuses to overwrite either target:
+
+```sh
+set -a
+. /path/to/protected/compose.prod.env
+set +a
+sh scripts/generate-auth-production-keys.sh \
+  /path/to/protected/generated-auth.prod.env \
+  /path/to/protected/generated-server-admin.prod.env
+```
+
+Merge the first snippet into the protected Compose environment and the second
+into `${SVR_SECRETS_DIR}/server.prod.env`, then remove the temporary snippets
+through the deployment system's secure secret workflow. The resulting
+`AUTH_JWT_KEYS_PROD` contains the private Ed25519 access signer and only the
+public ES256 administration key. The server secret environment contains only
+the ES256 private key and its `kid`; production Compose maps the remaining
+`AUTH_ADMIN_JWT_*` policy from explicit `*_PROD` variables.
+
 The Auth database URL must connect to the same production database as Shepherd
 and include `?search_path=auth`; Shepherd's server-side URL must explicitly use
 `public`. Run Shepherd migrations before starting a new GoTrue deployment so
@@ -95,3 +124,60 @@ Keep the Auth image pinned, monitor upstream security releases, and back up its
 shared PostgreSQL database as one consistent unit. A restore must preserve both
 the `auth` and `public` schemas, their owners, and the hook grants so subjects,
 application mappings, and refresh sessions remain coherent.
+
+## Access signing-key rotation
+
+Self-hosted GoTrue reads `GOTRUE_JWT_KEYS` at process startup, so every key
+state change requires recreating the Auth container. Shepherd follows the
+official standby/current/previous lifecycle explicitly:
+
+1. `prepare` adds a new Ed25519 public verification key while the existing
+   private key remains the sole signer.
+2. Recreate GoTrue and allow JWKS consumers to discover the standby key for
+   `AUTH_ACCESS_JWT_STANDBY_PROPAGATION_SECS`.
+3. `activate` makes the standby private key the sole signer and converts the
+   old key to verification-only.
+4. Recreate GoTrue and retain both public keys for the configured overlap.
+5. `retire` removes the previous verification key after the overlap, then
+   recreate GoTrue once more.
+
+Development commands use the generated Auth environment by default:
+
+```sh
+sh scripts/manage-auth-access-key.sh status
+sh scripts/manage-auth-access-key.sh prepare
+docker compose up -d --no-deps --force-recreate supabase-auth
+# After AUTH_ACCESS_JWT_STANDBY_PROPAGATION_SECS has elapsed:
+sh scripts/manage-auth-access-key.sh activate
+docker compose up -d --no-deps --force-recreate supabase-auth
+# After AUTH_ACCESS_JWT_KEY_OVERLAP_SECS has elapsed:
+sh scripts/manage-auth-access-key.sh retire
+docker compose up -d --no-deps --force-recreate supabase-auth
+```
+
+For production, pass the protected deployment environment and its key
+variable:
+
+```sh
+sh scripts/manage-auth-access-key.sh prepare /path/to/compose.prod.env AUTH_JWT_KEYS_PROD
+```
+
+Repeat with `activate` and `retire`, recreating the production Auth service
+after each state transition. The configured interval is 63,072,000 seconds
+(two years); it is policy metadata, not an automatic rotation timer. The tool
+rejects an early `prepare`, `activate`, or `retire` unless the operator
+passes `--force` for a planned early rotation, independently confirmed
+propagation, or emergency revocation. Propagation and overlap are
+environment-owned; overlap must exceed access-token and verifier-cache
+lifetimes.
+
+GoTrue still requires `GOTRUE_JWT_SECRET` for compatibility configuration,
+but `GOTRUE_JWT_VALID_METHODS=EdDSA,ES256` prevents HS256 bearer credentials.
+This standalone deployment calls GoTrue directly and therefore cannot use the
+opaque `sb_secret_...` gateway credential. The short-lived ES256
+`service_role` JWT is the future-aligned direct-GoTrue alternative.
+
+Upstream references:
+
+- [Supabase self-hosted asymmetric authentication](https://supabase.com/docs/guides/self-hosting/self-hosted-auth-keys)
+- [Supabase JWT signing-key lifecycle](https://supabase.com/docs/guides/auth/signing-keys)

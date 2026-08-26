@@ -51,6 +51,8 @@ dotenvy = { version = "*" }
 parking_lot = { version = "*" }
 base64 = { version = "*" }
 sha2 = { version = "*" }
+hmac = { version = "*" }
+aes-gcm = { version = "*" }
 cfg-if = { version = "*" }
 thiserror = { version = "*" }
 governor = { version = "*", features = ["std", "dashmap"] }
@@ -88,3 +90,22 @@ indexing_slicing = "deny"
 [workspace.lints.rust]
 unsafe_code = "forbid"
 # unused = { level = "allow" }
+
+# Development builds live in a persistent Docker volume. Full dependency debug
+# information and incremental generations caused that volume to grow beyond
+# 50 GiB. Keep line-table debugging for workspace code, omit dependency debug
+# symbols, and prefer bounded/reproducible artifacts over incremental state.
+# Release profiles are intentionally unchanged.
+[profile.dev]
+debug = 1
+incremental = false
+
+[profile.dev.package."*"]
+debug = 0
+
+[profile.test]
+debug = 1
+incremental = false
+
+[profile.test.package."*"]
+debug = 0

@@ -5,266 +5,390 @@ import {
   type UseMutationResult,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import { BadgeDollarSign, LoaderCircle, Plus, ShieldCheck } from "lucide-react";
-import { useMemo, useState, type FormEvent } from "react";
+import {
+  BadgeDollarSign,
+  CalendarDays,
+  LoaderCircle,
+  Pencil,
+  Search,
+  UsersRound,
+  X,
+} from "lucide-react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type {
   Customer,
-  Employee,
-  JobPosition,
   PermissionCode,
-  StaffingEligibility,
-  StaffingEligibilityCreateRequest,
+  StaffingPriceSet,
+  StaffingPriceSetRequest,
   StaffingRate,
-  StaffingRateCreateRequest,
   StaffingRateKind,
+  StaffingStaff,
 } from "../../api/generated/contracts";
 import { friendlyApiError } from "../../shared/api/client";
 import { useAuth } from "../auth/AuthProvider";
 import {
-  createStaffingEligibility,
-  createStaffingRate,
   listCustomers,
-  listEmployees,
-  listJobs,
-  listStaffingEligibilities,
   listStaffingRates,
+  listStaffingStaff,
   operationsQueryKeys,
+  setStaffingPrices,
 } from "./api";
 
-interface RateDraft {
-  rateKind: StaffingRateKind;
-  code: string;
-  name: string;
-  customerId: string;
-  employeeId: string;
-  jobId: string;
+interface PriceDraft {
+  employeeId: string | null;
+  customerHourlyRate: string;
+  workerHourlyRate: string;
   currency: string;
-  hourlyRate: string;
-  priority: string;
   effectiveFrom: string;
-  effectiveTo: string;
 }
 
-interface EligibilityDraft {
-  employeeId: string;
-  jobId: string;
-  effectiveFrom: string;
-  effectiveTo: string;
-  notes: string;
+interface ResolvedPrice {
+  rate: StaffingRate | null;
+  inherited: boolean;
 }
 
-const today: string = new Date().toISOString().slice(0, 10);
+interface PriceRow {
+  employeeId: string | null;
+  employeeCode: string | null;
+  displayName: string;
+  customerBill: ResolvedPrice;
+  workerPay: ResolvedPrice;
+}
 
-const emptyRateDraft: RateDraft = {
-  rateKind: "customer_bill",
-  code: "",
-  name: "",
-  customerId: "",
-  employeeId: "",
-  jobId: "",
-  currency: "VND",
-  hourlyRate: "",
-  priority: "0",
-  effectiveFrom: today,
-  effectiveTo: "",
-};
+function localIsoDate(): string {
+  const now: Date = new Date();
+  const year: string = String(now.getFullYear());
+  const month: string = String(now.getMonth() + 1).padStart(2, "0");
+  const day: string = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
 
-const emptyEligibilityDraft: EligibilityDraft = {
-  employeeId: "",
-  jobId: "",
-  effectiveFrom: today,
-  effectiveTo: "",
-  notes: "",
-};
+const today: string = localIsoDate();
 
-function rateKindLabel(rateKind: StaffingRateKind): string {
-  return rateKind === "customer_bill" ? "Giá thu khách hàng" : "Tiền công nhân viên";
+function formatDecimal(value: string): string {
+  const [integerPart, decimalPart = ""]: string[] = value.split(".");
+  const grouped: string = integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  const fraction: string = decimalPart.replace(/0+$/, "");
+  return fraction ? `${grouped},${fraction}` : grouped;
+}
+
+function formatDate(value: string): string {
+  const [year, month, day]: string[] = value.split("-");
+  return `${day}/${month}/${year}`;
+}
+
+function compareRates(left: StaffingRate, right: StaffingRate, rateKind: StaffingRateKind): number {
+  const employeeSpecificity: number = Number(right.employee_id !== null) - Number(left.employee_id !== null);
+  if (employeeSpecificity !== 0) return employeeSpecificity;
+  if (rateKind === "worker_pay") {
+    const customerSpecificity: number = Number(right.customer_id !== null) - Number(left.customer_id !== null);
+    if (customerSpecificity !== 0) return customerSpecificity;
+  }
+  if (left.priority !== right.priority) return right.priority - left.priority;
+  const effectiveOrder: number = right.effective_from.localeCompare(left.effective_from);
+  return effectiveOrder !== 0 ? effectiveOrder : left.id.localeCompare(right.id);
+}
+
+function resolveRate(
+  rates: StaffingRate[],
+  rateKind: StaffingRateKind,
+  customerId: string,
+  employeeId: string | null,
+  workDate: string,
+): ResolvedPrice {
+  const candidates: StaffingRate[] = rates
+    .filter((rate: StaffingRate): boolean => {
+      if (!rate.is_active || rate.rate_kind !== rateKind) return false;
+      if (rate.effective_from > workDate || (rate.effective_to !== null && rate.effective_to < workDate)) return false;
+      if (rateKind === "customer_bill" && rate.customer_id !== customerId) return false;
+      if (rateKind === "worker_pay" && rate.customer_id !== null && rate.customer_id !== customerId) return false;
+      if (employeeId === null) return rate.employee_id === null;
+      return rate.employee_id === null || rate.employee_id === employeeId;
+    })
+    .sort((left: StaffingRate, right: StaffingRate): number => compareRates(left, right, rateKind));
+  const rate: StaffingRate | null = candidates[0] ?? null;
+  return { rate, inherited: employeeId !== null && rate?.employee_id === null };
+}
+
+function RateCell({ price }: { price: ResolvedPrice }): React.JSX.Element {
+  if (price.rate === null) {
+    return <span className="font-semibold text-amber-700">Chưa thiết lập</span>;
+  }
+  return (
+    <div>
+      <p className="text-base font-black tabular-nums text-slate-950">
+        {formatDecimal(price.rate.hourly_rate)} <span className="text-xs font-bold text-slate-500">{price.rate.currency}/giờ</span>
+      </p>
+      {price.inherited ? <p className="mt-1 text-xs font-semibold text-blue-600">Theo mức mặc định</p> : null}
+    </div>
+  );
+}
+
+function effectiveLabel(row: PriceRow): string {
+  const billDate: string | null = row.customerBill.rate?.effective_from ?? null;
+  const payDate: string | null = row.workerPay.rate?.effective_from ?? null;
+  if (billDate === null && payDate === null) return "—";
+  if (billDate === payDate && billDate !== null) return formatDate(billDate);
+  return `Thu: ${billDate ? formatDate(billDate) : "—"} · Công: ${payDate ? formatDate(payDate) : "—"}`;
 }
 
 export function StaffingConfigurationPage(): React.JSX.Element {
   const auth: ReturnType<typeof useAuth> = useAuth();
   const queryClient: ReturnType<typeof useQueryClient> = useQueryClient();
   const permissions: PermissionCode[] = auth.profile?.permissions ?? [];
-  const canReadRates: boolean = permissions.includes("business.staffing_rates.read");
-  const canManageRates: boolean = permissions.includes("business.staffing_rates.manage");
-  const canReadEligibility: boolean = permissions.includes("business.staffing_eligibility.read");
-  const canManageEligibility: boolean = permissions.includes("business.staffing_eligibility.manage");
-  const [rateDraft, setRateDraft] = useState<RateDraft>(emptyRateDraft);
-  const [eligibilityDraft, setEligibilityDraft] = useState<EligibilityDraft>(emptyEligibilityDraft);
+  const canRead: boolean = permissions.includes("business.staffing_rates.read");
+  const canManage: boolean = permissions.includes("business.staffing_rates.manage");
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string>("");
+  const [viewDate, setViewDate] = useState<string>(today);
+  const [search, setSearch] = useState<string>("");
+  const [draft, setDraft] = useState<PriceDraft | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
 
   const ratesQuery: UseQueryResult<StaffingRate[], Error> = useQuery({
     queryKey: operationsQueryKeys.staffingRates,
     queryFn: listStaffingRates,
-    enabled: canReadRates,
+    enabled: canRead,
   });
-  const eligibilityQuery: UseQueryResult<StaffingEligibility[], Error> = useQuery({
-    queryKey: operationsQueryKeys.staffingEligibilities,
-    queryFn: listStaffingEligibilities,
-    enabled: canReadEligibility,
+  const staffQuery: UseQueryResult<StaffingStaff[], Error> = useQuery({
+    queryKey: operationsQueryKeys.staffingStaff,
+    queryFn: listStaffingStaff,
+    enabled: canRead,
   });
   const customersQuery: UseQueryResult<Customer[], Error> = useQuery({
     queryKey: operationsQueryKeys.customers,
     queryFn: listCustomers,
-    enabled: canReadRates,
+    enabled: canRead,
   });
-  const jobsQuery: UseQueryResult<JobPosition[], Error> = useQuery({
-    queryKey: operationsQueryKeys.jobs,
-    queryFn: listJobs,
-    enabled: canReadRates || canReadEligibility,
-  });
-  const employeesQuery: UseQueryResult<Employee[], Error> = useQuery({
-    queryKey: operationsQueryKeys.employees,
-    queryFn: listEmployees,
-    enabled: canReadRates || canReadEligibility,
-  });
-  const customerNames: Map<string, string> = useMemo(
-    (): Map<string, string> =>
-      new Map((customersQuery.data ?? []).map((customer: Customer): [string, string] => [customer.id, customer.name])),
+
+  const activeCustomers: Customer[] = useMemo(
+    (): Customer[] => (customersQuery.data ?? []).filter((customer: Customer): boolean => customer.status === "active"),
     [customersQuery.data],
   );
-  const employeeNames: Map<string, string> = useMemo(
-    (): Map<string, string> =>
-      new Map((employeesQuery.data ?? []).map((employee: Employee): [string, string] => [employee.id, employee.display_name])),
-    [employeesQuery.data],
-  );
-  const jobNames: Map<string, string> = useMemo(
-    (): Map<string, string> =>
-      new Map((jobsQuery.data ?? []).map((job: JobPosition): [string, string] => [job.id, job.name])),
-    [jobsQuery.data],
-  );
 
-  const rateMutation: UseMutationResult<StaffingRate, Error, StaffingRateCreateRequest> = useMutation({
-    mutationFn: createStaffingRate,
-    onSuccess: (rate: StaffingRate): void => {
-      void queryClient.invalidateQueries({ queryKey: operationsQueryKeys.staffingRates });
-      setRateDraft(emptyRateDraft);
-      setFeedback("Đã tạo " + rateKindLabel(rate.rate_kind).toLocaleLowerCase("vi") + " " + rate.name + ".");
-    },
-  });
-  const eligibilityMutation: UseMutationResult<
-    StaffingEligibility,
-    Error,
-    StaffingEligibilityCreateRequest
-  > = useMutation({
-    mutationFn: createStaffingEligibility,
+  useEffect((): void => {
+    if (selectedCustomerId === "" && activeCustomers.length > 0) {
+      setSelectedCustomerId(activeCustomers[0]?.id ?? "");
+    }
+  }, [activeCustomers, selectedCustomerId]);
+
+  const rows: PriceRow[] = useMemo((): PriceRow[] => {
+    if (selectedCustomerId === "") return [];
+    const rates: StaffingRate[] = ratesQuery.data ?? [];
+    const makeRow = (staff: StaffingStaff | null): PriceRow => {
+      const employeeId: string | null = staff?.employee_id ?? null;
+      return {
+        employeeId,
+        employeeCode: staff?.employee_code ?? null,
+        displayName: staff?.display_name ?? "Toàn bộ nhân viên Staff",
+        customerBill: resolveRate(rates, "customer_bill", selectedCustomerId, employeeId, viewDate),
+        workerPay: resolveRate(rates, "worker_pay", selectedCustomerId, employeeId, viewDate),
+      };
+    };
+    return [makeRow(null), ...(staffQuery.data ?? []).map((staff: StaffingStaff): PriceRow => makeRow(staff))];
+  }, [ratesQuery.data, selectedCustomerId, staffQuery.data, viewDate]);
+
+  const visibleRows: PriceRow[] = useMemo((): PriceRow[] => {
+    const normalizedSearch: string = search.trim().toLocaleLowerCase("vi");
+    if (normalizedSearch === "") return rows;
+    return rows.filter((row: PriceRow): boolean =>
+      row.employeeId === null
+      || row.displayName.toLocaleLowerCase("vi").includes(normalizedSearch)
+      || (row.employeeCode ?? "").toLocaleLowerCase("vi").includes(normalizedSearch),
+    );
+  }, [rows, search]);
+
+  const priceMutation: UseMutationResult<StaffingPriceSet, Error, StaffingPriceSetRequest> = useMutation({
+    mutationFn: setStaffingPrices,
     onSuccess: (): void => {
-      void queryClient.invalidateQueries({ queryKey: operationsQueryKeys.staffingEligibilities });
-      setEligibilityDraft(emptyEligibilityDraft);
-      setFeedback("Đã thêm năng lực làm dịch vụ theo thời hạn.");
+      void queryClient.invalidateQueries({ queryKey: operationsQueryKeys.staffingRates });
+      setDraft(null);
+      setFeedback("Đã lưu mức giá mới. Các mức cũ vẫn được giữ lại trong lịch sử.");
     },
   });
 
-  const submitRate: (event: FormEvent<HTMLFormElement>) => void = (
-    event: FormEvent<HTMLFormElement>,
-  ): void => {
-    event.preventDefault();
+  const selectedCustomer: Customer | null =
+    activeCustomers.find((customer: Customer): boolean => customer.id === selectedCustomerId) ?? null;
+
+  const openEditor = (row: PriceRow): void => {
+    const effectiveFrom: string = viewDate < today ? today : viewDate;
     setFeedback(null);
-    rateMutation.mutate({
-      rate_kind: rateDraft.rateKind,
-      code: rateDraft.code.trim().toLocaleLowerCase("en-US"),
-      name: rateDraft.name.trim(),
-      customer_id: rateDraft.customerId || null,
-      employee_id: rateDraft.employeeId || null,
-      job_id: rateDraft.jobId,
-      currency: rateDraft.currency.trim().toLocaleUpperCase("en-US"),
-      hourly_rate: rateDraft.hourlyRate.trim(),
-      priority: Number(rateDraft.priority),
-      effective_from: rateDraft.effectiveFrom,
-      effective_to: rateDraft.effectiveTo || null,
-      is_active: true,
+    priceMutation.reset();
+    setDraft({
+      employeeId: row.employeeId,
+      customerHourlyRate: row.customerBill.rate?.hourly_rate ?? "",
+      workerHourlyRate: row.workerPay.rate?.hourly_rate ?? "",
+      currency: row.customerBill.rate?.currency ?? row.workerPay.rate?.currency ?? "VND",
+      effectiveFrom,
     });
   };
 
-  const submitEligibility: (event: FormEvent<HTMLFormElement>) => void = (
-    event: FormEvent<HTMLFormElement>,
-  ): void => {
+  const submitPrices = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
+    if (draft === null || selectedCustomerId === "") return;
     setFeedback(null);
-    eligibilityMutation.mutate({
-      employee_id: eligibilityDraft.employeeId,
-      job_id: eligibilityDraft.jobId,
-      effective_from: eligibilityDraft.effectiveFrom,
-      effective_to: eligibilityDraft.effectiveTo || null,
-      notes: eligibilityDraft.notes.trim() || null,
+    priceMutation.mutate({
+      customer_id: selectedCustomerId,
+      employee_id: draft.employeeId,
+      currency: draft.currency.trim().toLocaleUpperCase("en-US"),
+      customer_hourly_rate: draft.customerHourlyRate.trim(),
+      worker_hourly_rate: draft.workerHourlyRate.trim(),
+      effective_from: draft.effectiveFrom,
     });
   };
 
-  if (!canReadRates && !canReadEligibility) {
-    return <section className="panel p-8 text-center text-sm text-slate-500">Bạn chưa có quyền xem cấu hình nhân sự dịch vụ.</section>;
+  if (!canRead) {
+    return <section className="panel p-8 text-center text-sm text-slate-500">Bạn chưa có quyền xem giá và tiền công.</section>;
   }
 
-  const loading: boolean =
-    ratesQuery.isPending || eligibilityQuery.isPending || jobsQuery.isPending || employeesQuery.isPending;
-
+  const loading: boolean = ratesQuery.isPending || staffQuery.isPending || customersQuery.isPending;
   if (loading) {
-    return <section className="panel p-8 text-center text-sm text-slate-500"><LoaderCircle className="mr-2 inline size-4 animate-spin" />Đang tải cấu hình...</section>;
+    return <section className="panel p-8 text-center text-sm text-slate-500"><LoaderCircle className="mr-2 inline size-4 animate-spin" />Đang tải giá và tiền công...</section>;
   }
 
-  const error: Error | null =
-    ratesQuery.error ?? eligibilityQuery.error ?? jobsQuery.error ?? employeesQuery.error ?? customersQuery.error ?? null;
+  const error: Error | null = ratesQuery.error ?? staffQuery.error ?? customersQuery.error ?? null;
+  const editingRow: PriceRow | null = draft === null
+    ? null
+    : rows.find((row: PriceRow): boolean => row.employeeId === draft.employeeId) ?? null;
 
   return (
     <div className="space-y-5">
       {feedback ? <div className="rounded-xl bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">{feedback}</div> : null}
-      {error ? <div className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{friendlyApiError(error, "Không thể tải cấu hình nghiệp vụ.")}</div> : null}
-      {rateMutation.error ? <div className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{friendlyApiError(rateMutation.error, "Không thể tạo mức giá. Kiểm tra phạm vi và thời hạn bị trùng.")}</div> : null}
-      {eligibilityMutation.error ? <div className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{friendlyApiError(eligibilityMutation.error, "Không thể tạo năng lực làm dịch vụ.")}</div> : null}
+      {error ? <div className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{friendlyApiError(error, "Không thể tải giá và tiền công.")}</div> : null}
 
-      <div className="grid gap-5 xl:grid-cols-2">
-        <section className="panel p-5 sm:p-6">
-          <div className="flex items-center gap-2"><BadgeDollarSign className="size-5 text-blue-600" /><h2 className="font-black text-slate-950">Giá thu và tiền công</h2></div>
-          <p className="mt-1 text-sm text-slate-500">Hai loại giá độc lập; tiền công có thể thay đổi theo nhân viên, khách hàng và ngày hiệu lực.</p>
-          {canManageRates ? (
-            <form className="mt-5 grid gap-3 sm:grid-cols-2" onSubmit={submitRate}>
-              <label className="text-sm font-semibold text-slate-700">Loại giá<select className="mt-1.5 w-full rounded-xl border-slate-300" value={rateDraft.rateKind} onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => setRateDraft({ ...rateDraft, rateKind: event.target.value as StaffingRateKind })}><option value="customer_bill">Giá thu khách hàng</option><option value="worker_pay">Tiền công nhân viên</option></select></label>
-              <label className="text-sm font-semibold text-slate-700">Mã<input className="mt-1.5 w-full rounded-xl border-slate-300" required value={rateDraft.code} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => setRateDraft({ ...rateDraft, code: event.target.value })} /></label>
-              <label className="text-sm font-semibold text-slate-700 sm:col-span-2">Tên<input className="mt-1.5 w-full rounded-xl border-slate-300" required value={rateDraft.name} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => setRateDraft({ ...rateDraft, name: event.target.value })} /></label>
-              <label className="text-sm font-semibold text-slate-700">Khách hàng / nơi làm việc<select className="mt-1.5 w-full rounded-xl border-slate-300" required={rateDraft.rateKind === "customer_bill"} value={rateDraft.customerId} onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => setRateDraft({ ...rateDraft, customerId: event.target.value })}><option value="">{rateDraft.rateKind === "worker_pay" ? "Mặc định mọi khách hàng" : "Chọn khách hàng"}</option>{(customersQuery.data ?? []).map((customer: Customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}</select></label>
-              <label className="text-sm font-semibold text-slate-700">Nhân viên<select className="mt-1.5 w-full rounded-xl border-slate-300" value={rateDraft.employeeId} onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => setRateDraft({ ...rateDraft, employeeId: event.target.value })}><option value="">Mọi nhân viên phù hợp</option>{(employeesQuery.data ?? []).filter((employee: Employee): boolean => employee.status === "active").map((employee: Employee) => <option key={employee.id} value={employee.id}>{employee.display_name}</option>)}</select></label>
-              <label className="text-sm font-semibold text-slate-700">Dịch vụ / công việc<select className="mt-1.5 w-full rounded-xl border-slate-300" required value={rateDraft.jobId} onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => setRateDraft({ ...rateDraft, jobId: event.target.value })}><option value="">Chọn công việc</option>{(jobsQuery.data ?? []).map((job: JobPosition) => <option key={job.id} value={job.id}>{job.name}</option>)}</select></label>
-              <label className="text-sm font-semibold text-slate-700">Đơn giá / giờ<input className="mt-1.5 w-full rounded-xl border-slate-300" inputMode="decimal" required value={rateDraft.hourlyRate} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => setRateDraft({ ...rateDraft, hourlyRate: event.target.value })} /></label>
-              <label className="text-sm font-semibold text-slate-700">Tiền tệ<input className="mt-1.5 w-full rounded-xl border-slate-300" maxLength={3} required value={rateDraft.currency} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => setRateDraft({ ...rateDraft, currency: event.target.value })} /></label>
-              <label className="text-sm font-semibold text-slate-700">Hiệu lực từ<input className="mt-1.5 w-full rounded-xl border-slate-300" required type="date" value={rateDraft.effectiveFrom} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => setRateDraft({ ...rateDraft, effectiveFrom: event.target.value })} /></label>
-              <label className="text-sm font-semibold text-slate-700">Hiệu lực đến<input className="mt-1.5 w-full rounded-xl border-slate-300" type="date" value={rateDraft.effectiveTo} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => setRateDraft({ ...rateDraft, effectiveTo: event.target.value })} /></label>
-              <label className="text-sm font-semibold text-slate-700">Ưu tiên<input className="mt-1.5 w-full rounded-xl border-slate-300" required type="number" value={rateDraft.priority} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => setRateDraft({ ...rateDraft, priority: event.target.value })} /></label>
-              <button className="action-primary self-end" disabled={rateMutation.isPending} type="submit"><Plus className="size-4" />Thêm mức giá</button>
-            </form>
-          ) : null}
-        </section>
-
-        <section className="panel p-5 sm:p-6">
-          <div className="flex items-center gap-2"><ShieldCheck className="size-5 text-violet-600" /><h2 className="font-black text-slate-950">Năng lực làm dịch vụ</h2></div>
-          <p className="mt-1 text-sm text-slate-500">Độc lập với chức danh HR chính; một nhân viên có thể làm nhiều loại công việc khách hàng.</p>
-          {canManageEligibility ? (
-            <form className="mt-5 grid gap-3 sm:grid-cols-2" onSubmit={submitEligibility}>
-              <label className="text-sm font-semibold text-slate-700">Nhân viên<select className="mt-1.5 w-full rounded-xl border-slate-300" required value={eligibilityDraft.employeeId} onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => setEligibilityDraft({ ...eligibilityDraft, employeeId: event.target.value })}><option value="">Chọn nhân viên</option>{(employeesQuery.data ?? []).filter((employee: Employee): boolean => employee.status === "active").map((employee: Employee) => <option key={employee.id} value={employee.id}>{employee.display_name}</option>)}</select></label>
-              <label className="text-sm font-semibold text-slate-700">Dịch vụ / công việc<select className="mt-1.5 w-full rounded-xl border-slate-300" required value={eligibilityDraft.jobId} onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => setEligibilityDraft({ ...eligibilityDraft, jobId: event.target.value })}><option value="">Chọn công việc</option>{(jobsQuery.data ?? []).map((job: JobPosition) => <option key={job.id} value={job.id}>{job.name}</option>)}</select></label>
-              <label className="text-sm font-semibold text-slate-700">Hiệu lực từ<input className="mt-1.5 w-full rounded-xl border-slate-300" required type="date" value={eligibilityDraft.effectiveFrom} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => setEligibilityDraft({ ...eligibilityDraft, effectiveFrom: event.target.value })} /></label>
-              <label className="text-sm font-semibold text-slate-700">Hiệu lực đến<input className="mt-1.5 w-full rounded-xl border-slate-300" type="date" value={eligibilityDraft.effectiveTo} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => setEligibilityDraft({ ...eligibilityDraft, effectiveTo: event.target.value })} /></label>
-              <label className="text-sm font-semibold text-slate-700 sm:col-span-2">Ghi chú<textarea className="mt-1.5 w-full rounded-xl border-slate-300" rows={2} value={eligibilityDraft.notes} onChange={(event: React.ChangeEvent<HTMLTextAreaElement>): void => setEligibilityDraft({ ...eligibilityDraft, notes: event.target.value })} /></label>
-              <button className="action-primary sm:col-span-2" disabled={eligibilityMutation.isPending} type="submit"><Plus className="size-4" />Thêm năng lực</button>
-            </form>
-          ) : null}
-        </section>
-      </div>
-
-      <div className="grid gap-5 xl:grid-cols-2">
-        <section className="panel overflow-hidden">
-          <div className="border-b border-slate-200 px-5 py-4 font-bold text-slate-950">Mức giá đang cấu hình</div>
-          <div className="divide-y divide-slate-100">
-            {(ratesQuery.data ?? []).map((rate: StaffingRate) => <div className="px-5 py-4" key={rate.id}><div className="flex items-start justify-between gap-3"><div><p className="font-bold text-slate-900">{rate.name}</p><p className="mt-1 text-xs text-slate-500">{customerNames.get(rate.customer_id ?? "") ?? "Mọi khách hàng"} · {employeeNames.get(rate.employee_id ?? "") ?? "Mọi nhân viên"} · {jobNames.get(rate.job_id) ?? rate.job_id}</p></div><span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-bold text-blue-700">{rateKindLabel(rate.rate_kind)}</span></div><p className="mt-2 text-sm font-semibold text-slate-700">{rate.hourly_rate} {rate.currency}/giờ · từ {rate.effective_from}</p></div>)}
-            {(ratesQuery.data ?? []).length === 0 ? <p className="p-6 text-center text-sm text-slate-500">Chưa có mức giá.</p> : null}
+      <section className="panel p-5 sm:p-6">
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+          <div className="max-w-2xl">
+            <div className="flex items-center gap-2">
+              <BadgeDollarSign className="size-5 text-blue-600" />
+              <h2 className="font-black text-slate-950">Bảng giá theo khách hàng và Staff</h2>
+            </div>
+            <p className="mt-1 text-sm text-slate-500">
+              So sánh trực tiếp giá thu và tiền công theo giờ. Dòng mặc định áp dụng khi Staff chưa có mức riêng.
+            </p>
           </div>
-        </section>
-        <section className="panel overflow-hidden">
-          <div className="border-b border-slate-200 px-5 py-4 font-bold text-slate-950">Năng lực nhân viên</div>
-          <div className="divide-y divide-slate-100">
-            {(eligibilityQuery.data ?? []).map((eligibility: StaffingEligibility) => <div className="px-5 py-4" key={eligibility.id}><p className="font-bold text-slate-900">{employeeNames.get(eligibility.employee_id) ?? eligibility.employee_id}</p><p className="mt-1 text-sm text-slate-600">{jobNames.get(eligibility.job_id) ?? eligibility.job_id}</p><p className="mt-1 text-xs text-slate-500">Từ {eligibility.effective_from}{eligibility.effective_to ? " đến " + eligibility.effective_to : ""}</p></div>)}
-            {(eligibilityQuery.data ?? []).length === 0 ? <p className="p-6 text-center text-sm text-slate-500">Chưa có năng lực dịch vụ.</p> : null}
+          <div className="grid gap-3 sm:grid-cols-2 lg:min-w-[34rem]">
+            <label className="text-sm font-semibold text-slate-700">
+              Khách hàng
+              <select className="mt-1.5 min-h-11 w-full rounded-xl border-slate-300" onChange={(event): void => setSelectedCustomerId(event.target.value)} value={selectedCustomerId}>
+                {activeCustomers.length === 0 ? <option value="">Chưa có khách hàng đang hoạt động</option> : null}
+                {activeCustomers.map((customer: Customer): React.JSX.Element => <option key={customer.id} value={customer.id}>{customer.name}</option>)}
+              </select>
+            </label>
+            <label className="text-sm font-semibold text-slate-700">
+              Xem giá tại ngày
+              <div className="relative mt-1.5">
+                <CalendarDays className="pointer-events-none absolute left-3 top-3 size-5 text-slate-400" />
+                <input className="min-h-11 w-full rounded-xl border-slate-300 pl-10" onChange={(event): void => setViewDate(event.target.value)} required type="date" value={viewDate} />
+              </div>
+            </label>
           </div>
-        </section>
-      </div>
+        </div>
+
+        <div className="mt-5 flex flex-col gap-3 border-t border-slate-100 pt-5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="relative w-full sm:max-w-sm">
+            <Search className="pointer-events-none absolute left-3 top-3 size-5 text-slate-400" />
+            <input className="min-h-11 w-full rounded-xl border-slate-300 pl-10" onChange={(event): void => setSearch(event.target.value)} placeholder="Tìm Staff theo tên hoặc mã..." value={search} />
+          </div>
+          <p className="text-xs leading-5 text-slate-500">
+            Giá quá khứ chỉ để xem. Mỗi thay đổi từ hôm nay trở đi tạo một phiên bản mới và giữ nguyên lịch sử.
+          </p>
+        </div>
+      </section>
+
+      <section className="panel overflow-hidden">
+        {selectedCustomer === null ? (
+          <div className="p-10 text-center text-sm text-slate-500">Hãy tạo một khách hàng đang hoạt động trước khi thiết lập giá.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-slate-200">
+              <thead className="bg-slate-50">
+                <tr className="text-left text-xs font-black uppercase tracking-wide text-slate-500">
+                  <th className="px-5 py-3">Staff</th>
+                  <th className="px-5 py-3">Giá thu khách hàng</th>
+                  <th className="px-5 py-3">Tiền công nhân viên</th>
+                  <th className="px-5 py-3">Hiệu lực từ</th>
+                  <th className="px-5 py-3 text-right">Thao tác</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 bg-white">
+                {visibleRows.map((row: PriceRow): React.JSX.Element => (
+                  <tr className={row.employeeId === null ? "bg-blue-50/40" : "hover:bg-slate-50"} key={row.employeeId ?? "all-staff"}>
+                    <td className="px-5 py-4">
+                      <div className="flex items-center gap-3">
+                        <div className={`grid size-10 shrink-0 place-items-center rounded-xl ${row.employeeId === null ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-600"}`}>
+                          <UsersRound className="size-5" />
+                        </div>
+                        <div>
+                          <p className="font-bold text-slate-950">{row.displayName}</p>
+                          <p className="mt-0.5 text-xs text-slate-500">{row.employeeCode ?? "Mức mặc định"}</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-5 py-4"><RateCell price={row.customerBill} /></td>
+                    <td className="px-5 py-4"><RateCell price={row.workerPay} /></td>
+                    <td className="max-w-52 px-5 py-4 text-sm font-semibold text-slate-600">{effectiveLabel(row)}</td>
+                    <td className="px-5 py-4 text-right">
+                      {canManage ? (
+                        <button className="action-secondary min-h-9 px-3" onClick={(): void => openEditor(row)} type="button">
+                          <Pencil className="size-4" />
+                          {row.customerBill.rate === null && row.workerPay.rate === null ? "Thiết lập" : "Thay đổi"}
+                        </button>
+                      ) : null}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {visibleRows.length === 0 ? <p className="p-8 text-center text-sm text-slate-500">Không tìm thấy Staff phù hợp.</p> : null}
+          </div>
+        )}
+      </section>
+
+      {draft !== null && editingRow !== null && selectedCustomer !== null ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/50 p-4">
+          <form className="w-full max-w-xl rounded-2xl bg-white p-6 shadow-2xl" onSubmit={submitPrices}>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-black text-slate-950">Thiết lập giá và tiền công</h2>
+                <p className="mt-1 text-sm text-slate-500">{selectedCustomer.name} · {editingRow.displayName}</p>
+              </div>
+              <button aria-label="Đóng" className="grid size-9 place-items-center rounded-lg hover:bg-slate-100" onClick={(): void => setDraft(null)} type="button"><X className="size-5" /></button>
+            </div>
+
+            <div className="mt-5 rounded-xl bg-blue-50 px-4 py-3 text-sm leading-6 text-blue-800">
+              Hệ thống không sửa số tiền của bản ghi cũ. Khi lưu, mức hiện tại được khép lại và mức mới bắt đầu từ ngày bạn chọn.
+            </div>
+
+            <div className="mt-5 grid gap-4 sm:grid-cols-2">
+              <label className="text-sm font-semibold text-slate-700">
+                Giá thu khách hàng / giờ
+                <input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" inputMode="decimal" min="0.0001" onChange={(event): void => setDraft({ ...draft, customerHourlyRate: event.target.value })} required step="0.0001" type="number" value={draft.customerHourlyRate} />
+              </label>
+              <label className="text-sm font-semibold text-slate-700">
+                Tiền công nhân viên / giờ
+                <input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" inputMode="decimal" min="0.0001" onChange={(event): void => setDraft({ ...draft, workerHourlyRate: event.target.value })} required step="0.0001" type="number" value={draft.workerHourlyRate} />
+              </label>
+              <label className="text-sm font-semibold text-slate-700">
+                Ngày bắt đầu hiệu lực
+                <input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" min={today} onChange={(event): void => setDraft({ ...draft, effectiveFrom: event.target.value })} required type="date" value={draft.effectiveFrom} />
+              </label>
+              <label className="text-sm font-semibold text-slate-700">
+                Tiền tệ
+                <input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" maxLength={3} onChange={(event): void => setDraft({ ...draft, currency: event.target.value })} required value={draft.currency} />
+              </label>
+            </div>
+
+            {priceMutation.error ? <p className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{friendlyApiError(priceMutation.error, "Không thể lưu mức giá. Ngày hiệu lực phải là hôm nay hoặc tương lai.")}</p> : null}
+            <div className="mt-6 flex justify-end gap-3">
+              <button className="action-secondary" onClick={(): void => setDraft(null)} type="button">Hủy</button>
+              <button className="action-primary" disabled={priceMutation.isPending} type="submit">
+                {priceMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : null}
+                Lưu phiên bản mới
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
     </div>
   );
 }

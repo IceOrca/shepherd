@@ -17,8 +17,8 @@ use crate::{AppContext, auth::AuthenticatedUser};
 use super::core::{
     BusinessRecordStatus, Customer, CustomerInput, CustomerWorkRecord, CustomerWorkRecordInput, ManualRateOverride,
     ShiftAssignment, ShiftAssignmentInput, StaffingCandidate, StaffingEligibility, StaffingEligibilityInput,
-    StaffingError, StaffingRate, StaffingRateInput, StaffingRateKind, StaffingReconciliation, StaffingShift,
-    StaffingShiftInput,
+    StaffingError, StaffingPriceSet, StaffingPriceSetInput, StaffingRate, StaffingReconciliation, StaffingShift,
+    StaffingShiftInput, StaffingStaff,
 };
 
 #[derive(Debug, Deserialize, TS)]
@@ -47,36 +47,24 @@ impl From<CustomerUpsertRequest> for CustomerInput {
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(optional_fields = nullable)]
-pub struct StaffingRateCreateRequest {
-    pub rate_kind: StaffingRateKind,
-    pub code: String,
-    pub name: String,
-    pub customer_id: Option<Uuid>,
+pub struct StaffingPriceSetRequest {
+    pub customer_id: Uuid,
     pub employee_id: Option<Uuid>,
-    pub job_id: Uuid,
     pub currency: String,
-    pub hourly_rate: String,
-    pub priority: i16,
+    pub customer_hourly_rate: String,
+    pub worker_hourly_rate: String,
     pub effective_from: NaiveDate,
-    pub effective_to: Option<NaiveDate>,
-    pub is_active: bool,
 }
 
-impl From<StaffingRateCreateRequest> for StaffingRateInput {
-    fn from(value: StaffingRateCreateRequest) -> Self {
+impl From<StaffingPriceSetRequest> for StaffingPriceSetInput {
+    fn from(value: StaffingPriceSetRequest) -> Self {
         Self {
-            rate_kind: value.rate_kind,
-            code: value.code.trim().to_ascii_lowercase(),
-            name: value.name.trim().to_owned(),
             customer_id: value.customer_id,
             employee_id: value.employee_id,
-            job_id: value.job_id,
             currency: value.currency.trim().to_ascii_uppercase(),
-            hourly_rate: value.hourly_rate.trim().to_owned(),
-            priority: value.priority,
+            customer_hourly_rate: value.customer_hourly_rate.trim().to_owned(),
+            worker_hourly_rate: value.worker_hourly_rate.trim().to_owned(),
             effective_from: value.effective_from,
-            effective_to: value.effective_to,
-            is_active: value.is_active,
         }
     }
 }
@@ -195,7 +183,9 @@ pub fn routes() -> Router<Arc<AppContext>> {
     Router::new()
         .route("/customers", get(list_customers).post(create_customer))
         .route("/customers/{customer_id}", put(update_customer))
-        .route("/staffing/rates", get(list_rates).post(create_rate))
+        .route("/staffing/rates", get(list_rates))
+        .route("/staffing/staff", get(list_staff))
+        .route("/staffing/prices", post(set_prices))
         .route(
             "/staffing/eligibilities",
             get(list_eligibilities).post(create_eligibility),
@@ -280,19 +270,33 @@ pub async fn list_rates(
         .map_err(|error| staffing_status("list staffing rates", &user, error))
 }
 
-pub async fn create_rate(
+pub async fn list_staff(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
-    Json(payload): Json<StaffingRateCreateRequest>,
-) -> Result<(StatusCode, Json<StaffingRate>), StatusCode> {
-    require_permission(&user, "business.staffing_rates.manage")?;
-    let rate: StaffingRate = context
+) -> Result<Json<Vec<StaffingStaff>>, StatusCode> {
+    require_permission(&user, "business.staffing_rates.read")?;
+    context
         .core
         .staffing
-        .create_rate(user.tenant_id, payload.into(), user.account_id)
+        .list_staff(user.tenant_id)
         .await
-        .map_err(|error| staffing_status("create staffing rate", &user, error))?;
-    Ok((StatusCode::CREATED, Json(rate)))
+        .map(Json)
+        .map_err(|error| staffing_status("list staffing staff", &user, error))
+}
+
+pub async fn set_prices(
+    State(context): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(payload): Json<StaffingPriceSetRequest>,
+) -> Result<(StatusCode, Json<StaffingPriceSet>), StatusCode> {
+    require_permission(&user, "business.staffing_rates.manage")?;
+    let prices: StaffingPriceSet = context
+        .core
+        .staffing
+        .set_prices(user.tenant_id, payload.into(), user.account_id)
+        .await
+        .map_err(|error| staffing_status("set staffing prices", &user, error))?;
+    Ok((StatusCode::CREATED, Json(prices)))
 }
 
 pub async fn list_eligibilities(

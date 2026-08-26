@@ -171,7 +171,6 @@ pub struct UrgentWorkReconcileInput {
     pub job_id: Uuid,
     pub worked_seconds: i64,
     pub adjustment_reason: Option<String>,
-    pub eligibility_exception_reason: Option<String>,
     pub manual_rate: Option<ManualRateOverride>,
 }
 
@@ -445,20 +444,6 @@ impl UrgentWorkService {
             .is_some_and(|reason: &str| !(3..=500).contains(&reason.len()))
         {
             return Err(UrgentWorkError::InvalidInput("urgent reconciliation reason is invalid"));
-        }
-        input.eligibility_exception_reason = input
-            .eligibility_exception_reason
-            .take()
-            .map(|reason: String| reason.trim().to_owned())
-            .filter(|reason: &String| !reason.is_empty());
-        if input
-            .eligibility_exception_reason
-            .as_deref()
-            .is_some_and(|reason: &str| !(3..=500).contains(&reason.len()))
-        {
-            return Err(UrgentWorkError::InvalidInput(
-                "urgent eligibility exception reason is invalid",
-            ));
         }
         if let Some(manual_rate) = input.manual_rate.as_mut() {
             manual_rate.reason = manual_rate.reason.trim().to_owned();

@@ -85,6 +85,12 @@ CREATE POLICY hr_employees_tenant_isolation ON hr_employees
     USING (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id))
     WITH CHECK (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id));
 
+ALTER TABLE hr_employee_sensitive_audit_log ENABLE ROW LEVEL SECURITY;
+ALTER TABLE hr_employee_sensitive_audit_log FORCE ROW LEVEL SECURITY;
+CREATE POLICY hr_employee_sensitive_audit_tenant_isolation ON hr_employee_sensitive_audit_log
+    USING (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id))
+    WITH CHECK (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id));
+
 ALTER TABLE hr_employee_assignments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE hr_employee_assignments FORCE ROW LEVEL SECURITY;
 CREATE POLICY hr_employee_assignments_tenant_isolation ON hr_employee_assignments

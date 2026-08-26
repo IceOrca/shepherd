@@ -15,11 +15,13 @@ import type {
   StaffingCandidate,
   StaffingEligibility,
   StaffingEligibilityCreateRequest,
+  StaffingPriceSet,
+  StaffingPriceSetRequest,
   StaffingRate,
-  StaffingRateCreateRequest,
   StaffingReconciliation,
   StaffingShift,
   StaffingShiftCreateRequest,
+  StaffingStaff,
   UrgentCustomerWorkRecord,
   UrgentCustomerWorkRecordUpsertRequest,
   UrgentWorkEmployee,
@@ -39,6 +41,7 @@ export const operationsQueryKeys = {
   jobs: ["operations", "jobs"] as const,
   employees: ["operations", "employees"] as const,
   staffingRates: ["operations", "staffing-rates"] as const,
+  staffingStaff: ["operations", "staffing-staff"] as const,
   staffingEligibilities: ["operations", "staffing-eligibilities"] as const,
   ownAssignments: ["operations", "own-assignments"] as const,
   reconciliations: ["operations", "reconciliations"] as const,
@@ -111,8 +114,12 @@ export function listStaffingRates(): Promise<StaffingRate[]> {
   return apiRequest<StaffingRate[]>("/api/business/staffing/rates");
 }
 
-export function createStaffingRate(payload: StaffingRateCreateRequest): Promise<StaffingRate> {
-  return apiRequest<StaffingRate>("/api/business/staffing/rates", {
+export function listStaffingStaff(): Promise<StaffingStaff[]> {
+  return apiRequest<StaffingStaff[]>("/api/business/staffing/staff");
+}
+
+export function setStaffingPrices(payload: StaffingPriceSetRequest): Promise<StaffingPriceSet> {
+  return apiRequest<StaffingPriceSet>("/api/business/staffing/prices", {
     method: "POST",
     body: JSON.stringify(payload),
   });

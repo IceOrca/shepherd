@@ -5,8 +5,10 @@ use chrono::{DateTime, NaiveDate, Utc};
 use tracing::{error, warn, info, debug, trace};
 use crate::features::people::core::{
     AttendanceSession, Department, DepartmentInput, Employee, EmployeeAssignment, EmployeeAssignmentInput,
-    EmployeeInput, EmployeeStatus, HrError, HrRecordStatus, JobPosition, JobPositionInput, PeopleRepo,
+    EmployeeCitizenIdInput, EmployeeInput, EmployeeSensitiveProfile, EmployeeStatus, Gender, HrError, HrRecordStatus,
+    JobPosition, JobPositionInput, PeopleRepo,
 };
+use crate::features::people::security::{CitizenIdProtector, ProtectedCitizenId};
 use uuid::Uuid;
 
 use infra_postgres::{DatabaseAdapter, TenantDbErr, TenantTransaction};
@@ -14,11 +16,17 @@ use sqlx::PgConnection;
 
 pub struct PeopleDb {
     db: Arc<DatabaseAdapter>,
+    citizen_id_protector: CitizenIdProtector,
 }
 
 impl PeopleDb {
     pub fn new_arc(db: Arc<DatabaseAdapter>) -> Arc<Self> {
-        Arc::new(Self { db })
+        let citizen_id_protector: CitizenIdProtector = CitizenIdProtector::from_env()
+            .unwrap_or_else(|error| panic!("employee citizen-ID protection configuration is invalid: {error}"));
+        Arc::new(Self {
+            db,
+            citizen_id_protector,
+        })
     }
 
     async fn begin_active_tenant(&self, tenant_id: Uuid) -> Result<TenantTransaction, HrError> {
@@ -27,22 +35,90 @@ impl PeopleDb {
             HrError::BackendUnavailable
         })
     }
+
+    fn sensitive_profile(
+        &self,
+        tenant_id: Uuid,
+        row: EmployeeSensitiveRow,
+    ) -> Result<EmployeeSensitiveProfile, HrError> {
+        let citizen_id: Option<String> = match (
+            row.citizen_id_country_code.as_deref(),
+            row.citizen_id_key_id.as_deref(),
+            row.citizen_id_ciphertext.as_deref(),
+        ) {
+            (None, None, None) => None,
+            (Some(country_code), Some(key_id), Some(ciphertext)) => Some(
+                self.citizen_id_protector
+                    .reveal(tenant_id, country_code, key_id, ciphertext)
+                    .map_err(|error| {
+                        error!(
+                            tenant_id = %tenant_id,
+                            employee_id = %row.employee_id,
+                            reason = %error,
+                            "Employee citizen ID could not be decrypted"
+                        );
+                        HrError::BackendUnavailable
+                    })?,
+            ),
+            _ => {
+                error!(
+                    tenant_id = %tenant_id,
+                    employee_id = %row.employee_id,
+                    "Employee citizen-ID storage is internally inconsistent"
+                );
+                return Err(HrError::BackendUnavailable);
+            }
+        };
+        Ok(EmployeeSensitiveProfile {
+            employee_id: row.employee_id,
+            citizen_id_country_code: row.citizen_id_country_code,
+            citizen_id,
+            version: row.version,
+        })
+    }
 }
 
 #[derive(Debug)]
 struct EmployeeRow {
     id: Uuid,
+    branch_id: Uuid,
     account_id: Option<Uuid>,
     employee_code: String,
     display_name: String,
+    legal_first_name: Option<String>,
+    legal_middle_name: Option<String>,
+    legal_last_name: Option<String>,
     work_email: Option<String>,
     work_phone: Option<String>,
+    personal_phone_e164: Option<String>,
+    gender: Option<String>,
     badge_id: Option<String>,
+    citizen_id_country_code: Option<String>,
+    citizen_id_last4: Option<String>,
+    profile_complete: bool,
     status: String,
     hire_date: NaiveDate,
     termination_date: Option<NaiveDate>,
+    version: i64,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug)]
+struct EmployeeSensitiveRow {
+    employee_id: Uuid,
+    citizen_id_country_code: Option<String>,
+    citizen_id_key_id: Option<String>,
+    citizen_id_ciphertext: Option<Vec<u8>>,
+    version: i64,
+}
+
+#[derive(Debug)]
+struct EmployeeSensitiveUpdateRow {
+    branch_id: Uuid,
+    citizen_id_country_code: Option<String>,
+    citizen_id_last4: Option<String>,
+    version: i64,
 }
 
 impl TryFrom<EmployeeRow> for Employee {
@@ -51,15 +127,28 @@ impl TryFrom<EmployeeRow> for Employee {
     fn try_from(row: EmployeeRow) -> Result<Self, Self::Error> {
         Ok(Self {
             id: row.id,
+            branch_id: row.branch_id,
             account_id: row.account_id,
             employee_code: row.employee_code,
             display_name: row.display_name,
+            legal_first_name: row.legal_first_name,
+            legal_middle_name: row.legal_middle_name,
+            legal_last_name: row.legal_last_name,
             work_email: row.work_email,
             work_phone: row.work_phone,
+            personal_phone_e164: row.personal_phone_e164,
+            gender: match row.gender.as_deref() {
+                Some(code) => Some(Gender::from_code(code).ok_or(HrError::BackendUnavailable)?),
+                None => None,
+            },
             badge_id: row.badge_id,
+            citizen_id_country_code: row.citizen_id_country_code,
+            citizen_id_last4: row.citizen_id_last4,
+            profile_complete: row.profile_complete,
             status: EmployeeStatus::from_code(&row.status).ok_or(HrError::BackendUnavailable)?,
             hire_date: row.hire_date,
             termination_date: row.termination_date,
+            version: row.version,
             created_at: row.created_at,
             updated_at: row.updated_at,
         })
@@ -189,8 +278,12 @@ impl PeopleRepo for PeopleDb {
                 sqlx::query_as!(
                     EmployeeRow,
                     r#"
-                    SELECT id, account_id, employee_code, display_name, work_email, work_phone, badge_id,
-                           status, hire_date, termination_date, created_at, updated_at
+                    SELECT id, branch_id, account_id, employee_code, display_name,
+                           legal_first_name, legal_middle_name, legal_last_name,
+                           work_email, work_phone, personal_phone_e164, gender, badge_id,
+                           citizen_id_country_code, citizen_id_last4,
+                           (legal_first_name IS NOT NULL AND legal_last_name IS NOT NULL) AS "profile_complete!",
+                           status, hire_date, termination_date, version, created_at, updated_at
                     FROM hr_employees
                     WHERE tenant_id = $1
                     ORDER BY lower(display_name), employee_code
@@ -217,8 +310,12 @@ impl PeopleRepo for PeopleDb {
                 sqlx::query_as!(
                     EmployeeRow,
                     r#"
-                    SELECT id, account_id, employee_code, display_name, work_email, work_phone, badge_id,
-                           status, hire_date, termination_date, created_at, updated_at
+                    SELECT id, branch_id, account_id, employee_code, display_name,
+                           legal_first_name, legal_middle_name, legal_last_name,
+                           work_email, work_phone, personal_phone_e164, gender, badge_id,
+                           citizen_id_country_code, citizen_id_last4,
+                           (legal_first_name IS NOT NULL AND legal_last_name IS NOT NULL) AS "profile_complete!",
+                           status, hire_date, termination_date, version, created_at, updated_at
                     FROM hr_employees
                     WHERE tenant_id = $1 AND id = $2
                     "#,
@@ -240,8 +337,12 @@ impl PeopleRepo for PeopleDb {
                 sqlx::query_as!(
                     EmployeeRow,
                     r#"
-                    SELECT id, account_id, employee_code, display_name, work_email, work_phone, badge_id,
-                           status, hire_date, termination_date, created_at, updated_at
+                    SELECT id, branch_id, account_id, employee_code, display_name,
+                           legal_first_name, legal_middle_name, legal_last_name,
+                           work_email, work_phone, personal_phone_e164, gender, badge_id,
+                           citizen_id_country_code, citizen_id_last4,
+                           (legal_first_name IS NOT NULL AND legal_last_name IS NOT NULL) AS "profile_complete!",
+                           status, hire_date, termination_date, version, created_at, updated_at
                     FROM hr_employees
                     WHERE tenant_id = $1 AND account_id = $2
                     "#,
@@ -259,6 +360,7 @@ impl PeopleRepo for PeopleDb {
     async fn create_employee(
         &self,
         tenant_id: Uuid,
+        branch_id: Uuid,
         employee_id: Uuid,
         input: &EmployeeInput,
         audit_account_id: Uuid,
@@ -270,20 +372,37 @@ impl PeopleRepo for PeopleDb {
                     EmployeeRow,
                     r#"
                     INSERT INTO hr_employees (
-                        id, tenant_id, account_id, employee_code, display_name, work_email, work_phone, badge_id,
+                        id, tenant_id, branch_id, account_id, employee_code, display_name,
+                        legal_first_name, legal_middle_name, legal_last_name,
+                        work_email, work_phone, personal_phone_e164, gender, badge_id,
                         status, hire_date, termination_date, created_by_account_id, updated_by_account_id
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12)
-                    RETURNING id, account_id, employee_code, display_name, work_email, work_phone, badge_id,
-                              status, hire_date, termination_date, created_at, updated_at
+                    VALUES (
+                        $1, $2, $3, $4, $5, $6,
+                        $7, $8, $9,
+                        $10, $11, $12, $13, $14,
+                        $15, $16, $17, $18, $18
+                    )
+                    RETURNING id, branch_id, account_id, employee_code, display_name,
+                              legal_first_name, legal_middle_name, legal_last_name,
+                              work_email, work_phone, personal_phone_e164, gender, badge_id,
+                              citizen_id_country_code, citizen_id_last4,
+                              (legal_first_name IS NOT NULL AND legal_last_name IS NOT NULL) AS "profile_complete!",
+                              status, hire_date, termination_date, version, created_at, updated_at
                     "#,
                     employee_id,
                     tenant_id,
+                    branch_id,
                     input.account_id,
                     input.employee_code,
                     input.display_name,
+                    input.legal_first_name,
+                    input.legal_middle_name,
+                    input.legal_last_name,
                     input.work_email,
                     input.work_phone,
+                    input.personal_phone_e164,
+                    input.gender.map(|gender: Gender| gender.as_code()),
                     input.badge_id,
                     input.status.as_code(),
                     input.hire_date,
@@ -309,6 +428,9 @@ impl PeopleRepo for PeopleDb {
         input: &EmployeeInput,
         audit_account_id: Uuid,
     ) -> Result<Employee, HrError> {
+        let expected_version: i64 = input
+            .expected_version
+            .ok_or(HrError::InvalidInput("employee update requires an expected version"))?;
         let mut transaction = self.begin_active_tenant(tenant_id).await?;
         if input.status == EmployeeStatus::Terminated {
             let termination_date = input.termination_date.ok_or(HrError::InvalidInput(
@@ -346,35 +468,51 @@ impl PeopleRepo for PeopleDb {
             SET account_id = $3,
                 employee_code = $4,
                 display_name = $5,
-                work_email = $6,
-                work_phone = $7,
-                badge_id = $8,
-                status = $9,
-                hire_date = $10,
-                termination_date = $11,
+                legal_first_name = $6,
+                legal_middle_name = $7,
+                legal_last_name = $8,
+                work_email = $9,
+                work_phone = $10,
+                personal_phone_e164 = $11,
+                gender = $12,
+                badge_id = $13,
+                status = $14,
+                hire_date = $15,
+                termination_date = $16,
+                version = version + 1,
                 updated_at = CURRENT_TIMESTAMP,
-                updated_by_account_id = $12
-            WHERE tenant_id = $1 AND id = $2
-            RETURNING id, account_id, employee_code, display_name, work_email, work_phone, badge_id,
-                      status, hire_date, termination_date, created_at, updated_at
+                updated_by_account_id = $17
+            WHERE tenant_id = $1 AND id = $2 AND version = $18
+            RETURNING id, branch_id, account_id, employee_code, display_name,
+                      legal_first_name, legal_middle_name, legal_last_name,
+                      work_email, work_phone, personal_phone_e164, gender, badge_id,
+                      citizen_id_country_code, citizen_id_last4,
+                      (legal_first_name IS NOT NULL AND legal_last_name IS NOT NULL) AS "profile_complete!",
+                      status, hire_date, termination_date, version, created_at, updated_at
             "#,
             tenant_id,
             employee_id,
             input.account_id,
             input.employee_code,
             input.display_name,
+            input.legal_first_name,
+            input.legal_middle_name,
+            input.legal_last_name,
             input.work_email,
             input.work_phone,
+            input.personal_phone_e164,
+            input.gender.map(|gender: Gender| gender.as_code()),
             input.badge_id,
             input.status.as_code(),
             input.hire_date,
             input.termination_date,
             audit_account_id,
+            expected_version,
         )
         .fetch_optional(transaction.connection())
         .await
         .map_err(|error| mutation_failure("update employee", tenant_id, error))?;
-        let row: EmployeeRow = row.ok_or(HrError::NotFound)?;
+        let row: EmployeeRow = row.ok_or(HrError::Conflict)?;
         if let Some(termination_date) = input.termination_date {
             sqlx::query!(
                 r#"
@@ -427,6 +565,200 @@ impl PeopleRepo for PeopleDb {
             audit_account_id
         );
         Employee::try_from(row)
+    }
+
+    async fn find_employee_sensitive_profile(
+        &self,
+        tenant_id: Uuid,
+        employee_id: Uuid,
+    ) -> Result<Option<EmployeeSensitiveProfile>, HrError> {
+        let row: Option<EmployeeSensitiveRow> = self
+            .db
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                sqlx::query_as!(
+                    EmployeeSensitiveRow,
+                    r#"
+                    SELECT id AS employee_id, citizen_id_country_code, citizen_id_key_id,
+                           citizen_id_ciphertext, version
+                    FROM hr_employees
+                    WHERE tenant_id = $1 AND id = $2
+                    "#,
+                    tenant_id,
+                    employee_id,
+                )
+                .fetch_optional(connection)
+                .await
+            })
+            .await
+            .map_err(|error: TenantDbErr| {
+                tenant_database_failure("find sensitive employee profile", tenant_id, error)
+            })?;
+        row.map(|sensitive_row: EmployeeSensitiveRow| self.sensitive_profile(tenant_id, sensitive_row))
+            .transpose()
+    }
+
+    async fn find_employee_sensitive_profile_by_account(
+        &self,
+        tenant_id: Uuid,
+        account_id: Uuid,
+    ) -> Result<Option<EmployeeSensitiveProfile>, HrError> {
+        let row: Option<EmployeeSensitiveRow> = self
+            .db
+            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+                sqlx::query_as!(
+                    EmployeeSensitiveRow,
+                    r#"
+                    SELECT id AS employee_id, citizen_id_country_code, citizen_id_key_id,
+                           citizen_id_ciphertext, version
+                    FROM hr_employees
+                    WHERE tenant_id = $1 AND account_id = $2
+                    "#,
+                    tenant_id,
+                    account_id,
+                )
+                .fetch_optional(connection)
+                .await
+            })
+            .await
+            .map_err(|error: TenantDbErr| {
+                tenant_database_failure("find own sensitive employee profile", tenant_id, error)
+            })?;
+        row.map(|sensitive_row: EmployeeSensitiveRow| self.sensitive_profile(tenant_id, sensitive_row))
+            .transpose()
+    }
+
+    async fn update_employee_citizen_id(
+        &self,
+        tenant_id: Uuid,
+        employee_id: Uuid,
+        input: &EmployeeCitizenIdInput,
+        audit_account_id: Uuid,
+    ) -> Result<EmployeeSensitiveProfile, HrError> {
+        let protected: Option<ProtectedCitizenId> =
+            match (input.citizen_id_country_code.as_deref(), input.citizen_id.as_deref()) {
+                (Some(country_code), Some(citizen_id)) => Some(
+                    self.citizen_id_protector
+                        .protect(tenant_id, country_code, citizen_id)
+                        .map_err(|error| {
+                            error!(
+                                tenant_id = %tenant_id,
+                                employee_id = %employee_id,
+                                reason = %error,
+                                "Employee citizen ID could not be encrypted"
+                            );
+                            HrError::BackendUnavailable
+                        })?,
+                ),
+                (None, None) => None,
+                _ => return Err(HrError::InvalidInput("citizen ID input is inconsistent")),
+            };
+        let mut transaction: TenantTransaction = self.begin_active_tenant(tenant_id).await?;
+        let current: Option<EmployeeSensitiveUpdateRow> = sqlx::query_as!(
+            EmployeeSensitiveUpdateRow,
+            r#"
+            SELECT branch_id, citizen_id_country_code, citizen_id_last4, version
+            FROM hr_employees
+            WHERE tenant_id = $1 AND id = $2
+            FOR UPDATE
+            "#,
+            tenant_id,
+            employee_id,
+        )
+        .fetch_optional(transaction.connection())
+        .await
+        .map_err(|error| database_failure("lock employee citizen ID", tenant_id, error))?;
+        let current: EmployeeSensitiveUpdateRow = current.ok_or(HrError::NotFound)?;
+        if current.version != input.expected_version {
+            return Err(HrError::Conflict);
+        }
+        let action: &str = match (current.citizen_id_last4.is_some(), protected.is_some()) {
+            (false, true) => "set",
+            (true, true) => "replace",
+            (true, false) => "clear",
+            (false, false) => "clear",
+        };
+        let new_country_code: Option<&str> = input.citizen_id_country_code.as_deref();
+        let new_citizen_id: Option<&str> = input.citizen_id.as_deref();
+        let new_key_id: Option<&str> = protected
+            .as_ref()
+            .map(|value: &ProtectedCitizenId| value.key_id.as_str());
+        let new_ciphertext: Option<&[u8]> = protected
+            .as_ref()
+            .map(|value: &ProtectedCitizenId| value.ciphertext.as_slice());
+        let new_lookup_hmac: Option<&[u8]> = protected
+            .as_ref()
+            .map(|value: &ProtectedCitizenId| value.lookup_hmac.as_slice());
+        let new_last4: Option<&str> = protected
+            .as_ref()
+            .map(|value: &ProtectedCitizenId| value.last4.as_str());
+        let version: i64 = sqlx::query_scalar!(
+            r#"
+            UPDATE hr_employees
+            SET citizen_id_country_code = $3,
+                citizen_id_key_id = $4,
+                citizen_id_ciphertext = $5,
+                citizen_id_lookup_hmac = $6,
+                citizen_id_last4 = $7,
+                version = version + 1,
+                updated_at = CURRENT_TIMESTAMP,
+                updated_by_account_id = $8
+            WHERE tenant_id = $1 AND id = $2 AND version = $9
+            RETURNING version
+            "#,
+            tenant_id,
+            employee_id,
+            new_country_code,
+            new_key_id,
+            new_ciphertext,
+            new_lookup_hmac,
+            new_last4,
+            audit_account_id,
+            input.expected_version,
+        )
+        .fetch_optional(transaction.connection())
+        .await
+        .map_err(|error| mutation_failure("update employee citizen ID", tenant_id, error))?
+        .ok_or(HrError::Conflict)?;
+        sqlx::query!(
+            r#"
+            INSERT INTO hr_employee_sensitive_audit_log (
+                id, tenant_id, branch_id, employee_id, action,
+                previous_country_code, previous_last4, new_country_code, new_last4,
+                changed_by_account_id
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            "#,
+            Uuid::new_v4(),
+            tenant_id,
+            current.branch_id,
+            employee_id,
+            action,
+            current.citizen_id_country_code,
+            current.citizen_id_last4,
+            new_country_code,
+            new_last4,
+            audit_account_id,
+        )
+        .execute(transaction.connection())
+        .await
+        .map_err(|error| database_failure("audit employee citizen ID update", tenant_id, error))?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| database_failure("commit employee citizen ID update", tenant_id, error))?;
+        info!(
+            tenant_id = %tenant_id,
+            employee_id = %employee_id,
+            action,
+            audit_account_id = %audit_account_id,
+            "Employee citizen ID updated without logging credential material"
+        );
+        Ok(EmployeeSensitiveProfile {
+            employee_id,
+            citizen_id_country_code: input.citizen_id_country_code.clone(),
+            citizen_id: new_citizen_id.map(str::to_owned),
+            version,
+        })
     }
 
     async fn list_departments(&self, tenant_id: Uuid) -> Result<Vec<Department>, HrError> {

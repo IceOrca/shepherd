@@ -9,8 +9,9 @@ use uuid::Uuid;
 use super::core::{
     BusinessRecordStatus, Customer, CustomerInput, CustomerWorkRecord, CustomerWorkRecordInput, ManualRateOverride,
     RateSource, ReconciliationStatus, ShiftAssignment, ShiftAssignmentInput, ShiftAssignmentStatus, StaffingCandidate,
-    StaffingEligibility, StaffingEligibilityInput, StaffingError, StaffingRate, StaffingRateInput, StaffingRateKind,
-    StaffingReconciliation, StaffingRepo, StaffingShift, StaffingShiftInput, StaffingShiftStatus,
+    StaffingEligibility, StaffingEligibilityInput, StaffingError, StaffingPriceSet, StaffingPriceSetInput,
+    StaffingRate, StaffingRateKind, StaffingReconciliation, StaffingRepo, StaffingShift, StaffingShiftInput,
+    StaffingShiftStatus, StaffingStaff,
 };
 
 pub struct StaffingDb {
@@ -90,7 +91,6 @@ struct StaffingRateRow {
     name: String,
     customer_id: Option<Uuid>,
     employee_id: Option<Uuid>,
-    job_id: Uuid,
     currency: String,
     hourly_rate: String,
     priority: i16,
@@ -110,7 +110,6 @@ impl From<StaffingRateRow> for StaffingRate {
             name: row.name,
             customer_id: row.customer_id,
             employee_id: row.employee_id,
-            job_id: row.job_id,
             currency: row.currency,
             hourly_rate: row.hourly_rate,
             priority: row.priority,
@@ -118,6 +117,23 @@ impl From<StaffingRateRow> for StaffingRate {
             effective_to: row.effective_to,
             is_active: row.is_active,
             created_at: row.created_at,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct StaffingStaffRow {
+    employee_id: Uuid,
+    employee_code: String,
+    display_name: String,
+}
+
+impl From<StaffingStaffRow> for StaffingStaff {
+    fn from(row: StaffingStaffRow) -> Self {
+        Self {
+            employee_id: row.employee_id,
+            employee_code: row.employee_code,
+            display_name: row.display_name,
         }
     }
 }
@@ -236,7 +252,6 @@ impl TryFrom<AssignmentRow> for ShiftAssignment {
 #[derive(Debug)]
 struct ShiftRateContext {
     customer_id: Uuid,
-    job_id: Uuid,
     work_date: NaiveDate,
     starts_at: DateTime<Utc>,
     ends_at: DateTime<Utc>,
@@ -453,7 +468,7 @@ impl StaffingRepo for StaffingDb {
                 sqlx::query_as!(
                     StaffingRateRow,
                     r#"
-                    SELECT id, rate_kind, code, name, customer_id, employee_id, job_id, currency,
+                    SELECT id, rate_kind, code, name, customer_id, employee_id, currency,
                            hourly_rate::TEXT AS "hourly_rate!",
                            priority, effective_from, effective_to, is_active, created_at
                     FROM business_staffing_rates
@@ -470,54 +485,168 @@ impl StaffingRepo for StaffingDb {
         Ok(rows.into_iter().map(StaffingRate::from).collect())
     }
 
-    async fn create_rate(
-        &self,
-        tenant_id: Uuid,
-        rate_id: Uuid,
-        input: &StaffingRateInput,
-        audit_account_id: Uuid,
-    ) -> Result<StaffingRate, StaffingError> {
-        let row: StaffingRateRow = self
+    async fn list_staff(&self, tenant_id: Uuid) -> Result<Vec<StaffingStaff>, StaffingError> {
+        let rows: Vec<StaffingStaffRow> = self
             .db
             .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
                 sqlx::query_as!(
-                    StaffingRateRow,
+                    StaffingStaffRow,
                     r#"
-                    INSERT INTO business_staffing_rates (
-                        id, tenant_id, rate_kind, code, name, customer_id, employee_id,
-                        job_id, currency, hourly_rate, priority, effective_from,
-                        effective_to, is_active, created_by_account_id
-                    )
-                    VALUES (
-                        $1, $2, $3, $4, $5, $6, $7, $8, $9,
-                        $10::TEXT::NUMERIC, $11, $12, $13, $14, $15
-                    )
-                    RETURNING id, rate_kind, code, name, customer_id, employee_id, job_id, currency,
-                              hourly_rate::TEXT AS "hourly_rate!",
-                              priority, effective_from, effective_to, is_active, created_at
+                    SELECT employee.id AS employee_id, employee.employee_code, employee.display_name
+                    FROM hr_employees AS employee
+                    INNER JOIN accounts AS account
+                        ON account.tenant_id = employee.tenant_id
+                       AND account.id = employee.account_id
+                    WHERE employee.tenant_id = $1
+                      AND employee.status = 'active'
+                      AND account.status = 'active'
+                      AND account.primary_role_code = 'staff'
+                    ORDER BY lower(employee.display_name), employee.employee_code, employee.id
                     "#,
-                    rate_id,
                     tenant_id,
-                    input.rate_kind.as_code(),
-                    input.code,
-                    input.name,
-                    input.customer_id,
-                    input.employee_id,
-                    input.job_id,
-                    input.currency,
-                    input.hourly_rate,
-                    input.priority,
-                    input.effective_from,
-                    input.effective_to,
-                    input.is_active,
-                    audit_account_id,
                 )
-                .fetch_one(connection)
+                .fetch_all(connection)
                 .await
             })
             .await
-            .map_err(|error: TenantDbErr| tenant_mutation_failure("create staffing rate", tenant_id, error))?;
-        Ok(row.into())
+            .map_err(|error: TenantDbErr| tenant_database_failure("list staffing staff", tenant_id, error))?;
+        Ok(rows.into_iter().map(StaffingStaff::from).collect())
+    }
+
+    async fn set_prices(
+        &self,
+        tenant_id: Uuid,
+        input: &StaffingPriceSetInput,
+        audit_account_id: Uuid,
+    ) -> Result<StaffingPriceSet, StaffingError> {
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        let customer_context: Option<(Uuid, NaiveDate)> = sqlx::query_as(
+            r#"
+            SELECT branch_id, (CURRENT_TIMESTAMP AT TIME ZONE time_zone)::DATE
+            FROM business_customers
+            WHERE tenant_id = $1 AND id = $2 AND status = 'active'
+            FOR UPDATE
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(input.customer_id)
+        .fetch_optional(transaction.connection())
+        .await
+        .map_err(|error| database_failure("lock staffing price customer", tenant_id, error))?;
+        let (branch_id, customer_today): (Uuid, NaiveDate) = customer_context.ok_or(StaffingError::NotFound)?;
+        if input.effective_from < customer_today {
+            return Err(StaffingError::InvalidInput(
+                "historical staffing prices cannot be changed",
+            ));
+        }
+        if let Some(employee_id) = input.employee_id {
+            let is_active_staff: bool = sqlx::query_scalar!(
+                r#"
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM hr_employees AS employee
+                    INNER JOIN accounts AS account
+                        ON account.tenant_id = employee.tenant_id
+                       AND account.id = employee.account_id
+                    WHERE employee.tenant_id = $1
+                      AND employee.branch_id = $2
+                      AND employee.id = $3
+                      AND employee.status = 'active'
+                      AND account.status = 'active'
+                      AND account.primary_role_code = 'staff'
+                ) AS "exists!"
+                "#,
+                tenant_id,
+                branch_id,
+                employee_id,
+            )
+            .fetch_one(transaction.connection())
+            .await
+            .map_err(|error| database_failure("validate staffing price staff", tenant_id, error))?;
+            if !is_active_staff {
+                return Err(StaffingError::InvalidInput(
+                    "staffing price employee must be active staff",
+                ));
+            }
+        }
+
+        for rate_kind in ["customer_bill", "worker_pay"] {
+            sqlx::query(
+                r#"
+                UPDATE business_staffing_rates
+                SET is_active = FALSE,
+                    superseded_at = CURRENT_TIMESTAMP,
+                    superseded_by_account_id = $5
+                WHERE tenant_id = $1
+                  AND rate_kind = $2
+                  AND customer_id = $3
+                  AND employee_id IS NOT DISTINCT FROM $4
+                  AND is_active
+                  AND effective_from >= $6
+                "#,
+            )
+            .bind(tenant_id)
+            .bind(rate_kind)
+            .bind(input.customer_id)
+            .bind(input.employee_id)
+            .bind(audit_account_id)
+            .bind(input.effective_from)
+            .execute(transaction.connection())
+            .await
+            .map_err(|error| mutation_failure("supersede future staffing prices", tenant_id, error))?;
+
+            sqlx::query(
+                r#"
+                UPDATE business_staffing_rates
+                SET effective_to = $6 - 1,
+                    superseded_at = CURRENT_TIMESTAMP,
+                    superseded_by_account_id = $5
+                WHERE tenant_id = $1
+                  AND rate_kind = $2
+                  AND customer_id = $3
+                  AND employee_id IS NOT DISTINCT FROM $4
+                  AND is_active
+                  AND effective_from < $6
+                  AND (effective_to IS NULL OR effective_to >= $6)
+                "#,
+            )
+            .bind(tenant_id)
+            .bind(rate_kind)
+            .bind(input.customer_id)
+            .bind(input.employee_id)
+            .bind(audit_account_id)
+            .bind(input.effective_from)
+            .execute(transaction.connection())
+            .await
+            .map_err(|error| mutation_failure("close current staffing prices", tenant_id, error))?;
+        }
+
+        let customer_bill_rate: StaffingRateRow = insert_price_rate(
+            transaction.connection(),
+            tenant_id,
+            input,
+            audit_account_id,
+            StaffingRateKind::CustomerBill,
+            &input.customer_hourly_rate,
+        )
+        .await?;
+        let worker_pay_rate: StaffingRateRow = insert_price_rate(
+            transaction.connection(),
+            tenant_id,
+            input,
+            audit_account_id,
+            StaffingRateKind::WorkerPay,
+            &input.worker_hourly_rate,
+        )
+        .await?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| database_failure("commit staffing prices", tenant_id, error))?;
+        Ok(StaffingPriceSet {
+            customer_bill_rate: customer_bill_rate.into(),
+            worker_pay_rate: worker_pay_rate.into(),
+        })
     }
 
     async fn list_eligibilities(&self, tenant_id: Uuid) -> Result<Vec<StaffingEligibility>, StaffingError> {
@@ -687,24 +816,12 @@ impl StaffingRepo for StaffingDb {
                     CandidateRow,
                     r#"
             WITH target AS (
-                SELECT shift.id, shift.job_id, shift.starts_at, shift.ends_at,
-                       (shift.starts_at AT TIME ZONE customer.time_zone)::DATE AS work_date
+                SELECT shift.id, shift.starts_at, shift.ends_at
                 FROM business_staffing_shifts AS shift
-                INNER JOIN business_customers AS customer
-                    ON customer.tenant_id = shift.tenant_id
-                   AND customer.id = shift.customer_id
                 WHERE shift.tenant_id = $1 AND shift.id = $2
             )
             SELECT employee.id AS employee_id, employee.employee_code, employee.display_name,
-                   EXISTS (
-                       SELECT 1 FROM business_staffing_employee_eligibilities AS employee_assignment
-                       WHERE employee_assignment.tenant_id = employee.tenant_id
-                         AND employee_assignment.employee_id = employee.id
-                         AND employee_assignment.job_id = target.job_id
-                         AND employee_assignment.effective_from <= target.work_date
-                         AND (employee_assignment.effective_to IS NULL
-                              OR employee_assignment.effective_to >= target.work_date)
-                   ) AS "suitable!",
+                   TRUE AS "suitable!",
                    NOT EXISTS (
                        SELECT 1
                        FROM business_shift_assignments AS existing_assignment
@@ -741,9 +858,15 @@ impl StaffingRepo for StaffingDb {
                        LIMIT 1
                    ) AS conflict_shift_id
             FROM hr_employees AS employee
+            INNER JOIN accounts AS account
+                ON account.tenant_id = employee.tenant_id
+               AND account.id = employee.account_id
             CROSS JOIN target
-            WHERE employee.tenant_id = $1 AND employee.status = 'active'
-            ORDER BY "suitable!" DESC, "available!" DESC, lower(employee.display_name), employee.employee_code
+            WHERE employee.tenant_id = $1
+              AND employee.status = 'active'
+              AND account.status = 'active'
+              AND account.primary_role_code = 'staff'
+            ORDER BY "available!" DESC, lower(employee.display_name), employee.employee_code
             "#,
                     tenant_id,
                     shift_id,
@@ -775,7 +898,7 @@ impl StaffingRepo for StaffingDb {
         let shift: Option<ShiftRateContext> = sqlx::query_as!(
             ShiftRateContext,
             r#"
-            SELECT shift.customer_id, shift.job_id,
+            SELECT shift.customer_id,
                    (shift.starts_at AT TIME ZONE customer.time_zone)::DATE AS "work_date!",
                    shift.starts_at, shift.ends_at, shift.status
             FROM business_staffing_shifts AS shift
@@ -806,11 +929,19 @@ impl StaffingRepo for StaffingDb {
             return Err(StaffingError::Conflict);
         }
 
-        let employee_is_active: bool = sqlx::query_scalar!(
+        let employee_is_active_staff: bool = sqlx::query_scalar!(
             r#"
             SELECT EXISTS (
-                SELECT 1 FROM hr_employees
-                WHERE tenant_id = $1 AND id = $2 AND status = 'active'
+                SELECT 1
+                FROM hr_employees AS employee
+                INNER JOIN accounts AS account
+                    ON account.tenant_id = employee.tenant_id
+                   AND account.id = employee.account_id
+                WHERE employee.tenant_id = $1
+                  AND employee.id = $2
+                  AND employee.status = 'active'
+                  AND account.status = 'active'
+                  AND account.primary_role_code = 'staff'
             ) AS "exists!"
             "#,
             tenant_id,
@@ -819,33 +950,8 @@ impl StaffingRepo for StaffingDb {
         .fetch_one(transaction.connection())
         .await
         .map_err(|error| database_failure("validate staffing employee", tenant_id, error))?;
-        if !employee_is_active {
+        if !employee_is_active_staff {
             return Err(StaffingError::NotFound);
-        }
-
-        let employee_is_suitable: bool = sqlx::query_scalar!(
-            r#"
-            SELECT EXISTS (
-                SELECT 1 FROM business_staffing_employee_eligibilities
-                WHERE tenant_id = $1
-                  AND employee_id = $2
-                  AND job_id = $3
-                  AND effective_from <= $4
-                  AND (effective_to IS NULL OR effective_to >= $4)
-            ) AS "exists!"
-            "#,
-            tenant_id,
-            input.employee_id,
-            shift.job_id,
-            shift.work_date,
-        )
-        .fetch_one(transaction.connection())
-        .await
-        .map_err(|error| database_failure("validate staffing job suitability", tenant_id, error))?;
-        if !employee_is_suitable {
-            return Err(StaffingError::InvalidInput(
-                "employee is not suitable for the staffing job",
-            ));
         }
 
         let employee_is_available: bool = sqlx::query_scalar!(
@@ -909,10 +1015,9 @@ impl StaffingRepo for StaffingDb {
                         WHERE tenant_id = $1
                           AND rate_kind = 'customer_bill'
                           AND customer_id = $2
-                          AND job_id = $3
-                          AND (employee_id IS NULL OR employee_id = $4)
-                          AND effective_from <= $5
-                          AND (effective_to IS NULL OR effective_to >= $5)
+                          AND (employee_id IS NULL OR employee_id = $3)
+                          AND effective_from <= $4
+                          AND (effective_to IS NULL OR effective_to >= $4)
                           AND is_active
                         ORDER BY
                             (employee_id IS NOT NULL) DESC,
@@ -923,7 +1028,6 @@ impl StaffingRepo for StaffingDb {
                         "#,
                     tenant_id,
                     shift.customer_id,
-                    shift.job_id,
                     input.employee_id,
                     shift.work_date,
                 )
@@ -939,10 +1043,9 @@ impl StaffingRepo for StaffingDb {
                         WHERE tenant_id = $1
                           AND rate_kind = 'worker_pay'
                           AND (customer_id IS NULL OR customer_id = $2)
-                          AND job_id = $3
-                          AND (employee_id IS NULL OR employee_id = $4)
-                          AND effective_from <= $5
-                          AND (effective_to IS NULL OR effective_to >= $5)
+                          AND (employee_id IS NULL OR employee_id = $3)
+                          AND effective_from <= $4
+                          AND (effective_to IS NULL OR effective_to >= $4)
                           AND is_active
                         ORDER BY
                             (employee_id IS NOT NULL) DESC,
@@ -954,7 +1057,6 @@ impl StaffingRepo for StaffingDb {
                         "#,
                     tenant_id,
                     shift.customer_id,
-                    shift.job_id,
                     input.employee_id,
                     shift.work_date,
                 )
@@ -1389,6 +1491,61 @@ impl StaffingRepo for StaffingDb {
         let row: CustomerWorkRecordRow = row.ok_or(StaffingError::Conflict)?;
         Ok(row.into())
     }
+}
+
+async fn insert_price_rate(
+    connection: &mut sqlx::PgConnection,
+    tenant_id: Uuid,
+    input: &StaffingPriceSetInput,
+    audit_account_id: Uuid,
+    rate_kind: StaffingRateKind,
+    hourly_rate: &str,
+) -> Result<StaffingRateRow, StaffingError> {
+    let rate_id: Uuid = Uuid::new_v4();
+    let kind_code: &str = rate_kind.as_code();
+    let short_kind: &str = if rate_kind == StaffingRateKind::CustomerBill {
+        "bill"
+    } else {
+        "pay"
+    };
+    let code: String = format!("price-{short_kind}-{}", &rate_id.simple().to_string()[..16]);
+    let scope_name: &str = if input.employee_id.is_some() {
+        "staff override"
+    } else {
+        "all staff default"
+    };
+    let name: String = format!("{scope_name} {short_kind} from {}", input.effective_from);
+    sqlx::query_as!(
+        StaffingRateRow,
+        r#"
+        INSERT INTO business_staffing_rates (
+            id, tenant_id, rate_kind, code, name, customer_id, employee_id,
+            currency, hourly_rate, priority, effective_from, is_active,
+            created_by_account_id
+        )
+        VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9::TEXT::NUMERIC,
+            0, $10, TRUE, $11
+        )
+        RETURNING id, rate_kind, code, name, customer_id, employee_id, currency,
+                  hourly_rate::TEXT AS "hourly_rate!", priority, effective_from,
+                  effective_to, is_active, created_at
+        "#,
+        rate_id,
+        tenant_id,
+        kind_code,
+        code,
+        name,
+        input.customer_id,
+        input.employee_id,
+        input.currency,
+        hourly_rate,
+        input.effective_from,
+        audit_account_id,
+    )
+    .fetch_one(connection)
+    .await
+    .map_err(|error| mutation_failure("insert staffing price", tenant_id, error))
 }
 
 async fn list_assignments(

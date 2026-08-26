@@ -380,7 +380,10 @@ async fn seed_tenant(
         tenant_id,
         tenant.accounts.len(),
         DEV_BRANCHES.len(),
-        seeded_accounts.len()
+        seeded_accounts
+            .iter()
+            .filter(|account: &&SeedAccount| account.role != DevRole::TenantOwner)
+            .count()
     );
     Ok(())
 }
@@ -506,7 +509,6 @@ async fn seed_staffing_business(
         "Karaoke A default staff rate",
         karaoke_a_id,
         None,
-        job_id,
         "150000.0000",
         "120000.0000",
         0,
@@ -522,7 +524,6 @@ async fn seed_staffing_business(
         "Karaoke B default staff rate",
         karaoke_b_id,
         None,
-        job_id,
         "180000.0000",
         "135000.0000",
         0,
@@ -538,7 +539,6 @@ async fn seed_staffing_business(
         "Karaoke B worker-specific rate",
         karaoke_b_id,
         Some(employee_id),
-        job_id,
         "180000.0000",
         "145000.0000",
         100,
@@ -779,7 +779,6 @@ async fn ensure_staffing_rate(
     name: &str,
     customer_id: Uuid,
     employee_id: Option<Uuid>,
-    job_id: Uuid,
     bill_hourly_rate: &str,
     worker_hourly_rate: &str,
     priority: i16,
@@ -795,7 +794,6 @@ async fn ensure_staffing_rate(
         &format!("{name} - customer bill"),
         Some(customer_id),
         employee_id,
-        job_id,
         bill_hourly_rate,
         priority,
         effective_from,
@@ -811,7 +809,6 @@ async fn ensure_staffing_rate(
         &format!("{name} - worker pay"),
         Some(customer_id),
         employee_id,
-        job_id,
         worker_hourly_rate,
         priority,
         effective_from,
@@ -831,7 +828,6 @@ async fn ensure_staffing_hourly_rate(
     name: &str,
     customer_id: Option<Uuid>,
     employee_id: Option<Uuid>,
-    job_id: Uuid,
     hourly_rate: &str,
     priority: i16,
     effective_from: NaiveDate,
@@ -841,18 +837,17 @@ async fn ensure_staffing_hourly_rate(
         r#"
         INSERT INTO business_staffing_rates (
             id, tenant_id, branch_id, rate_kind, code, name, customer_id,
-            employee_id, job_id, currency, hourly_rate, priority, effective_from,
+            employee_id, currency, hourly_rate, priority, effective_from,
             is_active, created_by_account_id
         )
         VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, 'VND',
-            $10::TEXT::NUMERIC, $11, $12, TRUE, $13
+            $1, $2, $3, $4, $5, $6, $7, $8, 'VND',
+            $9::TEXT::NUMERIC, $10, $11, TRUE, $12
         )
         ON CONFLICT (tenant_id, branch_id, rate_kind, code, effective_from) DO UPDATE
         SET name = EXCLUDED.name,
             customer_id = EXCLUDED.customer_id,
             employee_id = EXCLUDED.employee_id,
-            job_id = EXCLUDED.job_id,
             currency = EXCLUDED.currency,
             hourly_rate = EXCLUDED.hourly_rate,
             priority = EXCLUDED.priority,
@@ -868,7 +863,6 @@ async fn ensure_staffing_hourly_rate(
         name,
         customer_id,
         employee_id,
-        job_id,
         hourly_rate,
         priority,
         effective_from,
@@ -954,24 +948,6 @@ async fn seed_hr_infra(
     .fetch_one(transaction.connection())
     .await
     .map_err(io::Error::other)?;
-    let north_administration_department_id: Uuid = sqlx::query_scalar!(
-        r#"
-        INSERT INTO hr_departments (
-            id, tenant_id, branch_id, code, name, status, created_by_account_id, updated_by_account_id
-        ) VALUES ($1, $2, $3, 'administration', 'Administration', 'active', $4, $4)
-        ON CONFLICT (tenant_id, branch_id, lower(code)) DO UPDATE
-        SET name = EXCLUDED.name, status = 'active', updated_at = CURRENT_TIMESTAMP,
-            updated_by_account_id = EXCLUDED.updated_by_account_id
-        RETURNING id
-        "#,
-        Uuid::new_v4(),
-        tenant_id,
-        north_branch_id,
-        owner_account_id,
-    )
-    .fetch_one(transaction.connection())
-    .await
-    .map_err(io::Error::other)?;
     let north_operations_department_id: Uuid = sqlx::query_scalar!(
         r#"
         INSERT INTO hr_departments (
@@ -991,16 +967,6 @@ async fn seed_hr_infra(
     .await
     .map_err(io::Error::other)?;
 
-    let owner_job_id: Uuid = ensure_dev_job(
-        &mut transaction,
-        tenant_id,
-        head_office_branch_id,
-        "owner",
-        "Owner",
-        administration_department_id,
-        owner_account_id,
-    )
-    .await?;
     let supervisor_job_id: Uuid = ensure_dev_job(
         &mut transaction,
         tenant_id,
@@ -1018,16 +984,6 @@ async fn seed_hr_infra(
         "employee",
         "Employee",
         operations_department_id,
-        owner_account_id,
-    )
-    .await?;
-    let north_owner_job_id: Uuid = ensure_dev_job(
-        &mut transaction,
-        tenant_id,
-        north_branch_id,
-        "owner",
-        "Owner",
-        north_administration_department_id,
         owner_account_id,
     )
     .await?;
@@ -1055,27 +1011,26 @@ async fn seed_hr_infra(
     let mut employee_ids: HashMap<Uuid, Uuid> = HashMap::new();
     let mut employee_branch_ids: HashMap<Uuid, Uuid> = HashMap::new();
     for account in accounts {
-        let employee_branch_id: Uuid = if account.role == DevRole::TenantOwner {
-            head_office_branch_id
-        } else {
-            sqlx::query_scalar!(
-                r#"
-                SELECT assignment.branch_id
-                FROM account_branch_assignments AS assignment
-                INNER JOIN branches AS branch
-                    ON branch.tenant_id = assignment.tenant_id
-                   AND branch.id = assignment.branch_id
-                WHERE assignment.tenant_id = $1 AND assignment.account_id = $2
-                ORDER BY CASE WHEN branch.code = 'head-office' THEN 0 ELSE 1 END, branch.code
-                LIMIT 1
-                "#,
-                tenant_id,
-                account.id,
-            )
-            .fetch_one(transaction.connection())
-            .await
-            .map_err(io::Error::other)?
-        };
+        if account.role == DevRole::TenantOwner {
+            continue;
+        }
+        let employee_branch_id: Uuid = sqlx::query_scalar!(
+            r#"
+            SELECT assignment.branch_id
+            FROM account_branch_assignments AS assignment
+            INNER JOIN branches AS branch
+                ON branch.tenant_id = assignment.tenant_id
+               AND branch.id = assignment.branch_id
+            WHERE assignment.tenant_id = $1 AND assignment.account_id = $2
+            ORDER BY CASE WHEN branch.code = 'head-office' THEN 0 ELSE 1 END, branch.code
+            LIMIT 1
+            "#,
+            tenant_id,
+            account.id,
+        )
+        .fetch_one(transaction.connection())
+        .await
+        .map_err(io::Error::other)?;
         let employee_code: String = account.username.to_ascii_lowercase();
         let work_email: String = format!("{}@{}.dev", employee_code, tenant.slug);
         let employee_id: Uuid = sqlx::query_scalar!(
@@ -1121,9 +1076,6 @@ async fn seed_hr_infra(
         );
     }
 
-    let owner_employee_id: Uuid = *employee_ids
-        .get(&owner_account_id)
-        .ok_or_else(|| io::Error::other("seeded owner employee was not found"))?;
     let find_employee_by_role_and_branch = |role: DevRole, branch_code: Option<&str>| -> Option<Uuid> {
         accounts
             .iter()
@@ -1160,7 +1112,7 @@ async fn seed_hr_infra(
         "#,
         tenant_id,
         head_office_branch_id,
-        owner_employee_id,
+        executive_employee_id,
         head_branch_manager_id,
         north_branch_id,
         north_branch_manager_id,
@@ -1171,6 +1123,9 @@ async fn seed_hr_infra(
     .map_err(io::Error::other)?;
 
     for account in accounts {
+        if account.role == DevRole::TenantOwner {
+            continue;
+        }
         let employee_id: Uuid = *employee_ids
             .get(&account.id)
             .ok_or_else(|| io::Error::other("seeded employee account mapping was not found"))?;
@@ -1179,8 +1134,8 @@ async fn seed_hr_infra(
             .ok_or_else(|| io::Error::other("seeded employee branch mapping was not found"))?;
         let is_north_branch: bool = branch_id == north_branch_id;
         let (department_id, job_id, manager_employee_id): (Uuid, Uuid, Option<Uuid>) = match account.role {
-            DevRole::TenantOwner => (administration_department_id, owner_job_id, None),
-            DevRole::ExecutiveManager => (operations_department_id, supervisor_job_id, Some(owner_employee_id)),
+            DevRole::TenantOwner => continue,
+            DevRole::ExecutiveManager => (administration_department_id, supervisor_job_id, None),
             DevRole::BranchManager => (
                 if is_north_branch {
                     north_operations_department_id
@@ -1416,12 +1371,12 @@ async fn seed_hr_infra(
 
     transaction.commit().await.map_err(io::Error::other)?;
     info!(
-        "Development HR infra committed: tenant_slug={} tenant_id={} departments=2 jobs=3 employees={} assignments={} working_schedules=1 schedule_assignments={} completed_attendance_sessions={} open_attendance_sessions={}",
+        "Development HR infra committed: tenant_slug={} tenant_id={} branches=2 employees={} assignments={} working_schedules=1 schedule_assignments={} completed_attendance_sessions={} open_attendance_sessions={}",
         tenant.slug,
         tenant_id,
-        accounts.len(),
-        accounts.len(),
-        accounts.len(),
+        employee_ids.len(),
+        employee_ids.len(),
+        employee_ids.len(),
         completed_attendance_sessions,
         open_attendance_sessions
     );
@@ -1452,6 +1407,9 @@ async fn seed_payroll_configuration(
         effective_date,
     }: DevPayrollSeedContext<'_> = context;
     for account in accounts {
+        if account.role == DevRole::TenantOwner {
+            continue;
+        }
         let employee_id: Uuid = employee_ids
             .get(&account.id)
             .copied()
@@ -1489,12 +1447,9 @@ async fn seed_payroll_configuration(
                 .await
                 .map_err(io::Error::other)?;
             }
-            DevRole::TenantOwner | DevRole::ExecutiveManager | DevRole::BranchManager | DevRole::Supervisor => {
-                let monthly_rate: &str = if account.role == DevRole::TenantOwner {
-                    "50000000"
-                } else {
-                    "30000000"
-                };
+            DevRole::TenantOwner => continue,
+            DevRole::ExecutiveManager | DevRole::BranchManager | DevRole::Supervisor => {
+                let monthly_rate: &str = "30000000";
                 sqlx::query!(
                     r#"
                     INSERT INTO hr_employee_compensations (
@@ -1654,7 +1609,7 @@ async fn seed_payroll_configuration(
         "Development payroll configuration ensured: tenant_slug={} tenant_id={} compensations={} branch_rules={} time_rules=1 overtime_rules=2 currency=VND",
         tenant.slug,
         tenant_id,
-        accounts.len(),
+        employee_ids.len(),
         branch_rule_count
     );
     Ok(())

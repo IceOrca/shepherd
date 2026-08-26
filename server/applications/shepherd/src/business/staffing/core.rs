@@ -135,7 +135,6 @@ pub struct StaffingRate {
     pub name: String,
     pub customer_id: Option<Uuid>,
     pub employee_id: Option<Uuid>,
-    pub job_id: Uuid,
     pub currency: String,
     pub hourly_rate: String,
     pub priority: i16,
@@ -143,6 +142,19 @@ pub struct StaffingRate {
     pub effective_to: Option<NaiveDate>,
     pub is_active: bool,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, TS)]
+pub struct StaffingStaff {
+    pub employee_id: Uuid,
+    pub employee_code: String,
+    pub display_name: String,
+}
+
+#[derive(Clone, Debug, Serialize, TS)]
+pub struct StaffingPriceSet {
+    pub customer_bill_rate: StaffingRate,
+    pub worker_pay_rate: StaffingRate,
 }
 
 #[derive(Clone, Debug, Serialize, TS)]
@@ -260,19 +272,13 @@ pub struct CustomerInput {
 }
 
 #[derive(Clone, Debug)]
-pub struct StaffingRateInput {
-    pub rate_kind: StaffingRateKind,
-    pub code: String,
-    pub name: String,
-    pub customer_id: Option<Uuid>,
+pub struct StaffingPriceSetInput {
+    pub customer_id: Uuid,
     pub employee_id: Option<Uuid>,
-    pub job_id: Uuid,
     pub currency: String,
-    pub hourly_rate: String,
-    pub priority: i16,
+    pub customer_hourly_rate: String,
+    pub worker_hourly_rate: String,
     pub effective_from: NaiveDate,
-    pub effective_to: Option<NaiveDate>,
-    pub is_active: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -344,13 +350,13 @@ pub trait StaffingRepo {
         audit_account_id: Uuid,
     ) -> Result<Customer, StaffingError>;
     async fn list_rates(&self, tenant_id: Uuid) -> Result<Vec<StaffingRate>, StaffingError>;
-    async fn create_rate(
+    async fn list_staff(&self, tenant_id: Uuid) -> Result<Vec<StaffingStaff>, StaffingError>;
+    async fn set_prices(
         &self,
         tenant_id: Uuid,
-        rate_id: Uuid,
-        input: &StaffingRateInput,
+        input: &StaffingPriceSetInput,
         audit_account_id: Uuid,
-    ) -> Result<StaffingRate, StaffingError>;
+    ) -> Result<StaffingPriceSet, StaffingError>;
     async fn list_eligibilities(&self, tenant_id: Uuid) -> Result<Vec<StaffingEligibility>, StaffingError>;
     async fn create_eligibility(
         &self,
@@ -497,40 +503,34 @@ impl StaffingService {
         result
     }
 
-    pub async fn create_rate(
+    pub async fn list_staff(&self, tenant_id: Uuid) -> Result<Vec<StaffingStaff>, StaffingError> {
+        debug!(operation = "list_staffing_staff", tenant_id = %tenant_id, "Staffing service operation accepted");
+        let result: Result<Vec<StaffingStaff>, StaffingError> = self.repo.list_staff(tenant_id).await;
+        log_staffing_operation("list_staffing_staff", tenant_id, None, None, &result);
+        result
+    }
+
+    pub async fn set_prices(
         &self,
         tenant_id: Uuid,
-        input: StaffingRateInput,
+        input: StaffingPriceSetInput,
         audit_account_id: Uuid,
-    ) -> Result<StaffingRate, StaffingError> {
-        let rate_id: Uuid = Uuid::new_v4();
-        trace!(
-            operation = "create_rate",
-            tenant_id = %tenant_id,
-            audit_account_id = %audit_account_id,
-            rate_id = %rate_id,
-            customer_id = ?input.customer_id,
-            employee_id = ?input.employee_id,
-            job_id = %input.job_id,
-            "Validating staffing hourly rate creation"
-        );
-        validate_identity(&input.code, &input.name)?;
+    ) -> Result<StaffingPriceSet, StaffingError> {
+        if input.customer_id.is_nil() || input.employee_id.is_some_and(|id: Uuid| id.is_nil()) {
+            return Err(StaffingError::InvalidInput("staffing price scope is invalid"));
+        }
         validate_currency(&input.currency)?;
-        validate_positive_decimal(&input.hourly_rate)?;
-        if input.rate_kind == StaffingRateKind::CustomerBill && input.customer_id.is_none() {
-            return Err(StaffingError::InvalidInput("customer bill rate requires a customer"));
-        }
-        if input
-            .effective_to
-            .is_some_and(|date: NaiveDate| date < input.effective_from)
-        {
-            return Err(StaffingError::InvalidInput("staffing rate date range is invalid"));
-        }
-        let result: Result<StaffingRate, StaffingError> = self
-            .repo
-            .create_rate(tenant_id, rate_id, &input, audit_account_id)
-            .await;
-        log_staffing_operation("create_rate", tenant_id, Some(audit_account_id), Some(rate_id), &result);
+        validate_positive_decimal(&input.customer_hourly_rate)?;
+        validate_positive_decimal(&input.worker_hourly_rate)?;
+        let result: Result<StaffingPriceSet, StaffingError> =
+            self.repo.set_prices(tenant_id, &input, audit_account_id).await;
+        log_staffing_operation(
+            "set_staffing_prices",
+            tenant_id,
+            Some(audit_account_id),
+            input.employee_id,
+            &result,
+        );
         result
     }
 

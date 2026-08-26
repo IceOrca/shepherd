@@ -12,6 +12,7 @@ import { ShiftCoordinationPage } from "../features/operations/ShiftCoordinationP
 import { StaffingConfigurationPage } from "../features/operations/StaffingConfigurationPage";
 import { UrgentReconciliationPage } from "../features/operations/UrgentReconciliationPage";
 import { UrgentWorkPage } from "../features/operations/UrgentWorkPage";
+import { EmployeesPage } from "../features/people/EmployeesPage";
 import { OperationsLayout } from "../layouts/OperationsLayout";
 
 function SessionGate() {
@@ -61,6 +62,7 @@ export function AppRouter() {
           <Route path="/operations/my-shifts" element={<MyAssignmentsPage />} />
           <Route path="/operations/shifts" element={<ShiftCoordinationPage />} />
           <Route path="/operations/customers" element={<CustomersPage />} />
+          <Route path="/operations/employees" element={<EmployeesPage />} />
           <Route path="/operations/staffing-configuration" element={<StaffingConfigurationPage />} />
           <Route path="/operations/reconciliation" element={<UrgentReconciliationPage />} />
           <Route path="/operations/reconciliation/planned" element={<ReconciliationPage />} />

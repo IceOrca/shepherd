@@ -67,6 +67,11 @@ services:
       AUTH_JWKS_URL: http://supabase-auth:9999/.well-known/jwks.json
       AUTH_AUDIENCE: ${AUTH_AUDIENCE_PROD:-authenticated}
       AUTH_JWT_ALGORITHMS: ${AUTH_JWT_ALGORITHMS_PROD:-EdDSA}
+      AUTH_ADMIN_JWT_ALGORITHM: ${AUTH_ADMIN_JWT_ALGORITHM_PROD:?required}
+      AUTH_ADMIN_JWT_ROLE: ${AUTH_ADMIN_JWT_ROLE_PROD:?required}
+      AUTH_ADMIN_JWT_ISSUER: ${AUTH_PUBLIC_URL_PROD:?required}
+      AUTH_ADMIN_JWT_AUDIENCE: ${AUTH_AUDIENCE_PROD:?required}
+      AUTH_ADMIN_JWT_EXPIRY_SECS: ${AUTH_ADMIN_JWT_EXPIRY_SECS_PROD:?required}
     secrets:
       - source: server_prod_env
         target: server_prod_env
@@ -105,6 +110,8 @@ services:
       GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_URI: pg-functions://${POSTGRES_DB_PROD:?required}/public/shepherd_custom_access_token_hook
       GOTRUE_JWT_SECRET: ${AUTH_JWT_SECRET_PROD:?required}
       GOTRUE_JWT_KEYS: ${AUTH_JWT_KEYS_PROD:?required}
+      GOTRUE_JWT_VALID_METHODS: ${AUTH_JWT_VALID_METHODS_PROD:?required}
+      GOTRUE_JWT_ADMIN_ROLES: ${AUTH_ADMIN_JWT_ROLE_PROD:?required}
       GOTRUE_JWT_ISSUER: ${AUTH_PUBLIC_URL_PROD:?required}
       GOTRUE_JWT_AUD: ${AUTH_AUDIENCE_PROD:-authenticated}
       GOTRUE_JWT_EXP: ${AUTH_JWT_EXPIRY_SECS_PROD:-900}
@@ -146,7 +153,11 @@ services:
       DATABASE_URL: !reset null
       AUTH_ADMIN_URL: !reset null
       AUTH_ISSUER_URL: !reset null
-      AUTH_ADMIN_TOKEN: !reset null
+      AUTH_ADMIN_JWT_ALGORITHM: ${AUTH_ADMIN_JWT_ALGORITHM_PROD:?required}
+      AUTH_ADMIN_JWT_ROLE: ${AUTH_ADMIN_JWT_ROLE_PROD:?required}
+      AUTH_ADMIN_JWT_ISSUER: ${AUTH_PUBLIC_URL_PROD:?required}
+      AUTH_ADMIN_JWT_AUDIENCE: ${AUTH_AUDIENCE_PROD:?required}
+      AUTH_ADMIN_JWT_EXPIRY_SECS: ${AUTH_ADMIN_JWT_EXPIRY_SECS_PROD:?required}
       TENANT_BOOTSTRAP_ADMIN_ACCOUNT: ${TENANT_BOOTSTRAP_ADMIN_ACCOUNT_PROD:?required}
       TENANT_BOOTSTRAP_ADMIN_EMAIL: ${TENANT_BOOTSTRAP_ADMIN_EMAIL_PROD:?required}
       TENANT_BOOTSTRAP_ADMIN_SECRET: !reset null

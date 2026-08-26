@@ -68,7 +68,7 @@ Preserve these rules in database constraints and server-side transactions, not o
 - A customer belongs to exactly one branch and stores its workplace address and IANA time zone. There is no customer-facility table or second customer-location hierarchy.
 - A shift fixes the branch-owned customer, job, scheduled interval, and required worker count.
 - A shift cannot accept assignments beyond its required capacity once its authoritative status is `filled`.
-- A planned assignment requires an active employee in the same branch, an effective staffing eligibility for the shift job on the customer-local work date, and no overlapping non-cancelled staffing assignment. Staffing eligibility is independent from the employee's primary HR job because a temporary worker may provide several customer services.
+- A planned assignment requires an active employee linked to an active account whose primary organizational role is `staff`, in the same branch, with no overlapping non-cancelled staffing assignment. The current client treats all such Staff as eligible for every staffing job; do not expose or require separate service-eligibility setup.
 - A shift assignment fixes the employee and snapshots independently resolved customer-bill and worker-pay rates. Later rate changes must not rewrite historical assignments. A manual rate requires its own normalized audit reason and must never masquerade as a configured rate.
 - An employee may have at most one open staffing work session across planned and urgent work, and a planned assignment or urgent report may have at most one open session.
 - Start and finish operations require idempotency keys. Repeated delivery of the same action must return the same transition; competing actions must create exactly one transition.
@@ -86,13 +86,18 @@ Preserve these rules in database constraints and server-side transactions, not o
 Keep the database explicit rather than collapsing evidence or customer locations into HR tables:
 
 - `branches`: A's internal operating units.
+- `hr_employees`: the branch-owned HR profile for every Shepherd account except
+  `tenant_owner`. It owns operational/legal names, personal phone, gender, and
+  employment status. Citizen ID ciphertext and masked lookup metadata stay here;
+  full values require separate sensitive permissions and must never enter JWTs,
+  ordinary account responses, or logs.
 - `tenant_roles` and `tenant_role_permissions`: each tenant's active role definitions and role permission grants. The global `roles` and `role_permissions` tables are application bootstrap templates, not runtime tenant authorization.
 - `account_role_assignments`: database-authoritative tenant-wide or branch-scoped role grants. A `NULL` branch means tenant scope; a branch UUID means that the role contributes authority only in that active branch.
 - `account_permission_overrides`: tenant-wide or branch-scoped per-account `allow`/`deny` exceptions. An applicable `deny` always wins over role grants and `allow` exceptions.
 - `access_control_audit_log`: immutable tenant-scoped records of branch, role, role-permission, and account-access mutations.
 - `business_customers`: branch-owned customer workplaces with address and IANA time zone.
-- `business_staffing_rates`: independent effective-dated `customer_bill` and `worker_pay` hourly rates. Customer billing always has a customer scope; worker pay may be branch-wide or specialized by customer, employee, job, date, and priority.
-- `business_staffing_employee_eligibilities`: effective-dated employee-to-service/job suitability independent from the employee's primary HR position.
+- `business_staffing_rates`: paired, effective-dated `customer_bill` and `worker_pay` hourly rates scoped by customer and optionally by Staff. Every customer has an all-Staff default row; a Staff-specific row overrides that default. Price changes create a new current/future version and preserve superseded history.
+- `business_staffing_employee_eligibilities`: dormant compatibility data for a possible future client that prices or dispatches by service suitability. It is not exposed or enforced for the current client.
 - `business_staffing_shifts`: one branch-owned customer order interval, job, required capacity, and operational status.
 - `business_urgent_work_batches`: one idempotent urgent Start action, acting account, selected customer, and target employee set.
 - `business_urgent_work_reports`: one employee's urgent staff-side claim, lifecycle, and immutable selected customer.
@@ -115,13 +120,13 @@ State transitions are monotonic:
 
 Lock the shift row while assigning so capacity cannot race. Lock assignment/work context while starting or ending so ownership and one-open-session rules cannot race. Urgent batches lock the acting and target employee rows before the idempotency decision and inserts; urgent end locks the report/session before checking repeated delivery. The cross-workflow one-open-session guard also locks the employee row. Upsert customer evidence only while planned assignments are still `assigned` or urgent reports are `completed`; the database trigger must archive the old customer record before every update. Reconciliation, formal snapshot creation, financial calculation, and approval audit fields belong in one tenant transaction.
 
-Store instants as UTC `TIMESTAMPTZ`. Use the customer's IANA time zone only when deriving the local work date for staffing eligibility and rate resolution, assigning reconciled staffing pay to a payroll period, or formatting for users. Represent money and hourly rates with PostgreSQL `NUMERIC` and decimal strings at API boundaries; never use floating-point arithmetic for financial snapshots.
+Store instants as UTC `TIMESTAMPTZ`. Use the customer's IANA time zone only when deriving the local work date for rate resolution, assigning reconciled staffing pay to a payroll period, or formatting for users. Represent money and hourly rates with PostgreSQL `NUMERIC` and decimal strings at API boundaries; never use floating-point arithmetic for financial snapshots.
 
-The current client contract uses hourly staffing rates only. Resolve customer billing and worker pay separately, then require a common currency. Prefer the most specific applicable scope, followed by configured priority and newest effective date; reject overlapping active rows at the same exact scope, kind, priority, and date range. Urgent work resolves both rates at reconciliation because no assignment existed at Start. Planned work snapshots both rate IDs and values when the assignment is accepted. If a supervisor uses manual pricing, store no configured rate IDs and require a dedicated manual-rate reason.
+The current client contract uses hourly staffing rates only. Managers write customer bill and worker pay as one atomic pair with a common currency. Resolve a Staff-specific customer rate before the selected customer's all-Staff default, followed by configured priority and newest effective date; reject overlapping active rows at the same exact scope, kind, priority, and date range. Urgent work resolves both rates at reconciliation because no assignment existed at Start. Planned work snapshots both rate IDs and values when the assignment is accepted. If a supervisor uses manual pricing, store no configured rate IDs and require a dedicated manual-rate reason.
 
 For this client, `worker_amount` is the employee's gross earning for the reconciled work. The employee handles personal tax and insurance outside Shepherd, so the current company-profit result remains `margin_amount = customer_amount - worker_amount`. Do not add generic employer tax, insurance, overhead allocation, costing ledgers, salary-rule engines, or ERP accounting abstractions unless a future client requirement explicitly changes this contract.
 
-Urgent work may already be completed before its service eligibility is discovered. Reconciliation therefore permits an ineligible urgent report only with an explicit normalized `eligibility_exception_reason`, stored on the immutable approved assignment. Planned assignment remains strict and rejects missing eligibility before work starts.
+Urgent reconciliation does not request a service-eligibility exception because every authorized Staff member is eligible under the current client contract. Keep any historical nullable eligibility-exception snapshot columns only for compatibility.
 
 ## Authentication, Authorization, and Multi-Tenancy
 
@@ -160,7 +165,7 @@ Supabase Auth (GoTrue) is the external identity provider. It owns credentials, s
 - Never cache bearer/access/refresh tokens, passwords, cookies, raw authorization headers, or complete provider responses in the authenticated-user cache. Cache logs may include the hashed cache key, tenant/account IDs, hit/miss, TTL, and counts, but no credentials or token material.
 - Caching `AuthenticatedUser` removes repeated global identity and authorization-grant queries on cache hits; it does not remove tenant-scoped SQLx connections or PostgreSQL RLS context for business queries.
 - Auth administration creates or manages GoTrue users through its admin API, never by modifying GoTrue tables directly.
-- First-tenant provisioning is a platform operation because no tenant actor exists yet. Use the profile-gated, one-shot `tenant-bootstrap` Compose service through `scripts/bootstrap-tenant.sh`; never expose it as an unauthenticated HTTP route or authorize it with an ordinary tenant role. The bootstrap operator is separate from every tenant account and is configured by `TENANT_BOOTSTRAP_ADMIN_ACCOUNT`, `TENANT_BOOTSTRAP_ADMIN_EMAIL`, and a secret. Development may keep the secret in ignored `.env`; production must mount `${SVR_SECRETS_DIR}/tenant_bootstrap_admin_secret` and must keep the Supabase service-role token in the mounted server secret environment.
+- First-tenant provisioning is a platform operation because no tenant actor exists yet. Use the profile-gated, one-shot `tenant-bootstrap` Compose service through `scripts/bootstrap-tenant.sh`; never expose it as an unauthenticated HTTP route or authorize it with an ordinary tenant role. The bootstrap operator is separate from every tenant account and is configured by `TENANT_BOOTSTRAP_ADMIN_ACCOUNT`, `TENANT_BOOTSTRAP_ADMIN_EMAIL`, and a secret. Development may keep the secret in ignored `.env`; production must mount `${SVR_SECRETS_DIR}/tenant_bootstrap_admin_secret` and must keep the Supabase administration ES256 private key in the mounted server secret environment.
 - `platform_tenant_bootstrap_requests` is the global persistent idempotency and recovery ledger because its claim exists before the tenant exists. It stores the request fingerprint, operator identity, tenant metadata, resolved provider subjects, status, and safe failure code, but never plaintext owner passwords or administrator secrets. Reuse the same tenant UUID and idempotency UUID with byte-equivalent owner input after failure. Provider identities are retained when the application transaction fails and are recovered on retry; never delete a potentially shared external identity as compensation.
 - Tenant bootstrap resolves or creates normalized-email identities through the provider-neutral administration contract and then atomically inserts the tenant, tenant-owned catalog initialized from application templates, one or more tenant-local owner accounts, `issuer + subject` mappings, tenant-scoped `tenant_owner` assignments, and an access-control audit row. Under the current operating policy, bootstrap rejects an external identity already mapped to another tenant, while the database schema remains capable of future multi-membership. The bootstrap operator `iceorca` is not synthesized as a Shepherd account or Supabase login merely because it ran this tool.
 - Frontends create users only through Shepherd's authenticated auth-administration route and never call the GoTrue admin API directly. The backend reuses an existing normalized-email GoTrue identity when present, otherwise creates it, and then creates the tenant-local account mapping. A tenant-local link failure must retain the provider identity because it may already serve other tenants; persistent idempotency supports safe recovery without deleting shared credentials.
@@ -214,8 +219,9 @@ Important staffing APIs include:
 - `GET/POST /api/business/customers`
 - `PUT /api/business/customers/{customer_id}`
 - `GET /api/business/branches`
-- `GET/POST /api/business/staffing/rates`
-- `GET/POST /api/business/staffing/eligibilities`
+- `GET /api/business/staffing/rates`
+- `GET /api/business/staffing/staff`
+- `POST /api/business/staffing/prices`
 - `GET /api/business/staffing/urgent-work/customers`
 - `GET /api/business/staffing/urgent-work/employees`
 - `GET /api/business/staffing/urgent-work/me`
@@ -246,12 +252,12 @@ The Vite/React application is under `client/web/src`. API helpers and generated 
 Maintain role-oriented workflows:
 
 - **Staff**: an urgent-work-first dashboard; choose an active customer in their branch, choose themselves and present coworkers who have effective staff-clocking authorization in that branch, start/finish work, and view own/team evidence and actor provenance. Do not show ordinary coordination-role employees in the peer picker. **My shifts** remains available for optional planned assignments.
-- **Supervisor/branch manager**: branch dashboard, urgent **Reconciliation**, branch customer management, **Staffing configuration**, and optional **Shift coordination** pages; maintain independent customer-bill rates, worker-pay rates, and service eligibility, enter independent customer/time evidence, compare both sources, lock final results, and create planned shifts when time permits.
+- **Supervisor/branch manager**: branch dashboard, urgent **Reconciliation**, branch customer management, **Giá và tiền công**, and optional **Shift coordination** pages; compare and maintain paired customer-bill and Staff-pay rates, enter independent customer/time evidence, compare both sources, lock final results, and create planned shifts when time permits.
 - **Executive manager**: the same coordination capabilities across assigned branches, selected explicitly in the UI.
 - **Tenant owner**: tenant administration and all branches. Do not show **My shifts** or staff clocking pages unless the account separately receives the corresponding staff permission.
 - **Auth administrator**: provision or link provider identities and enable/disable Shepherd accounts in the active tenant while maintaining branch mappings. Tenant administrators do not disable a shared provider identity globally.
 
-Navigation is permission-driven, not role-name-driven. The customer page at `/operations/customers` requires `business.customers.read`; its create/edit controls and `POST/PUT` API calls require `business.customers.manage`. The staffing configuration page at `/operations/staffing-configuration` separately gates rate and eligibility reads/manages with `business.staffing_rates.*` and `business.staffing_eligibility.*`. The urgent reconciliation page may read the active customer directory with `business.reconciliation.read` without granting staff-side urgent-work permissions.
+Navigation is permission-driven, not role-name-driven. The customer page at `/operations/customers` requires `business.customers.read`; its create/edit controls and `POST/PUT` API calls require `business.customers.manage`. The **Giá và tiền công** page at `/operations/staffing-configuration` gates reads and paired effective-dated writes with `business.staffing_rates.*`; the dormant eligibility permissions do not expose a current-client UI. The urgent reconciliation page may read the active customer directory with `business.reconciliation.read` without granting staff-side urgent-work permissions.
 
 The frontend first calls `/api/tenants`, persists one active tenant, sends `X-Tenant-Id` on tenant-scoped API calls, and displays a tenant selector when one identity has multiple memberships. It also persists one active branch per tenant and sends `X-Branch-Id`. Switching tenant clears branch context, reloads `/api/me`, restores only a branch authorized in the new tenant, and invalidates all TanStack Query data. Switching branch also invalidates cached queries. Frontend selection is usability state only; middleware membership validation and PostgreSQL RLS remain authoritative.
 
@@ -337,7 +343,7 @@ Database integration fixtures must use isolated tenant IDs and delete every depe
 For staffing changes, verify at minimum:
 
 - tenant isolation and permission checks;
-- assignment capacity, effective job suitability, and overlapping-shift rejection;
+- assignment capacity, active Staff-only candidate selection, and overlapping-shift rejection;
 - urgent customer selection, peer actor provenance, and same-customer authorization;
 - concurrent start/end idempotency, one-open-session constraints across urgent/planned modes, and server timestamps;
 - GPS absence when disabled;

@@ -23,7 +23,6 @@ if [ "${APP_ENV:-development}" != "development" ]; then
     exit 2
 fi
 
-auth_admin_token="${AUTH_ADMIN_TOKEN:-}"
 auth_admin_url="http://127.0.0.1:${AUTH_PORT:-9999}"
 dev_accounts_file="scripts/dev-auth-accounts.tsv"
 auth_health_max_attempts="${AUTH_DEV_HEALTH_MAX_ATTEMPTS:-30}"
@@ -31,11 +30,6 @@ auth_health_interval_secs="${AUTH_DEV_HEALTH_INTERVAL_SECS:-1}"
 
 if [ ! -f "${dev_accounts_file}" ]; then
     echo >&2 "Development Auth account catalog is missing: ${dev_accounts_file}"
-    exit 2
-fi
-
-if [ -z "${auth_admin_token}" ]; then
-    echo >&2 "AUTH_ADMIN_TOKEN is required to seed development Auth users"
     exit 2
 fi
 
@@ -75,6 +69,11 @@ while ! curl --fail --silent --show-error --output /dev/null "${auth_admin_url}/
     auth_health_attempt=$((auth_health_attempt + 1))
     sleep "${auth_health_interval_secs}"
 done
+
+AUTH_ADMIN_JWT_ISSUER="${AUTH_ADMIN_JWT_ISSUER:-${AUTH_ISSUER_URL:-}}"
+AUTH_ADMIN_JWT_AUDIENCE="${AUTH_ADMIN_JWT_AUDIENCE:-${AUTH_AUDIENCE:-}}"
+export AUTH_ADMIN_JWT_ISSUER AUTH_ADMIN_JWT_AUDIENCE
+auth_admin_token="$(sh scripts/mint-auth-admin-token.sh)"
 
 users_json="$(curl --fail --silent --show-error \
     --header "Authorization: Bearer ${auth_admin_token}" \

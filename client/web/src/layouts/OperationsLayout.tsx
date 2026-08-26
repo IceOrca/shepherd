@@ -73,16 +73,16 @@ const navigation: NavigationItem[] = [
     permission: "business.customers.read",
   },
   {
-    label: "Giá và năng lực",
+    label: "Giá và tiền công",
     to: "/operations/staffing-configuration",
     icon: Settings2,
     permission: "business.staffing_rates.read",
   },
   {
     label: "Nhân sự",
+    to: "/operations/employees",
     icon: UsersRound,
     permission: "hr.employees.read",
-    soon: true,
   },
   {
     label: "Phân quyền",
@@ -130,8 +130,8 @@ function pageTitle(pathname: string): { title: string; description: string } {
 
   if (pathname === "/operations/staffing-configuration") {
     return {
-      title: "Giá và năng lực dịch vụ",
-      description: "Cấu hình độc lập giá thu khách hàng, tiền công nhân viên và năng lực làm dịch vụ.",
+      title: "Giá và tiền công",
+      description: "So sánh và thiết lập giá thu khách hàng, tiền công cho từng Staff theo ngày hiệu lực.",
     };
   }
 
@@ -139,6 +139,13 @@ function pageTitle(pathname: string): { title: string; description: string } {
     return {
       title: "Khách hàng",
       description: "Quản lý doanh nghiệp mua dịch vụ nhân sự và trạng thái hợp tác.",
+    };
+  }
+
+  if (pathname === "/operations/employees") {
+    return {
+      title: "Hồ sơ nhân sự",
+      description: "Quản lý thông tin nhân thân của nhân viên trong chi nhánh đang chọn.",
     };
   }
 

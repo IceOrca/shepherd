@@ -1315,49 +1315,10 @@ async fn reconcile_report(
     .map_err(|error: sqlx::Error| database_failure("derive urgent local work date", tenant_id, error))?;
     let work_date: NaiveDate = work_date_row.work_date;
 
-    let employee_is_eligible: bool = sqlx::query_scalar!(
-        r#"
-        SELECT EXISTS (
-            SELECT 1
-            FROM business_staffing_employee_eligibilities
-            WHERE tenant_id = $1
-              AND employee_id = $2
-              AND job_id = $3
-              AND effective_from <= $4
-              AND (effective_to IS NULL OR effective_to >= $4)
-        ) AS "exists!"
-        "#,
-        tenant_id,
-        context.employee_id,
-        input.job_id,
-        work_date,
-    )
-    .fetch_one(transaction.connection())
-    .await
-    .map_err(|error: sqlx::Error| database_failure("validate urgent staffing eligibility", tenant_id, error))?;
-    let eligibility_exception_reason: Option<&str> = if employee_is_eligible {
-        None
-    } else {
-        input
-            .eligibility_exception_reason
-            .as_deref()
-            .ok_or(UrgentWorkError::InvalidInput(
-                "urgent work outside staffing eligibility requires an exception reason",
-            ))?
-            .into()
-    };
-    if let Some(reason) = eligibility_exception_reason {
-        warn!(
-            operation = "urgent_work.reconcile",
-            tenant_id = %tenant_id,
-            report_id = %report_id,
-            employee_id = %context.employee_id,
-            job_id = %input.job_id,
-            work_date = %work_date,
-            reason,
-            "Reconciling urgent work with an explicit staffing eligibility exception"
-        );
-    }
+    // This client treats every authorized staff member as staffing-eligible. Keep
+    // the immutable snapshot column for compatibility, but do not require a
+    // separate service-eligibility record or exception reason.
+    let eligibility_exception_reason: Option<&str> = None;
 
     let (
         customer_bill_rate_id,
@@ -1392,10 +1353,9 @@ async fn reconcile_report(
                     WHERE tenant_id = $1
                       AND rate_kind = 'customer_bill'
                       AND customer_id = $2
-                      AND job_id = $3
-                      AND (employee_id IS NULL OR employee_id = $4)
-                      AND effective_from <= $5
-                      AND (effective_to IS NULL OR effective_to >= $5)
+                      AND (employee_id IS NULL OR employee_id = $3)
+                      AND effective_from <= $4
+                      AND (effective_to IS NULL OR effective_to >= $4)
                       AND is_active
                     ORDER BY
                         (employee_id IS NOT NULL) DESC,
@@ -1406,7 +1366,6 @@ async fn reconcile_report(
                     "#,
                     tenant_id,
                     input.final_customer_id,
-                    input.job_id,
                     context.employee_id,
                     work_date,
                 )
@@ -1422,10 +1381,9 @@ async fn reconcile_report(
                     WHERE tenant_id = $1
                       AND rate_kind = 'worker_pay'
                       AND (customer_id IS NULL OR customer_id = $2)
-                      AND job_id = $3
-                      AND (employee_id IS NULL OR employee_id = $4)
-                      AND effective_from <= $5
-                      AND (effective_to IS NULL OR effective_to >= $5)
+                      AND (employee_id IS NULL OR employee_id = $3)
+                      AND effective_from <= $4
+                      AND (effective_to IS NULL OR effective_to >= $4)
                       AND is_active
                     ORDER BY
                         (employee_id IS NOT NULL) DESC,
@@ -1437,7 +1395,6 @@ async fn reconcile_report(
                     "#,
                     tenant_id,
                     input.final_customer_id,
-                    input.job_id,
                     context.employee_id,
                     work_date,
                 )

@@ -177,22 +177,58 @@ assume that a provider uses UUID user IDs.
 
 The concrete Supabase Auth admin API implementation lives in
 `server/infra/external-auth/supabase-auth` and is injected by `server/runtime`. It alone
-knows Supabase Auth's `/admin/users` endpoints, bearer administration token, JSON
+knows Supabase Auth's `/admin/users` endpoints, short-lived ES256 administration JWTs, JSON
 payloads, recovery metadata, ban representation, and HTTP errors. Replacing
 Supabase Auth with Zitadel, Keycloak, or another provider means implementing the same
 provider-neutral contract and changing runtime wiring; `infra-auth` and
 Shepherd business modules do not change.
 
 Application-specific account side effects use an injected lifecycle hook in
-the same tenant transaction. Shepherd owns the rule that a `staff` account has
-an `hr_employees` row and that changing its primary branch synchronizes that
-employee. Reusable access control does not know the `staff` role or query HR
-tables. The old `infra/auth/src/legacy_api` implementation is retained only
-as uncompiled reference material and is not exported by `infra-auth`.
+the same tenant transaction. Shepherd owns the rule that every account except
+the `tenant_owner` has an `hr_employees` row and that changing authorized
+branches synchronizes that employee's stable primary branch. Promoting an
+account to `tenant_owner` detaches its account link while preserving any HR
+record needed by historical business data. A deferred database guard prevents
+a tenant-owner account from being linked to an employee at commit. Reusable
+access control does not know these Shepherd roles or query HR tables. The old
+`infra/auth/src/legacy_api` implementation is retained only as uncompiled
+reference material and is not exported by `infra-auth`.
+
+### Employee personal profiles
+
+`hr_employees` owns operational and legal employee details; GoTrue and the
+application `accounts` table do not. The branch-scoped **Nhân sự** page edits
+the display name, legal first/middle/last names, personal E.164 phone, gender,
+work contacts, badge, employment dates, and status. Updates use an employee
+`version` so concurrent edits return a conflict instead of silently overwriting
+newer data.
+
+Citizen IDs are isolated from ordinary employee responses. Normal directory
+responses expose only country and last four characters. Reading or changing
+the full value uses separate permission-gated endpoints and an explicit reveal
+in the UI. PostgreSQL stores AES-256-GCM ciphertext, key ID, tenant-bound
+HMAC-SHA256 lookup material, and the last four characters; the sensitive audit
+log stores only masked prior/new values and the acting account.
+
+Development requires a server-only ignored key file. Generate it once before
+starting Compose:
+
+```sh
+sh scripts/generate-hr-pii-dev-env.sh
+```
+
+Production supplies `HR_CITIZEN_ID_ACTIVE_KEY_ID`,
+`HR_CITIZEN_ID_ENCRYPTION_KEYS_JSON`, and
+`HR_CITIZEN_ID_LOOKUP_KEY_BASE64` through the mounted server secret environment
+shown in `deploy/secrets_example/server.prod.env.example`. Never expose these
+values through `VITE_*`. To introduce a new encryption key, retain old keys in
+the JSON keyring for reads, add a new key ID, and switch the active ID for new
+writes. The lookup key is stable unless stored lookup HMACs are deliberately
+rewritten as a coordinated migration.
 
 ### Automatic database bootstrap
 
-Normal startup requires only:
+After one-time development secret generation, normal startup requires only:
 
 ```sh
 docker compose up -d --wait
@@ -221,6 +257,41 @@ should not be necessary. If it does not, inspect the actual failing dependency
 with `docker compose ps -a` and
 `docker compose logs postgres-db postgres-bootstrap supabase-auth` rather than
 restarting the graph blindly.
+
+### Rust development build storage
+
+Rust artifacts are kept in the persistent `server_target` Docker volume so
+normal container recreation does not force a full rebuild. Cargo produces
+different hashed artifacts for build/check/test profiles, feature sets,
+compiler or dependency versions, test harnesses, and incremental generations;
+it does not guarantee that a long-lived target directory remains bounded.
+
+The development and test profiles therefore keep reduced debug information,
+omit dependency debug symbols, and disable incremental compilation. Release
+build settings are unchanged. If the volume still grows after substantial
+toolchain or dependency changes, clear only the recoverable Rust artifacts:
+
+```sh
+sh scripts/clean-rust-dev-cache.sh
+```
+
+The next Rust command recompiles dependencies. This script does not remove the
+PostgreSQL volume or application data. Check usage with `docker system df -v`.
+
+rust-analyzer uses its own persistent `target/rust-analyzer` directory inside
+the same `server_target` volume. This follows rust-analyzer's recommended
+separate-target approach, avoiding build-lock contention and cache thrashing
+with terminal Cargo commands. Its background Clippy check runs through
+`server/scripts/rust-analyzer-check.sh`, which measures the directory at most
+once per day and clears only that directory when it exceeds 8192 MiB. Cache
+priming remains enabled, so normal editor restarts reuse artifacts.
+
+The ceiling and maintenance interval can be changed through
+`RUST_ANALYZER_TARGET_MAX_MIB` and
+`RUST_ANALYZER_TARGET_CHECK_INTERVAL_SECS` in the editor configuration. After
+changing these settings, run **Rust Analyzer: Restart server**. The manual
+cleanup script above clears both normal and rust-analyzer targets when a fully
+cold rebuild is intentionally required.
 
 Do not run `scripts/bootstrap-postgres.sh` directly and do not install a
 PostgreSQL client on the host or server image for bootstrap. The job uses
@@ -523,7 +594,7 @@ keeps the account/email in the deployment environment and mounts
 `${SVR_SECRETS_DIR}/tenant_bootstrap_admin_secret`; copy the placeholder from
 `deploy/secrets_example/tenant_bootstrap_admin_secret.example`. The production
 server secret environment must also provide `DATABASE_URL`, `AUTH_ADMIN_URL`,
-`AUTH_ADMIN_TOKEN`, and `AUTH_ISSUER_URL` as shown in
+the `AUTH_ADMIN_JWT_*` signer settings, and `AUTH_ISSUER_URL` as shown in
 `deploy/secrets_example/server.prod.env.example`.
 
 Each request is fingerprinted without storing a plaintext password and claimed

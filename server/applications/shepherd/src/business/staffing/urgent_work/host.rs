@@ -54,7 +54,6 @@ pub struct UrgentWorkReconcileRequest {
     pub job_id: Uuid,
     pub worked_seconds: i64,
     pub adjustment_reason: Option<String>,
-    pub eligibility_exception_reason: Option<String>,
     pub manual_rate: Option<ManualRateOverrideRequest>,
 }
 
@@ -239,7 +238,6 @@ async fn reconcile(
         job_id: request.job_id,
         worked_seconds: request.worked_seconds,
         adjustment_reason: normalize_optional(request.adjustment_reason),
-        eligibility_exception_reason: normalize_optional(request.eligibility_exception_reason),
         manual_rate,
     };
     let result: UrgentWorkReconciliation = context

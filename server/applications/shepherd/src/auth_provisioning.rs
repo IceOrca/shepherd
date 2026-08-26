@@ -6,7 +6,7 @@ use sqlx::{PgConnection, postgres::PgQueryResult};
 use tracing::{debug, error, trace};
 use uuid::Uuid;
 
-const STAFF_ROLE_CODE: &str = "staff";
+const TENANT_OWNER_ROLE_CODE: &str = "tenant_owner";
 
 #[derive(Debug)]
 pub struct ShepherdAuthAccountProvisioner;
@@ -18,35 +18,23 @@ impl AuthAccountProvisioner for ShepherdAuthAccountProvisioner {
         connection: &mut PgConnection,
         context: &AuthAccountProvisioningContext,
     ) -> Result<(), AuthAccountProvisioningError> {
-        if context.primary_role.as_str() != STAFF_ROLE_CODE {
+        if context.primary_role.as_str() == TENANT_OWNER_ROLE_CODE {
             trace!(
                 tenant_id = %context.tenant_id,
                 account_id = %context.account_id,
                 primary_role = %context.primary_role,
-                "Skipped HR employee provisioning for a non-staff account"
+                "Skipped HR employee provisioning for the tenant-owner account"
             );
             return Ok(());
         }
 
-        let branch_id: uuid::Uuid = context.branch_ids.first().copied().ok_or_else(|| {
-            error!(
-                tenant_id = %context.tenant_id,
-                actor_id = %context.actor_account_id,
-                account_id = %context.account_id,
-                "Staff account provisioning received no branch assignment"
-            );
-            AuthAccountProvisioningError::new("staff_branch_assignment_missing")
-        })?;
-        if context.branch_ids.len() != 1 {
-            error!(
-                tenant_id = %context.tenant_id,
-                actor_id = %context.actor_account_id,
-                account_id = %context.account_id,
-                branch_count = context.branch_ids.len(),
-                "Staff account provisioning received multiple branch assignments"
-            );
-            return Err(AuthAccountProvisioningError::new("staff_branch_assignment_invalid"));
-        }
+        let branch_id: Uuid = employee_branch(
+            context.tenant_id,
+            context.actor_account_id,
+            context.account_id,
+            &context.branch_ids,
+            None,
+        )?;
 
         let employee_code: String = generated_employee_code(&context.username, context.account_id);
         let result: PgQueryResult = sqlx::query!(
@@ -97,26 +85,84 @@ impl AuthAccountProvisioner for ShepherdAuthAccountProvisioner {
         connection: &mut PgConnection,
         context: &AuthAccountAccessContext,
     ) -> Result<(), AuthAccountProvisioningError> {
-        if context.primary_role.as_str() != STAFF_ROLE_CODE {
+        if context.primary_role.as_str() == TENANT_OWNER_ROLE_CODE {
+            let result: PgQueryResult = sqlx::query!(
+                r#"
+                UPDATE hr_employees
+                SET account_id = NULL, updated_at = CURRENT_TIMESTAMP, updated_by_account_id = $3
+                WHERE tenant_id = $1 AND account_id = $2
+                "#,
+                context.tenant_id,
+                context.account_id,
+                context.actor_account_id,
+            )
+            .execute(connection)
+            .await
+            .map_err(|database_error: sqlx::Error| {
+                error!(
+                    tenant_id = %context.tenant_id,
+                    actor_id = %context.actor_account_id,
+                    account_id = %context.account_id,
+                    error = %database_error,
+                    "Tenant-owner account could not be detached from an HR employee"
+                );
+                AuthAccountProvisioningError::new("tenant_owner_employee_detach_failed")
+            })?;
             trace!(
                 tenant_id = %context.tenant_id,
                 account_id = %context.account_id,
                 primary_role = %context.primary_role,
-                "Skipped HR employee branch synchronization for a non-staff account"
+                rows_affected = result.rows_affected(),
+                "Tenant-owner account has no linked HR employee"
             );
             return Ok(());
         }
-        let branch_id: Uuid = single_staff_branch(
+        let current_branch_id: Option<Uuid> = sqlx::query_scalar!(
+            "SELECT branch_id FROM hr_employees WHERE tenant_id = $1 AND account_id = $2 FOR UPDATE",
+            context.tenant_id,
+            context.account_id,
+        )
+        .fetch_optional(&mut *connection)
+        .await
+        .map_err(|database_error: sqlx::Error| {
+            error!(
+                tenant_id = %context.tenant_id,
+                actor_id = %context.actor_account_id,
+                account_id = %context.account_id,
+                error = %database_error,
+                "Existing HR employee branch could not be loaded"
+            );
+            AuthAccountProvisioningError::new("hr_employee_branch_load_failed")
+        })?;
+        let branch_id: Uuid = employee_branch(
             context.tenant_id,
             context.actor_account_id,
             context.account_id,
             &context.branch_ids,
+            current_branch_id,
         )?;
+        let employee_code: String = generated_employee_code(&context.username, context.account_id);
         let result: PgQueryResult = sqlx::query!(
-            "UPDATE hr_employees SET branch_id = $3, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = $1 AND account_id = $2",
+            r#"
+            INSERT INTO hr_employees (
+                id, tenant_id, branch_id, account_id, employee_code, display_name, work_email,
+                status, hire_date, created_by_account_id, updated_by_account_id
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', CURRENT_DATE, $8, $8)
+            ON CONFLICT (tenant_id, account_id) DO UPDATE
+            SET branch_id = EXCLUDED.branch_id,
+                work_email = EXCLUDED.work_email,
+                updated_at = CURRENT_TIMESTAMP,
+                updated_by_account_id = EXCLUDED.updated_by_account_id
+            "#,
+            Uuid::new_v4(),
             context.tenant_id,
-            context.account_id,
             branch_id,
+            context.account_id,
+            employee_code,
+            context.username,
+            context.email,
+            context.actor_account_id,
         )
         .execute(connection)
         .await
@@ -143,31 +189,26 @@ impl AuthAccountProvisioner for ShepherdAuthAccountProvisioner {
     }
 }
 
-fn single_staff_branch(
+fn employee_branch(
     tenant_id: Uuid,
     actor_account_id: Uuid,
     account_id: Uuid,
     branch_ids: &[Uuid],
+    current_branch_id: Option<Uuid>,
 ) -> Result<Uuid, AuthAccountProvisioningError> {
-    let branch_id: Uuid = branch_ids.first().copied().ok_or_else(|| {
-        error!(
-            tenant_id = %tenant_id,
-            actor_id = %actor_account_id,
-            account_id = %account_id,
-            "Staff account lifecycle received no branch assignment"
-        );
-        AuthAccountProvisioningError::new("staff_branch_assignment_missing")
-    })?;
-    if branch_ids.len() != 1 {
-        error!(
-            tenant_id = %tenant_id,
-            actor_id = %actor_account_id,
-            account_id = %account_id,
-            branch_count = branch_ids.len(),
-            "Staff account lifecycle received multiple branch assignments"
-        );
-        return Err(AuthAccountProvisioningError::new("staff_branch_assignment_invalid"));
-    }
+    let branch_id: Uuid = current_branch_id
+        .filter(|branch_id: &Uuid| branch_ids.contains(branch_id))
+        .or_else(|| infra_postgres::active_branch_id().filter(|branch_id: &Uuid| branch_ids.contains(branch_id)))
+        .or_else(|| branch_ids.first().copied())
+        .ok_or_else(|| {
+            error!(
+                tenant_id = %tenant_id,
+                actor_id = %actor_account_id,
+                account_id = %account_id,
+                "Non-owner account lifecycle received no employee branch assignment"
+            );
+            AuthAccountProvisioningError::new("employee_branch_assignment_missing")
+        })?;
     Ok(branch_id)
 }
 
@@ -201,7 +242,7 @@ fn generated_employee_code(username: &str, account_id: uuid::Uuid) -> String {
 mod tests {
     use uuid::Uuid;
 
-    use super::generated_employee_code;
+    use super::{employee_branch, generated_employee_code};
 
     #[test]
     fn generated_employee_codes_are_normalized_bounded_and_account_specific() -> Result<(), uuid::Error> {
@@ -217,5 +258,20 @@ mod tests {
             character.is_ascii_lowercase() || character.is_ascii_digit() || matches!(character, '-' | '_')
         }));
         Ok(())
+    }
+
+    #[test]
+    fn employee_branch_preserves_current_authorized_branch_for_multi_branch_roles() {
+        let first_branch: Uuid = Uuid::new_v4();
+        let current_branch: Uuid = Uuid::new_v4();
+        let selected: Uuid = employee_branch(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            &[first_branch, current_branch],
+            Some(current_branch),
+        )
+        .unwrap_or_else(|error| panic!("employee branch must resolve: {error}"));
+        assert_eq!(selected, current_branch);
     }
 }

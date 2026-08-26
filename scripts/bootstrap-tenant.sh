@@ -26,7 +26,7 @@
 # Production uses the same command after COMPOSE_FILE selects compose.prod.yaml.
 # Before production use, copy the examples under deploy/secrets_example into
 # SVR_SECRETS_DIR and replace every placeholder, especially
-# tenant_bootstrap_admin_secret and AUTH_ADMIN_TOKEN.
+# tenant_bootstrap_admin_secret and the AUTH_ADMIN_JWT_* signing settings.
 
 set -euo pipefail
 

@@ -7,13 +7,15 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::{DateTime, Utc};
 use infra_auth::ext_service::auth_admin::{
     CreateExternalIdentityRequest, ExternalIdentity, ExternalIdentityAdmin, ExternalIdentityAdminError,
     ExternalIdentityStatus,
 };
+use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use reqwest::Url;
-use serde::{Deserialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::json;
 use tracing::{debug, error, info, trace, warn};
 use uuid::Uuid;
@@ -27,27 +29,56 @@ const LEGACY_INFRA_MANAGED_BY: &str = "infra-auth";
 pub struct SupabaseAuthIdentityAdmin {
     client: reqwest::Client,
     base_url: String,
-    admin_token: String,
+    admin_token_signer: AdminTokenSigner,
+}
+
+#[derive(Clone)]
+struct AdminTokenSigner {
+    encoding_key: EncodingKey,
+    key_id: String,
+    issuer: String,
+    audience: String,
+    role: String,
+    expiry_secs: i64,
+}
+
+#[derive(Serialize)]
+struct AdminTokenClaims<'a> {
+    role: &'a str,
+    iss: &'a str,
+    aud: &'a str,
+    iat: i64,
+    exp: i64,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum SupabaseAuthIdentityAdminConfigError {
     #[error("AUTH_ADMIN_URL is required")]
     MissingUrl,
-    #[error("AUTH_ADMIN_TOKEN is required")]
-    MissingToken,
+    #[error("{0} is required")]
+    MissingSetting(&'static str),
     #[error("AUTH_ADMIN_URL is invalid: {0}")]
     InvalidUrl(String),
     #[error("AUTH_ADMIN_URL must be an absolute HTTP(S) URL")]
     UnsupportedUrl,
     #[error("AUTH_ADMIN_HTTP_TIMEOUT_SECS must be a positive integer")]
     InvalidTimeout,
+    #[error("AUTH_ADMIN_JWT_ALGORITHM must be ES256")]
+    InvalidAdminAlgorithm,
+    #[error("AUTH_ADMIN_JWT_EXPIRY_SECS must be a positive integer no greater than 3600")]
+    InvalidAdminTokenExpiry,
+    #[error("AUTH_ADMIN_JWT_PRIVATE_KEY_BASE64 must contain base64-encoded PKCS#8 PEM")]
+    InvalidAdminPrivateKeyEncoding(#[source] base64::DecodeError),
+    #[error("AUTH_ADMIN_JWT_PRIVATE_KEY_BASE64 does not contain a valid ES256 PKCS#8 private key")]
+    InvalidAdminPrivateKey(#[source] jsonwebtoken::errors::Error),
     #[error("failed to construct Supabase Auth administration HTTP client")]
     Client(#[source] reqwest::Error),
 }
 
 #[derive(Debug, thiserror::Error)]
 enum SupabaseAuthError {
+    #[error("failed to sign the Supabase Auth administration token")]
+    AdminToken(#[source] jsonwebtoken::errors::Error),
     #[error("Supabase Auth request failed")]
     Transport(#[source] reqwest::Error),
     #[error("Supabase Auth returned HTTP {status}: {message}")]
@@ -110,10 +141,11 @@ impl SupabaseAuthIdentityAdmin {
             .timeout(Duration::from_secs(timeout_secs))
             .build()
             .map_err(SupabaseAuthIdentityAdminConfigError::Client)?;
+        let admin_token_signer: AdminTokenSigner = AdminTokenSigner::from_env()?;
         let service: Arc<Self> = Arc::new(Self {
             client,
             base_url: raw_url.trim().trim_end_matches('/').to_owned(),
-            admin_token: required_env("AUTH_ADMIN_TOKEN").ok_or(SupabaseAuthIdentityAdminConfigError::MissingToken)?,
+            admin_token_signer,
         });
         info!(
             timeout_secs,
@@ -129,10 +161,11 @@ impl SupabaseAuthIdentityAdmin {
                 message: "The Supabase Auth user subject is invalid.".to_owned(),
             })?;
         trace!(auth_user_id = %user_id, "Supabase Auth user lookup accepted");
+        let admin_token: String = self.admin_token_signer.sign()?;
         let response: reqwest::Response = self
             .client
             .get(format!("{}/admin/users/{user_id}", self.base_url))
-            .bearer_auth(&self.admin_token)
+            .bearer_auth(admin_token)
             .send()
             .await
             .map_err(SupabaseAuthError::Transport)?;
@@ -147,11 +180,12 @@ impl SupabaseAuthIdentityAdmin {
 
     async fn find_users(&self, normalized_email: &str) -> Result<Vec<SupabaseAuthUser>, SupabaseAuthError> {
         trace!("Searching Supabase Auth users by normalized email");
+        let admin_token: String = self.admin_token_signer.sign()?;
         let response: reqwest::Response = self
             .client
             .get(format!("{}/admin/users", self.base_url))
             .query(&[("filter", normalized_email)])
-            .bearer_auth(&self.admin_token)
+            .bearer_auth(admin_token)
             .send()
             .await
             .map_err(SupabaseAuthError::Transport)?;
@@ -258,10 +292,11 @@ impl ExternalIdentityAdmin for SupabaseAuthIdentityAdmin {
         if let Some(password) = request.password.as_ref() {
             attributes.insert("password".to_owned(), json!(password));
         }
+        let admin_token: String = self.admin_token_signer.sign().map_err(map_supabase_auth_error)?;
         let response: reqwest::Response = self
             .client
             .post(format!("{}/admin/users", self.base_url))
-            .bearer_auth(&self.admin_token)
+            .bearer_auth(admin_token)
             .json(&attributes)
             .send()
             .await
@@ -272,6 +307,51 @@ impl ExternalIdentityAdmin for SupabaseAuthIdentityAdmin {
             .map_err(map_supabase_auth_error)?;
         info!(auth_user_id = %user.id, "Supabase Auth user created");
         Ok(user.into())
+    }
+}
+
+impl AdminTokenSigner {
+    fn from_env() -> Result<Self, SupabaseAuthIdentityAdminConfigError> {
+        let algorithm: String = required_admin_env("AUTH_ADMIN_JWT_ALGORITHM")?;
+        if algorithm != "ES256" {
+            return Err(SupabaseAuthIdentityAdminConfigError::InvalidAdminAlgorithm);
+        }
+        let expiry_secs: i64 = required_admin_env("AUTH_ADMIN_JWT_EXPIRY_SECS")?
+            .parse::<i64>()
+            .ok()
+            .filter(|value: &i64| (1..=3600).contains(value))
+            .ok_or(SupabaseAuthIdentityAdminConfigError::InvalidAdminTokenExpiry)?;
+        let private_key_base64: String = required_admin_env("AUTH_ADMIN_JWT_PRIVATE_KEY_BASE64")?;
+        let private_key_pem: Vec<u8> = STANDARD
+            .decode(private_key_base64)
+            .map_err(SupabaseAuthIdentityAdminConfigError::InvalidAdminPrivateKeyEncoding)?;
+        let encoding_key: EncodingKey = EncodingKey::from_ec_pem(&private_key_pem)
+            .map_err(SupabaseAuthIdentityAdminConfigError::InvalidAdminPrivateKey)?;
+        Ok(Self {
+            encoding_key,
+            key_id: required_admin_env("AUTH_ADMIN_JWT_KEY_ID")?,
+            issuer: required_admin_env("AUTH_ADMIN_JWT_ISSUER")?,
+            audience: required_admin_env("AUTH_ADMIN_JWT_AUDIENCE")?,
+            role: required_admin_env("AUTH_ADMIN_JWT_ROLE")?,
+            expiry_secs,
+        })
+    }
+
+    fn sign(&self) -> Result<String, SupabaseAuthError> {
+        self.sign_at(Utc::now().timestamp())
+    }
+
+    fn sign_at(&self, issued_at: i64) -> Result<String, SupabaseAuthError> {
+        let mut header: Header = Header::new(Algorithm::ES256);
+        header.kid = Some(self.key_id.clone());
+        let claims = AdminTokenClaims {
+            role: &self.role,
+            iss: &self.issuer,
+            aud: &self.audience,
+            iat: issued_at,
+            exp: issued_at.saturating_add(self.expiry_secs),
+        };
+        encode(&header, &claims, &self.encoding_key).map_err(SupabaseAuthError::AdminToken)
     }
 }
 
@@ -316,6 +396,10 @@ fn map_supabase_auth_error(error: SupabaseAuthError) -> ExternalIdentityAdminErr
                 "Supabase Auth administration transport failed"
             );
             ExternalIdentityAdminError::Unavailable("Supabase Auth transport failed".to_owned())
+        }
+        SupabaseAuthError::AdminToken(signing_error) => {
+            error!(reason = %signing_error, "Supabase Auth administration token signing failed");
+            ExternalIdentityAdminError::Unavailable("Supabase Auth administration credential is unavailable".to_owned())
         }
         SupabaseAuthError::InvalidResponse(response_error) => {
             error!(reason = %response_error, "Supabase Auth administration returned malformed JSON");
@@ -368,10 +452,24 @@ fn required_env(name: &str) -> Option<String> {
         .filter(|value: &String| !value.is_empty())
 }
 
+fn required_admin_env(name: &'static str) -> Result<String, SupabaseAuthIdentityAdminConfigError> {
+    required_env(name).ok_or(SupabaseAuthIdentityAdminConfigError::MissingSetting(name))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{SupabaseAuthUser, provider_message, user_is_banned};
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use jsonwebtoken::{Algorithm, EncodingKey, decode_header};
+
+    use super::{AdminTokenSigner, SupabaseAuthUser, provider_message, user_is_banned};
     use uuid::Uuid;
+
+    const TEST_ES256_PRIVATE_KEY: &[u8] = br#"-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgBTB80Tj8f1KY+uhC
+VlQPYibNEmprjMZ7XkU7Imc906uhRANCAAT5mybr9SFvCNf8gNtL03QzgLwohOvY
+goJNLXyZySwuRTAsDkwzkYc8/FBa6AfD99PAXvKZc99tqRuc9GSjNv89
+-----END PRIVATE KEY-----
+"#;
 
     #[test]
     fn detects_future_ban_and_sanitizes_provider_message() {
@@ -388,6 +486,54 @@ mod tests {
         assert_eq!(
             provider_message(r#"{"msg":"Email already exists"}"#),
             "Email already exists"
+        );
+    }
+
+    #[test]
+    fn signs_short_lived_es256_admin_token_with_configured_claims() {
+        let encoding_key: EncodingKey = EncodingKey::from_ec_pem(TEST_ES256_PRIVATE_KEY)
+            .unwrap_or_else(|error| panic!("test ES256 key must be valid: {error}"));
+        let signer = AdminTokenSigner {
+            encoding_key,
+            key_id: "admin-test-key".to_owned(),
+            issuer: "https://auth.example.com/auth/v1".to_owned(),
+            audience: "authenticated".to_owned(),
+            role: "service_role".to_owned(),
+            expiry_secs: 600,
+        };
+
+        let token: String = signer
+            .sign_at(1_700_000_000)
+            .unwrap_or_else(|error| panic!("test token signing must succeed: {error}"));
+        let header = decode_header(&token).unwrap_or_else(|error| panic!("test header must decode: {error}"));
+        assert_eq!(header.alg, Algorithm::ES256);
+        assert_eq!(header.kid.as_deref(), Some("admin-test-key"));
+
+        let mut segments = token.split('.');
+        let _header_segment: &str = segments.next().unwrap_or_default();
+        let claims_segment: &str = segments.next().unwrap_or_default();
+        let _signature_segment: &str = segments.next().unwrap_or_default();
+        assert!(segments.next().is_none());
+        let claims_bytes: Vec<u8> = URL_SAFE_NO_PAD
+            .decode(claims_segment)
+            .unwrap_or_else(|error| panic!("test claims must be base64url: {error}"));
+        let claims: serde_json::Value =
+            serde_json::from_slice(&claims_bytes).unwrap_or_else(|error| panic!("test claims must be JSON: {error}"));
+        assert_eq!(
+            claims.get("role").and_then(serde_json::Value::as_str),
+            Some("service_role")
+        );
+        assert_eq!(
+            claims.get("iss").and_then(serde_json::Value::as_str),
+            Some("https://auth.example.com/auth/v1")
+        );
+        assert_eq!(
+            claims.get("iat").and_then(serde_json::Value::as_i64),
+            Some(1_700_000_000)
+        );
+        assert_eq!(
+            claims.get("exp").and_then(serde_json::Value::as_i64),
+            Some(1_700_000_600)
         );
     }
 }

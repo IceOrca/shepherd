@@ -64,7 +64,6 @@ CREATE TABLE business_staffing_rates (
     name TEXT NOT NULL,
     customer_id UUID,
     employee_id UUID,
-    job_id UUID NOT NULL,
     currency TEXT NOT NULL,
     hourly_rate NUMERIC(19, 4) NOT NULL,
     priority SMALLINT NOT NULL DEFAULT 0,
@@ -73,6 +72,8 @@ CREATE TABLE business_staffing_rates (
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_by_account_id UUID NOT NULL,
+    superseded_at TIMESTAMPTZ,
+    superseded_by_account_id UUID,
     CONSTRAINT business_staffing_rates_tenant_id_id_uq UNIQUE (tenant_id, id),
     CONSTRAINT business_staffing_rates_tenant_branch_id_id_uq UNIQUE (tenant_id, branch_id, id),
     CONSTRAINT business_staffing_rates_branch_tenant_fk
@@ -84,11 +85,11 @@ CREATE TABLE business_staffing_rates (
     CONSTRAINT business_staffing_rates_employee_branch_tenant_fk
         FOREIGN KEY (tenant_id, branch_id, employee_id)
         REFERENCES hr_employees (tenant_id, branch_id, id) ON DELETE RESTRICT,
-    CONSTRAINT business_staffing_rates_job_branch_tenant_fk
-        FOREIGN KEY (tenant_id, branch_id, job_id)
-        REFERENCES hr_jobs (tenant_id, branch_id, id) ON DELETE RESTRICT,
     CONSTRAINT business_staffing_rates_created_by_tenant_fk
         FOREIGN KEY (tenant_id, created_by_account_id)
+        REFERENCES accounts (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT business_staffing_rates_superseded_by_tenant_fk
+        FOREIGN KEY (tenant_id, superseded_by_account_id)
         REFERENCES accounts (tenant_id, id) ON DELETE RESTRICT,
     CONSTRAINT business_staffing_rates_kind_valid CHECK (
         rate_kind IN ('customer_bill', 'worker_pay')
@@ -112,12 +113,16 @@ CREATE TABLE business_staffing_rates (
     CONSTRAINT business_staffing_rates_dates_valid CHECK (
         effective_to IS NULL OR effective_to >= effective_from
     ),
+    CONSTRAINT business_staffing_rates_supersession_valid CHECK (
+        (superseded_at IS NULL AND superseded_by_account_id IS NULL)
+        OR (superseded_at IS NOT NULL AND superseded_by_account_id IS NOT NULL)
+    ),
     UNIQUE (tenant_id, branch_id, rate_kind, code, effective_from)
 );
 
 CREATE INDEX business_staffing_rates_resolution_idx
     ON business_staffing_rates (
-        tenant_id, branch_id, rate_kind, customer_id, job_id, employee_id,
+        tenant_id, branch_id, rate_kind, customer_id, employee_id,
         effective_from DESC, effective_to, priority DESC
     )
     WHERE is_active;
@@ -137,7 +142,6 @@ BEGIN
           AND existing.rate_kind = NEW.rate_kind
           AND existing.customer_id IS NOT DISTINCT FROM NEW.customer_id
           AND existing.employee_id IS NOT DISTINCT FROM NEW.employee_id
-          AND existing.job_id = NEW.job_id
           AND existing.priority = NEW.priority
           AND daterange(existing.effective_from, existing.effective_to, '[]')
               && daterange(NEW.effective_from, NEW.effective_to, '[]')

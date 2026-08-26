@@ -4,6 +4,7 @@
   "service": "server",
   "workspaceFolder": "/app/shepherd_server",
   "postCreateCommand": "cargo fetch",
+  "postStartCommand": "sh scripts/rust-analyzer-check.sh --maintenance-only",
   "customizations": {
     "vscode": {
       "extensions": [
@@ -12,9 +13,16 @@
         "usernamehw.errorlens",
       ],
       "settings": {
-        "rust-analyzer.check.command": "clippy",
+        "rust-analyzer.cargo.targetDir": "target/rust-analyzer",
+        "rust-analyzer.check.overrideCommand": [
+          "sh",
+          "scripts/rust-analyzer-check.sh",
+        ],
         "rust-analyzer.cargo.extraEnv": {
           "DATABASE_URL": "${containerEnv:DATABASE_URL}",
+          "RUST_ANALYZER_TARGET_DIR": "target/rust-analyzer",
+          "RUST_ANALYZER_TARGET_MAX_MIB": "8192",
+          "RUST_ANALYZER_TARGET_CHECK_INTERVAL_SECS": "86400",
         },
         "rust-analyzer.runnables.extraEnv": {
           "DATABASE_URL": "${containerEnv:DATABASE_URL}",
