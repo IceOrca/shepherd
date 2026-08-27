@@ -57,6 +57,11 @@ pub struct UrgentWorkReconcileRequest {
     pub manual_rate: Option<ManualRateOverrideRequest>,
 }
 
+#[derive(Debug, Deserialize, TS)]
+pub struct UrgentWorkAcceptStaffRecordRequest {
+    pub job_id: Uuid,
+}
+
 pub fn routes() -> Router<Arc<AppContext>> {
     info!("Configured urgent-first staffing routes");
     Router::new()
@@ -72,6 +77,10 @@ pub fn routes() -> Router<Arc<AppContext>> {
             put(upsert_customer_record),
         )
         .route("/staffing/urgent-work/{report_id}/reconcile", post(reconcile))
+        .route(
+            "/staffing/urgent-work/{report_id}/accept-staff-record",
+            post(accept_staff_record),
+        )
 }
 
 async fn list_customers(
@@ -246,6 +255,24 @@ async fn reconcile(
         .reconcile(user.tenant_id, user.account_id, report_id, input)
         .await
         .map_err(|operation_error: UrgentWorkError| status("reconcile urgent work", &user, operation_error))?;
+    Ok(Json(result))
+}
+
+async fn accept_staff_record(
+    State(context): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(report_id): Path<Uuid>,
+    Json(request): Json<UrgentWorkAcceptStaffRecordRequest>,
+) -> Result<Json<UrgentWorkReconciliation>, StatusCode> {
+    require_permission(&user, "business.urgent_work.reconcile")?;
+    let result: UrgentWorkReconciliation = context
+        .core
+        .urgent_work
+        .accept_staff_record(user.tenant_id, user.account_id, report_id, request.job_id)
+        .await
+        .map_err(|operation_error: UrgentWorkError| {
+            status("accept urgent staff work record", &user, operation_error)
+        })?;
     Ok(Json(result))
 }
 

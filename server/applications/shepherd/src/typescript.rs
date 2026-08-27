@@ -26,8 +26,8 @@ use crate::{
                 UrgentWorkItem, UrgentWorkReconciliation, UrgentWorkStatus,
             },
             host::{
-                UrgentCustomerWorkRecordUpsertRequest, UrgentWorkEndRequest, UrgentWorkReconcileRequest,
-                UrgentWorkStartRequest,
+                UrgentCustomerWorkRecordUpsertRequest, UrgentWorkAcceptStaffRecordRequest, UrgentWorkEndRequest,
+                UrgentWorkReconcileRequest, UrgentWorkStartRequest,
             },
         },
         work_session::{
@@ -150,6 +150,7 @@ pub fn contract() -> String {
     push::<UrgentWorkEndRequest>(&mut output, &config);
     push::<UrgentCustomerWorkRecordUpsertRequest>(&mut output, &config);
     push::<UrgentWorkReconcileRequest>(&mut output, &config);
+    push::<UrgentWorkAcceptStaffRecordRequest>(&mut output, &config);
     push::<EmployeeStatus>(&mut output, &config);
     push::<Gender>(&mut output, &config);
     push::<Employee>(&mut output, &config);

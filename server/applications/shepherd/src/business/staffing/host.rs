@@ -210,6 +210,10 @@ pub fn routes() -> Router<Arc<AppContext>> {
             "/staffing/assignments/{assignment_id}/reconcile",
             post(reconcile_shift_assignment),
         )
+        .route(
+            "/staffing/assignments/{assignment_id}/accept-staff-record",
+            post(accept_staff_work_record),
+        )
 }
 
 pub async fn list_customers(
@@ -456,6 +460,21 @@ pub async fn reconcile_shift_assignment(
 ) -> Result<Json<ShiftAssignment>, StatusCode> {
     require_permission(&user, "business.reconciliation.manage")?;
     reconcile(context, user, assignment_id, payload).await
+}
+
+pub async fn accept_staff_work_record(
+    State(context): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(assignment_id): Path<Uuid>,
+) -> Result<Json<ShiftAssignment>, StatusCode> {
+    require_permission(&user, "business.reconciliation.manage")?;
+    context
+        .core
+        .staffing
+        .accept_staff_work_record(user.tenant_id, assignment_id, user.account_id)
+        .await
+        .map(Json)
+        .map_err(|error| staffing_status("accept staff work record", &user, error))
 }
 
 pub async fn approve_shift_assignment(

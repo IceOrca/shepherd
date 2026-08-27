@@ -410,6 +410,12 @@ pub trait StaffingRepo {
         adjustment_reason: Option<String>,
         audit_account_id: Uuid,
     ) -> Result<ShiftAssignment, StaffingError>;
+    async fn accept_staff_work_record(
+        &self,
+        tenant_id: Uuid,
+        assignment_id: Uuid,
+        audit_account_id: Uuid,
+    ) -> Result<ShiftAssignment, StaffingError>;
     async fn list_reconciliations(&self, tenant_id: Uuid) -> Result<Vec<StaffingReconciliation>, StaffingError>;
     async fn upsert_customer_work_record(
         &self,
@@ -762,6 +768,33 @@ impl StaffingService {
             .await;
         log_staffing_operation(
             "approve_shift_assignment",
+            tenant_id,
+            Some(audit_account_id),
+            Some(assignment_id),
+            &result,
+        );
+        result
+    }
+
+    pub async fn accept_staff_work_record(
+        &self,
+        tenant_id: Uuid,
+        assignment_id: Uuid,
+        audit_account_id: Uuid,
+    ) -> Result<ShiftAssignment, StaffingError> {
+        trace!(
+            operation = "accept_staff_work_record",
+            tenant_id = %tenant_id,
+            audit_account_id = %audit_account_id,
+            assignment_id = %assignment_id,
+            "Finalizing an exact staff and customer evidence match in one transaction"
+        );
+        let result: Result<ShiftAssignment, StaffingError> = self
+            .repo
+            .accept_staff_work_record(tenant_id, assignment_id, audit_account_id)
+            .await;
+        log_staffing_operation(
+            "accept_staff_work_record",
             tenant_id,
             Some(audit_account_id),
             Some(assignment_id),

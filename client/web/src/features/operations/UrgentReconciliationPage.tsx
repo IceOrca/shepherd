@@ -22,6 +22,7 @@ import { friendlyApiError } from "../../shared/api/client";
 import { formatDateTime, formatDuration } from "../../shared/lib/format";
 import { useAuth } from "../auth/AuthProvider";
 import {
+  acceptUrgentStaffRecordForBranch,
   listJobsForBranch,
   listUrgentCustomersForBranch,
   listUrgentReconciliationsForBranch,
@@ -208,6 +209,16 @@ export function UrgentReconciliationPage(): React.JSX.Element {
     setMessage(null);
   }, [selected]);
 
+  useEffect((): void => {
+    const jobs: StaffingJob[] = jobsQuery.data ?? [];
+    if (!selectedId || jobs.length !== 1) {
+      return;
+    }
+    setFinalDraft((current: FinalDraft): FinalDraft =>
+      current.jobId ? current : { ...current, jobId: jobs[0].id },
+    );
+  }, [jobsQuery.data, selectedId]);
+
   const refresh = (): Promise<void> =>
     queryClient.invalidateQueries({ queryKey: operationsQueryKeys.urgentReconciliations });
 
@@ -229,11 +240,11 @@ export function UrgentReconciliationPage(): React.JSX.Element {
       });
     },
     onSuccess: (): void => {
-      setMessage("Đã lưu bằng chứng độc lập từ khách hàng.");
+      setMessage("Đã lưu thông tin khách hàng xác nhận.");
       void refresh();
     },
     onError: (error: unknown): void => {
-      setMessage(friendlyApiError(error, "Không thể lưu bằng chứng khách hàng."));
+      setMessage(friendlyApiError(error, "Không thể lưu thông tin khách hàng xác nhận."));
     },
   });
 
@@ -263,12 +274,36 @@ export function UrgentReconciliationPage(): React.JSX.Element {
       });
     },
     onSuccess: (): void => {
-      setMessage("Đã chốt khách hàng, thời gian và ảnh chụp tài chính cuối cùng.");
+      setMessage("Đã chốt kết quả cuối cùng cho tính lương và doanh thu.");
       void refresh();
     },
     onError: (error: unknown): void => {
       setMessage(
         friendlyApiError(error, "Không thể chốt đối soát. Mọi chênh lệch về khách hàng hoặc thời gian cần có lý do."),
+      );
+    },
+  });
+
+  const acceptStaffRecordMutation: UseMutationResult<UrgentWorkReconciliation, unknown, void> = useMutation<
+    UrgentWorkReconciliation,
+    unknown,
+    void
+  >({
+    mutationFn: (): Promise<UrgentWorkReconciliation> => {
+      if (!selectedId || !selected || !finalDraft.jobId) {
+        throw new Error("urgent staff work record is incomplete");
+      }
+      return acceptUrgentStaffRecordForBranch(selected.work.branch_id, selectedId, {
+        job_id: finalDraft.jobId,
+      });
+    },
+    onSuccess: (): void => {
+      setMessage("Đã xác nhận giờ nhân viên và chốt kết quả công việc.");
+      void refresh();
+    },
+    onError: (error: unknown): void => {
+      setMessage(
+        friendlyApiError(error, "Không thể xác nhận. Dữ liệu khách hàng phải khớp hoàn toàn với giờ nhân viên."),
       );
     },
   });
@@ -291,7 +326,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
     return (
       <section className="panel p-8 text-center text-sm text-slate-500">
         <RefreshCw className="mr-2 inline size-4 animate-spin" />
-        Đang tải dữ liệu đối soát khẩn...
+        Đang tải dữ liệu đối soát...
       </section>
     );
   }
@@ -299,7 +334,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
     return (
       <section className="panel p-8 text-center text-sm text-red-600">
         <CircleAlert className="mr-2 inline size-4" />
-        {friendlyApiError(firstError, "Không thể tải dữ liệu đối soát khẩn.")}
+        {friendlyApiError(firstError, "Không thể tải dữ liệu đối soát.")}
       </section>
     );
   }
@@ -317,7 +352,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
         <section className="panel overflow-hidden">
           <div className="border-b border-slate-200 px-5 py-4">
             <h2 className="font-bold text-slate-950">Công việc cần đối soát</h2>
-            <p className="mt-1 text-sm text-slate-500">Bằng chứng nhân viên chọn khách hàng và tự/ghi hộ thời gian.</p>
+            <p className="mt-1 text-sm text-slate-500">Kiểm tra nơi làm việc và thời gian nhân viên đã ghi nhận.</p>
           </div>
           <div className="max-h-[72vh] divide-y divide-slate-100 overflow-y-auto">
             {items.map((item: UrgentWorkReconciliation): React.JSX.Element => (
@@ -342,7 +377,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
               </button>
             ))}
             {items.length === 0 ? (
-              <p className="p-8 text-center text-sm text-slate-500">Chưa có công việc khẩn cần đối soát.</p>
+              <p className="p-8 text-center text-sm text-slate-500">Chưa có công việc phát sinh cần đối soát.</p>
             ) : null}
           </div>
         </section>
@@ -386,7 +421,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                   <p className="mt-1 text-sm font-bold text-amber-900">
                     {selected.customer_record ? formatDuration(selected.customer_record.confirmed_worked_seconds) : "—"}
                   </p>
-                  <p className="mt-1 text-xs text-amber-700">Nguồn độc lập, không sao chép từ nhân viên</p>
+                  <p className="mt-1 text-xs text-amber-700">Theo xác nhận khách hàng</p>
                 </div>
                 <div className="rounded-xl bg-emerald-50 p-4">
                   <p className="text-xs font-bold uppercase text-emerald-600">Kết quả cuối</p>
@@ -404,7 +439,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                 <h3 className="font-bold text-slate-950">Xác nhận / bill từ khách hàng</h3>
               </div>
               <p className="mt-1 text-sm text-slate-500">
-                Nhập đúng khách hàng và thời gian trên dữ liệu xác nhận. Form trống cho đến khi có bằng chứng khách hàng.
+                Nhập khách hàng và thời gian theo bill hoặc thông tin khách hàng đã xác nhận.
               </p>
               <label className="mt-4 block text-sm font-semibold text-slate-700">
                 Khách hàng / nơi làm việc xác nhận
@@ -489,6 +524,41 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                 <GitCompareArrows className="size-5 text-blue-600" />
                 <h3 className="font-bold text-slate-950">Chốt đối soát</h3>
               </div>
+              {selected.reconciliation_status === "matched" ? (
+                <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                  <p className="font-bold text-emerald-950">Hai nguồn đã khớp</p>
+                  <p className="mt-1 text-sm leading-6 text-emerald-800">
+                    Xác nhận kết quả khi nơi làm việc, giờ nhân viên và dữ liệu khách hàng đã khớp hoàn toàn. Thao tác này không thay đổi dữ liệu của hai bên.
+                  </p>
+                  {!finalDraft.jobId ? (
+                    <p className="mt-2 text-sm font-semibold text-amber-700">Vui lòng chọn công việc bên dưới trước khi xác nhận.</p>
+                  ) : null}
+                  <button
+                    className="mt-3 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 text-sm font-bold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={
+                      !canManage ||
+                      !finalDraft.jobId ||
+                      acceptStaffRecordMutation.isPending ||
+                      evidenceMutation.isPending ||
+                      reconcileMutation.isPending
+                    }
+                    onClick={(): void => {
+                      if (window.confirm("Xác nhận hai nguồn đã khớp và khóa kết quả công việc này?")) {
+                        acceptStaffRecordMutation.mutate();
+                      }
+                    }}
+                    type="button"
+                  >
+                    <CheckCircle2 className="size-4" />
+                    {acceptStaffRecordMutation.isPending ? "Đang xác nhận..." : "Xác nhận giờ nhân viên"}
+                  </button>
+                </div>
+              ) : null}
+              {selected.reconciliation_status !== "reconciled" && selected.reconciliation_status !== "matched" ? (
+                <p className="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  Nhập dữ liệu khách hàng trước. Nút xác nhận nhanh chỉ xuất hiện khi khách hàng và nhân viên ghi nhận hoàn toàn giống nhau.
+                </p>
+              ) : null}
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <label className="text-sm font-semibold text-slate-700">
                   Khách hàng cuối cùng

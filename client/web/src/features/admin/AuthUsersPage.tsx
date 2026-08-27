@@ -266,8 +266,7 @@ export function AuthUsersPage() {
                 Tài khoản đăng nhập
               </h2>
               <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-500">
-                Supabase Auth giữ thông tin đăng nhập; vai trò và quyền truy cập
-                được Shepherd quản lý riêng cho doanh nghiệp này.
+                Quản lý tài khoản đăng nhập, trạng thái làm việc và quyền truy cập của từng người trong doanh nghiệp.
               </p>
             </div>
           </div>
@@ -371,7 +370,7 @@ export function AuthUsersPage() {
             <p className="mt-2 text-sm text-slate-500">
               {search
                 ? "Hãy thử một từ khóa khác."
-                : "Tạo tài khoản đầu tiên để cấp quyền truy cập Shepherd."}
+                : "Tạo tài khoản đầu tiên cho nhân sự hoặc người quản lý."}
             </p>
           </div>
         ) : null}
@@ -609,7 +608,7 @@ export function AuthUsersPage() {
                   </button>
                 </span>
                 <span className="mt-2 block text-xs leading-5 text-slate-500">
-                  Chỉ dùng khi tạo danh tính mới. Nếu email đã có trong hệ thống, Shepherd liên kết danh tính đó vào doanh nghiệp này và không đổi mật khẩu hiện tại. Có thể để trống cho Google hoặc Facebook; email từ nhà cung cấp phải khớp chính xác.
+                  Nhập khi tạo tài khoản mới. Nếu email đã tồn tại, tài khoản hiện có sẽ được liên kết với doanh nghiệp này. Có thể để trống khi người dùng đăng nhập bằng Google hoặc Facebook.
                 </span>
               </label>
               <label className="block">

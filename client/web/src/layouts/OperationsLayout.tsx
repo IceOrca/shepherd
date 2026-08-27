@@ -256,7 +256,7 @@ export function OperationsLayout() {
     try {
       await auth.selectTenant(tenantId);
       await queryClient.invalidateQueries();
-      console.info("Shepherd UI tenant selection changed", { tenantId });
+      console.info("Staffing UI tenant selection changed", { tenantId });
     } catch (error: unknown) {
       setTenantSwitchError(friendlyApiError(error, "Không thể chuyển doanh nghiệp lúc này. Vui lòng thử lại."));
     } finally {
@@ -269,7 +269,7 @@ export function OperationsLayout() {
       return;
     }
     auth.selectBranch(branchId);
-    console.info("Shepherd UI branch selection changed", {
+    console.info("Staffing UI branch selection changed", {
       tenantId: profile.tenant_id,
       accountId: profile.account_id,
       branchId,
@@ -294,11 +294,11 @@ export function OperationsLayout() {
     <div className="flex h-full flex-col bg-slate-950 text-slate-300">
       <div className="flex h-20 items-center gap-3 border-b border-white/10 px-5">
         <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-blue-600 text-lg font-black text-white shadow-lg shadow-blue-600/20">
-          S
+          NS
         </div>
         <div className="min-w-0">
-          <p className="truncate font-bold text-white">Shepherd</p>
-          <p className="truncate text-xs text-slate-500">Điều hành nhân sự theo ca</p>
+          <p className="truncate font-bold text-white">Cung ứng nhân sự</p>
+          <p className="truncate text-xs text-slate-500">Điều hành ca và nhân viên</p>
         </div>
         <button
           aria-label="Đóng trình đơn"

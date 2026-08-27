@@ -32,19 +32,19 @@ function requestMethod(init: RequestInit): string {
 }
 
 function logClientApiRequest(context: ClientApiLogContext): void {
-  console.debug("Shepherd API request dispatched", context);
+  console.debug("Staffing API request dispatched", context);
 }
 
 function logClientApiResponse(context: ClientApiLogContext): void {
   if (context.status !== undefined && context.status >= 500) {
-    console.error("Shepherd API request failed", context);
+    console.error("Staffing API request failed", context);
     return;
   }
   if (context.status !== undefined && context.status >= 400) {
-    console.warn("Shepherd API request rejected", context);
+    console.warn("Staffing API request rejected", context);
     return;
   }
-  console.info("Shepherd API request completed", context);
+  console.info("Staffing API request completed", context);
 }
 
 export function setAuthenticationLostHandler(handler: (() => void) | null): void {
@@ -63,12 +63,12 @@ export function setApiAccessToken(token: string | null): void {
 
 export function setApiActiveBranchId(branchId: string | null): void {
   activeBranchId = branchId;
-  console.info("Shepherd API active branch updated", { activeBranchId });
+  console.info("Staffing API active branch updated", { activeBranchId });
 }
 
 export function setApiActiveTenantId(tenantId: string | null): void {
   activeTenantId = tenantId;
-  console.info("Shepherd API active tenant updated", { activeTenantId });
+  console.info("Staffing API active tenant updated", { activeTenantId });
 }
 
 export function getApiActiveBranchId(): string | null {
@@ -88,7 +88,7 @@ async function readPayload(response: Response): Promise<unknown> {
 }
 
 async function sendRequest(path: string, init: RequestInit): Promise<Response> {
-    const headers: Headers = new Headers(init.headers);
+  const headers: Headers = new Headers(init.headers);
   const hasBody: boolean = typeof init.body === "string";
   const hasAccessToken: boolean = accessToken !== null;
   const method: string = requestMethod(init);
@@ -131,13 +131,13 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
   let refreshed: boolean = false;
 
   if (response.status === 401 && authenticationRefreshHandler) {
-    console.info("Shepherd API authentication refresh requested", { path, method });
+    console.info("Staffing API authentication refresh requested", { path, method });
     const refreshedToken: string | null = await authenticationRefreshHandler();
     if (refreshedToken) {
       refreshed = true;
       response = await sendRequest(path, init);
     } else {
-      console.warn("Shepherd API authentication refresh did not return a usable token", { path, method });
+      console.warn("Staffing API authentication refresh did not return a usable token", { path, method });
     }
   }
 
@@ -170,7 +170,7 @@ export function apiRequestForBranch<T>(
 ): Promise<T> {
   const headers: Headers = new Headers(init.headers);
   headers.set("X-Branch-Id", branchId);
-  console.debug("Shepherd API request assigned an explicit branch context", {
+  console.debug("Staffing API request assigned an explicit branch context", {
     path,
     branchId,
   });

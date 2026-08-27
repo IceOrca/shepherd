@@ -134,6 +134,10 @@ the same work cannot be paid from two sources.
 - Keep staff evidence immutable and customer evidence independent.
 - Require a supervisor to reconcile every completed work report, including an
   exact match.
+- Offer **Xác nhận giờ nhân viên** only after independently entered customer
+  evidence exactly matches the staff record. This convenience action uses the
+  ordinary final reconciliation transaction and never creates, copies, or
+  updates customer evidence or its history.
 - Use PostgreSQL/server timestamps and tenant-scoped RLS as authoritative
   boundaries.
 - Keep GPS disabled until the customer explicitly chooses to introduce it.

@@ -10,6 +10,7 @@ import { friendlyApiError } from "../../shared/api/client";
 import { formatDateTime, formatDuration } from "../../shared/lib/format";
 import { useAuth } from "../auth/AuthProvider";
 import {
+  acceptAssignmentStaffRecordForBranch,
   listCustomersForBranch,
   listReconciliationsForBranch,
   operationsQueryKeys,
@@ -157,6 +158,14 @@ export function ReconciliationPage(): React.JSX.Element {
     onSuccess: () => { setMessage("Đã chốt dữ liệu cuối cùng và khóa kết quả ca."); void refresh(); },
     onError: (error) => setMessage(friendlyApiError(error, "Không thể chốt đối soát. Chênh lệch cần có lý do xử lý.")),
   });
+  const acceptStaffRecordMutation = useMutation({
+    mutationFn: () => acceptAssignmentStaffRecordForBranch(selected?.branch_id ?? "", selectedId ?? ""),
+    onSuccess: () => {
+      setMessage("Đã xác nhận giờ nhân viên và chốt kết quả ca làm.");
+      void refresh();
+    },
+    onError: (error) => setMessage(friendlyApiError(error, "Không thể xác nhận. Dữ liệu khách hàng phải khớp hoàn toàn với giờ nhân viên.")),
+  });
 
   const saveEvidence = (event: FormEvent) => {
     event.preventDefault();
@@ -184,7 +193,7 @@ export function ReconciliationPage(): React.JSX.Element {
           <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-lg font-black text-slate-950">{selected.employee_name}</h2><p className="mt-1 text-sm text-slate-500">{selected.employee_code} · {selected.customer_name}</p></div><span className={`rounded-full px-3 py-1 text-xs font-bold ${statusTone(selected.reconciliation_status)}`}>{statusLabel(selected.reconciliation_status)}</span></div>
           <div className="mt-5 grid gap-3 sm:grid-cols-3">
             <div className="rounded-xl bg-violet-50 p-4"><p className="text-xs font-bold uppercase text-violet-600">Nhân viên ghi</p><p className="mt-2 text-xl font-black text-violet-950">{formatDuration(selected.staff_worked_seconds)}</p><p className="mt-1 text-xs text-violet-700">{selected.staff_started_at ? formatDateTime(selected.staff_started_at) : "Chưa bắt đầu"}</p></div>
-            <div className="rounded-xl bg-amber-50 p-4"><p className="text-xs font-bold uppercase text-amber-600">Khách hàng xác nhận</p><p className="mt-2 text-xl font-black text-amber-950">{selected.customer_record ? formatDuration(selected.customer_record.confirmed_worked_seconds) : "—"}</p><p className="mt-1 text-xs text-amber-700">Nguồn độc lập</p></div>
+            <div className="rounded-xl bg-amber-50 p-4"><p className="text-xs font-bold uppercase text-amber-600">Khách hàng xác nhận</p><p className="mt-2 text-xl font-black text-amber-950">{selected.customer_record ? formatDuration(selected.customer_record.confirmed_worked_seconds) : "—"}</p><p className="mt-1 text-xs text-amber-700">Theo xác nhận khách hàng</p></div>
             <div className="rounded-xl bg-emerald-50 p-4"><p className="text-xs font-bold uppercase text-emerald-600">Kết quả cuối</p><p className="mt-2 text-xl font-black text-emerald-950">{selected.final_worked_seconds ? formatDuration(selected.final_worked_seconds) : "Chưa chốt"}</p><p className="mt-1 text-xs text-emerald-700">Dùng cho thanh toán</p></div>
           </div>
         </section>
@@ -211,7 +220,10 @@ export function ReconciliationPage(): React.JSX.Element {
           {selected.assignment_status !== "approved" ? <button className="action-secondary mt-4" disabled={!canManage || evidenceMutation.isPending} type="submit"><Save className="size-4" />Lưu xác nhận khách hàng</button> : null}
         </form>
 
-        <section className="panel p-5 sm:p-6"><div className="flex items-center gap-2"><GitCompareArrows className="size-5 text-blue-600" /><h3 className="font-bold text-slate-950">Chốt đối soát</h3></div><div className="mt-4 grid gap-3 sm:grid-cols-2"><label className="text-sm font-semibold text-slate-700">Thời gian cuối (giờ)<input className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5" disabled={selected.assignment_status === "approved"} min="0.01" required step="0.01" type="number" value={finalHours} onChange={(event) => setFinalHours(event.target.value)} /></label><label className="text-sm font-semibold text-slate-700">Lý do xử lý chênh lệch<input className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5" disabled={selected.assignment_status === "approved"} placeholder="Bắt buộc nếu hai nguồn không khớp" value={resolution} onChange={(event) => setResolution(event.target.value)} /></label></div>
+        <section className="panel p-5 sm:p-6"><div className="flex items-center gap-2"><GitCompareArrows className="size-5 text-blue-600" /><h3 className="font-bold text-slate-950">Chốt đối soát</h3></div>
+          {selected.assignment_status !== "approved" && selected.reconciliation_status === "matched" ? <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-4"><p className="font-bold text-emerald-950">Hai nguồn đã khớp</p><p className="mt-1 text-sm leading-6 text-emerald-800">Xác nhận kết quả khi giờ nhân viên và dữ liệu khách hàng đã khớp hoàn toàn. Thao tác này không thay đổi dữ liệu của hai bên.</p><button className="mt-3 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 text-sm font-bold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50" disabled={!canManage || acceptStaffRecordMutation.isPending || evidenceMutation.isPending || reconcileMutation.isPending} onClick={(): void => { if (window.confirm("Xác nhận hai nguồn đã khớp và khóa kết quả ca làm này?")) acceptStaffRecordMutation.mutate(); }} type="button"><CheckCircle2 className="size-4" />{acceptStaffRecordMutation.isPending ? "Đang xác nhận..." : "Xác nhận giờ nhân viên"}</button></div> : null}
+          {selected.assignment_status !== "approved" && selected.reconciliation_status !== "matched" ? <p className="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800">Nhập dữ liệu khách hàng trước. Nút xác nhận nhanh chỉ xuất hiện khi khách hàng và nhân viên ghi nhận hoàn toàn giống nhau.</p> : null}
+          <div className="mt-4 grid gap-3 sm:grid-cols-2"><label className="text-sm font-semibold text-slate-700">Thời gian cuối (giờ)<input className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5" disabled={selected.assignment_status === "approved"} min="0.01" required step="0.01" type="number" value={finalHours} onChange={(event) => setFinalHours(event.target.value)} /></label><label className="text-sm font-semibold text-slate-700">Lý do xử lý chênh lệch<input className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5" disabled={selected.assignment_status === "approved"} placeholder="Bắt buộc nếu hai nguồn không khớp" value={resolution} onChange={(event) => setResolution(event.target.value)} /></label></div>
           {selected.assignment_status === "approved" ? <p className="mt-4 flex items-center gap-2 text-sm font-semibold text-emerald-700"><CheckCircle2 className="size-5" />Kết quả đã khóa và sẵn sàng cho nghiệp vụ thanh toán.</p> : <button className="action-primary mt-4" disabled={!canManage || !selected.customer_record || selected.staff_worked_seconds <= 0 || reconcileMutation.isPending} onClick={() => reconcileMutation.mutate()} type="button"><CheckCircle2 className="size-4" />Chốt kết quả</button>}
         </section>
       </div> : null}

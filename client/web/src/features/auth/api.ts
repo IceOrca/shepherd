@@ -85,12 +85,12 @@ function readCallbackSession(): AuthSession | null {
   window.history.replaceState(null, "", window.location.pathname + window.location.search);
   if (oauthError) {
     callbackError = oauthError;
-    console.warn("Shepherd OAuth callback returned an error without logging its details");
+    console.warn("Staffing application OAuth callback returned an error without logging its details");
     return null;
   }
   if (!accessToken || !refreshToken || !Number.isFinite(expiresIn) || expiresIn <= 0) {
     callbackError = "Dịch vụ đăng nhập trả về phiên không hợp lệ.";
-    console.warn("Shepherd OAuth callback returned an invalid session shape");
+    console.warn("Staffing application OAuth callback returned an invalid session shape");
     return null;
   }
 
@@ -103,9 +103,9 @@ function readCallbackSession(): AuthSession | null {
   };
   try {
     window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(callbackSession));
-    console.info("Shepherd OAuth callback session persisted", { expiresIn });
+    console.info("Staffing application OAuth callback session persisted", { expiresIn });
   } catch {
-    console.warn("Shepherd OAuth callback session could not be persisted; retaining in-memory session");
+    console.warn("Staffing application OAuth callback session could not be persisted; retaining in-memory session");
   }
   return callbackSession;
 }
@@ -114,18 +114,18 @@ function readStoredSession(): AuthSession | null {
   try {
     const stored: string | null = window.localStorage.getItem(SESSION_STORAGE_KEY);
     if (!stored) {
-      console.debug("Shepherd has no persisted authentication session");
+      console.debug("Staffing application has no persisted authentication session");
       return null;
     }
     const parsed: unknown = JSON.parse(stored);
     if (isAuthSession(parsed)) {
-      console.info("Shepherd restored persisted authentication session without logging token data");
+      console.info("Staffing application restored persisted authentication session without logging token data");
       return parsed;
     }
     window.localStorage.removeItem(SESSION_STORAGE_KEY);
-    console.warn("Shepherd removed malformed persisted authentication session");
+    console.warn("Staffing application removed malformed persisted authentication session");
   } catch {
-    console.warn("Shepherd could not read persisted authentication session; treating as signed out");
+    console.warn("Staffing application could not read persisted authentication session; treating as signed out");
   }
   return null;
 }
@@ -136,13 +136,13 @@ function storeSession(nextSession: AuthSession | null): void {
   try {
     if (nextSession) {
       window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(nextSession));
-      console.info("Shepherd stored active authentication session without logging token data");
+      console.info("Staffing application stored active authentication session without logging token data");
     } else {
       window.localStorage.removeItem(SESSION_STORAGE_KEY);
-      console.info("Shepherd cleared persisted authentication session");
+      console.info("Staffing application cleared persisted authentication session");
     }
   } catch {
-    console.warn("Shepherd could not persist authentication session state");
+    console.warn("Staffing application could not persist authentication session state");
   }
 }
 
@@ -324,14 +324,14 @@ export async function selectTenantSession(tenantId: string): Promise<CurrentUser
   setApiActiveBranchId(null);
   try {
     const profile: CurrentUserProfile = await apiRequest<CurrentUserProfile>("/api/me");
-    console.info("Shepherd tenant context switch resolved", {
+    console.info("Staffing tenant context switch resolved", {
       tenantId: profile.tenant_id,
       accountId: profile.account_id,
     });
     return profile;
   } catch (error: unknown) {
     setApiActiveTenantId(null);
-    console.warn("Shepherd tenant context switch was rejected", {
+    console.warn("Staffing tenant context switch was rejected", {
       tenantId,
       errorType: error instanceof Error ? error.name : typeof error,
     });
@@ -344,7 +344,7 @@ async function resolveApplicationSession(preferredTenantId: string | null): Prom
   setApiActiveBranchId(null);
   const memberships: TenantMembershipSummary[] = await apiRequest<TenantMembershipSummary[]>("/api/tenants");
   if (memberships.length === 0) {
-    console.warn("Authenticated GoTrue identity has no active Shepherd tenant membership");
+    console.warn("Authenticated GoTrue identity has no active Staffing tenant membership");
     throw new AuthenticationError("Tài khoản chưa được cấp quyền vào doanh nghiệp nào.");
   }
   const selectedMembership: TenantMembershipSummary =
@@ -352,7 +352,7 @@ async function resolveApplicationSession(preferredTenantId: string | null): Prom
       (membership: TenantMembershipSummary): boolean => membership.tenant_id === preferredTenantId,
     ) ?? memberships[0];
   const profile: CurrentUserProfile = await selectTenantSession(selectedMembership.tenant_id);
-  console.info("Shepherd application session context resolved", {
+  console.info("Staffing application session context resolved", {
     selectedTenantId: selectedMembership.tenant_id,
     membershipCount: memberships.length,
   });

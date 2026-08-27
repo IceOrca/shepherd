@@ -122,14 +122,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const selectedProfile: CurrentUserProfile = await selectTenantSession(tenantId);
           localStorage.setItem(TENANT_STORAGE_KEY, tenantId);
           setProfile(initializeActiveBranch(selectedProfile));
-          console.info("Shepherd frontend tenant selection changed", {
+          console.info("Staffing frontend tenant selection changed", {
             tenantId,
             accountId: selectedProfile.account_id,
           });
         } catch (error: unknown) {
           setApiActiveTenantId(profile?.tenant_id ?? null);
           setApiActiveBranchId(profile?.active_branch_id ?? null);
-          console.warn("Shepherd frontend restored the previous tenant after a failed switch", {
+          console.warn("Staffing frontend restored the previous tenant after a failed switch", {
             tenantId,
             previousTenantId: profile?.tenant_id ?? null,
           });

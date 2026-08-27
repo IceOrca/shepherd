@@ -231,6 +231,7 @@ Important staffing APIs include:
 - `GET /api/business/staffing/urgent-work/reconciliations`
 - `PUT /api/business/staffing/urgent-work/{report_id}/customer-record`
 - `POST /api/business/staffing/urgent-work/{report_id}/reconcile`
+- `POST /api/business/staffing/urgent-work/{report_id}/accept-staff-record`
 
 - `GET/POST /api/business/staffing/shifts`
 - `GET/POST /api/business/staffing/shifts/{shift_id}/assignments`
@@ -241,6 +242,7 @@ Important staffing APIs include:
 - `GET /api/business/staffing/reconciliations`
 - `PUT /api/business/staffing/assignments/{assignment_id}/customer-record`
 - `POST /api/business/staffing/assignments/{assignment_id}/reconcile`
+- `POST /api/business/staffing/assignments/{assignment_id}/accept-staff-record`
 
 Do not duplicate Rust DTO shapes manually in TypeScript. Register public contracts in `typescript.rs` and regenerate the tracked `client/web/src/api/generated/contracts.ts` file with `scripts/generate-api-types.sh`; never hand-edit it.
 
@@ -261,7 +263,7 @@ Navigation is permission-driven, not role-name-driven. The customer page at `/op
 
 The frontend first calls `/api/tenants`, persists one active tenant, sends `X-Tenant-Id` on tenant-scoped API calls, and displays a tenant selector when one identity has multiple memberships. It also persists one active branch per tenant and sends `X-Branch-Id`. Switching tenant clears branch context, reloads `/api/me`, restores only a branch authorized in the new tenant, and invalidates all TanStack Query data. Switching branch also invalidates cached queries. Frontend selection is usability state only; middleware membership validation and PostgreSQL RLS remain authoritative.
 
-The UI may explain why a candidate is unavailable, but the backend remains authoritative. Never prefill customer evidence from staff evidence: convenience must not make two independent sources appear to agree. Use generated contracts and invalidate the appropriate TanStack Query keys after mutations.
+The UI may explain why a candidate is unavailable, but the backend remains authoritative. Never prefill customer evidence from staff evidence: convenience must not make two independent sources appear to agree. The `accept-staff-record` convenience endpoints are available only after independently entered customer evidence exactly matches staff evidence. They run the ordinary final reconciliation transaction with no override or adjustment reason and must never insert or update either evidence source. Normal customer-evidence upserts lock the assignment or urgent report so they cannot race a terminal reconciliation. Use generated contracts and invalidate the appropriate TanStack Query keys after mutations.
 
 GPS is controlled by both `STAFFING_GPS_ENABLED` and `VITE_STAFFING_GPS_ENABLED`; both default to `false` in development Compose. When disabled, the client hides GPS controls and sends no coordinates, and the server discards any supplied coordinates.
 

@@ -1217,134 +1217,42 @@ impl StaffingRepo for StaffingDb {
         audit_account_id: Uuid,
     ) -> Result<ShiftAssignment, StaffingError> {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
-        let row: Option<AssignmentRow> = sqlx::query_as!(
-            AssignmentRow,
-            r#"
-            WITH observed AS (
-                SELECT MIN(started_at) FILTER (WHERE ended_at IS NOT NULL) AS started_at,
-                       MAX(ended_at) AS ended_at,
-                       COALESCE(SUM(worked_seconds), 0)::BIGINT AS total
-                FROM business_shift_work_sessions
-                WHERE tenant_id = $1 AND assignment_id = $2 AND ended_at IS NOT NULL
-            ), customer AS (
-                SELECT confirmed_customer_id, confirmed_started_at,
-                       confirmed_ended_at, confirmed_worked_seconds AS total
-                FROM business_customer_work_records
-                WHERE tenant_id = $1 AND assignment_id = $2
-            )
-            UPDATE business_shift_assignments AS assignment
-            SET status = 'approved',
-                worked_seconds = COALESCE($3::BIGINT, observed.total),
-                observed_worked_seconds = observed.total,
-                approval_adjustment_reason = $4::TEXT,
-                customer_amount = ROUND(
-                    assignment.bill_hourly_rate_snapshot * COALESCE($3::BIGINT, observed.total)::NUMERIC / 3600,
-                    4
-                ),
-                worker_amount = ROUND(
-                    assignment.worker_hourly_rate_snapshot * COALESCE($3::BIGINT, observed.total)::NUMERIC / 3600,
-                    4
-                ),
-                margin_amount = ROUND(
-                    assignment.bill_hourly_rate_snapshot * COALESCE($3::BIGINT, observed.total)::NUMERIC / 3600,
-                    4
-                ) - ROUND(
-                    assignment.worker_hourly_rate_snapshot * COALESCE($3::BIGINT, observed.total)::NUMERIC / 3600,
-                    4
-                ),
-                approved_at = CURRENT_TIMESTAMP,
-                approved_by_account_id = $5
-            FROM observed, customer
-            WHERE assignment.tenant_id = $1
-              AND assignment.id = $2
-              AND assignment.status = 'assigned'
-              AND observed.total > 0
-              AND NOT EXISTS (
-                  SELECT 1 FROM business_shift_work_sessions AS open_session
-                  WHERE open_session.tenant_id = $1
-                    AND open_session.assignment_id = $2
-                    AND open_session.ended_at IS NULL
-              )
-              AND (
-                  (COALESCE($3::BIGINT, observed.total) = observed.total
-                      AND observed.total = customer.total
-                      AND observed.started_at = customer.confirmed_started_at
-                      AND observed.ended_at = customer.confirmed_ended_at
-                      AND customer.confirmed_customer_id = (
-                          SELECT shift.customer_id
-                          FROM business_staffing_shifts AS shift
-                          WHERE shift.tenant_id = assignment.tenant_id
-                            AND shift.id = assignment.shift_id
-                      ))
-                  OR $4::TEXT IS NOT NULL
-              )
-            RETURNING assignment.id, assignment.shift_id, assignment.employee_id,
-                      assignment.customer_bill_rate_id, assignment.worker_pay_rate_id, assignment.rate_source,
-                      assignment.manual_rate_reason, assignment.currency,
-                      assignment.bill_hourly_rate_snapshot::TEXT AS "bill_hourly_rate_snapshot!",
-                      assignment.worker_hourly_rate_snapshot::TEXT AS "worker_hourly_rate_snapshot!",
-                      assignment.eligibility_exception_reason, assignment.status, assignment.worked_seconds, assignment.observed_worked_seconds,
-                      assignment.approval_adjustment_reason,
-                      assignment.customer_amount::TEXT AS customer_amount,
-                      assignment.worker_amount::TEXT AS worker_amount,
-                      assignment.margin_amount::TEXT AS margin_amount,
-                      assignment.approved_at, assignment.created_at
-            "#,
+        let row: AssignmentRow = approve_shift_assignment_in_transaction(
+            &mut transaction,
             tenant_id,
             assignment_id,
             worked_seconds,
             adjustment_reason,
             audit_account_id,
         )
-        .fetch_optional(transaction.connection())
-        .await
-        .map_err(|error| mutation_failure("approve staffing assignment", tenant_id, error))?;
-        let row: AssignmentRow = match row {
-            Some(row) => row,
-            None => {
-                let exists: bool = sqlx::query_scalar!(
-                    r#"
-                    SELECT EXISTS (
-                        SELECT 1 FROM business_shift_assignments WHERE tenant_id = $1 AND id = $2
-                    ) AS "exists!"
-                    "#,
-                    tenant_id,
-                    assignment_id,
-                )
-                .fetch_one(transaction.connection())
-                .await
-                .map_err(|error| database_failure("check staffing assignment approval", tenant_id, error))?;
-                return Err(if exists {
-                    StaffingError::Conflict
-                } else {
-                    StaffingError::NotFound
-                });
-            }
-        };
-        sqlx::query!(
-            r#"
-            UPDATE business_staffing_shifts AS shift
-            SET status = 'completed', updated_at = CURRENT_TIMESTAMP, updated_by_account_id = $3
-            WHERE shift.tenant_id = $1
-              AND shift.id = $2
-              AND NOT EXISTS (
-                  SELECT 1 FROM business_shift_assignments AS pending
-                  WHERE pending.tenant_id = shift.tenant_id
-                    AND pending.shift_id = shift.id
-                    AND pending.status = 'assigned'
-              )
-            "#,
-            tenant_id,
-            row.shift_id,
-            audit_account_id,
-        )
-        .execute(transaction.connection())
-        .await
-        .map_err(|error| database_failure("complete reconciled staffing shift", tenant_id, error))?;
+        .await?;
         transaction
             .commit()
             .await
             .map_err(|error| database_failure("commit staffing assignment approval", tenant_id, error))?;
+        ShiftAssignment::try_from(row)
+    }
+
+    async fn accept_staff_work_record(
+        &self,
+        tenant_id: Uuid,
+        assignment_id: Uuid,
+        audit_account_id: Uuid,
+    ) -> Result<ShiftAssignment, StaffingError> {
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        let row: AssignmentRow = approve_shift_assignment_in_transaction(
+            &mut transaction,
+            tenant_id,
+            assignment_id,
+            None,
+            None,
+            audit_account_id,
+        )
+        .await?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| database_failure("commit accepted staff work record", tenant_id, error))?;
         ShiftAssignment::try_from(row)
     }
 
@@ -1489,55 +1397,197 @@ impl StaffingRepo for StaffingDb {
         input: &CustomerWorkRecordInput,
         audit_account_id: Uuid,
     ) -> Result<CustomerWorkRecord, StaffingError> {
-        let row: Option<CustomerWorkRecordRow> = self
-            .db
-            .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
-                sqlx::query_as!(
-                    CustomerWorkRecordRow,
-                    r#"
-                    INSERT INTO business_customer_work_records (
-                        id, tenant_id, assignment_id, confirmed_customer_id,
-                        confirmed_started_at, confirmed_ended_at,
-                        customer_reference, notes, recorded_by_account_id
-                    )
-                    SELECT $1, $2, assignment.id, $4, $5, $6, $7, $8, $9
-                    FROM business_shift_assignments AS assignment
-                    WHERE assignment.tenant_id = $2
-                      AND assignment.id = $3
-                      AND assignment.status = 'assigned'
-                    ON CONFLICT (tenant_id, assignment_id) DO UPDATE
-                    SET confirmed_customer_id = EXCLUDED.confirmed_customer_id,
-                        confirmed_started_at = EXCLUDED.confirmed_started_at,
-                        confirmed_ended_at = EXCLUDED.confirmed_ended_at,
-                        customer_reference = EXCLUDED.customer_reference,
-                        notes = EXCLUDED.notes,
-                        recorded_by_account_id = EXCLUDED.recorded_by_account_id,
-                        updated_at = CURRENT_TIMESTAMP
-                    RETURNING id, assignment_id, confirmed_customer_id,
-                              confirmed_started_at, confirmed_ended_at,
-                              confirmed_worked_seconds AS "confirmed_worked_seconds!",
-                              customer_reference, notes, updated_at
-                    "#,
-                    record_id,
-                    tenant_id,
-                    assignment_id,
-                    input.confirmed_customer_id,
-                    input.confirmed_started_at,
-                    input.confirmed_ended_at,
-                    input.customer_reference,
-                    input.notes,
-                    audit_account_id,
-                )
-                .fetch_optional(connection)
-                .await
-            })
-            .await
-            .map_err(|error: TenantDbErr| {
-                tenant_mutation_failure("upsert customer staffing work record", tenant_id, error)
-            })?;
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        let status: Option<String> = sqlx::query_scalar!(
+            "SELECT status FROM business_shift_assignments WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
+            tenant_id,
+            assignment_id,
+        )
+        .fetch_optional(transaction.connection())
+        .await
+        .map_err(|error| database_failure("lock staffing assignment customer evidence", tenant_id, error))?;
+        match status.as_deref() {
+            None => return Err(StaffingError::NotFound),
+            Some("assigned") => {}
+            Some(_) => return Err(StaffingError::Conflict),
+        }
+        let row: Option<CustomerWorkRecordRow> = sqlx::query_as!(
+            CustomerWorkRecordRow,
+            r#"
+            INSERT INTO business_customer_work_records (
+                id, tenant_id, assignment_id, confirmed_customer_id,
+                confirmed_started_at, confirmed_ended_at,
+                customer_reference, notes, recorded_by_account_id
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (tenant_id, assignment_id) DO UPDATE
+            SET confirmed_customer_id = EXCLUDED.confirmed_customer_id,
+                confirmed_started_at = EXCLUDED.confirmed_started_at,
+                confirmed_ended_at = EXCLUDED.confirmed_ended_at,
+                customer_reference = EXCLUDED.customer_reference,
+                notes = EXCLUDED.notes,
+                recorded_by_account_id = EXCLUDED.recorded_by_account_id,
+                updated_at = CURRENT_TIMESTAMP
+            RETURNING id, assignment_id, confirmed_customer_id,
+                      confirmed_started_at, confirmed_ended_at,
+                      confirmed_worked_seconds AS "confirmed_worked_seconds!",
+                      customer_reference, notes, updated_at
+            "#,
+            record_id,
+            tenant_id,
+            assignment_id,
+            input.confirmed_customer_id,
+            input.confirmed_started_at,
+            input.confirmed_ended_at,
+            input.customer_reference,
+            input.notes,
+            audit_account_id,
+        )
+        .fetch_optional(transaction.connection())
+        .await
+        .map_err(|error| mutation_failure("upsert customer staffing work record", tenant_id, error))?;
         let row: CustomerWorkRecordRow = row.ok_or(StaffingError::Conflict)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| database_failure("commit customer staffing work record", tenant_id, error))?;
         Ok(row.into())
     }
+}
+
+async fn approve_shift_assignment_in_transaction(
+    transaction: &mut TenantTransaction,
+    tenant_id: Uuid,
+    assignment_id: Uuid,
+    worked_seconds: Option<i64>,
+    adjustment_reason: Option<String>,
+    audit_account_id: Uuid,
+) -> Result<AssignmentRow, StaffingError> {
+    let row: Option<AssignmentRow> = sqlx::query_as!(
+        AssignmentRow,
+        r#"
+        WITH observed AS (
+            SELECT MIN(started_at) FILTER (WHERE ended_at IS NOT NULL) AS started_at,
+                   MAX(ended_at) AS ended_at,
+                   COALESCE(SUM(worked_seconds), 0)::BIGINT AS total
+            FROM business_shift_work_sessions
+            WHERE tenant_id = $1 AND assignment_id = $2 AND ended_at IS NOT NULL
+        ), customer AS (
+            SELECT confirmed_customer_id, confirmed_started_at,
+                   confirmed_ended_at, confirmed_worked_seconds AS total
+            FROM business_customer_work_records
+            WHERE tenant_id = $1 AND assignment_id = $2
+        )
+        UPDATE business_shift_assignments AS assignment
+        SET status = 'approved',
+            worked_seconds = COALESCE($3::BIGINT, observed.total),
+            observed_worked_seconds = observed.total,
+            approval_adjustment_reason = $4::TEXT,
+            customer_amount = ROUND(
+                assignment.bill_hourly_rate_snapshot * COALESCE($3::BIGINT, observed.total)::NUMERIC / 3600,
+                4
+            ),
+            worker_amount = ROUND(
+                assignment.worker_hourly_rate_snapshot * COALESCE($3::BIGINT, observed.total)::NUMERIC / 3600,
+                4
+            ),
+            margin_amount = ROUND(
+                assignment.bill_hourly_rate_snapshot * COALESCE($3::BIGINT, observed.total)::NUMERIC / 3600,
+                4
+            ) - ROUND(
+                assignment.worker_hourly_rate_snapshot * COALESCE($3::BIGINT, observed.total)::NUMERIC / 3600,
+                4
+            ),
+            approved_at = CURRENT_TIMESTAMP,
+            approved_by_account_id = $5
+        FROM observed, customer
+        WHERE assignment.tenant_id = $1
+          AND assignment.id = $2
+          AND assignment.status = 'assigned'
+          AND observed.total > 0
+          AND NOT EXISTS (
+              SELECT 1 FROM business_shift_work_sessions AS open_session
+              WHERE open_session.tenant_id = $1
+                AND open_session.assignment_id = $2
+                AND open_session.ended_at IS NULL
+          )
+          AND (
+              (COALESCE($3::BIGINT, observed.total) = observed.total
+                  AND observed.total = customer.total
+                  AND observed.started_at = customer.confirmed_started_at
+                  AND observed.ended_at = customer.confirmed_ended_at
+                  AND customer.confirmed_customer_id = (
+                      SELECT shift.customer_id
+                      FROM business_staffing_shifts AS shift
+                      WHERE shift.tenant_id = assignment.tenant_id
+                        AND shift.id = assignment.shift_id
+                  ))
+              OR $4::TEXT IS NOT NULL
+          )
+        RETURNING assignment.id, assignment.shift_id, assignment.employee_id,
+                  assignment.customer_bill_rate_id, assignment.worker_pay_rate_id, assignment.rate_source,
+                  assignment.manual_rate_reason, assignment.currency,
+                  assignment.bill_hourly_rate_snapshot::TEXT AS "bill_hourly_rate_snapshot!",
+                  assignment.worker_hourly_rate_snapshot::TEXT AS "worker_hourly_rate_snapshot!",
+                  assignment.eligibility_exception_reason, assignment.status, assignment.worked_seconds, assignment.observed_worked_seconds,
+                  assignment.approval_adjustment_reason,
+                  assignment.customer_amount::TEXT AS customer_amount,
+                  assignment.worker_amount::TEXT AS worker_amount,
+                  assignment.margin_amount::TEXT AS margin_amount,
+                  assignment.approved_at, assignment.created_at
+        "#,
+        tenant_id,
+        assignment_id,
+        worked_seconds,
+        adjustment_reason,
+        audit_account_id,
+    )
+    .fetch_optional(transaction.connection())
+    .await
+    .map_err(|error| mutation_failure("approve staffing assignment", tenant_id, error))?;
+    let row: AssignmentRow = match row {
+        Some(row) => row,
+        None => {
+            let exists: bool = sqlx::query_scalar!(
+                r#"
+                SELECT EXISTS (
+                    SELECT 1 FROM business_shift_assignments WHERE tenant_id = $1 AND id = $2
+                ) AS "exists!"
+                "#,
+                tenant_id,
+                assignment_id,
+            )
+            .fetch_one(transaction.connection())
+            .await
+            .map_err(|error| database_failure("check staffing assignment approval", tenant_id, error))?;
+            return Err(if exists {
+                StaffingError::Conflict
+            } else {
+                StaffingError::NotFound
+            });
+        }
+    };
+    sqlx::query!(
+        r#"
+        UPDATE business_staffing_shifts AS shift
+        SET status = 'completed', updated_at = CURRENT_TIMESTAMP, updated_by_account_id = $3
+        WHERE shift.tenant_id = $1
+          AND shift.id = $2
+          AND NOT EXISTS (
+              SELECT 1 FROM business_shift_assignments AS pending
+              WHERE pending.tenant_id = shift.tenant_id
+                AND pending.shift_id = shift.id
+                AND pending.status = 'assigned'
+          )
+        "#,
+        tenant_id,
+        row.shift_id,
+        audit_account_id,
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(|error| database_failure("complete reconciled staffing shift", tenant_id, error))?;
+    Ok(row)
 }
 
 async fn insert_price_rate(

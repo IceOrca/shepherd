@@ -761,6 +761,19 @@ impl UrgentWorkRepo for UrgentWorkDb {
         input: &UrgentCustomerWorkRecordInput,
     ) -> Result<UrgentCustomerWorkRecord, UrgentWorkError> {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        let status: Option<String> = sqlx::query_scalar!(
+            "SELECT status FROM business_urgent_work_reports WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
+            tenant_id,
+            report_id,
+        )
+        .fetch_optional(transaction.connection())
+        .await
+        .map_err(|error| database_failure("lock urgent customer evidence report", tenant_id, error))?;
+        match status.as_deref() {
+            None => return Err(UrgentWorkError::NotFound),
+            Some("completed") => {}
+            Some(_) => return Err(UrgentWorkError::Conflict),
+        }
         let result: PgQueryResult = sqlx::query!(
             r#"
             INSERT INTO business_urgent_customer_work_records (
@@ -768,12 +781,9 @@ impl UrgentWorkRepo for UrgentWorkDb {
                 confirmed_started_at, confirmed_ended_at, customer_reference,
                 notes, recorded_by_account_id
             )
-            SELECT $1, $2, report.id, $4, $5, $6, $7, $8, $9
-            FROM business_urgent_work_reports AS report
-            INNER JOIN business_customers AS customer
-                ON customer.tenant_id = report.tenant_id AND customer.id = $4
-            WHERE report.tenant_id = $2 AND report.id = $3 AND report.status = 'completed'
-              AND customer.status = 'active'
+            SELECT $1, $2, $3, customer.id, $5, $6, $7, $8, $9
+            FROM business_customers AS customer
+            WHERE customer.tenant_id = $2 AND customer.id = $4 AND customer.status = 'active'
             ON CONFLICT (tenant_id, report_id) DO UPDATE
             SET confirmed_customer_id = EXCLUDED.confirmed_customer_id,
                 confirmed_started_at = EXCLUDED.confirmed_started_at,
@@ -826,6 +836,79 @@ impl UrgentWorkRepo for UrgentWorkDb {
             input,
         )
         .await
+    }
+
+    async fn accept_staff_record(
+        &self,
+        tenant_id: Uuid,
+        actor_account_id: Uuid,
+        shift_id: Uuid,
+        assignment_id: Uuid,
+        report_id: Uuid,
+        job_id: Uuid,
+    ) -> Result<UrgentWorkReconciliation, UrgentWorkError> {
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        let staff = sqlx::query!(
+            r#"
+            SELECT report.status, report.claimed_customer_id,
+                   session.started_at, session.ended_at, session.worked_seconds,
+                   customer_record.confirmed_customer_id AS "confirmed_customer_id?",
+                   customer_record.confirmed_started_at AS "confirmed_started_at?",
+                   customer_record.confirmed_ended_at AS "confirmed_ended_at?",
+                   customer_record.confirmed_worked_seconds AS "confirmed_worked_seconds?"
+            FROM business_urgent_work_reports AS report
+            INNER JOIN business_urgent_work_sessions AS session
+                ON session.tenant_id = report.tenant_id AND session.report_id = report.id
+            LEFT JOIN business_urgent_customer_work_records AS customer_record
+                ON customer_record.tenant_id = report.tenant_id AND customer_record.report_id = report.id
+            WHERE report.tenant_id = $1 AND report.id = $2
+            FOR UPDATE OF report, session
+            "#,
+            tenant_id,
+            report_id,
+        )
+        .fetch_optional(transaction.connection())
+        .await
+        .map_err(|error| database_failure("lock urgent staff evidence acceptance", tenant_id, error))?
+        .ok_or(UrgentWorkError::NotFound)?;
+        if staff.status != "completed" {
+            return Err(UrgentWorkError::Conflict);
+        }
+        let ended_at: DateTime<Utc> = staff.ended_at.ok_or(UrgentWorkError::Conflict)?;
+        let worked_seconds: i64 = staff
+            .worked_seconds
+            .filter(|value| *value > 0)
+            .ok_or(UrgentWorkError::Conflict)?;
+        let evidence_matches: bool = staff.confirmed_customer_id == Some(staff.claimed_customer_id)
+            && staff.confirmed_started_at == Some(staff.started_at)
+            && staff.confirmed_ended_at == Some(ended_at)
+            && staff.confirmed_worked_seconds == Some(worked_seconds);
+        if !evidence_matches {
+            return Err(UrgentWorkError::Conflict);
+        }
+        let input: UrgentWorkReconcileInput = UrgentWorkReconcileInput {
+            final_customer_id: staff.claimed_customer_id,
+            job_id,
+            worked_seconds,
+            adjustment_reason: None,
+            manual_rate: None,
+        };
+        let reconciliation: UrgentWorkReconciliation = reconcile_report_in_transaction(
+            &mut transaction,
+            tenant_id,
+            actor_account_id,
+            shift_id,
+            assignment_id,
+            report_id,
+            &input,
+        )
+        .await?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| tenant_failure("commit accepted urgent staff evidence", tenant_id, error))?;
+        info!(tenant_id = %tenant_id, report_id = %report_id, assignment_id = %assignment_id, "Urgent staff evidence accepted atomically");
+        Ok(reconciliation)
     }
 }
 
@@ -1221,6 +1304,33 @@ async fn reconcile_report(
     input: &UrgentWorkReconcileInput,
 ) -> Result<UrgentWorkReconciliation, UrgentWorkError> {
     let mut transaction: TenantTransaction = provider.begin_tenant(tenant_id).await?;
+    let reconciliation: UrgentWorkReconciliation = reconcile_report_in_transaction(
+        &mut transaction,
+        tenant_id,
+        actor_account_id,
+        shift_id,
+        assignment_id,
+        report_id,
+        input,
+    )
+    .await?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error: sqlx::Error| tenant_failure("commit urgent reconciliation", tenant_id, error))?;
+    info!(tenant_id = %tenant_id, report_id = %report_id, assignment_id = %assignment_id, "Urgent reconciliation committed");
+    Ok(reconciliation)
+}
+
+async fn reconcile_report_in_transaction(
+    transaction: &mut TenantTransaction,
+    tenant_id: Uuid,
+    actor_account_id: Uuid,
+    shift_id: Uuid,
+    assignment_id: Uuid,
+    report_id: Uuid,
+    input: &UrgentWorkReconcileInput,
+) -> Result<UrgentWorkReconciliation, UrgentWorkError> {
     let context: ReconcileContextRow = sqlx::query_as!(
         ReconcileContextRow,
         r#"
@@ -1527,11 +1637,6 @@ async fn reconcile_report(
             .await
             .map_err(|error: sqlx::Error| database_failure("load reconciled urgent work", tenant_id, error))?;
     let row: ReconciliationRow = rows.pop().ok_or(UrgentWorkError::BackendUnavailable)?;
-    transaction
-        .commit()
-        .await
-        .map_err(|error: sqlx::Error| tenant_failure("commit urgent reconciliation", tenant_id, error))?;
-    info!(tenant_id = %tenant_id, report_id = %report_id, assignment_id = %assignment_id, "Urgent reconciliation committed");
     reconciliation_from_row(row)
 }
 

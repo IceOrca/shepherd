@@ -168,6 +168,8 @@ export type UrgentCustomerWorkRecordUpsertRequest = { confirmed_customer_id: str
 
 export type UrgentWorkReconcileRequest = { final_customer_id: string, job_id: string, worked_seconds: number, adjustment_reason?: string | null, manual_rate?: ManualRateOverrideRequest | null, };
 
+export type UrgentWorkAcceptStaffRecordRequest = { job_id: string, };
+
 export type EmployeeStatus = "active" | "on_leave" | "terminated";
 
 export type Gender = "female" | "male" | "other" | "unspecified";

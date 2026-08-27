@@ -42,7 +42,7 @@ function SessionGate() {
       <main className="grid min-h-screen place-items-center bg-slate-50">
         <div className="text-center">
           <div className="mx-auto grid size-12 place-items-center rounded-2xl bg-blue-600 text-xl font-black text-white shadow-lg shadow-blue-600/20">
-            S
+            NS
           </div>
           <LoaderCircle className="mx-auto mt-5 size-6 animate-spin text-blue-600" />
           <p className="mt-3 text-sm font-medium text-slate-500">Đang khôi phục phiên làm việc...</p>

@@ -18,7 +18,10 @@ use super::{
     database::UrgentWorkDb,
 };
 use crate::business::staffing::{
-    core::{ManualRateOverride, ReconciliationStatus, StaffingError},
+    core::{
+        CustomerWorkRecordInput, ManualRateOverride, ReconciliationStatus, ShiftAssignmentStatus, StaffingError,
+        StaffingService,
+    },
     database::StaffingDb,
     work_session::{
         core::{ShiftWorkActionInput, StaffingWorkService},
@@ -242,6 +245,10 @@ impl Fixture {
         StaffingWorkService::new_arc(StaffingWorkDb::new_arc(Arc::clone(&self.database)))
     }
 
+    fn staffing_service(&self) -> Arc<StaffingService> {
+        StaffingService::new_arc(StaffingDb::new_arc(Arc::clone(&self.database)))
+    }
+
     async fn age_urgent_report(&self, report_id: Uuid) -> Result<(), Box<dyn Error>> {
         let mut transaction: infra_postgres::TenantTransaction = self.database.begin_tenant(self.tenant_id).await?;
         sqlx::query!(
@@ -252,6 +259,50 @@ impl Fixture {
             "#,
             self.tenant_id,
             report_id,
+        )
+        .execute(transaction.connection())
+        .await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+
+    async fn age_planned_assignment(&self) -> Result<(), Box<dyn Error>> {
+        let mut transaction: infra_postgres::TenantTransaction = self.database.begin_tenant(self.tenant_id).await?;
+        sqlx::query!(
+            r#"
+            UPDATE business_shift_work_sessions
+            SET started_at = CURRENT_TIMESTAMP - INTERVAL '2 minutes'
+            WHERE tenant_id = $1 AND assignment_id = $2
+            "#,
+            self.tenant_id,
+            self.planned_assignment_id,
+        )
+        .execute(transaction.connection())
+        .await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+
+    async fn configure_default_rates(&self) -> Result<(), Box<dyn Error>> {
+        let mut transaction: infra_postgres::TenantTransaction = self.database.begin_tenant(self.tenant_id).await?;
+        sqlx::query!(
+            r#"
+            INSERT INTO business_staffing_rates (
+                id, tenant_id, branch_id, rate_kind, code, name, customer_id,
+                currency, hourly_rate, priority, effective_from, is_active,
+                created_by_account_id
+            ) VALUES
+                ($1, $3, $4, 'customer_bill', 'test-default-bill', 'Test default bill', $5,
+                 'VND', 150000, 0, CURRENT_DATE - 1, TRUE, $6),
+                ($2, $3, $4, 'worker_pay', 'test-default-pay', 'Test default pay', $5,
+                 'VND', 120000, 0, CURRENT_DATE - 1, TRUE, $6)
+            "#,
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            self.tenant_id,
+            self.branch_id,
+            self.customer_id,
+            self.actor_account_id,
         )
         .execute(transaction.connection())
         .await?;
@@ -312,6 +363,23 @@ impl Fixture {
             "#,
             self.tenant_id,
             report_id,
+        )
+        .fetch_one(transaction.connection())
+        .await?;
+        transaction.commit().await?;
+        Ok(count)
+    }
+
+    async fn planned_customer_history_count(&self) -> Result<i64, Box<dyn Error>> {
+        let mut transaction: infra_postgres::TenantTransaction = self.database.begin_tenant(self.tenant_id).await?;
+        let count: i64 = sqlx::query_scalar!(
+            r#"
+            SELECT COUNT(*) AS "count!"
+            FROM business_customer_work_record_history
+            WHERE tenant_id = $1 AND assignment_id = $2
+            "#,
+            self.tenant_id,
+            self.planned_assignment_id,
         )
         .fetch_one(transaction.connection())
         .await?;
@@ -903,6 +971,189 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
                 .map(|item: &crate::business::staffing::core::StaffingReconciliation| item.assignment_id),
             Some(fixture.planned_assignment_id)
         );
+        Ok(())
+    })
+    .await;
+    let cleanup_result: TestResult = fixture.cleanup().await;
+    cleanup_result?;
+    test_result
+}
+
+#[tokio::test]
+async fn urgent_accept_staff_record_requires_exact_customer_evidence_and_preserves_history() -> TestResult {
+    let fixture: Fixture = Fixture::create().await?;
+    let test_result: TestResult = infra_postgres::with_active_branch(fixture.branch_id, async {
+        let service: Arc<UrgentWorkService> = fixture.urgent_service();
+        let started: Vec<super::core::UrgentWorkItem> = require_urgent(
+            service
+                .start(
+                    fixture.tenant_id,
+                    fixture.actor_account_id,
+                    true,
+                    start_input(&fixture, vec![fixture.actor_employee_id], Uuid::new_v4()),
+                )
+                .await,
+        )?;
+        let report_id: Uuid = started
+            .first()
+            .map(|work: &super::core::UrgentWorkItem| work.report_id)
+            .ok_or_else(|| io::Error::other("urgent report missing"))?;
+        fixture.age_urgent_report(report_id).await?;
+        let ended: super::core::UrgentWorkItem = require_urgent(
+            service
+                .end(
+                    fixture.tenant_id,
+                    fixture.actor_account_id,
+                    false,
+                    report_id,
+                    UrgentWorkEndInput {
+                        idempotency_key: Uuid::new_v4(),
+                        location: location(),
+                    },
+                )
+                .await,
+        )?;
+
+        let missing_evidence: Result<super::core::UrgentWorkReconciliation, UrgentWorkError> = service
+            .accept_staff_record(fixture.tenant_id, fixture.actor_account_id, report_id, fixture.job_id)
+            .await;
+        assert!(matches!(missing_evidence, Err(UrgentWorkError::Conflict)));
+        assert_eq!(fixture.urgent_customer_history_count(report_id).await?, 0);
+
+        let ended_at: chrono::DateTime<chrono::Utc> = ended
+            .ended_at
+            .ok_or_else(|| io::Error::other("urgent end timestamp missing"))?;
+        require_urgent(
+            service
+                .upsert_customer_record(
+                    fixture.tenant_id,
+                    fixture.actor_account_id,
+                    report_id,
+                    UrgentCustomerWorkRecordInput {
+                        confirmed_customer_id: fixture.customer_id,
+                        confirmed_started_at: ended.started_at,
+                        confirmed_ended_at: ended_at,
+                        customer_reference: Some("test-exact-customer-record".to_owned()),
+                        notes: None,
+                    },
+                )
+                .await,
+        )?;
+        fixture.configure_default_rates().await?;
+        let accepted: super::core::UrgentWorkReconciliation = require_urgent(
+            service
+                .accept_staff_record(fixture.tenant_id, fixture.actor_account_id, report_id, fixture.job_id)
+                .await,
+        )?;
+        assert_eq!(accepted.reconciliation_status, ReconciliationStatus::Reconciled);
+        assert_eq!(fixture.urgent_customer_history_count(report_id).await?, 0);
+
+        let repeated: Result<super::core::UrgentWorkReconciliation, UrgentWorkError> = service
+            .accept_staff_record(fixture.tenant_id, fixture.actor_account_id, report_id, fixture.job_id)
+            .await;
+        assert!(matches!(repeated, Err(UrgentWorkError::Conflict)));
+        assert_eq!(fixture.urgent_customer_history_count(report_id).await?, 0);
+        Ok(())
+    })
+    .await;
+    let cleanup_result: TestResult = fixture.cleanup().await;
+    cleanup_result?;
+    test_result
+}
+
+#[tokio::test]
+async fn planned_accept_staff_record_requires_exact_customer_evidence_and_preserves_history() -> TestResult {
+    let fixture: Fixture = Fixture::create().await?;
+    let test_result: TestResult = infra_postgres::with_active_branch(fixture.branch_id, async {
+        let work_service: Arc<StaffingWorkService> = fixture.planned_service();
+        let staffing_service: Arc<StaffingService> = fixture.staffing_service();
+        let _started: crate::business::staffing::work_session::core::ShiftWorkSession = work_service
+            .start(
+                fixture.tenant_id,
+                fixture.planned_assignment_id,
+                fixture.peer_account_id,
+                ShiftWorkActionInput {
+                    idempotency_key: Uuid::new_v4(),
+                    latitude: None,
+                    longitude: None,
+                    accuracy_meters: None,
+                },
+            )
+            .await
+            .map_err(|operation_error: StaffingError| {
+                io::Error::other(format!("planned work start failed: {operation_error:?}"))
+            })?;
+        fixture.age_planned_assignment().await?;
+        let ended: crate::business::staffing::work_session::core::ShiftWorkSession = work_service
+            .end(
+                fixture.tenant_id,
+                fixture.planned_assignment_id,
+                fixture.peer_account_id,
+                ShiftWorkActionInput {
+                    idempotency_key: Uuid::new_v4(),
+                    latitude: None,
+                    longitude: None,
+                    accuracy_meters: None,
+                },
+            )
+            .await
+            .map_err(|operation_error: StaffingError| {
+                io::Error::other(format!("planned work end failed: {operation_error:?}"))
+            })?;
+
+        let missing_evidence: Result<crate::business::staffing::core::ShiftAssignment, StaffingError> =
+            staffing_service
+                .accept_staff_work_record(
+                    fixture.tenant_id,
+                    fixture.planned_assignment_id,
+                    fixture.actor_account_id,
+                )
+                .await;
+        assert!(matches!(missing_evidence, Err(StaffingError::Conflict)));
+        assert_eq!(fixture.planned_customer_history_count().await?, 0);
+
+        let ended_at: chrono::DateTime<chrono::Utc> = ended
+            .ended_at
+            .ok_or_else(|| io::Error::other("planned end timestamp missing"))?;
+        staffing_service
+            .upsert_customer_work_record(
+                fixture.tenant_id,
+                fixture.planned_assignment_id,
+                CustomerWorkRecordInput {
+                    confirmed_customer_id: fixture.customer_id,
+                    confirmed_started_at: ended.started_at,
+                    confirmed_ended_at: ended_at,
+                    customer_reference: Some("test-exact-customer-record".to_owned()),
+                    notes: None,
+                },
+                fixture.actor_account_id,
+            )
+            .await
+            .map_err(|operation_error: StaffingError| {
+                io::Error::other(format!("planned customer evidence failed: {operation_error:?}"))
+            })?;
+        let accepted: crate::business::staffing::core::ShiftAssignment = staffing_service
+            .accept_staff_work_record(
+                fixture.tenant_id,
+                fixture.planned_assignment_id,
+                fixture.actor_account_id,
+            )
+            .await
+            .map_err(|operation_error: StaffingError| {
+                io::Error::other(format!("planned staff evidence acceptance failed: {operation_error:?}"))
+            })?;
+        assert_eq!(accepted.status, ShiftAssignmentStatus::Approved);
+        assert_eq!(fixture.planned_customer_history_count().await?, 0);
+
+        let repeated: Result<crate::business::staffing::core::ShiftAssignment, StaffingError> = staffing_service
+            .accept_staff_work_record(
+                fixture.tenant_id,
+                fixture.planned_assignment_id,
+                fixture.actor_account_id,
+            )
+            .await;
+        assert!(matches!(repeated, Err(StaffingError::Conflict)));
+        assert_eq!(fixture.planned_customer_history_count().await?, 0);
         Ok(())
     })
     .await;

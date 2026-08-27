@@ -239,6 +239,16 @@ pub trait UrgentWorkRepo {
         report_id: Uuid,
         input: &UrgentWorkReconcileInput,
     ) -> Result<UrgentWorkReconciliation, UrgentWorkError>;
+    #[allow(clippy::too_many_arguments)]
+    async fn accept_staff_record(
+        &self,
+        tenant_id: Uuid,
+        actor_account_id: Uuid,
+        shift_id: Uuid,
+        assignment_id: Uuid,
+        report_id: Uuid,
+        job_id: Uuid,
+    ) -> Result<UrgentWorkReconciliation, UrgentWorkError>;
 }
 
 pub type DynUrgentWorkRepo = Arc<dyn UrgentWorkRepo + Send + Sync>;
@@ -457,6 +467,37 @@ impl UrgentWorkService {
             .await;
         log_result(
             "urgent_work.reconcile",
+            tenant_id,
+            Some(actor_account_id),
+            Some(report_id),
+            &result,
+        );
+        result
+    }
+
+    pub async fn accept_staff_record(
+        &self,
+        tenant_id: Uuid,
+        actor_account_id: Uuid,
+        report_id: Uuid,
+        job_id: Uuid,
+    ) -> Result<UrgentWorkReconciliation, UrgentWorkError> {
+        if job_id.is_nil() {
+            return Err(UrgentWorkError::InvalidInput("urgent reconciliation job is invalid"));
+        }
+        let result: Result<UrgentWorkReconciliation, UrgentWorkError> = self
+            .repo
+            .accept_staff_record(
+                tenant_id,
+                actor_account_id,
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                report_id,
+                job_id,
+            )
+            .await;
+        log_result(
+            "urgent_work.accept_staff_record",
             tenant_id,
             Some(actor_account_id),
             Some(report_id),

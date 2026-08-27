@@ -95,9 +95,9 @@ export function LoginPage() {
       <section className="relative hidden overflow-hidden p-12 text-white lg:flex lg:flex-col lg:justify-between">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_10%,rgba(59,130,246,0.30),transparent_36%),radial-gradient(circle_at_85%_80%,rgba(14,165,233,0.18),transparent_32%)]" />
         <div className="relative flex items-center gap-3">
-          <div className="grid size-11 place-items-center rounded-xl bg-blue-500 text-xl font-black shadow-lg shadow-blue-500/25">S</div>
+          <div className="grid size-11 place-items-center rounded-xl bg-blue-500 text-sm font-black shadow-lg shadow-blue-500/25">NS</div>
           <div>
-            <p className="text-lg font-bold">Shepherd</p>
+            <p className="text-lg font-bold">Hệ thống cung ứng nhân sự</p>
             <p className="text-sm text-slate-400">Điều hành nhân sự theo ca</p>
           </div>
         </div>
@@ -108,7 +108,7 @@ export function LoginPage() {
           </span>
           <h1 className="text-4xl font-bold leading-tight xl:text-5xl">Mọi ca làm, con người và địa điểm trong một nơi dễ hiểu.</h1>
           <p className="mt-6 max-w-lg text-lg leading-8 text-slate-300">
-            Theo dõi nhân viên đang làm việc, xử lý ca phát sinh và đối soát thời gian mà không cần một hệ thống ERP phức tạp.
+            Theo dõi nhân viên đang làm việc, xử lý ca phát sinh và đối soát thời gian mà không phải tổng hợp thủ công qua nhiều bảng tính.
           </p>
         </div>
 
@@ -120,8 +120,8 @@ export function LoginPage() {
           </div>
           <div className="rounded-2xl border border-white/10 bg-white/5 p-5 backdrop-blur">
             <ShieldCheck className="mb-3 size-6 text-emerald-300" />
-            <p className="font-semibold">Supabase Auth</p>
-            <p className="mt-1 text-sm text-slate-400">Mật khẩu và phiên làm việc tách khỏi dữ liệu nghiệp vụ.</p>
+            <p className="font-semibold">Bảo mật tài khoản</p>
+            <p className="mt-1 text-sm text-slate-400">Chỉ người được doanh nghiệp cấp quyền mới có thể đăng nhập.</p>
           </div>
         </div>
       </section>
@@ -129,18 +129,18 @@ export function LoginPage() {
       <section className="flex min-h-screen items-center justify-center bg-slate-50 px-5 py-10 sm:px-10">
         <div className="w-full max-w-md">
           <div className="mb-9 flex items-center gap-3 lg:hidden">
-            <div className="grid size-10 place-items-center rounded-xl bg-blue-600 text-lg font-black text-white">S</div>
+            <div className="grid size-10 place-items-center rounded-xl bg-blue-600 text-xs font-black text-white">NS</div>
             <div>
-              <p className="font-bold text-slate-950">Shepherd</p>
+              <p className="font-bold text-slate-950">Hệ thống cung ứng nhân sự</p>
               <p className="text-xs text-slate-500">Điều hành nhân sự theo ca</p>
             </div>
           </div>
 
           <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-xl shadow-slate-200/60 sm:p-9">
             <p className="text-sm font-semibold text-blue-600">Chào mừng trở lại</p>
-            <h2 className="mt-2 text-2xl font-bold tracking-tight text-slate-950">Đăng nhập Shepherd</h2>
+            <h2 className="mt-2 text-2xl font-bold tracking-tight text-slate-950">Đăng nhập hệ thống</h2>
             <p className="mt-3 text-sm leading-6 text-slate-500">
-              Dùng tài khoản do doanh nghiệp cấp. Shepherd không lưu mật khẩu của bạn.
+              Dùng tài khoản do doanh nghiệp cấp để tiếp tục công việc.
             </p>
 
             {socialProviders.length > 0 ? (
