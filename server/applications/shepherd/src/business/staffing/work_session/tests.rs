@@ -90,7 +90,7 @@ impl Fixture {
         .await?;
         sqlx::query!(
             r#"
-            INSERT INTO hr_jobs (id, tenant_id, branch_id, code, name, status)
+            INSERT INTO business_staffing_jobs (id, tenant_id, branch_id, code, name, status)
             VALUES ($1, $2, $3, 'staffing-work-cases', 'Staffing Work Cases', 'active')
             "#,
             job_id,
@@ -358,9 +358,12 @@ impl Fixture {
         sqlx::query!("DELETE FROM hr_employees WHERE tenant_id = $1", self.tenant_id)
             .execute(transaction.connection())
             .await?;
-        sqlx::query!("DELETE FROM hr_jobs WHERE tenant_id = $1", self.tenant_id)
-            .execute(transaction.connection())
-            .await?;
+        sqlx::query!(
+            "DELETE FROM business_staffing_jobs WHERE tenant_id = $1",
+            self.tenant_id
+        )
+        .execute(transaction.connection())
+        .await?;
         sqlx::query!("DELETE FROM accounts WHERE tenant_id = $1", self.tenant_id)
             .execute(transaction.connection())
             .await?;

@@ -3305,7 +3305,6 @@ dependencies = [
  "hmac 0.13.0",
  "infra-app-sdk",
  "infra-auth",
- "infra-authz",
  "infra-host",
  "infra-kernel",
  "infra-notifier",

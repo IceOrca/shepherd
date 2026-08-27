@@ -156,7 +156,7 @@ impl Fixture {
         .execute(setup.connection())
         .await?;
         sqlx::query!(
-            "INSERT INTO hr_jobs (id, tenant_id, branch_id, code, name, status) VALUES ($1, $2, $3, 'staff', 'Staff', 'active')",
+            "INSERT INTO business_staffing_jobs (id, tenant_id, branch_id, code, name, status) VALUES ($1, $2, $3, 'staff', 'Staff', 'active')",
             job_id,
             tenant_id,
             branch_id,
@@ -410,9 +410,12 @@ impl Fixture {
             sqlx::query!("DELETE FROM hr_employees WHERE tenant_id = $1", self.tenant_id)
                 .execute(transaction.connection())
                 .await?;
-        let job_delete: PgQueryResult = sqlx::query!("DELETE FROM hr_jobs WHERE tenant_id = $1", self.tenant_id)
-            .execute(transaction.connection())
-            .await?;
+        let job_delete: PgQueryResult = sqlx::query!(
+            "DELETE FROM business_staffing_jobs WHERE tenant_id = $1",
+            self.tenant_id
+        )
+        .execute(transaction.connection())
+        .await?;
         let account_branch_assignment_delete: PgQueryResult = sqlx::query!(
             "DELETE FROM account_branch_assignments WHERE tenant_id = $1",
             self.tenant_id,

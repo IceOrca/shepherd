@@ -4,9 +4,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use tracing::{error, warn, info, debug, trace};
 use crate::features::people::core::{
-    AttendanceSession, Department, DepartmentInput, Employee, EmployeeAssignment, EmployeeAssignmentInput,
-    EmployeeCitizenIdInput, EmployeeInput, EmployeeSensitiveProfile, EmployeeStatus, Gender, HrError, HrRecordStatus,
-    JobPosition, JobPositionInput, PeopleRepo,
+    AttendanceSession, Employee, EmployeeCitizenIdInput, EmployeeInput, EmployeeSensitiveProfile, EmployeeStatus,
+    Gender, HrError, PeopleRepo,
 };
 use crate::features::people::security::{CitizenIdProtector, ProtectedCitizenId};
 use uuid::Uuid;
@@ -88,11 +87,8 @@ struct EmployeeRow {
     legal_first_name: Option<String>,
     legal_middle_name: Option<String>,
     legal_last_name: Option<String>,
-    work_email: Option<String>,
-    work_phone: Option<String>,
     personal_phone_e164: Option<String>,
     gender: Option<String>,
-    badge_id: Option<String>,
     citizen_id_country_code: Option<String>,
     citizen_id_last4: Option<String>,
     profile_complete: bool,
@@ -134,14 +130,11 @@ impl TryFrom<EmployeeRow> for Employee {
             legal_first_name: row.legal_first_name,
             legal_middle_name: row.legal_middle_name,
             legal_last_name: row.legal_last_name,
-            work_email: row.work_email,
-            work_phone: row.work_phone,
             personal_phone_e164: row.personal_phone_e164,
             gender: match row.gender.as_deref() {
                 Some(code) => Some(Gender::from_code(code).ok_or(HrError::BackendUnavailable)?),
                 None => None,
             },
-            badge_id: row.badge_id,
             citizen_id_country_code: row.citizen_id_country_code,
             citizen_id_last4: row.citizen_id_last4,
             profile_complete: row.profile_complete,
@@ -153,76 +146,6 @@ impl TryFrom<EmployeeRow> for Employee {
             updated_at: row.updated_at,
         })
     }
-}
-
-#[derive(Debug)]
-struct DepartmentRow {
-    id: Uuid,
-    code: String,
-    name: String,
-    parent_department_id: Option<Uuid>,
-    manager_employee_id: Option<Uuid>,
-    status: String,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
-}
-
-impl TryFrom<DepartmentRow> for Department {
-    type Error = HrError;
-
-    fn try_from(row: DepartmentRow) -> Result<Self, Self::Error> {
-        Ok(Self {
-            id: row.id,
-            code: row.code,
-            name: row.name,
-            parent_department_id: row.parent_department_id,
-            manager_employee_id: row.manager_employee_id,
-            status: HrRecordStatus::from_code(&row.status).ok_or(HrError::BackendUnavailable)?,
-            created_at: row.created_at,
-            updated_at: row.updated_at,
-        })
-    }
-}
-
-#[derive(Debug)]
-struct JobRow {
-    id: Uuid,
-    code: String,
-    name: String,
-    department_id: Option<Uuid>,
-    status: String,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
-}
-
-impl TryFrom<JobRow> for JobPosition {
-    type Error = HrError;
-
-    fn try_from(row: JobRow) -> Result<Self, Self::Error> {
-        Ok(Self {
-            id: row.id,
-            code: row.code,
-            name: row.name,
-            department_id: row.department_id,
-            status: HrRecordStatus::from_code(&row.status).ok_or(HrError::BackendUnavailable)?,
-            created_at: row.created_at,
-            updated_at: row.updated_at,
-        })
-    }
-}
-
-#[derive(Debug)]
-struct AssignmentRow {
-    id: Uuid,
-    employee_id: Uuid,
-    branch_id: Uuid,
-    department_id: Option<Uuid>,
-    job_id: Option<Uuid>,
-    manager_employee_id: Option<Uuid>,
-    date_start: NaiveDate,
-    date_end: Option<NaiveDate>,
-    is_primary: bool,
-    created_at: DateTime<Utc>,
 }
 
 #[derive(Debug)]
@@ -252,23 +175,6 @@ impl From<AttendanceSessionRow> for AttendanceSession {
     }
 }
 
-impl From<AssignmentRow> for EmployeeAssignment {
-    fn from(row: AssignmentRow) -> Self {
-        Self {
-            id: row.id,
-            employee_id: row.employee_id,
-            branch_id: row.branch_id,
-            department_id: row.department_id,
-            job_id: row.job_id,
-            manager_employee_id: row.manager_employee_id,
-            date_start: row.date_start,
-            date_end: row.date_end,
-            is_primary: row.is_primary,
-            created_at: row.created_at,
-        }
-    }
-}
-
 #[async_trait]
 impl PeopleRepo for PeopleDb {
     async fn list_employees(&self, tenant_id: Uuid) -> Result<Vec<Employee>, HrError> {
@@ -280,7 +186,7 @@ impl PeopleRepo for PeopleDb {
                     r#"
                     SELECT id, branch_id, account_id, employee_code, display_name,
                            legal_first_name, legal_middle_name, legal_last_name,
-                           work_email, work_phone, personal_phone_e164, gender, badge_id,
+                           personal_phone_e164, gender,
                            citizen_id_country_code, citizen_id_last4,
                            (legal_first_name IS NOT NULL AND legal_last_name IS NOT NULL) AS "profile_complete!",
                            status, hire_date, termination_date, version, created_at, updated_at
@@ -312,7 +218,7 @@ impl PeopleRepo for PeopleDb {
                     r#"
                     SELECT id, branch_id, account_id, employee_code, display_name,
                            legal_first_name, legal_middle_name, legal_last_name,
-                           work_email, work_phone, personal_phone_e164, gender, badge_id,
+                           personal_phone_e164, gender,
                            citizen_id_country_code, citizen_id_last4,
                            (legal_first_name IS NOT NULL AND legal_last_name IS NOT NULL) AS "profile_complete!",
                            status, hire_date, termination_date, version, created_at, updated_at
@@ -339,7 +245,7 @@ impl PeopleRepo for PeopleDb {
                     r#"
                     SELECT id, branch_id, account_id, employee_code, display_name,
                            legal_first_name, legal_middle_name, legal_last_name,
-                           work_email, work_phone, personal_phone_e164, gender, badge_id,
+                           personal_phone_e164, gender,
                            citizen_id_country_code, citizen_id_last4,
                            (legal_first_name IS NOT NULL AND legal_last_name IS NOT NULL) AS "profile_complete!",
                            status, hire_date, termination_date, version, created_at, updated_at
@@ -374,18 +280,18 @@ impl PeopleRepo for PeopleDb {
                     INSERT INTO hr_employees (
                         id, tenant_id, branch_id, account_id, employee_code, display_name,
                         legal_first_name, legal_middle_name, legal_last_name,
-                        work_email, work_phone, personal_phone_e164, gender, badge_id,
+                        personal_phone_e164, gender,
                         status, hire_date, termination_date, created_by_account_id, updated_by_account_id
                     )
                     VALUES (
                         $1, $2, $3, $4, $5, $6,
                         $7, $8, $9,
-                        $10, $11, $12, $13, $14,
-                        $15, $16, $17, $18, $18
+                        $10, $11,
+                        $12, $13, $14, $15, $15
                     )
                     RETURNING id, branch_id, account_id, employee_code, display_name,
                               legal_first_name, legal_middle_name, legal_last_name,
-                              work_email, work_phone, personal_phone_e164, gender, badge_id,
+                              personal_phone_e164, gender,
                               citizen_id_country_code, citizen_id_last4,
                               (legal_first_name IS NOT NULL AND legal_last_name IS NOT NULL) AS "profile_complete!",
                               status, hire_date, termination_date, version, created_at, updated_at
@@ -399,11 +305,8 @@ impl PeopleRepo for PeopleDb {
                     input.legal_first_name,
                     input.legal_middle_name,
                     input.legal_last_name,
-                    input.work_email,
-                    input.work_phone,
                     input.personal_phone_e164,
                     input.gender.map(|gender: Gender| gender.as_code()),
-                    input.badge_id,
                     input.status.as_code(),
                     input.hire_date,
                     input.termination_date,
@@ -432,35 +335,6 @@ impl PeopleRepo for PeopleDb {
             .expected_version
             .ok_or(HrError::InvalidInput("employee update requires an expected version"))?;
         let mut transaction = self.begin_active_tenant(tenant_id).await?;
-        if input.status == EmployeeStatus::Terminated {
-            let termination_date = input.termination_date.ok_or(HrError::InvalidInput(
-                "terminated employee is missing a termination date",
-            ))?;
-            let has_later_assignment: bool = sqlx::query_scalar!(
-                r#"
-                SELECT
-                    EXISTS (
-                        SELECT 1
-                        FROM hr_employee_assignments
-                        WHERE tenant_id = $1 AND employee_id = $2 AND date_start > $3
-                    )
-                    OR EXISTS (
-                        SELECT 1
-                        FROM hr_employee_schedule_assignments
-                        WHERE tenant_id = $1 AND employee_id = $2 AND date_start > $3
-                    ) AS "exists!"
-                "#,
-                tenant_id,
-                employee_id,
-                termination_date,
-            )
-            .fetch_one(transaction.connection())
-            .await
-            .map_err(|error| database_failure("validate employee termination date", tenant_id, error))?;
-            if has_later_assignment {
-                return Err(HrError::Conflict);
-            }
-        }
         let row: Option<EmployeeRow> = sqlx::query_as!(
             EmployeeRow,
             r#"
@@ -471,21 +345,18 @@ impl PeopleRepo for PeopleDb {
                 legal_first_name = $6,
                 legal_middle_name = $7,
                 legal_last_name = $8,
-                work_email = $9,
-                work_phone = $10,
-                personal_phone_e164 = $11,
-                gender = $12,
-                badge_id = $13,
-                status = $14,
-                hire_date = $15,
-                termination_date = $16,
+                personal_phone_e164 = $9,
+                gender = $10,
+                status = $11,
+                hire_date = $12,
+                termination_date = $13,
                 version = version + 1,
                 updated_at = CURRENT_TIMESTAMP,
-                updated_by_account_id = $17
-            WHERE tenant_id = $1 AND id = $2 AND version = $18
+                updated_by_account_id = $14
+            WHERE tenant_id = $1 AND id = $2 AND version = $15
             RETURNING id, branch_id, account_id, employee_code, display_name,
                       legal_first_name, legal_middle_name, legal_last_name,
-                      work_email, work_phone, personal_phone_e164, gender, badge_id,
+                      personal_phone_e164, gender,
                       citizen_id_country_code, citizen_id_last4,
                       (legal_first_name IS NOT NULL AND legal_last_name IS NOT NULL) AS "profile_complete!",
                       status, hire_date, termination_date, version, created_at, updated_at
@@ -498,11 +369,8 @@ impl PeopleRepo for PeopleDb {
             input.legal_first_name,
             input.legal_middle_name,
             input.legal_last_name,
-            input.work_email,
-            input.work_phone,
             input.personal_phone_e164,
             input.gender.map(|gender: Gender| gender.as_code()),
-            input.badge_id,
             input.status.as_code(),
             input.hire_date,
             input.termination_date,
@@ -513,46 +381,6 @@ impl PeopleRepo for PeopleDb {
         .await
         .map_err(|error| mutation_failure("update employee", tenant_id, error))?;
         let row: EmployeeRow = row.ok_or(HrError::Conflict)?;
-        if let Some(termination_date) = input.termination_date {
-            sqlx::query!(
-                r#"
-                UPDATE hr_employee_assignments
-                SET date_end = $3
-                WHERE tenant_id = $1
-                  AND employee_id = $2
-                  AND date_end IS NULL
-                  AND date_start <= $3
-                "#,
-                tenant_id,
-                employee_id,
-                termination_date,
-            )
-            .execute(transaction.connection())
-            .await
-            .map_err(|error| database_failure("close assignments for terminated employee", tenant_id, error))?;
-            sqlx::query!(
-                r#"
-                UPDATE hr_employee_schedule_assignments
-                SET date_end = $3
-                WHERE tenant_id = $1
-                  AND employee_id = $2
-                  AND date_end IS NULL
-                  AND date_start <= $3
-                "#,
-                tenant_id,
-                employee_id,
-                termination_date,
-            )
-            .execute(transaction.connection())
-            .await
-            .map_err(|error| {
-                database_failure(
-                    "close working schedule assignments for terminated employee",
-                    tenant_id,
-                    error,
-                )
-            })?;
-        }
         transaction
             .commit()
             .await
@@ -759,402 +587,6 @@ impl PeopleRepo for PeopleDb {
             citizen_id: new_citizen_id.map(str::to_owned),
             version,
         })
-    }
-
-    async fn list_departments(&self, tenant_id: Uuid) -> Result<Vec<Department>, HrError> {
-        let rows: Vec<DepartmentRow> = self
-            .db
-            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
-                sqlx::query_as!(
-                    DepartmentRow,
-                    r#"
-                    SELECT id, code, name, parent_department_id, manager_employee_id, status, created_at, updated_at
-                    FROM hr_departments
-                    WHERE tenant_id = $1
-                    ORDER BY lower(name), code
-                    "#,
-                    tenant_id,
-                )
-                .fetch_all(connection)
-                .await
-            })
-            .await
-            .map_err(|error: TenantDbErr| tenant_database_failure("list departments", tenant_id, error))?;
-        rows.into_iter().map(Department::try_from).collect()
-    }
-
-    async fn create_department(
-        &self,
-        tenant_id: Uuid,
-        department_id: Uuid,
-        input: &DepartmentInput,
-        audit_account_id: Uuid,
-    ) -> Result<Department, HrError> {
-        let row: DepartmentRow = self
-            .db
-            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
-                sqlx::query_as!(
-                    DepartmentRow,
-                    r#"
-                    INSERT INTO hr_departments (
-                        id, tenant_id, code, name, parent_department_id, manager_employee_id, status,
-                        created_by_account_id, updated_by_account_id
-                    )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
-                    RETURNING id, code, name, parent_department_id, manager_employee_id, status, created_at, updated_at
-                    "#,
-                    department_id,
-                    tenant_id,
-                    input.code,
-                    input.name,
-                    input.parent_department_id,
-                    input.manager_employee_id,
-                    input.status.as_code(),
-                    audit_account_id,
-                )
-                .fetch_one(connection)
-                .await
-            })
-            .await
-            .map_err(|error: TenantDbErr| tenant_mutation_failure("create department", tenant_id, error))?;
-        info!(
-            "HR department created: tenant_id={} department_id={} code={} audit_account_id={}",
-            tenant_id, department_id, input.code, audit_account_id
-        );
-        Department::try_from(row)
-    }
-
-    async fn update_department(
-        &self,
-        tenant_id: Uuid,
-        department_id: Uuid,
-        input: &DepartmentInput,
-        audit_account_id: Uuid,
-    ) -> Result<Department, HrError> {
-        let mut transaction = self.begin_active_tenant(tenant_id).await?;
-        if let Some(parent_id) = input.parent_department_id {
-            let creates_cycle: bool = sqlx::query_scalar!(
-                r#"
-                WITH RECURSIVE descendants AS (
-                    SELECT id
-                    FROM hr_departments
-                    WHERE tenant_id = $1 AND parent_department_id = $2
-                    UNION ALL
-                    SELECT department.id
-                    FROM hr_departments AS department
-                    JOIN descendants ON department.parent_department_id = descendants.id
-                    WHERE department.tenant_id = $1
-                )
-                SELECT EXISTS (SELECT 1 FROM descendants WHERE id = $3) AS "exists!"
-                "#,
-                tenant_id,
-                department_id,
-                parent_id,
-            )
-            .fetch_one(transaction.connection())
-            .await
-            .map_err(|error| database_failure("validate department hierarchy", tenant_id, error))?;
-            if creates_cycle {
-                return Err(HrError::InvalidInput("department hierarchy would contain a cycle"));
-            }
-        }
-        let row: Option<DepartmentRow> = sqlx::query_as!(
-            DepartmentRow,
-            r#"
-            UPDATE hr_departments
-            SET code = $3,
-                name = $4,
-                parent_department_id = $5,
-                manager_employee_id = $6,
-                status = $7,
-                updated_at = CURRENT_TIMESTAMP,
-                updated_by_account_id = $8
-            WHERE tenant_id = $1 AND id = $2
-            RETURNING id, code, name, parent_department_id, manager_employee_id, status, created_at, updated_at
-            "#,
-            tenant_id,
-            department_id,
-            input.code,
-            input.name,
-            input.parent_department_id,
-            input.manager_employee_id,
-            input.status.as_code(),
-            audit_account_id,
-        )
-        .fetch_optional(transaction.connection())
-        .await
-        .map_err(|error| mutation_failure("update department", tenant_id, error))?;
-        let row = row.ok_or(HrError::NotFound)?;
-        transaction
-            .commit()
-            .await
-            .map_err(|error| database_failure("commit department update", tenant_id, error))?;
-        info!(
-            "HR department updated: tenant_id={} department_id={} status={} audit_account_id={}",
-            tenant_id,
-            department_id,
-            input.status.as_code(),
-            audit_account_id
-        );
-        Department::try_from(row)
-    }
-
-    async fn list_jobs(&self, tenant_id: Uuid) -> Result<Vec<JobPosition>, HrError> {
-        let rows: Vec<JobRow> = self
-            .db
-            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
-                sqlx::query_as!(
-                    JobRow,
-                    r#"
-                    SELECT id, code, name, department_id, status, created_at, updated_at
-                    FROM hr_jobs
-                    WHERE tenant_id = $1
-                    ORDER BY lower(name), code
-                    "#,
-                    tenant_id,
-                )
-                .fetch_all(connection)
-                .await
-            })
-            .await
-            .map_err(|error: TenantDbErr| tenant_database_failure("list jobs", tenant_id, error))?;
-        rows.into_iter().map(JobPosition::try_from).collect()
-    }
-
-    async fn create_job(
-        &self,
-        tenant_id: Uuid,
-        job_id: Uuid,
-        input: &JobPositionInput,
-        audit_account_id: Uuid,
-    ) -> Result<JobPosition, HrError> {
-        let row: JobRow = self
-            .db
-            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
-                sqlx::query_as!(
-                    JobRow,
-                    r#"
-                    INSERT INTO hr_jobs (
-                        id, tenant_id, code, name, department_id, status, created_by_account_id, updated_by_account_id
-                    )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
-                    RETURNING id, code, name, department_id, status, created_at, updated_at
-                    "#,
-                    job_id,
-                    tenant_id,
-                    input.code,
-                    input.name,
-                    input.department_id,
-                    input.status.as_code(),
-                    audit_account_id,
-                )
-                .fetch_one(connection)
-                .await
-            })
-            .await
-            .map_err(|error: TenantDbErr| tenant_mutation_failure("create job", tenant_id, error))?;
-        info!(
-            "HR job position created: tenant_id={} job_id={} code={} audit_account_id={}",
-            tenant_id, job_id, input.code, audit_account_id
-        );
-        JobPosition::try_from(row)
-    }
-
-    async fn update_job(
-        &self,
-        tenant_id: Uuid,
-        job_id: Uuid,
-        input: &JobPositionInput,
-        audit_account_id: Uuid,
-    ) -> Result<JobPosition, HrError> {
-        let row: Option<JobRow> = self
-            .db
-            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
-                sqlx::query_as!(
-                    JobRow,
-                    r#"
-                    UPDATE hr_jobs
-                    SET code = $3,
-                        name = $4,
-                        department_id = $5,
-                        status = $6,
-                        updated_at = CURRENT_TIMESTAMP,
-                        updated_by_account_id = $7
-                    WHERE tenant_id = $1 AND id = $2
-                    RETURNING id, code, name, department_id, status, created_at, updated_at
-                    "#,
-                    tenant_id,
-                    job_id,
-                    input.code,
-                    input.name,
-                    input.department_id,
-                    input.status.as_code(),
-                    audit_account_id,
-                )
-                .fetch_optional(connection)
-                .await
-            })
-            .await
-            .map_err(|error: TenantDbErr| tenant_mutation_failure("update job", tenant_id, error))?;
-        let row: JobRow = row.ok_or(HrError::NotFound)?;
-        info!(
-            "HR job position updated: tenant_id={} job_id={} status={} audit_account_id={}",
-            tenant_id,
-            job_id,
-            input.status.as_code(),
-            audit_account_id
-        );
-        JobPosition::try_from(row)
-    }
-
-    async fn list_assignments(&self, tenant_id: Uuid, employee_id: Uuid) -> Result<Vec<EmployeeAssignment>, HrError> {
-        let result: (bool, Vec<AssignmentRow>) = self
-            .db
-            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
-                let employee_exists: bool = sqlx::query_scalar!(
-                    r#"SELECT EXISTS (
-                        SELECT 1 FROM hr_employees WHERE tenant_id = $1 AND id = $2
-                    ) AS "exists!""#,
-                    tenant_id,
-                    employee_id,
-                )
-                .fetch_one(&mut *connection)
-                .await?;
-                let rows: Vec<AssignmentRow> = sqlx::query_as!(
-                    AssignmentRow,
-                    r#"
-                    SELECT id, employee_id, branch_id, department_id, job_id, manager_employee_id,
-                           date_start, date_end, is_primary, created_at
-                    FROM hr_employee_assignments
-                    WHERE tenant_id = $1 AND employee_id = $2
-                    ORDER BY date_start DESC, created_at DESC
-                    "#,
-                    tenant_id,
-                    employee_id,
-                )
-                .fetch_all(connection)
-                .await?;
-                Ok((employee_exists, rows))
-            })
-            .await
-            .map_err(|error: TenantDbErr| tenant_database_failure("list employee assignments", tenant_id, error))?;
-        let (employee_exists, rows): (bool, Vec<AssignmentRow>) = result;
-        if !employee_exists {
-            return Err(HrError::NotFound);
-        }
-        Ok(rows.into_iter().map(EmployeeAssignment::from).collect())
-    }
-
-    async fn create_assignment(
-        &self,
-        tenant_id: Uuid,
-        assignment_id: Uuid,
-        employee_id: Uuid,
-        input: &EmployeeAssignmentInput,
-        audit_account_id: Uuid,
-    ) -> Result<EmployeeAssignment, HrError> {
-        let mut transaction = self.begin_active_tenant(tenant_id).await?;
-        let employee_exists: bool = sqlx::query_scalar!(
-            r#"SELECT EXISTS (SELECT 1 FROM hr_employees WHERE tenant_id = $1 AND id = $2) AS "exists!""#,
-            tenant_id,
-            employee_id,
-        )
-        .fetch_one(transaction.connection())
-        .await
-        .map_err(|error| database_failure("validate employee for assignment creation", tenant_id, error))?;
-        if !employee_exists {
-            return Err(HrError::NotFound);
-        }
-        if input.is_primary {
-            sqlx::query!(
-                r#"
-                UPDATE hr_employee_assignments
-                SET date_end = $3::date - 1
-                WHERE tenant_id = $1
-                  AND employee_id = $2
-                  AND is_primary
-                  AND date_end IS NULL
-                  AND date_start < $3
-                "#,
-                tenant_id,
-                employee_id,
-                input.date_start,
-            )
-            .execute(transaction.connection())
-            .await
-            .map_err(|error| database_failure("close previous primary assignment", tenant_id, error))?;
-
-            let overlaps: bool = sqlx::query_scalar!(
-                r#"
-                SELECT EXISTS (
-                    SELECT 1
-                    FROM hr_employee_assignments
-                    WHERE tenant_id = $1
-                      AND employee_id = $2
-                      AND is_primary
-                      AND daterange(date_start, COALESCE(date_end, 'infinity'::date), '[]')
-                          && daterange($3, COALESCE($4, 'infinity'::date), '[]')
-                ) AS "exists!"
-                "#,
-                tenant_id,
-                employee_id,
-                input.date_start,
-                input.date_end,
-            )
-            .fetch_one(transaction.connection())
-            .await
-            .map_err(|error| database_failure("check primary assignment overlap", tenant_id, error))?;
-            if overlaps {
-                info!(
-                    "Primary assignment rejected because dates overlap: tenant_id={} employee_id={} date_start={} date_end={:?}",
-                    tenant_id, employee_id, input.date_start, input.date_end
-                );
-                return Err(HrError::Conflict);
-            }
-        }
-
-        let row: AssignmentRow = sqlx::query_as!(
-            AssignmentRow,
-            r#"
-            INSERT INTO hr_employee_assignments (
-                id, tenant_id, employee_id, branch_id, department_id, job_id, manager_employee_id,
-                date_start, date_end, is_primary, created_by_account_id
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-            RETURNING id, employee_id, branch_id, department_id, job_id, manager_employee_id,
-                      date_start, date_end, is_primary, created_at
-            "#,
-            assignment_id,
-            tenant_id,
-            employee_id,
-            input.branch_id,
-            input.department_id,
-            input.job_id,
-            input.manager_employee_id,
-            input.date_start,
-            input.date_end,
-            input.is_primary,
-            audit_account_id,
-        )
-        .fetch_one(transaction.connection())
-        .await
-        .map_err(|error| mutation_failure("create employee assignment", tenant_id, error))?;
-        transaction
-            .commit()
-            .await
-            .map_err(|error| database_failure("commit assignment creation", tenant_id, error))?;
-        info!(
-            "Employee assignment created: tenant_id={} employee_id={} assignment_id={} branch_id={} date_start={} date_end={:?} primary={} audit_account_id={}",
-            tenant_id,
-            employee_id,
-            assignment_id,
-            input.branch_id,
-            input.date_start,
-            input.date_end,
-            input.is_primary,
-            audit_account_id
-        );
-        Ok(row.into())
     }
 
     async fn list_attendance_sessions(

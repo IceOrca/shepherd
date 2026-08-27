@@ -17,8 +17,8 @@ use crate::{AppContext, auth::AuthenticatedUser};
 use super::core::{
     BusinessRecordStatus, Customer, CustomerInput, CustomerWorkRecord, CustomerWorkRecordInput, ManualRateOverride,
     ShiftAssignment, ShiftAssignmentInput, StaffingCandidate, StaffingEligibility, StaffingEligibilityInput,
-    StaffingError, StaffingPriceSet, StaffingPriceSetInput, StaffingRate, StaffingReconciliation, StaffingShift,
-    StaffingShiftInput, StaffingStaff,
+    StaffingError, StaffingJob, StaffingPriceSet, StaffingPriceSetInput, StaffingRate, StaffingReconciliation,
+    StaffingShift, StaffingShiftInput, StaffingStaff,
 };
 
 #[derive(Debug, Deserialize, TS)]
@@ -184,6 +184,7 @@ pub fn routes() -> Router<Arc<AppContext>> {
         .route("/customers", get(list_customers).post(create_customer))
         .route("/customers/{customer_id}", put(update_customer))
         .route("/staffing/rates", get(list_rates))
+        .route("/staffing/jobs", get(list_jobs))
         .route("/staffing/staff", get(list_staff))
         .route("/staffing/prices", post(set_prices))
         .route(
@@ -268,6 +269,20 @@ pub async fn list_rates(
         .await
         .map(Json)
         .map_err(|error| staffing_status("list staffing rates", &user, error))
+}
+
+pub async fn list_jobs(
+    State(context): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> Result<Json<Vec<StaffingJob>>, StatusCode> {
+    require_permission(&user, "business.staffing_jobs.read")?;
+    context
+        .core
+        .staffing
+        .list_jobs(user.tenant_id)
+        .await
+        .map(Json)
+        .map_err(|error| staffing_status("list staffing jobs", &user, error))
 }
 
 pub async fn list_staff(

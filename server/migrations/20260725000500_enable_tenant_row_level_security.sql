@@ -67,15 +67,9 @@ CREATE POLICY branches_tenant_isolation ON branches
     USING (tenant_id = shepherd_current_tenant_id())
     WITH CHECK (tenant_id = shepherd_current_tenant_id());
 
-ALTER TABLE hr_departments ENABLE ROW LEVEL SECURITY;
-ALTER TABLE hr_departments FORCE ROW LEVEL SECURITY;
-CREATE POLICY hr_departments_tenant_isolation ON hr_departments
-    USING (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id))
-    WITH CHECK (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id));
-
-ALTER TABLE hr_jobs ENABLE ROW LEVEL SECURITY;
-ALTER TABLE hr_jobs FORCE ROW LEVEL SECURITY;
-CREATE POLICY hr_jobs_tenant_isolation ON hr_jobs
+ALTER TABLE business_staffing_jobs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE business_staffing_jobs FORCE ROW LEVEL SECURITY;
+CREATE POLICY business_staffing_jobs_tenant_isolation ON business_staffing_jobs
     USING (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id))
     WITH CHECK (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id));
 
@@ -91,34 +85,5 @@ CREATE POLICY hr_employee_sensitive_audit_tenant_isolation ON hr_employee_sensit
     USING (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id))
     WITH CHECK (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id));
 
-ALTER TABLE hr_employee_assignments ENABLE ROW LEVEL SECURITY;
-ALTER TABLE hr_employee_assignments FORCE ROW LEVEL SECURITY;
-CREATE POLICY hr_employee_assignments_tenant_isolation ON hr_employee_assignments
-    USING (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id))
-    WITH CHECK (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id));
-
-ALTER TABLE hr_working_schedules ENABLE ROW LEVEL SECURITY;
-ALTER TABLE hr_working_schedules FORCE ROW LEVEL SECURITY;
-CREATE POLICY hr_working_schedules_tenant_isolation ON hr_working_schedules
-    USING (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id))
-    WITH CHECK (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id));
-
-ALTER TABLE hr_working_schedule_periods ENABLE ROW LEVEL SECURITY;
-ALTER TABLE hr_working_schedule_periods FORCE ROW LEVEL SECURITY;
-CREATE POLICY hr_working_schedule_periods_tenant_isolation ON hr_working_schedule_periods
-    USING (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id))
-    WITH CHECK (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id));
-
-ALTER TABLE hr_employee_schedule_assignments ENABLE ROW LEVEL SECURITY;
-ALTER TABLE hr_employee_schedule_assignments FORCE ROW LEVEL SECURITY;
-CREATE POLICY hr_employee_schedule_assignments_tenant_isolation ON hr_employee_schedule_assignments
-    USING (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id))
-    WITH CHECK (tenant_id = shepherd_current_tenant_id() AND shepherd_branch_visible(branch_id));
-
-ALTER TABLE hr_departments ALTER COLUMN branch_id SET DEFAULT shepherd_current_branch_id();
-ALTER TABLE hr_jobs ALTER COLUMN branch_id SET DEFAULT shepherd_current_branch_id();
+ALTER TABLE business_staffing_jobs ALTER COLUMN branch_id SET DEFAULT shepherd_current_branch_id();
 ALTER TABLE hr_employees ALTER COLUMN branch_id SET DEFAULT shepherd_current_branch_id();
-ALTER TABLE hr_employee_assignments ALTER COLUMN branch_id SET DEFAULT shepherd_current_branch_id();
-ALTER TABLE hr_working_schedules ALTER COLUMN branch_id SET DEFAULT shepherd_current_branch_id();
-ALTER TABLE hr_working_schedule_periods ALTER COLUMN branch_id SET DEFAULT shepherd_current_branch_id();
-ALTER TABLE hr_employee_schedule_assignments ALTER COLUMN branch_id SET DEFAULT shepherd_current_branch_id();

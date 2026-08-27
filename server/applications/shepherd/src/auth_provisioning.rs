@@ -40,12 +40,12 @@ impl AuthAccountProvisioner for ShepherdAuthAccountProvisioner {
         let result: PgQueryResult = sqlx::query!(
             r#"
             INSERT INTO hr_employees (
-                id, tenant_id, branch_id, account_id, employee_code, display_name, work_email,
+                id, tenant_id, branch_id, account_id, employee_code, display_name,
                 status, hire_date, created_by_account_id, updated_by_account_id
             )
             VALUES (
-                $1, $2, $3, $4, $5, $6, $7,
-                'active', CURRENT_DATE, $8, $8
+                $1, $2, $3, $4, $5, $6,
+                'active', CURRENT_DATE, $7, $7
             )
             "#,
             uuid::Uuid::new_v4(),
@@ -54,7 +54,6 @@ impl AuthAccountProvisioner for ShepherdAuthAccountProvisioner {
             context.account_id,
             employee_code,
             context.username,
-            context.email,
             context.actor_account_id,
         )
         .execute(connection)
@@ -145,13 +144,12 @@ impl AuthAccountProvisioner for ShepherdAuthAccountProvisioner {
         let result: PgQueryResult = sqlx::query!(
             r#"
             INSERT INTO hr_employees (
-                id, tenant_id, branch_id, account_id, employee_code, display_name, work_email,
+                id, tenant_id, branch_id, account_id, employee_code, display_name,
                 status, hire_date, created_by_account_id, updated_by_account_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', CURRENT_DATE, $8, $8)
+            VALUES ($1, $2, $3, $4, $5, $6, 'active', CURRENT_DATE, $7, $7)
             ON CONFLICT (tenant_id, account_id) DO UPDATE
             SET branch_id = EXCLUDED.branch_id,
-                work_email = EXCLUDED.work_email,
                 updated_at = CURRENT_TIMESTAMP,
                 updated_by_account_id = EXCLUDED.updated_by_account_id
             "#,
@@ -161,7 +159,6 @@ impl AuthAccountProvisioner for ShepherdAuthAccountProvisioner {
             context.account_id,
             employee_code,
             context.username,
-            context.email,
             context.actor_account_id,
         )
         .execute(connection)

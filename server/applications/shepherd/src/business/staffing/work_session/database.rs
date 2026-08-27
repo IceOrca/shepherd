@@ -633,7 +633,7 @@ mod database_tests {
         .await?;
         sqlx::query!(
             r#"
-            INSERT INTO hr_jobs (id, tenant_id, branch_id, code, name, status)
+            INSERT INTO business_staffing_jobs (id, tenant_id, branch_id, code, name, status)
             VALUES ($1, $2, $3, 'staffing-work-job', 'Staffing Work Job', 'active')
             "#,
             job_id,
@@ -855,7 +855,7 @@ mod database_tests {
             sqlx::query!("DELETE FROM hr_employees WHERE tenant_id = $1", tenant_id)
                 .execute(verify.connection())
                 .await?;
-            sqlx::query!("DELETE FROM hr_jobs WHERE tenant_id = $1", tenant_id)
+            sqlx::query!("DELETE FROM business_staffing_jobs WHERE tenant_id = $1", tenant_id)
                 .execute(verify.connection())
                 .await?;
             sqlx::query!("DELETE FROM accounts WHERE tenant_id = $1", tenant_id)

@@ -7,12 +7,12 @@ Shepherd is one application crate organized first by business area, then by feat
 
 The top-level boundaries are:
 
-- `hr`: employees, schedules, attendance, compensation, and payroll.
-- `business`: internal branches plus branch-owned customer workplaces, urgent work evidence, staffing rates, shifts, and assignments.
+- `hr`: employee profiles, sensitive-profile audit, and internal attendance evidence.
+- `business`: internal branches plus branch-owned customer workplaces, staffing jobs, urgent work evidence, staffing rates, shifts, and assignments.
 
-Existing HR capabilities remain under `src/features/`; new staffing behavior lives under `src/business/staffing/`.
+Employee-profile and internal-attendance capabilities remain under `src/features/`; staffing behavior lives under `src/business/staffing/`.
 Rates store customer billing and worker pay independently. Assignments snapshot both values so later agreement changes
-cannot rewrite approved work or payroll history.
+cannot rewrite approved work or future payroll inputs.
 
 ## Feature Layout
 
@@ -61,9 +61,7 @@ Supervisors record independent customer-confirmed customer and time, then reconc
 - `PUT /api/business/staffing/urgent-work/{report_id}/customer-record`
 - `POST /api/business/staffing/urgent-work/{report_id}/reconcile`
 
-Reconciliation compares exact timestamps, duration, and customer. It atomically creates a completed formal shift and an approved assignment linked to the urgent report, preserving the existing billing, worker-pay, margin, and payroll snapshot model.
-
-Planned staffing remains optional. Authenticated assigned employees use:
+Reconciliation compares exact timestamps, duration, and customer. It atomically creates a completed formal shift and an approved assignment linked to the urgent report, preserving billing, worker-pay, margin, and future payroll input snapshots.
 
 Authenticated employees use:
 
@@ -73,10 +71,10 @@ Authenticated employees use:
 
 All start and end operations require an `Idempotency-Key` UUID header. The server owns timestamps and queues notifications in the same transaction. Planned work derives employee/customer from the assignment; urgent work fixes the selected active customer and selected employees in its accepted batch. GPS fields remain in the contract and schema but are discarded while `STAFFING_GPS_ENABLED=false` (the development default).
 
-For optional planned work, supervisors create customer shifts and can assign only active employees whose effective primary job matches and whose other
-staffing assignments do not overlap. Customer confirmation or bill time is stored separately from staff work sessions. An assignment
+For optional planned work, supervisors create customer shifts and can assign active Staff whose other staffing assignments do not overlap.
+The current client treats every active Staff member as eligible for every staffing job. Customer confirmation or bill time is stored separately from staff work sessions. An assignment
 can be finalized only after both sources exist; mismatched time or any final override requires an adjustment reason. The finalized
-snapshot remains the payroll source.
+worker-pay snapshot is the authoritative input for a future aligned payroll flow.
 
 Supervisor endpoints include:
 

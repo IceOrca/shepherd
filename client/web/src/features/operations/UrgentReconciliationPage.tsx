@@ -10,7 +10,7 @@ import { CheckCircle2, CircleAlert, GitCompareArrows, MapPin, RefreshCw, Save } 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import type {
-  JobPosition,
+  StaffingJob,
   ManualRateOverrideRequest,
   PermissionCode,
   ReconciliationStatus,
@@ -193,9 +193,9 @@ export function UrgentReconciliationPage(): React.JSX.Element {
       listUrgentCustomersForBranch(selectedBranchId ?? ""),
     enabled: canRead && selectedBranchId !== null,
   });
-  const jobsQuery: UseQueryResult<JobPosition[], Error> = useQuery({
+  const jobsQuery: UseQueryResult<StaffingJob[], Error> = useQuery({
     queryKey: [...operationsQueryKeys.jobs, "branch", selectedBranchId],
-    queryFn: (): Promise<JobPosition[]> => listJobsForBranch(selectedBranchId ?? ""),
+    queryFn: (): Promise<StaffingJob[]> => listJobsForBranch(selectedBranchId ?? ""),
     enabled: canRead && selectedBranchId !== null,
   });
 
@@ -519,7 +519,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                     value={finalDraft.jobId}
                   >
                     <option value="">Chọn công việc</option>
-                    {(jobsQuery.data ?? []).map((job: JobPosition): React.JSX.Element => (
+                    {(jobsQuery.data ?? []).map((job: StaffingJob): React.JSX.Element => (
                       <option key={job.id} value={job.id}>{job.name}</option>
                     ))}
                   </select>

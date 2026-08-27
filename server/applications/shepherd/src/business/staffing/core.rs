@@ -128,6 +128,16 @@ pub struct Customer {
 }
 
 #[derive(Clone, Debug, Serialize, TS)]
+pub struct StaffingJob {
+    pub id: Uuid,
+    pub code: String,
+    pub name: String,
+    pub status: BusinessRecordStatus,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, TS)]
 pub struct StaffingRate {
     pub id: Uuid,
     pub rate_kind: StaffingRateKind,
@@ -335,6 +345,7 @@ pub enum StaffingError {
 #[async_trait]
 pub trait StaffingRepo {
     async fn list_customers(&self, tenant_id: Uuid) -> Result<Vec<Customer>, StaffingError>;
+    async fn list_jobs(&self, tenant_id: Uuid) -> Result<Vec<StaffingJob>, StaffingError>;
     async fn create_customer(
         &self,
         tenant_id: Uuid,
@@ -424,6 +435,13 @@ impl StaffingService {
         debug!(operation = "list_customers", tenant_id = %tenant_id, "Staffing service operation accepted");
         let result: Result<Vec<Customer>, StaffingError> = self.repo.list_customers(tenant_id).await;
         log_staffing_operation("list_customers", tenant_id, None, None, &result);
+        result
+    }
+
+    pub async fn list_jobs(&self, tenant_id: Uuid) -> Result<Vec<StaffingJob>, StaffingError> {
+        debug!(operation = "list_staffing_jobs", tenant_id = %tenant_id, "Staffing service operation accepted");
+        let result: Result<Vec<StaffingJob>, StaffingError> = self.repo.list_jobs(tenant_id).await;
+        log_staffing_operation("list_staffing_jobs", tenant_id, None, None, &result);
         result
     }
 

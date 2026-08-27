@@ -50,7 +50,7 @@ services:
       target: runner
     image: iceorca/shepherd-srv:0.1.0
     restart: unless-stopped
-    command: !reset null
+    command: [ "/app/shepherd-srv" ]
     env_file: !reset []
     ports: !reset []
     volumes: !reset []
@@ -95,8 +95,6 @@ services:
     stop_grace_period: 30s
 
   client:
-    # Production assets are exported from Dockerfile.prod and served by host Caddy.
-    profiles: [ "build-only" ]
     build:
       context: ./client/web
       dockerfile: Dockerfile.prod
@@ -104,11 +102,14 @@ services:
       args:
         VITE_SHEPHERD_AUTH_URL: ${AUTH_PUBLIC_URL_PROD:?required}
     image: iceorca/shepherd-cli-builder:0.1.0
-    restart: "no"
-    command: !reset null
+    restart: unless-stopped
+    command: [ "npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "${FRONTEND_PROD_PORT:-4173}" ]
     env_file: !reset []
     volumes: !reset []
-    ports: !reset []
+    ports: !override
+      - "127.0.0.1:${FRONTEND_PROD_PORT:-4173}:${FRONTEND_PROD_PORT:-4173}"
+    expose:
+      - ${FRONTEND_PROD_PORT:-4173}
 
   supabase-auth:
     restart: unless-stopped

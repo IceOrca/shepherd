@@ -44,11 +44,8 @@ function employeeDraft(employee: Employee): EmployeeUpsertRequest {
     legal_first_name: employee.legal_first_name,
     legal_middle_name: employee.legal_middle_name,
     legal_last_name: employee.legal_last_name,
-    work_email: employee.work_email,
-    work_phone: employee.work_phone,
     personal_phone_e164: employee.personal_phone_e164,
     gender: employee.gender,
-    badge_id: employee.badge_id,
     status: employee.status,
     hire_date: employee.hire_date,
     termination_date: employee.termination_date,
@@ -111,8 +108,6 @@ export function EmployeesPage(): React.JSX.Element {
         employee.legal_middle_name ?? "",
         employee.legal_last_name ?? "",
         employee.personal_phone_e164 ?? "",
-        employee.work_phone ?? "",
-        employee.work_email ?? "",
       ].join(" ").toLocaleLowerCase("vi").includes(needle),
     );
   }, [employeesQuery.data, search]);
@@ -195,10 +190,7 @@ export function EmployeesPage(): React.JSX.Element {
         legal_first_name: optionalValue(draft.legal_first_name ?? ""),
         legal_middle_name: optionalValue(draft.legal_middle_name ?? ""),
         legal_last_name: optionalValue(draft.legal_last_name ?? ""),
-        work_email: optionalValue(draft.work_email ?? "")?.toLocaleLowerCase("en-US") ?? null,
-        work_phone: optionalValue(draft.work_phone ?? ""),
         personal_phone_e164: optionalValue(draft.personal_phone_e164 ?? ""),
-        badge_id: optionalValue(draft.badge_id ?? ""),
         termination_date: draft.status === "terminated" ? draft.termination_date : null,
       },
     });
@@ -226,7 +218,7 @@ export function EmployeesPage(): React.JSX.Element {
       <div className="panel flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
         <label className="relative block w-full max-w-xl">
           <Search className="absolute left-3 top-3 size-5 text-slate-400" />
-          <input className="min-h-11 w-full rounded-xl border-slate-300 pl-10" onChange={(event): void => setSearch(event.target.value)} placeholder="Tìm theo tên, mã, điện thoại hoặc email" type="search" value={search} />
+          <input className="min-h-11 w-full rounded-xl border-slate-300 pl-10" onChange={(event): void => setSearch(event.target.value)} placeholder="Tìm theo tên, mã hoặc điện thoại" type="search" value={search} />
         </label>
         <button aria-label="Tải lại" className="action-secondary shrink-0" onClick={(): void => { void employeesQuery.refetch(); }} type="button">
           <RefreshCw className={`size-4 ${employeesQuery.isFetching ? "animate-spin" : ""}`} />
@@ -283,9 +275,6 @@ export function EmployeesPage(): React.JSX.Element {
                 <label className="text-sm font-semibold text-slate-700">Tên<input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" maxLength={100} onChange={(event): void => setDraft({ ...draft, legal_first_name: event.target.value })} value={draft.legal_first_name ?? ""} /></label>
                 <label className="text-sm font-semibold text-slate-700">Giới tính<select className="mt-2 min-h-11 w-full rounded-xl border-slate-300" onChange={(event): void => setDraft({ ...draft, gender: (event.target.value || null) as Gender | null })} value={draft.gender ?? ""}><option value="">Chưa cập nhật</option><option value="female">Nữ</option><option value="male">Nam</option><option value="other">Khác</option><option value="unspecified">Không công bố</option></select></label>
                 <label className="text-sm font-semibold text-slate-700">Điện thoại cá nhân (E.164)<input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" maxLength={16} onChange={(event): void => setDraft({ ...draft, personal_phone_e164: event.target.value })} placeholder="+84901234567" type="tel" value={draft.personal_phone_e164 ?? ""} /></label>
-                <label className="text-sm font-semibold text-slate-700">Điện thoại công việc<input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" maxLength={64} onChange={(event): void => setDraft({ ...draft, work_phone: event.target.value })} value={draft.work_phone ?? ""} /></label>
-                <label className="text-sm font-semibold text-slate-700">Email công việc<input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" maxLength={320} onChange={(event): void => setDraft({ ...draft, work_email: event.target.value })} type="email" value={draft.work_email ?? ""} /></label>
-                <label className="text-sm font-semibold text-slate-700">Mã thẻ<input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" maxLength={128} onChange={(event): void => setDraft({ ...draft, badge_id: event.target.value })} value={draft.badge_id ?? ""} /></label>
                 <label className="text-sm font-semibold text-slate-700">Ngày vào làm<input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" onChange={(event): void => setDraft({ ...draft, hire_date: event.target.value })} required type="date" value={draft.hire_date} /></label>
                 <label className="text-sm font-semibold text-slate-700">Trạng thái<select className="mt-2 min-h-11 w-full rounded-xl border-slate-300" onChange={(event): void => setDraft({ ...draft, status: event.target.value as EmployeeStatus })} value={draft.status}><option value="active">Đang làm việc</option><option value="on_leave">Đang nghỉ</option><option value="terminated">Đã nghỉ việc</option></select></label>
                 {draft.status === "terminated" ? <label className="text-sm font-semibold text-slate-700">Ngày nghỉ việc<input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" min={draft.hire_date} onChange={(event): void => setDraft({ ...draft, termination_date: event.target.value })} required type="date" value={draft.termination_date ?? ""} /></label> : null}

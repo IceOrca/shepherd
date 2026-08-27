@@ -63,30 +63,6 @@ impl EmployeeStatus {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum HrRecordStatus {
-    Active,
-    Archived,
-}
-
-impl HrRecordStatus {
-    pub fn as_code(self) -> &'static str {
-        match self {
-            Self::Active => "active",
-            Self::Archived => "archived",
-        }
-    }
-
-    pub fn from_code(code: &str) -> Option<Self> {
-        match code {
-            "active" => Some(Self::Active),
-            "archived" => Some(Self::Archived),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Clone, Debug, Serialize, TS)]
 pub struct Employee {
     pub id: Uuid,
@@ -97,11 +73,8 @@ pub struct Employee {
     pub legal_first_name: Option<String>,
     pub legal_middle_name: Option<String>,
     pub legal_last_name: Option<String>,
-    pub work_email: Option<String>,
-    pub work_phone: Option<String>,
     pub personal_phone_e164: Option<String>,
     pub gender: Option<Gender>,
-    pub badge_id: Option<String>,
     pub citizen_id_country_code: Option<String>,
     pub citizen_id_last4: Option<String>,
     pub profile_complete: bool,
@@ -119,43 +92,6 @@ pub struct EmployeeSensitiveProfile {
     pub citizen_id_country_code: Option<String>,
     pub citizen_id: Option<String>,
     pub version: i64,
-}
-
-#[derive(Clone, Debug, Serialize, TS)]
-pub struct Department {
-    pub id: Uuid,
-    pub code: String,
-    pub name: String,
-    pub parent_department_id: Option<Uuid>,
-    pub manager_employee_id: Option<Uuid>,
-    pub status: HrRecordStatus,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug, Serialize, TS)]
-pub struct JobPosition {
-    pub id: Uuid,
-    pub code: String,
-    pub name: String,
-    pub department_id: Option<Uuid>,
-    pub status: HrRecordStatus,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug, Serialize, TS)]
-pub struct EmployeeAssignment {
-    pub id: Uuid,
-    pub employee_id: Uuid,
-    pub branch_id: Uuid,
-    pub department_id: Option<Uuid>,
-    pub job_id: Option<Uuid>,
-    pub manager_employee_id: Option<Uuid>,
-    pub date_start: NaiveDate,
-    pub date_end: Option<NaiveDate>,
-    pub is_primary: bool,
-    pub created_at: DateTime<Utc>,
 }
 
 /// One contiguous employee work session. A workday can contain multiple
@@ -180,11 +116,8 @@ pub struct EmployeeInput {
     pub legal_first_name: Option<String>,
     pub legal_middle_name: Option<String>,
     pub legal_last_name: Option<String>,
-    pub work_email: Option<String>,
-    pub work_phone: Option<String>,
     pub personal_phone_e164: Option<String>,
     pub gender: Option<Gender>,
-    pub badge_id: Option<String>,
     pub status: EmployeeStatus,
     pub hire_date: NaiveDate,
     pub termination_date: Option<NaiveDate>,
@@ -196,34 +129,6 @@ pub struct EmployeeCitizenIdInput {
     pub citizen_id_country_code: Option<String>,
     pub citizen_id: Option<String>,
     pub expected_version: i64,
-}
-
-#[derive(Clone, Debug)]
-pub struct DepartmentInput {
-    pub code: String,
-    pub name: String,
-    pub parent_department_id: Option<Uuid>,
-    pub manager_employee_id: Option<Uuid>,
-    pub status: HrRecordStatus,
-}
-
-#[derive(Clone, Debug)]
-pub struct JobPositionInput {
-    pub code: String,
-    pub name: String,
-    pub department_id: Option<Uuid>,
-    pub status: HrRecordStatus,
-}
-
-#[derive(Clone, Debug)]
-pub struct EmployeeAssignmentInput {
-    pub branch_id: Uuid,
-    pub department_id: Option<Uuid>,
-    pub job_id: Option<Uuid>,
-    pub manager_employee_id: Option<Uuid>,
-    pub date_start: NaiveDate,
-    pub date_end: Option<NaiveDate>,
-    pub is_primary: bool,
 }
 
 #[derive(Debug)]
@@ -272,47 +177,6 @@ pub trait PeopleRepo {
         audit_account_id: Uuid,
     ) -> Result<EmployeeSensitiveProfile, HrError>;
 
-    async fn list_departments(&self, tenant_id: Uuid) -> Result<Vec<Department>, HrError>;
-    async fn create_department(
-        &self,
-        tenant_id: Uuid,
-        department_id: Uuid,
-        input: &DepartmentInput,
-        audit_account_id: Uuid,
-    ) -> Result<Department, HrError>;
-    async fn update_department(
-        &self,
-        tenant_id: Uuid,
-        department_id: Uuid,
-        input: &DepartmentInput,
-        audit_account_id: Uuid,
-    ) -> Result<Department, HrError>;
-
-    async fn list_jobs(&self, tenant_id: Uuid) -> Result<Vec<JobPosition>, HrError>;
-    async fn create_job(
-        &self,
-        tenant_id: Uuid,
-        job_id: Uuid,
-        input: &JobPositionInput,
-        audit_account_id: Uuid,
-    ) -> Result<JobPosition, HrError>;
-    async fn update_job(
-        &self,
-        tenant_id: Uuid,
-        job_id: Uuid,
-        input: &JobPositionInput,
-        audit_account_id: Uuid,
-    ) -> Result<JobPosition, HrError>;
-
-    async fn list_assignments(&self, tenant_id: Uuid, employee_id: Uuid) -> Result<Vec<EmployeeAssignment>, HrError>;
-    async fn create_assignment(
-        &self,
-        tenant_id: Uuid,
-        assignment_id: Uuid,
-        employee_id: Uuid,
-        input: &EmployeeAssignmentInput,
-        audit_account_id: Uuid,
-    ) -> Result<EmployeeAssignment, HrError>;
     async fn list_attendance_sessions(
         &self,
         tenant_id: Uuid,
@@ -420,91 +284,6 @@ impl PeopleService {
         validate_citizen_id_input(&input)?;
         self.repo
             .update_employee_citizen_id(tenant_id, employee_id, &input, audit_account_id)
-            .await
-    }
-
-    pub async fn list_departments(&self, tenant_id: Uuid) -> Result<Vec<Department>, HrError> {
-        self.repo.list_departments(tenant_id).await
-    }
-
-    pub async fn create_department(
-        &self,
-        tenant_id: Uuid,
-        input: DepartmentInput,
-        audit_account_id: Uuid,
-    ) -> Result<Department, HrError> {
-        validate_code_and_name(&input.code, &input.name)?;
-        self.repo
-            .create_department(tenant_id, Uuid::new_v4(), &input, audit_account_id)
-            .await
-    }
-
-    pub async fn update_department(
-        &self,
-        tenant_id: Uuid,
-        department_id: Uuid,
-        input: DepartmentInput,
-        audit_account_id: Uuid,
-    ) -> Result<Department, HrError> {
-        validate_code_and_name(&input.code, &input.name)?;
-        if input.parent_department_id == Some(department_id) {
-            return Err(HrError::InvalidInput("a department cannot be its own parent"));
-        }
-        self.repo
-            .update_department(tenant_id, department_id, &input, audit_account_id)
-            .await
-    }
-
-    pub async fn list_jobs(&self, tenant_id: Uuid) -> Result<Vec<JobPosition>, HrError> {
-        self.repo.list_jobs(tenant_id).await
-    }
-
-    pub async fn create_job(
-        &self,
-        tenant_id: Uuid,
-        input: JobPositionInput,
-        audit_account_id: Uuid,
-    ) -> Result<JobPosition, HrError> {
-        validate_code_and_name(&input.code, &input.name)?;
-        self.repo
-            .create_job(tenant_id, Uuid::new_v4(), &input, audit_account_id)
-            .await
-    }
-
-    pub async fn update_job(
-        &self,
-        tenant_id: Uuid,
-        job_id: Uuid,
-        input: JobPositionInput,
-        audit_account_id: Uuid,
-    ) -> Result<JobPosition, HrError> {
-        validate_code_and_name(&input.code, &input.name)?;
-        self.repo.update_job(tenant_id, job_id, &input, audit_account_id).await
-    }
-
-    pub async fn list_assignments(
-        &self,
-        tenant_id: Uuid,
-        employee_id: Uuid,
-    ) -> Result<Vec<EmployeeAssignment>, HrError> {
-        self.repo.list_assignments(tenant_id, employee_id).await
-    }
-
-    pub async fn create_assignment(
-        &self,
-        tenant_id: Uuid,
-        employee_id: Uuid,
-        input: EmployeeAssignmentInput,
-        audit_account_id: Uuid,
-    ) -> Result<EmployeeAssignment, HrError> {
-        if input.date_end.is_some_and(|date_end| date_end < input.date_start) {
-            return Err(HrError::InvalidInput("assignment end date precedes start date"));
-        }
-        if input.manager_employee_id == Some(employee_id) {
-            return Err(HrError::InvalidInput("an employee cannot manage themself"));
-        }
-        self.repo
-            .create_assignment(tenant_id, Uuid::new_v4(), employee_id, &input, audit_account_id)
             .await
     }
 
@@ -657,11 +436,8 @@ mod tests {
             legal_first_name: Some("An".to_owned()),
             legal_middle_name: Some("Văn".to_owned()),
             legal_last_name: Some("Nguyễn".to_owned()),
-            work_email: None,
-            work_phone: None,
             personal_phone_e164: Some("+84901234567".to_owned()),
             gender: Some(Gender::Male),
-            badge_id: None,
             status: EmployeeStatus::Active,
             hire_date: NaiveDate::from_ymd_opt(2026, 1, 2).expect("valid test date"),
             termination_date: None,

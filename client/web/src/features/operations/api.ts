@@ -5,7 +5,7 @@ import type {
   CustomerWorkRecord,
   CustomerWorkRecordUpsertRequest,
   Employee,
-  JobPosition,
+  StaffingJob,
   OwnStaffingAssignment,
   ShiftAssignment,
   ShiftAssignmentApproveRequest,
@@ -98,12 +98,12 @@ export function updateCustomer(customerId: string, payload: CustomerUpsertReques
   });
 }
 
-export function listJobs(): Promise<JobPosition[]> {
-  return apiRequest<JobPosition[]>("/api/hr/jobs");
+export function listJobs(): Promise<StaffingJob[]> {
+  return apiRequest<StaffingJob[]>("/api/business/staffing/jobs");
 }
 
-export function listJobsForBranch(branchId: string): Promise<JobPosition[]> {
-  return apiRequestForBranch<JobPosition[]>("/api/hr/jobs", branchId);
+export function listJobsForBranch(branchId: string): Promise<StaffingJob[]> {
+  return apiRequestForBranch<StaffingJob[]>("/api/business/staffing/jobs", branchId);
 }
 
 export function listEmployees(): Promise<Employee[]> {

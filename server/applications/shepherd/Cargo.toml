@@ -36,7 +36,6 @@ rust_xlsxwriter.workspace = true
 infra-app-sdk.workspace = true
 infra-kernel = { workspace = true, features = ["debugging"] }
 infra-auth = { path = "../../infra/auth", default-features = false, features = ["ext-service"] }
-infra-authz.workspace = true
 infra-host.workspace = true
 infra-postgres.workspace = true
 infra-notifier.workspace = true

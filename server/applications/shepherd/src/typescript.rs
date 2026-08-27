@@ -12,7 +12,7 @@ use crate::{
     business::staffing::{
         core::{
             BusinessRecordStatus, Customer, CustomerWorkRecord, RateSource, ReconciliationStatus, ShiftAssignment,
-            ShiftAssignmentStatus, StaffingCandidate, StaffingEligibility, StaffingPriceSet, StaffingRate,
+            ShiftAssignmentStatus, StaffingCandidate, StaffingEligibility, StaffingPriceSet, StaffingRate, StaffingJob,
             StaffingRateKind, StaffingReconciliation, StaffingShift, StaffingShiftStatus, StaffingStaff,
         },
         host::{
@@ -37,32 +37,9 @@ use crate::{
     },
     features::{
         organization::core::BranchSummary,
-        payroll::{
-            core::{
-                BranchRateRule, EmployeeCompensation, OvertimeRule, PayBasis, PayrollEmployeeResult, PayrollLine,
-                PayrollRun, PayrollRunStatus, TimeBandRule,
-            },
-            host::{
-                BranchRateRuleCreateRequest, EmployeeCompensationCreateRequest, OvertimeRuleCreateRequest,
-                PayrollCalculateRequest, TimeBandRuleCreateRequest,
-            },
-        },
         people::{
-            core::{
-                AttendanceSession, Department, Employee, EmployeeAssignment, EmployeeSensitiveProfile, EmployeeStatus,
-                Gender, HrRecordStatus, JobPosition,
-            },
-            host::dto::{
-                AttendanceCheckInRequest, DepartmentUpsertRequest, EmployeeAssignmentCreateRequest,
-                EmployeeCitizenIdUpdateRequest, EmployeeUpsertRequest, JobPositionUpsertRequest,
-            },
-        },
-        working_schedule::{
-            core::{EmployeeScheduleAssignment, WorkingPeriod, WorkingSchedule},
-            host::dto::{
-                EmployeeScheduleAssignmentCreateRequest, EmployeeScheduleAssignmentView, WorkingPeriodRequest,
-                WorkingScheduleUpsertRequest,
-            },
+            core::{AttendanceSession, Employee, EmployeeSensitiveProfile, EmployeeStatus, Gender},
+            host::dto::{AttendanceCheckInRequest, EmployeeCitizenIdUpdateRequest, EmployeeUpsertRequest},
         },
     },
 };
@@ -103,6 +80,7 @@ pub fn contract() -> String {
     push::<RateSource>(&mut output, &config);
     push::<StaffingRateKind>(&mut output, &config);
     push::<Customer>(&mut output, &config);
+    push::<StaffingJob>(&mut output, &config);
     push::<StaffingRate>(&mut output, &config);
     push::<StaffingStaff>(&mut output, &config);
     push::<StaffingPriceSet>(&mut output, &config);
@@ -135,42 +113,14 @@ pub fn contract() -> String {
     push::<UrgentWorkEndRequest>(&mut output, &config);
     push::<UrgentCustomerWorkRecordUpsertRequest>(&mut output, &config);
     push::<UrgentWorkReconcileRequest>(&mut output, &config);
-    push::<PayBasis>(&mut output, &config);
-    push::<PayrollRunStatus>(&mut output, &config);
-    push::<EmployeeCompensation>(&mut output, &config);
-    push::<BranchRateRule>(&mut output, &config);
-    push::<TimeBandRule>(&mut output, &config);
-    push::<OvertimeRule>(&mut output, &config);
-    push::<PayrollEmployeeResult>(&mut output, &config);
-    push::<PayrollLine>(&mut output, &config);
-    push::<PayrollRun>(&mut output, &config);
-    push::<EmployeeCompensationCreateRequest>(&mut output, &config);
-    push::<BranchRateRuleCreateRequest>(&mut output, &config);
-    push::<TimeBandRuleCreateRequest>(&mut output, &config);
-    push::<OvertimeRuleCreateRequest>(&mut output, &config);
-    push::<PayrollCalculateRequest>(&mut output, &config);
     push::<EmployeeStatus>(&mut output, &config);
     push::<Gender>(&mut output, &config);
-    push::<HrRecordStatus>(&mut output, &config);
     push::<Employee>(&mut output, &config);
     push::<EmployeeSensitiveProfile>(&mut output, &config);
-    push::<Department>(&mut output, &config);
-    push::<JobPosition>(&mut output, &config);
-    push::<EmployeeAssignment>(&mut output, &config);
     push::<AttendanceSession>(&mut output, &config);
     push::<AttendanceCheckInRequest>(&mut output, &config);
     push::<EmployeeUpsertRequest>(&mut output, &config);
     push::<EmployeeCitizenIdUpdateRequest>(&mut output, &config);
-    push::<DepartmentUpsertRequest>(&mut output, &config);
-    push::<JobPositionUpsertRequest>(&mut output, &config);
-    push::<EmployeeAssignmentCreateRequest>(&mut output, &config);
-    push::<WorkingPeriod>(&mut output, &config);
-    push::<WorkingSchedule>(&mut output, &config);
-    push::<EmployeeScheduleAssignment>(&mut output, &config);
-    push::<WorkingPeriodRequest>(&mut output, &config);
-    push::<EmployeeScheduleAssignmentView>(&mut output, &config);
-    push::<WorkingScheduleUpsertRequest>(&mut output, &config);
-    push::<EmployeeScheduleAssignmentCreateRequest>(&mut output, &config);
 
     output
 }

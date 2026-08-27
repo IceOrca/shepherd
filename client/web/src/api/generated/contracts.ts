@@ -62,6 +62,8 @@ export type StaffingRateKind = "customer_bill" | "worker_pay";
 
 export type Customer = { id: string, code: string, name: string, address: string | null, time_zone: string, billing_email: string | null, status: BusinessRecordStatus, created_at: string, updated_at: string, };
 
+export type StaffingJob = { id: string, code: string, name: string, status: BusinessRecordStatus, created_at: string, updated_at: string, };
+
 export type StaffingRate = { id: string, rate_kind: StaffingRateKind, code: string, name: string, customer_id: string | null, employee_id: string | null, currency: string, hourly_rate: string, priority: number, effective_from: string, effective_to: string | null, is_active: boolean, created_at: string, };
 
 export type StaffingStaff = { employee_id: string, employee_code: string, display_name: string, };
@@ -126,75 +128,19 @@ export type UrgentCustomerWorkRecordUpsertRequest = { confirmed_customer_id: str
 
 export type UrgentWorkReconcileRequest = { final_customer_id: string, job_id: string, worked_seconds: number, adjustment_reason?: string | null, manual_rate?: ManualRateOverrideRequest | null, };
 
-export type PayBasis = "hourly" | "monthly";
-
-export type PayrollRunStatus = "draft" | "calculated" | "approved" | "paid";
-
-export type EmployeeCompensation = { id: string, employee_id: string, currency: string, pay_basis: PayBasis, hourly_rate: string | null, monthly_rate: string | null, standard_monthly_hours: string | null, effective_from: string, effective_to: string | null, created_at: string, };
-
-export type BranchRateRule = { id: string, code: string, name: string, branch_id: string, employee_id: string | null, base_multiplier: string, hourly_adjustment: string, priority: number, effective_from: string, effective_to: string | null, is_active: boolean, };
-
-export type TimeBandRule = { id: string, code: string, name: string, weekdays: Array<number>, start_time: string, end_time: string, spans_next_day: boolean, premium_multiplier: string, hourly_adjustment: string, priority: number, effective_from: string, effective_to: string | null, is_active: boolean, };
-
-export type OvertimeRule = { id: string, code: string, name: string, threshold_minutes: number, premium_multiplier: string, hourly_adjustment: string, priority: number, effective_from: string, effective_to: string | null, is_active: boolean, };
-
-export type PayrollEmployeeResult = { employee_id: string, worked_seconds: number, base_amount: string, branch_amount: string, time_amount: string, overtime_amount: string, gross_amount: string, currency: string, };
-
-export type PayrollLine = { id: string, employee_id: string, attendance_session_id: string | null, staffing_assignment_id: string | null, branch_id: string, work_date: string, component: string, rule_code: string | null, worked_seconds: number, base_hourly_rate: string, multiplier: string, hourly_adjustment: string, amount: string, description: string, };
-
-export type PayrollRun = { id: string, period_start: string, period_end: string, time_zone: string, currency: string, status: PayrollRunStatus, calculated_at: string | null, approved_at: string | null, created_at: string, results: Array<PayrollEmployeeResult>, lines: Array<PayrollLine>, };
-
-export type EmployeeCompensationCreateRequest = { currency: string, pay_basis: PayBasis, hourly_rate?: string | null, monthly_rate?: string | null, standard_monthly_hours?: string | null, effective_from: string, effective_to?: string | null, };
-
-export type BranchRateRuleCreateRequest = { code: string, name: string, branch_id: string, employee_id?: string | null, base_multiplier: string, hourly_adjustment: string, priority: number, effective_from: string, effective_to?: string | null, is_active: boolean, };
-
-export type TimeBandRuleCreateRequest = { code: string, name: string, weekdays: Array<number>, start_time: string, end_time: string, spans_next_day: boolean, premium_multiplier: string, hourly_adjustment: string, priority: number, effective_from: string, effective_to?: string | null, is_active: boolean, };
-
-export type OvertimeRuleCreateRequest = { code: string, name: string, threshold_minutes: number, premium_multiplier: string, hourly_adjustment: string, priority: number, effective_from: string, effective_to?: string | null, is_active: boolean, };
-
-export type PayrollCalculateRequest = { year: number, month: number, time_zone: string, currency: string, };
-
 export type EmployeeStatus = "active" | "on_leave" | "terminated";
 
 export type Gender = "female" | "male" | "other" | "unspecified";
 
-export type HrRecordStatus = "active" | "archived";
-
-export type Employee = { id: string, branch_id: string, account_id: string | null, employee_code: string, display_name: string, legal_first_name: string | null, legal_middle_name: string | null, legal_last_name: string | null, work_email: string | null, work_phone: string | null, personal_phone_e164: string | null, gender: Gender | null, badge_id: string | null, citizen_id_country_code: string | null, citizen_id_last4: string | null, profile_complete: boolean, status: EmployeeStatus, hire_date: string, termination_date: string | null, version: number, created_at: string, updated_at: string, };
+export type Employee = { id: string, branch_id: string, account_id: string | null, employee_code: string, display_name: string, legal_first_name: string | null, legal_middle_name: string | null, legal_last_name: string | null, personal_phone_e164: string | null, gender: Gender | null, citizen_id_country_code: string | null, citizen_id_last4: string | null, profile_complete: boolean, status: EmployeeStatus, hire_date: string, termination_date: string | null, version: number, created_at: string, updated_at: string, };
 
 export type EmployeeSensitiveProfile = { employee_id: string, citizen_id_country_code: string | null, citizen_id: string | null, version: number, };
-
-export type Department = { id: string, code: string, name: string, parent_department_id: string | null, manager_employee_id: string | null, status: HrRecordStatus, created_at: string, updated_at: string, };
-
-export type JobPosition = { id: string, code: string, name: string, department_id: string | null, status: HrRecordStatus, created_at: string, updated_at: string, };
-
-export type EmployeeAssignment = { id: string, employee_id: string, branch_id: string, department_id: string | null, job_id: string | null, manager_employee_id: string | null, date_start: string, date_end: string | null, is_primary: boolean, created_at: string, };
 
 export type AttendanceSession = { id: string, employee_id: string, branch_id: string, check_in_at: string, check_out_at: string | null, worked_seconds: number | null, created_at: string, updated_at: string, };
 
 export type AttendanceCheckInRequest = { branch_id: string, };
 
-export type EmployeeUpsertRequest = { account_id?: string | null, employee_code: string, display_name: string, legal_first_name?: string | null, legal_middle_name?: string | null, legal_last_name?: string | null, work_email?: string | null, work_phone?: string | null, personal_phone_e164?: string | null, gender?: Gender | null, badge_id?: string | null, status: EmployeeStatus, hire_date: string, termination_date?: string | null, expected_version?: number | null, };
+export type EmployeeUpsertRequest = { account_id?: string | null, employee_code: string, display_name: string, legal_first_name?: string | null, legal_middle_name?: string | null, legal_last_name?: string | null, personal_phone_e164?: string | null, gender?: Gender | null, status: EmployeeStatus, hire_date: string, termination_date?: string | null, expected_version?: number | null, };
 
 export type EmployeeCitizenIdUpdateRequest = { citizen_id_country_code?: string | null, citizen_id?: string | null, expected_version: number, };
-
-export type DepartmentUpsertRequest = { code: string, name: string, parent_department_id?: string | null, manager_employee_id?: string | null, status: HrRecordStatus, };
-
-export type JobPositionUpsertRequest = { code: string, name: string, department_id?: string | null, status: HrRecordStatus, };
-
-export type EmployeeAssignmentCreateRequest = { branch_id: string, department_id?: string | null, job_id?: string | null, manager_employee_id?: string | null, date_start: string, date_end?: string | null, is_primary: boolean, };
-
-export type WorkingPeriod = { id: string, weekday: number, start_time: string, end_time: string, spans_next_day: boolean, unpaid_break_minutes: number, };
-
-export type WorkingSchedule = { id: string, code: string, name: string, time_zone: string, status: HrRecordStatus, periods: Array<WorkingPeriod>, created_at: string, updated_at: string, };
-
-export type EmployeeScheduleAssignment = { id: string, employee_id: string, schedule_id: string, date_start: string, date_end: string | null, created_at: string, };
-
-export type WorkingPeriodRequest = { weekday: number, start_time: string, end_time: string, spans_next_day: boolean, unpaid_break_minutes: number, };
-
-export type EmployeeScheduleAssignmentView = { assignment: EmployeeScheduleAssignment, schedule: WorkingSchedule, };
-
-export type WorkingScheduleUpsertRequest = { code: string, name: string, time_zone: string, status: HrRecordStatus, periods: Array<WorkingPeriodRequest>, };
-
-export type EmployeeScheduleAssignmentCreateRequest = { schedule_id: string, date_start: string, date_end?: string | null, };
 

@@ -1294,7 +1294,7 @@ async fn reconcile_report(
     }
     let job: ExistsRow = sqlx::query_as!(
         ExistsRow,
-        "SELECT EXISTS (SELECT 1 FROM hr_jobs WHERE tenant_id = $1 AND id = $2 AND status = 'active') AS \"exists!\"",
+        "SELECT EXISTS (SELECT 1 FROM business_staffing_jobs WHERE tenant_id = $1 AND id = $2 AND status = 'active') AS \"exists!\"",
         tenant_id,
         input.job_id,
     )

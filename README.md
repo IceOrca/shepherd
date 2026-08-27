@@ -76,19 +76,17 @@ Finish, including self/peer provenance. These actor names are resolved by the
 server from the immutable actor account IDs rather than inferred in the UI.
 
 This separation of evidence and mandatory human conclusion is the heart of the
-product. Scheduling, HR, payroll, authentication, and administration support
-that workflow; they are not the product's primary purpose.
+product. Scheduling, employee profiles, authentication, and administration
+support that workflow; they are not the product's primary purpose.
 
 
-### Customer-dependent pay, service eligibility, and company profit
+### Customer-dependent pay and company profit
 
-Temporary staffing pay is not derived from the employee's normal HR position
-alone. Shepherd keeps an effective-dated staffing eligibility directory so one
-employee may be suitable for several customer services even when their primary
-HR job is different. Planned assignment requires current eligibility. Urgent
-work is allowed to exist first because the service has already happened, but a
-supervisor must record an explicit eligibility-exception reason before
-reconciling an ineligible report.
+The current client treats every active account whose primary organizational
+role is `staff` as eligible for every staffing job. The
+`business_staffing_employee_eligibilities` table remains only as dormant
+compatibility data for a possible future client; the current application does
+not expose or enforce service-suitability setup.
 
 Customer billing and worker pay are independent hourly rate catalogs:
 
@@ -122,11 +120,10 @@ original recorder, and superseding actor. Planned and urgent records are
 classified as matched only when customer, exact start, exact end, and duration
 all agree; human reconciliation remains mandatory.
 
-Payroll consumes only the locked worker-pay snapshot. It dates the staffing
-line from the customer-confirmed interval and rejects the payroll run when an
-approved staffing interval overlaps internal HR attendance for the same
-employee. This makes duplicate sources visible instead of silently paying the
-same work twice.
+An aligned payroll flow has not yet been implemented. When added, it must
+consume only the locked worker-pay snapshot, date work from the
+customer-confirmed interval, and reject overlap with internal HR attendance so
+the same work cannot be paid from two sources.
 
 ## Core product principles
 
@@ -464,8 +461,8 @@ Authorization codes and lifecycle states deliberately use different type
 models. Roles and permissions remain database-driven and open-ended, so Rust
 uses validated string-backed `RoleCode` and `PermissionCode` newtypes and the
 generated TypeScript contracts expose matching semantic aliases. Finite domain
-state such as account, shift, assignment, urgent-work, reconciliation, and
-payroll status uses domain-specific Rust enums and generated TypeScript unions.
+state such as account, shift, assignment, urgent-work, and reconciliation
+status uses domain-specific Rust enums and generated TypeScript unions.
 PostgreSQL continues to store those values as constrained text; repository
 boundaries reject and log unknown persisted values instead of allowing raw
 status strings into domain logic.
@@ -474,8 +471,8 @@ status strings into domain logic.
 
 Each tenant is one staffing company with independent internal branches. Each
 customer belongs to exactly one branch and is itself the staffed workplace;
-Shepherd does not model customer facilities. HR employees, payroll inputs,
-staffing configuration, customers, work evidence, and financial results carry
+Shepherd does not model customer facilities. HR employees, staffing
+configuration, customers, work evidence, and financial results carry
 the owning branch and are protected by tenant plus active-branch RLS.
 
 Shepherd defines five organizational role codes:

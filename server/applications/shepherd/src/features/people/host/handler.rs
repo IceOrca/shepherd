@@ -6,17 +6,12 @@ use axum::{
     http::StatusCode,
 };
 use tracing::{error, warn, info, debug, trace};
-use crate::features::people::core::{
-    AttendanceSession, Department, Employee, EmployeeAssignment, EmployeeSensitiveProfile, HrError, JobPosition,
-};
+use crate::features::people::core::{AttendanceSession, Employee, EmployeeSensitiveProfile, HrError};
 use uuid::Uuid;
 
 use crate::{AppContext, auth::AuthenticatedUser};
 
-use super::dto::{
-    AttendanceCheckInRequest, DepartmentUpsertRequest, EmployeeAssignmentCreateRequest, EmployeeCitizenIdUpdateRequest,
-    EmployeeUpsertRequest, JobPositionUpsertRequest,
-};
+use super::dto::{AttendanceCheckInRequest, EmployeeCitizenIdUpdateRequest, EmployeeUpsertRequest};
 
 pub async fn list_employees(
     State(host): State<Arc<AppContext>>,
@@ -209,122 +204,6 @@ pub async fn update_employee_citizen_id(
         .await
         .map(Json)
         .map_err(|error| hr_status("update employee citizen ID", &user, error))
-}
-
-pub async fn list_employee_assignments(
-    State(host): State<Arc<AppContext>>,
-    Extension(user): Extension<AuthenticatedUser>,
-    Path(employee_id): Path<Uuid>,
-) -> Result<Json<Vec<EmployeeAssignment>>, StatusCode> {
-    require_permission(&user, "hr.assignments.read")?;
-    host.core
-        .people
-        .list_assignments(user.tenant_id, employee_id)
-        .await
-        .map(Json)
-        .map_err(|error| hr_status("list employee assignments", &user, error))
-}
-
-pub async fn create_employee_assignment(
-    State(host): State<Arc<AppContext>>,
-    Extension(user): Extension<AuthenticatedUser>,
-    Path(employee_id): Path<Uuid>,
-    Json(payload): Json<EmployeeAssignmentCreateRequest>,
-) -> Result<(StatusCode, Json<EmployeeAssignment>), StatusCode> {
-    require_permission(&user, "hr.assignments.manage")?;
-    let assignment: EmployeeAssignment = host
-        .core
-        .people
-        .create_assignment(user.tenant_id, employee_id, payload.into(), user.account_id)
-        .await
-        .map_err(|error| hr_status("create employee assignment", &user, error))?;
-    Ok((StatusCode::CREATED, Json(assignment)))
-}
-
-pub async fn list_departments(
-    State(host): State<Arc<AppContext>>,
-    Extension(user): Extension<AuthenticatedUser>,
-) -> Result<Json<Vec<Department>>, StatusCode> {
-    require_permission(&user, "hr.departments.read")?;
-    host.core
-        .people
-        .list_departments(user.tenant_id)
-        .await
-        .map(Json)
-        .map_err(|error| hr_status("list departments", &user, error))
-}
-
-pub async fn create_department(
-    State(host): State<Arc<AppContext>>,
-    Extension(user): Extension<AuthenticatedUser>,
-    Json(payload): Json<DepartmentUpsertRequest>,
-) -> Result<(StatusCode, Json<Department>), StatusCode> {
-    require_permission(&user, "hr.departments.manage")?;
-    let department: Department = host
-        .core
-        .people
-        .create_department(user.tenant_id, payload.into(), user.account_id)
-        .await
-        .map_err(|error| hr_status("create department", &user, error))?;
-    Ok((StatusCode::CREATED, Json(department)))
-}
-
-pub async fn update_department(
-    State(host): State<Arc<AppContext>>,
-    Extension(user): Extension<AuthenticatedUser>,
-    Path(department_id): Path<Uuid>,
-    Json(payload): Json<DepartmentUpsertRequest>,
-) -> Result<Json<Department>, StatusCode> {
-    require_permission(&user, "hr.departments.manage")?;
-    host.core
-        .people
-        .update_department(user.tenant_id, department_id, payload.into(), user.account_id)
-        .await
-        .map(Json)
-        .map_err(|error| hr_status("update department", &user, error))
-}
-
-pub async fn list_jobs(
-    State(host): State<Arc<AppContext>>,
-    Extension(user): Extension<AuthenticatedUser>,
-) -> Result<Json<Vec<JobPosition>>, StatusCode> {
-    require_permission(&user, "hr.jobs.read")?;
-    host.core
-        .people
-        .list_jobs(user.tenant_id)
-        .await
-        .map(Json)
-        .map_err(|error| hr_status("list jobs", &user, error))
-}
-
-pub async fn create_job(
-    State(host): State<Arc<AppContext>>,
-    Extension(user): Extension<AuthenticatedUser>,
-    Json(payload): Json<JobPositionUpsertRequest>,
-) -> Result<(StatusCode, Json<JobPosition>), StatusCode> {
-    require_permission(&user, "hr.jobs.manage")?;
-    let job: JobPosition = host
-        .core
-        .people
-        .create_job(user.tenant_id, payload.into(), user.account_id)
-        .await
-        .map_err(|error| hr_status("create job", &user, error))?;
-    Ok((StatusCode::CREATED, Json(job)))
-}
-
-pub async fn update_job(
-    State(host): State<Arc<AppContext>>,
-    Extension(user): Extension<AuthenticatedUser>,
-    Path(job_id): Path<Uuid>,
-    Json(payload): Json<JobPositionUpsertRequest>,
-) -> Result<Json<JobPosition>, StatusCode> {
-    require_permission(&user, "hr.jobs.manage")?;
-    host.core
-        .people
-        .update_job(user.tenant_id, job_id, payload.into(), user.account_id)
-        .await
-        .map(Json)
-        .map_err(|error| hr_status("update job", &user, error))
 }
 
 pub(crate) fn require_permission(user: &AuthenticatedUser, permission: &str) -> Result<(), StatusCode> {

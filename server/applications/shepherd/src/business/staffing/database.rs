@@ -9,7 +9,7 @@ use uuid::Uuid;
 use super::core::{
     BusinessRecordStatus, Customer, CustomerInput, CustomerWorkRecord, CustomerWorkRecordInput, ManualRateOverride,
     RateSource, ReconciliationStatus, ShiftAssignment, ShiftAssignmentInput, ShiftAssignmentStatus, StaffingCandidate,
-    StaffingEligibility, StaffingEligibilityInput, StaffingError, StaffingPriceSet, StaffingPriceSetInput,
+    StaffingEligibility, StaffingEligibilityInput, StaffingError, StaffingPriceSet, StaffingPriceSetInput, StaffingJob,
     StaffingRate, StaffingRateKind, StaffingReconciliation, StaffingRepo, StaffingShift, StaffingShiftInput,
     StaffingShiftStatus, StaffingStaff,
 };
@@ -76,6 +76,31 @@ impl TryFrom<CustomerRow> for Customer {
             address: row.address,
             time_zone: row.time_zone,
             billing_email: row.billing_email,
+            status: BusinessRecordStatus::from_code(&row.status).ok_or(StaffingError::BackendUnavailable)?,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct StaffingJobRow {
+    id: Uuid,
+    code: String,
+    name: String,
+    status: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl TryFrom<StaffingJobRow> for StaffingJob {
+    type Error = StaffingError;
+
+    fn try_from(row: StaffingJobRow) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: row.id,
+            code: row.code,
+            name: row.name,
             status: BusinessRecordStatus::from_code(&row.status).ok_or(StaffingError::BackendUnavailable)?,
             created_at: row.created_at,
             updated_at: row.updated_at,
@@ -368,6 +393,28 @@ impl StaffingRepo for StaffingDb {
             .await
             .map_err(|error: TenantDbErr| tenant_database_failure("list customers", tenant_id, error))?;
         rows.into_iter().map(Customer::try_from).collect()
+    }
+
+    async fn list_jobs(&self, tenant_id: Uuid) -> Result<Vec<StaffingJob>, StaffingError> {
+        let rows: Vec<StaffingJobRow> = self
+            .db
+            .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
+                sqlx::query_as!(
+                    StaffingJobRow,
+                    r#"
+                    SELECT id, code, name, status, created_at, updated_at
+                    FROM business_staffing_jobs
+                    WHERE tenant_id = $1
+                    ORDER BY lower(name), code
+                    "#,
+                    tenant_id,
+                )
+                .fetch_all(connection)
+                .await
+            })
+            .await
+            .map_err(|error: TenantDbErr| tenant_database_failure("list staffing jobs", tenant_id, error))?;
+        rows.into_iter().map(StaffingJob::try_from).collect()
     }
 
     async fn create_customer(
@@ -690,7 +737,7 @@ impl StaffingRepo for StaffingDb {
                     )
                     SELECT $1, $2, employee.id, job.id, $5, $6, $7, $8
                     FROM hr_employees AS employee
-                    INNER JOIN hr_jobs AS job
+                    INNER JOIN business_staffing_jobs AS job
                         ON job.tenant_id = employee.tenant_id
                        AND job.id = $4
                        AND job.status = 'active'

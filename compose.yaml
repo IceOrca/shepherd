@@ -116,7 +116,7 @@ services:
       - cargo_registry:/usr/local/cargo/registry
       - cargo_git:/usr/local/cargo/git
       - server_target:/app/shepherd_server/target
-    command: sleep infinity
+    command: [ "cargo", "run", "-p", "shepherd-runtime", "--bin", "shepherd-srv" ]
     depends_on:
       postgres-bootstrap:
         condition: service_completed_successfully
@@ -193,7 +193,7 @@ services:
       - ./client/web:/app/shepherd_client
       - client_node_modules:/app/shepherd_client/node_modules
       - npm_cache:/root/.npm
-    command: sleep infinity
+    command: [ "npm", "run", "dev", "--", "--port", "${FRONTEND_DEV_PORT:-5173}" ]
     depends_on:
       - server
 

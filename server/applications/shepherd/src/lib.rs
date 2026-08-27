@@ -2,7 +2,6 @@
 
 pub mod auth;
 mod auth_provisioning;
-pub mod authz;
 pub mod business;
 pub mod features;
 pub mod hr;
@@ -24,9 +23,7 @@ use business::staffing::{
 };
 use features::{
     organization::{core::OrganizationService, database::OrganizationDb},
-    payroll::{core::PayrollService, database::PayrollDb},
     people::{core::PeopleService, database::PeopleDb},
-    working_schedule::{core::WorkingScheduleService, database::WorkingScheduleDb},
 };
 
 pub use infra_host::ratelimiting;
@@ -35,8 +32,6 @@ pub use infra_host::ratelimiting;
 pub struct ApplicationCore {
     pub organization: Arc<OrganizationService>,
     pub people: Arc<PeopleService>,
-    pub working_schedules: Arc<WorkingScheduleService>,
-    pub payroll: Arc<PayrollService>,
     pub staffing: Arc<StaffingService>,
     pub urgent_work: Arc<UrgentWorkService>,
     pub staffing_work: Arc<StaffingWorkService>,
@@ -47,9 +42,6 @@ impl ApplicationCore {
         let organization: Arc<OrganizationService> =
             OrganizationService::new_arc(OrganizationDb::new_arc(Arc::clone(&db)));
         let people: Arc<PeopleService> = PeopleService::new_arc(PeopleDb::new_arc(Arc::clone(&db)));
-        let working_schedules: Arc<WorkingScheduleService> =
-            WorkingScheduleService::new_arc(WorkingScheduleDb::new_arc(Arc::clone(&db)));
-        let payroll: Arc<PayrollService> = PayrollService::new_arc(PayrollDb::new_arc(Arc::clone(&db)));
         let staffing: Arc<StaffingService> = StaffingService::new_arc(StaffingDb::new_arc(Arc::clone(&db)));
         let urgent_work: Arc<UrgentWorkService> = UrgentWorkService::new_arc(UrgentWorkDb::new_arc(Arc::clone(&db)));
         let staffing_work: Arc<StaffingWorkService> = StaffingWorkService::new_arc(StaffingWorkDb::new_arc(db));
@@ -57,8 +49,6 @@ impl ApplicationCore {
         Arc::new(Self {
             organization,
             people,
-            working_schedules,
-            payroll,
             staffing,
             urgent_work,
             staffing_work,

@@ -176,7 +176,7 @@ CREATE TABLE business_staffing_employee_eligibilities (
         REFERENCES hr_employees (tenant_id, branch_id, id) ON DELETE RESTRICT,
     CONSTRAINT business_staffing_employee_eligibilities_job_branch_tenant_fk
         FOREIGN KEY (tenant_id, branch_id, job_id)
-        REFERENCES hr_jobs (tenant_id, branch_id, id) ON DELETE RESTRICT,
+        REFERENCES business_staffing_jobs (tenant_id, branch_id, id) ON DELETE RESTRICT,
     CONSTRAINT business_staffing_employee_eligibilities_created_by_tenant_fk
         FOREIGN KEY (tenant_id, created_by_account_id)
         REFERENCES accounts (tenant_id, id) ON DELETE RESTRICT,
@@ -216,7 +216,7 @@ CREATE TABLE business_staffing_shifts (
         REFERENCES business_customers (tenant_id, branch_id, id) ON DELETE RESTRICT,
     CONSTRAINT business_staffing_shifts_job_branch_tenant_fk
         FOREIGN KEY (tenant_id, branch_id, job_id)
-        REFERENCES hr_jobs (tenant_id, branch_id, id) ON DELETE RESTRICT,
+        REFERENCES business_staffing_jobs (tenant_id, branch_id, id) ON DELETE RESTRICT,
     CONSTRAINT business_staffing_shifts_created_by_tenant_fk
         FOREIGN KEY (tenant_id, created_by_account_id)
         REFERENCES accounts (tenant_id, id) ON DELETE RESTRICT,
@@ -405,27 +405,6 @@ CREATE INDEX business_shift_assignments_tenant_shift_idx
 CREATE UNIQUE INDEX business_shift_assignments_urgent_report_uq
     ON business_shift_assignments (tenant_id, branch_id, urgent_work_report_id)
     WHERE urgent_work_report_id IS NOT NULL;
-
--- Payroll consumes the approved worker-pay snapshot rather than resolving the
--- employee's current compensation again.
-ALTER TABLE payroll_run_lines
-    ADD COLUMN staffing_assignment_id UUID,
-    ADD CONSTRAINT payroll_run_lines_staffing_assignment_tenant_fk
-        FOREIGN KEY (tenant_id, staffing_assignment_id)
-        REFERENCES business_shift_assignments (tenant_id, id)
-        ON DELETE RESTRICT,
-    DROP CONSTRAINT payroll_run_lines_component_valid,
-    ADD CONSTRAINT payroll_run_lines_component_valid CHECK (
-        component IN ('base', 'branch', 'time_band', 'overtime', 'staffing')
-    ),
-    ADD CONSTRAINT payroll_run_lines_source_valid CHECK (
-        (component = 'staffing' AND staffing_assignment_id IS NOT NULL AND attendance_session_id IS NULL)
-        OR (component <> 'staffing' AND staffing_assignment_id IS NULL)
-    );
-
-CREATE UNIQUE INDEX payroll_run_lines_run_staffing_assignment_uq
-    ON payroll_run_lines (tenant_id, payroll_run_id, staffing_assignment_id)
-    WHERE staffing_assignment_id IS NOT NULL;
 
 CREATE FUNCTION business_prevent_assignment_snapshot_mutation()
 RETURNS TRIGGER

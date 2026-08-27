@@ -523,7 +523,7 @@ async fn seed_staffing_business(
     .map_err(io::Error::other)?;
     let job: SeedIdRow = sqlx::query_as!(
         SeedIdRow,
-        "SELECT id FROM hr_jobs WHERE tenant_id = $1 AND branch_id = $2 AND code = 'employee'",
+        "SELECT id FROM business_staffing_jobs WHERE tenant_id = $1 AND branch_id = $2 AND code = 'employee'",
         tenant_id,
         branch_id,
     )
@@ -536,22 +536,16 @@ async fn seed_staffing_business(
         r#"
         SELECT employee.id
         FROM hr_employees AS employee
-        INNER JOIN hr_employee_assignments AS assignment
-            ON assignment.tenant_id = employee.tenant_id
-           AND assignment.employee_id = employee.id
         INNER JOIN accounts AS account
             ON account.tenant_id = employee.tenant_id
            AND account.id = employee.account_id
            AND account.primary_role_code = 'staff'
-           AND assignment.job_id = $2
-           AND assignment.date_end IS NULL
         WHERE employee.tenant_id = $1 AND employee.status = 'active'
-          AND employee.branch_id = $3
+          AND employee.branch_id = $2
         ORDER BY employee.employee_code
         LIMIT 1
         "#,
         tenant_id,
-        job_id,
         branch_id,
     )
     .fetch_one(transaction.connection())
@@ -642,40 +636,6 @@ async fn seed_staffing_business(
         owner_account_id,
     )
     .await?;
-    sqlx::query!(
-        r#"
-        INSERT INTO business_staffing_employee_eligibilities (
-            id, tenant_id, branch_id, employee_id, job_id, effective_from, notes, created_by_account_id
-        )
-        SELECT
-            MD5($1::UUID::TEXT || ':' || employee.id::TEXT || ':' || $2::UUID::TEXT)::UUID,
-            $1,
-            $5,
-            employee.id,
-            $2,
-            $3,
-            'Dữ liệu mẫu về khả năng phân công',
-            $4
-        FROM hr_employees AS employee
-        INNER JOIN account_roles AS account_role
-            ON account_role.tenant_id = employee.tenant_id
-           AND account_role.account_id = employee.account_id
-           AND account_role.role_code = 'staff'
-        WHERE employee.tenant_id = $1
-          AND employee.status = 'active'
-          AND employee.branch_id = $5
-        ON CONFLICT (tenant_id, branch_id, employee_id, job_id, effective_from) DO NOTHING
-        "#,
-        tenant_id,
-        job_id,
-        effective_date,
-        owner_account_id,
-        branch_id,
-    )
-    .execute(transaction.connection())
-    .await
-    .map_err(io::Error::other)?;
-
     let shift_id = Uuid::from_u128(tenant_id.as_u128() ^ DEV_STAFFING_SHIFT_ID_NAMESPACE);
     let assignment_id = Uuid::from_u128(tenant_id.as_u128() ^ DEV_STAFFING_ASSIGNMENT_ID_NAMESPACE);
     sqlx::query!(
@@ -983,129 +943,31 @@ async fn seed_hr_infra(
     let effective_date: NaiveDate =
         NaiveDate::from_ymd_opt(2026, 1, 1).ok_or_else(|| io::Error::other("invalid HR seed effective date"))?;
     info!(
-        "Seeding Odoo-inspired HR infra: tenant_slug={} tenant_id={} employees={} effective_date={}",
+        "Seeding current Shepherd employee profiles: tenant_slug={} tenant_id={} employees={} effective_date={}",
         tenant.slug,
         tenant_id,
         accounts.len(),
         effective_date
     );
 
-    let head_office_branch_id: Uuid = sqlx::query_scalar!(
-        r#"SELECT id FROM branches WHERE tenant_id = $1 AND code = 'head-office'"#,
+    let active_branches = sqlx::query!(
+        "SELECT id FROM branches WHERE tenant_id = $1 AND status = 'active' ORDER BY code",
         tenant_id,
     )
-    .fetch_one(transaction.connection())
+    .fetch_all(transaction.connection())
     .await
     .map_err(io::Error::other)?;
-    let north_branch_id: Uuid = sqlx::query_scalar!(
-        r#"SELECT id FROM branches WHERE tenant_id = $1 AND code = 'north-branch'"#,
-        tenant_id,
-    )
-    .fetch_one(transaction.connection())
-    .await
-    .map_err(io::Error::other)?;
-
-    let administration_department_id: Uuid = sqlx::query_scalar!(
-        r#"
-        INSERT INTO hr_departments (
-            id, tenant_id, branch_id, code, name, status, created_by_account_id, updated_by_account_id
+    for branch in active_branches {
+        ensure_dev_job(
+            &mut transaction,
+            tenant_id,
+            branch.id,
+            "employee",
+            "Nhân viên phục vụ",
+            owner_account_id,
         )
-        VALUES ($1, $2, $3, 'administration', 'Hành chính', 'active', $4, $4)
-        ON CONFLICT (tenant_id, branch_id, lower(code)) DO UPDATE
-        SET name = EXCLUDED.name,
-            status = 'active',
-            updated_at = CURRENT_TIMESTAMP,
-            updated_by_account_id = EXCLUDED.updated_by_account_id
-        RETURNING id
-        "#,
-        Uuid::new_v4(),
-        tenant_id,
-        head_office_branch_id,
-        owner_account_id,
-    )
-    .fetch_one(transaction.connection())
-    .await
-    .map_err(io::Error::other)?;
-    let operations_department_id: Uuid = sqlx::query_scalar!(
-        r#"
-        INSERT INTO hr_departments (
-            id, tenant_id, branch_id, code, name, status, created_by_account_id, updated_by_account_id
-        )
-        VALUES ($1, $2, $3, 'operations', 'Vận hành', 'active', $4, $4)
-        ON CONFLICT (tenant_id, branch_id, lower(code)) DO UPDATE
-        SET name = EXCLUDED.name,
-            status = 'active',
-            updated_at = CURRENT_TIMESTAMP,
-            updated_by_account_id = EXCLUDED.updated_by_account_id
-        RETURNING id
-        "#,
-        Uuid::new_v4(),
-        tenant_id,
-        head_office_branch_id,
-        owner_account_id,
-    )
-    .fetch_one(transaction.connection())
-    .await
-    .map_err(io::Error::other)?;
-    let north_operations_department_id: Uuid = sqlx::query_scalar!(
-        r#"
-        INSERT INTO hr_departments (
-            id, tenant_id, branch_id, code, name, status, created_by_account_id, updated_by_account_id
-        ) VALUES ($1, $2, $3, 'operations', 'Vận hành', 'active', $4, $4)
-        ON CONFLICT (tenant_id, branch_id, lower(code)) DO UPDATE
-        SET name = EXCLUDED.name, status = 'active', updated_at = CURRENT_TIMESTAMP,
-            updated_by_account_id = EXCLUDED.updated_by_account_id
-        RETURNING id
-        "#,
-        Uuid::new_v4(),
-        tenant_id,
-        north_branch_id,
-        owner_account_id,
-    )
-    .fetch_one(transaction.connection())
-    .await
-    .map_err(io::Error::other)?;
-
-    let supervisor_job_id: Uuid = ensure_dev_job(
-        &mut transaction,
-        tenant_id,
-        head_office_branch_id,
-        "supervisor",
-        "Điều phối viên",
-        operations_department_id,
-        owner_account_id,
-    )
-    .await?;
-    let employee_job_id: Uuid = ensure_dev_job(
-        &mut transaction,
-        tenant_id,
-        head_office_branch_id,
-        "employee",
-        "Nhân viên",
-        operations_department_id,
-        owner_account_id,
-    )
-    .await?;
-    let north_supervisor_job_id: Uuid = ensure_dev_job(
-        &mut transaction,
-        tenant_id,
-        north_branch_id,
-        "supervisor",
-        "Điều phối viên",
-        north_operations_department_id,
-        owner_account_id,
-    )
-    .await?;
-    let north_employee_job_id: Uuid = ensure_dev_job(
-        &mut transaction,
-        tenant_id,
-        north_branch_id,
-        "employee",
-        "Nhân viên",
-        north_operations_department_id,
-        owner_account_id,
-    )
-    .await?;
+        .await?;
+    }
 
     let mut employee_ids: HashMap<Uuid, Uuid> = HashMap::new();
     let mut employee_branch_ids: HashMap<Uuid, Uuid> = HashMap::new();
@@ -1131,18 +993,16 @@ async fn seed_hr_infra(
         .await
         .map_err(io::Error::other)?;
         let employee_code: String = account.username.to_ascii_lowercase();
-        let work_email: String = format!("{}@{}.dev", employee_code, tenant.slug);
         let employee_id: Uuid = sqlx::query_scalar!(
             r#"
             INSERT INTO hr_employees (
-                id, tenant_id, branch_id, account_id, employee_code, display_name, work_email, status, hire_date,
+                id, tenant_id, branch_id, account_id, employee_code, display_name, status, hire_date,
                 created_by_account_id, updated_by_account_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $9, $9)
+            VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8, $8)
             ON CONFLICT (tenant_id, branch_id, lower(employee_code)) DO UPDATE
             SET account_id = EXCLUDED.account_id,
                 display_name = EXCLUDED.display_name,
-                work_email = EXCLUDED.work_email,
                 status = 'active',
                 termination_date = NULL,
                 updated_at = CURRENT_TIMESTAMP,
@@ -1155,7 +1015,6 @@ async fn seed_hr_infra(
             account.id,
             employee_code,
             account.username,
-            work_email,
             effective_date,
             owner_account_id,
         )
@@ -1175,289 +1034,6 @@ async fn seed_hr_infra(
         );
     }
 
-    let find_employee_by_role_and_branch = |role: DevRole, branch_code: Option<&str>| -> Option<Uuid> {
-        accounts
-            .iter()
-            .find(|account: &&SeedAccount| {
-                account.role == role
-                    && branch_code.is_none_or(|code: &str| account.branch_code.as_deref() == Some(code))
-            })
-            .and_then(|account: &SeedAccount| employee_ids.get(&account.id).copied())
-    };
-    let executive_employee_id: Uuid = find_employee_by_role_and_branch(DevRole::ExecutiveManager, None)
-        .ok_or_else(|| io::Error::other("seeded executive manager employee was not found"))?;
-    let head_branch_manager_id: Uuid = find_employee_by_role_and_branch(DevRole::BranchManager, Some("head-office"))
-        .ok_or_else(|| io::Error::other("head office branch manager employee was not found"))?;
-    let north_branch_manager_id: Uuid = find_employee_by_role_and_branch(DevRole::BranchManager, Some("north-branch"))
-        .ok_or_else(|| io::Error::other("north branch manager employee was not found"))?;
-    let head_supervisor_id: Uuid = find_employee_by_role_and_branch(DevRole::Supervisor, Some("head-office"))
-        .ok_or_else(|| io::Error::other("head office supervisor employee was not found"))?;
-    let north_supervisor_id: Uuid = find_employee_by_role_and_branch(DevRole::Supervisor, Some("north-branch"))
-        .ok_or_else(|| io::Error::other("north branch supervisor employee was not found"))?;
-
-    sqlx::query!(
-        r#"
-        UPDATE hr_departments
-        SET manager_employee_id = CASE
-                WHEN branch_id = $2 AND code = 'administration' THEN $3
-                WHEN branch_id = $2 AND code = 'operations' THEN $4
-                WHEN branch_id = $5 THEN $6
-                ELSE manager_employee_id
-            END,
-            updated_at = CURRENT_TIMESTAMP,
-            updated_by_account_id = $7
-        WHERE tenant_id = $1
-          AND code IN ('administration', 'operations')
-        "#,
-        tenant_id,
-        head_office_branch_id,
-        executive_employee_id,
-        head_branch_manager_id,
-        north_branch_id,
-        north_branch_manager_id,
-        owner_account_id,
-    )
-    .execute(transaction.connection())
-    .await
-    .map_err(io::Error::other)?;
-
-    for account in accounts {
-        if account.role == DevRole::TenantOwner {
-            continue;
-        }
-        let employee_id: Uuid = *employee_ids
-            .get(&account.id)
-            .ok_or_else(|| io::Error::other("seeded employee account mapping was not found"))?;
-        let branch_id: Uuid = *employee_branch_ids
-            .get(&employee_id)
-            .ok_or_else(|| io::Error::other("seeded employee branch mapping was not found"))?;
-        let is_north_branch: bool = branch_id == north_branch_id;
-        let (department_id, job_id, manager_employee_id): (Uuid, Uuid, Option<Uuid>) = match account.role {
-            DevRole::TenantOwner => continue,
-            DevRole::ExecutiveManager => (administration_department_id, supervisor_job_id, None),
-            DevRole::BranchManager => (
-                if is_north_branch {
-                    north_operations_department_id
-                } else {
-                    operations_department_id
-                },
-                if is_north_branch {
-                    north_supervisor_job_id
-                } else {
-                    supervisor_job_id
-                },
-                Some(executive_employee_id),
-            ),
-            DevRole::Supervisor => (
-                if is_north_branch {
-                    north_operations_department_id
-                } else {
-                    operations_department_id
-                },
-                if is_north_branch {
-                    north_supervisor_job_id
-                } else {
-                    supervisor_job_id
-                },
-                Some(if is_north_branch {
-                    north_branch_manager_id
-                } else {
-                    head_branch_manager_id
-                }),
-            ),
-            DevRole::Staff => (
-                if is_north_branch {
-                    north_operations_department_id
-                } else {
-                    operations_department_id
-                },
-                if is_north_branch {
-                    north_employee_job_id
-                } else {
-                    employee_job_id
-                },
-                Some(if is_north_branch {
-                    north_supervisor_id
-                } else {
-                    head_supervisor_id
-                }),
-            ),
-        };
-        let assignment_id: Uuid = sqlx::query_scalar!(
-            r#"
-            INSERT INTO hr_employee_assignments (
-                id, tenant_id, employee_id, branch_id, department_id, job_id, manager_employee_id,
-                date_start, is_primary, created_by_account_id
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE, $9)
-            ON CONFLICT (tenant_id, employee_id) WHERE is_primary AND date_end IS NULL DO UPDATE
-            SET branch_id = EXCLUDED.branch_id,
-                department_id = EXCLUDED.department_id,
-                job_id = EXCLUDED.job_id,
-                manager_employee_id = EXCLUDED.manager_employee_id,
-                date_start = EXCLUDED.date_start
-            RETURNING id
-            "#,
-            Uuid::new_v4(),
-            tenant_id,
-            employee_id,
-            branch_id,
-            department_id,
-            job_id,
-            manager_employee_id,
-            effective_date,
-            owner_account_id,
-        )
-        .fetch_one(transaction.connection())
-        .await
-        .map_err(io::Error::other)?;
-        debug!(
-            "Development HR assignment ensured: tenant_slug={} employee_id={} assignment_id={} branch_id={} manager_employee_id={:?}",
-            tenant.slug, employee_id, assignment_id, branch_id, manager_employee_id
-        );
-    }
-
-    let standard_schedule_id: Uuid = sqlx::query_scalar!(
-        r#"
-        INSERT INTO hr_working_schedules (
-            id, tenant_id, branch_id, code, name, time_zone, status,
-            created_by_account_id, updated_by_account_id
-        )
-        VALUES ($1, $2, $3, 'standard-40', 'Lịch chuẩn 40 giờ', 'Asia/Ho_Chi_Minh', 'active', $4, $4)
-        ON CONFLICT (tenant_id, branch_id, lower(code)) DO UPDATE
-        SET name = EXCLUDED.name,
-            time_zone = EXCLUDED.time_zone,
-            status = 'active',
-            updated_at = CURRENT_TIMESTAMP,
-            updated_by_account_id = EXCLUDED.updated_by_account_id
-        RETURNING id
-        "#,
-        Uuid::new_v4(),
-        tenant_id,
-        head_office_branch_id,
-        owner_account_id,
-    )
-    .fetch_one(transaction.connection())
-    .await
-    .map_err(io::Error::other)?;
-    let north_standard_schedule_id: Uuid = sqlx::query_scalar!(
-        r#"
-        INSERT INTO hr_working_schedules (
-            id, tenant_id, branch_id, code, name, time_zone, status,
-            created_by_account_id, updated_by_account_id
-        )
-        VALUES ($1, $2, $3, 'standard-40', 'Lịch chuẩn 40 giờ', 'Asia/Ho_Chi_Minh', 'active', $4, $4)
-        ON CONFLICT (tenant_id, branch_id, lower(code)) DO UPDATE
-        SET name = EXCLUDED.name, time_zone = EXCLUDED.time_zone, status = 'active',
-            updated_at = CURRENT_TIMESTAMP,
-            updated_by_account_id = EXCLUDED.updated_by_account_id
-        RETURNING id
-        "#,
-        Uuid::new_v4(),
-        tenant_id,
-        north_branch_id,
-        owner_account_id,
-    )
-    .fetch_one(transaction.connection())
-    .await
-    .map_err(io::Error::other)?;
-    sqlx::query!(
-        "DELETE FROM hr_working_schedule_periods WHERE tenant_id = $1 AND schedule_id = $2",
-        tenant_id,
-        standard_schedule_id,
-    )
-    .execute(transaction.connection())
-    .await
-    .map_err(io::Error::other)?;
-    sqlx::query!(
-        "DELETE FROM hr_working_schedule_periods WHERE tenant_id = $1 AND schedule_id = $2",
-        tenant_id,
-        north_standard_schedule_id,
-    )
-    .execute(transaction.connection())
-    .await
-    .map_err(io::Error::other)?;
-    let work_start: NaiveTime =
-        NaiveTime::from_hms_opt(8, 0, 0).ok_or_else(|| io::Error::other("invalid seeded work start time"))?;
-    let work_end: NaiveTime =
-        NaiveTime::from_hms_opt(17, 0, 0).ok_or_else(|| io::Error::other("invalid seeded work end time"))?;
-    for (branch_id, schedule_id) in [
-        (head_office_branch_id, standard_schedule_id),
-        (north_branch_id, north_standard_schedule_id),
-    ] {
-        for weekday in 1_i16..=5_i16 {
-            sqlx::query!(
-                r#"
-                INSERT INTO hr_working_schedule_periods (
-                    id, tenant_id, branch_id, schedule_id, weekday, start_time, end_time,
-                    spans_next_day, unpaid_break_minutes
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, 60)
-                "#,
-                Uuid::new_v4(),
-                tenant_id,
-                branch_id,
-                schedule_id,
-                weekday,
-                work_start,
-                work_end,
-            )
-            .execute(transaction.connection())
-            .await
-            .map_err(io::Error::other)?;
-        }
-    }
-    for employee_id in employee_ids.values() {
-        let employee_branch_id: Uuid = *employee_branch_ids
-            .get(employee_id)
-            .ok_or_else(|| io::Error::other("seeded schedule employee branch was not found"))?;
-        let employee_schedule_id: Uuid = if employee_branch_id == north_branch_id {
-            north_standard_schedule_id
-        } else {
-            standard_schedule_id
-        };
-        let schedule_assignment_id: Uuid = sqlx::query_scalar!(
-            r#"
-            INSERT INTO hr_employee_schedule_assignments (
-                id, tenant_id, branch_id, employee_id, schedule_id, date_start, created_by_account_id
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT (tenant_id, branch_id, employee_id) WHERE date_end IS NULL DO UPDATE
-            SET schedule_id = EXCLUDED.schedule_id,
-                date_start = EXCLUDED.date_start
-            RETURNING id
-            "#,
-            Uuid::new_v4(),
-            tenant_id,
-            employee_branch_id,
-            employee_id,
-            employee_schedule_id,
-            effective_date,
-            owner_account_id,
-        )
-        .fetch_one(transaction.connection())
-        .await
-        .map_err(io::Error::other)?;
-        debug!(
-            "Development working schedule assignment ensured: tenant_slug={} employee_id={} schedule_id={} assignment_id={} effective_date={}",
-            tenant.slug, employee_id, employee_schedule_id, schedule_assignment_id, effective_date
-        );
-    }
-
-    seed_payroll_configuration(
-        &mut transaction,
-        DevPayrollSeedContext {
-            tenant_id,
-            tenant,
-            accounts,
-            employee_ids: &employee_ids,
-            employee_branch_ids: &employee_branch_ids,
-            owner_account_id,
-            effective_date,
-        },
-    )
-    .await?;
-
     let (completed_attendance_sessions, open_attendance_sessions): (usize, usize) = seed_attendance_sessions(
         &mut transaction,
         tenant_id,
@@ -1470,246 +1046,13 @@ async fn seed_hr_infra(
 
     transaction.commit().await.map_err(io::Error::other)?;
     info!(
-        "Development HR infra committed: tenant_slug={} tenant_id={} branches=2 employees={} assignments={} working_schedules=1 schedule_assignments={} completed_attendance_sessions={} open_attendance_sessions={}",
+        "Development employee profiles committed: tenant_slug={} tenant_id={} branches={} employees={} completed_attendance_sessions={} open_attendance_sessions={}",
         tenant.slug,
         tenant_id,
-        employee_ids.len(),
-        employee_ids.len(),
+        DEV_BRANCHES.len(),
         employee_ids.len(),
         completed_attendance_sessions,
         open_attendance_sessions
-    );
-    Ok(())
-}
-
-struct DevPayrollSeedContext<'a> {
-    tenant_id: Uuid,
-    tenant: &'a DevTenant,
-    accounts: &'a [SeedAccount],
-    employee_ids: &'a HashMap<Uuid, Uuid>,
-    employee_branch_ids: &'a HashMap<Uuid, Uuid>,
-    owner_account_id: Uuid,
-    effective_date: NaiveDate,
-}
-
-async fn seed_payroll_configuration(
-    transaction: &mut infra_postgres::TenantTransaction,
-    context: DevPayrollSeedContext<'_>,
-) -> Result<(), io::Error> {
-    let DevPayrollSeedContext {
-        tenant_id,
-        tenant,
-        accounts,
-        employee_ids,
-        employee_branch_ids,
-        owner_account_id,
-        effective_date,
-    }: DevPayrollSeedContext<'_> = context;
-    for account in accounts {
-        if account.role == DevRole::TenantOwner {
-            continue;
-        }
-        let employee_id: Uuid = employee_ids
-            .get(&account.id)
-            .copied()
-            .ok_or_else(|| io::Error::other("seeded payroll employee mapping was not found"))?;
-        let branch_id: Uuid = employee_branch_ids
-            .get(&employee_id)
-            .copied()
-            .ok_or_else(|| io::Error::other("seeded payroll employee branch was not found"))?;
-        match account.role {
-            DevRole::Staff => {
-                sqlx::query!(
-                    r#"
-                    INSERT INTO hr_employee_compensations (
-                        id, tenant_id, branch_id, employee_id, currency, pay_basis, hourly_rate,
-                        effective_from, created_by_account_id
-                    )
-                    VALUES ($1, $2, $3, $4, 'VND', 'hourly', 120000, $5, $6)
-                    ON CONFLICT (tenant_id, branch_id, employee_id, effective_from) DO UPDATE
-                    SET currency = 'VND',
-                        pay_basis = 'hourly',
-                        hourly_rate = 120000,
-                        monthly_rate = NULL,
-                        standard_monthly_hours = NULL,
-                        effective_to = NULL,
-                        created_by_account_id = EXCLUDED.created_by_account_id
-                    "#,
-                    Uuid::new_v4(),
-                    tenant_id,
-                    branch_id,
-                    employee_id,
-                    effective_date,
-                    owner_account_id,
-                )
-                .execute(transaction.connection())
-                .await
-                .map_err(io::Error::other)?;
-            }
-            DevRole::TenantOwner => continue,
-            DevRole::ExecutiveManager | DevRole::BranchManager | DevRole::Supervisor => {
-                let monthly_rate: &str = "30000000";
-                sqlx::query!(
-                    r#"
-                    INSERT INTO hr_employee_compensations (
-                        id, tenant_id, branch_id, employee_id, currency, pay_basis, monthly_rate,
-                        standard_monthly_hours, effective_from, created_by_account_id
-                    )
-                    VALUES ($1, $2, $3, $4, 'VND', 'monthly', $5::TEXT::NUMERIC, 160, $6, $7)
-                    ON CONFLICT (tenant_id, branch_id, employee_id, effective_from) DO UPDATE
-                    SET currency = 'VND',
-                        pay_basis = 'monthly',
-                        hourly_rate = NULL,
-                        monthly_rate = EXCLUDED.monthly_rate,
-                        standard_monthly_hours = 160,
-                        effective_to = NULL,
-                        created_by_account_id = EXCLUDED.created_by_account_id
-                    "#,
-                    Uuid::new_v4(),
-                    tenant_id,
-                    branch_id,
-                    employee_id,
-                    monthly_rate,
-                    effective_date,
-                    owner_account_id,
-                )
-                .execute(transaction.connection())
-                .await
-                .map_err(io::Error::other)?;
-            }
-        }
-    }
-
-    let payroll_branches = sqlx::query!(
-        r#"
-        SELECT branch.id, branch.code AS branch_code
-        FROM branches AS branch
-        WHERE branch.tenant_id = $1 AND branch.status = 'active'
-        ORDER BY branch.code
-        "#,
-        tenant_id,
-    )
-    .fetch_all(transaction.connection())
-    .await
-    .map_err(io::Error::other)?;
-    let branch_rule_count: usize = payroll_branches.len();
-    let default_payroll_branch_id: Uuid = payroll_branches
-        .first()
-        .map(|branch| branch.id)
-        .ok_or_else(|| io::Error::other("development tenant has no active payroll branch"))?;
-    for branch in payroll_branches {
-        let rule_code: String = format!("branch-{}", branch.branch_code);
-        sqlx::query!(
-            r#"
-            INSERT INTO payroll_branch_rate_rules (
-                id, tenant_id, code, name, branch_id, base_multiplier, hourly_adjustment,
-                priority, effective_from, is_active, created_by_account_id
-            )
-            VALUES ($1, $2, $3, 'Phụ cấp chi nhánh', $4, 1.15, 0, 10, $5, TRUE, $6)
-            ON CONFLICT (tenant_id, code, effective_from) DO UPDATE
-            SET name = EXCLUDED.name,
-                branch_id = EXCLUDED.branch_id,
-                employee_id = NULL,
-                base_multiplier = EXCLUDED.base_multiplier,
-                hourly_adjustment = EXCLUDED.hourly_adjustment,
-                priority = EXCLUDED.priority,
-                effective_to = NULL,
-                is_active = TRUE,
-                created_by_account_id = EXCLUDED.created_by_account_id
-            "#,
-            Uuid::new_v4(),
-            tenant_id,
-            rule_code,
-            branch.id,
-            effective_date,
-            owner_account_id,
-        )
-        .execute(transaction.connection())
-        .await
-        .map_err(io::Error::other)?;
-    }
-
-    sqlx::query!(
-        r#"
-        INSERT INTO payroll_time_band_rules (
-            id, tenant_id, branch_id, code, name, weekdays, start_time, end_time, spans_next_day,
-            premium_multiplier, hourly_adjustment, priority, effective_from, is_active,
-            created_by_account_id
-        )
-        VALUES (
-            $1, $2, $3, 'night-shift', 'Phụ cấp ca đêm', ARRAY[1, 2, 3, 4, 5, 6, 7]::SMALLINT[],
-            TIME '22:00', TIME '06:00', TRUE, 0.25, 0, 10, $4, TRUE, $5
-        )
-        ON CONFLICT (tenant_id, branch_id, code, effective_from) DO UPDATE
-        SET name = EXCLUDED.name,
-            weekdays = EXCLUDED.weekdays,
-            start_time = EXCLUDED.start_time,
-            end_time = EXCLUDED.end_time,
-            spans_next_day = EXCLUDED.spans_next_day,
-            premium_multiplier = EXCLUDED.premium_multiplier,
-            hourly_adjustment = EXCLUDED.hourly_adjustment,
-            priority = EXCLUDED.priority,
-            effective_to = NULL,
-            is_active = TRUE,
-            created_by_account_id = EXCLUDED.created_by_account_id
-        "#,
-        Uuid::new_v4(),
-        tenant_id,
-        default_payroll_branch_id,
-        effective_date,
-        owner_account_id,
-    )
-    .execute(transaction.connection())
-    .await
-    .map_err(io::Error::other)?;
-
-    for (code, name, threshold_minutes, premium_multiplier) in [
-        ("daily-ot-after-8h", "Daily overtime after 8 hours", 480_i32, "0.50"),
-        (
-            "daily-ot-after-12h",
-            "Additional overtime after 12 hours",
-            720_i32,
-            "0.50",
-        ),
-    ] {
-        sqlx::query!(
-            r#"
-            INSERT INTO payroll_overtime_rules (
-                id, tenant_id, branch_id, code, name, threshold_minutes, premium_multiplier,
-                hourly_adjustment, priority, effective_from, is_active, created_by_account_id
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7::TEXT::NUMERIC, 0, 10, $8, TRUE, $9)
-            ON CONFLICT (tenant_id, branch_id, code, effective_from) DO UPDATE
-            SET name = EXCLUDED.name,
-                threshold_minutes = EXCLUDED.threshold_minutes,
-                premium_multiplier = EXCLUDED.premium_multiplier,
-                hourly_adjustment = EXCLUDED.hourly_adjustment,
-                priority = EXCLUDED.priority,
-                effective_to = NULL,
-                is_active = TRUE,
-                created_by_account_id = EXCLUDED.created_by_account_id
-            "#,
-            Uuid::new_v4(),
-            tenant_id,
-            default_payroll_branch_id,
-            code,
-            name,
-            threshold_minutes,
-            premium_multiplier,
-            effective_date,
-            owner_account_id,
-        )
-        .execute(transaction.connection())
-        .await
-        .map_err(io::Error::other)?;
-    }
-
-    info!(
-        "Development payroll configuration ensured: tenant_slug={} tenant_id={} compensations={} branch_rules={} time_rules=1 overtime_rules=2 currency=VND",
-        tenant.slug,
-        tenant_id,
-        employee_ids.len(),
-        branch_rule_count
     );
     Ok(())
 }
@@ -1995,19 +1338,17 @@ async fn ensure_dev_job(
     branch_id: Uuid,
     code: &str,
     name: &str,
-    department_id: Uuid,
     owner_account_id: Uuid,
 ) -> Result<Uuid, io::Error> {
     sqlx::query_scalar!(
         r#"
-        INSERT INTO hr_jobs (
-            id, tenant_id, branch_id, code, name, department_id, status,
+        INSERT INTO business_staffing_jobs (
+            id, tenant_id, branch_id, code, name, status,
             created_by_account_id, updated_by_account_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $7)
+        VALUES ($1, $2, $3, $4, $5, 'active', $6, $6)
         ON CONFLICT (tenant_id, branch_id, lower(code)) DO UPDATE
         SET name = EXCLUDED.name,
-            department_id = EXCLUDED.department_id,
             status = 'active',
             updated_at = CURRENT_TIMESTAMP,
             updated_by_account_id = EXCLUDED.updated_by_account_id
@@ -2018,7 +1359,6 @@ async fn ensure_dev_job(
         branch_id,
         code,
         name,
-        department_id,
         owner_account_id,
     )
     .fetch_one(transaction.connection())
