@@ -21,6 +21,11 @@ use business::staffing::{
     urgent_work::{core::UrgentWorkService, database::UrgentWorkDb},
     work_session::{core::StaffingWorkService, database::StaffingWorkDb},
 };
+use business::finance::{
+    core::FinanceService,
+    database::FinanceDb,
+    reporting::{core::FinancialReportingService, database::FinancialReportingDb},
+};
 use features::{
     organization::{core::OrganizationService, database::OrganizationDb},
     people::{core::PeopleService, database::PeopleDb},
@@ -33,6 +38,8 @@ pub struct ApplicationCore {
     pub organization: Arc<OrganizationService>,
     pub people: Arc<PeopleService>,
     pub staffing: Arc<StaffingService>,
+    pub finance: Arc<FinanceService>,
+    pub financial_reporting: Arc<FinancialReportingService>,
     pub urgent_work: Arc<UrgentWorkService>,
     pub staffing_work: Arc<StaffingWorkService>,
 }
@@ -43,6 +50,9 @@ impl ApplicationCore {
             OrganizationService::new_arc(OrganizationDb::new_arc(Arc::clone(&db)));
         let people: Arc<PeopleService> = PeopleService::new_arc(PeopleDb::new_arc(Arc::clone(&db)));
         let staffing: Arc<StaffingService> = StaffingService::new_arc(StaffingDb::new_arc(Arc::clone(&db)));
+        let finance: Arc<FinanceService> = FinanceService::new_arc(FinanceDb::new_arc(Arc::clone(&db)));
+        let financial_reporting: Arc<FinancialReportingService> =
+            FinancialReportingService::new_arc(FinancialReportingDb::new_arc(Arc::clone(&db)));
         let urgent_work: Arc<UrgentWorkService> = UrgentWorkService::new_arc(UrgentWorkDb::new_arc(Arc::clone(&db)));
         let staffing_work: Arc<StaffingWorkService> = StaffingWorkService::new_arc(StaffingWorkDb::new_arc(db));
 
@@ -50,6 +60,8 @@ impl ApplicationCore {
             organization,
             people,
             staffing,
+            finance,
+            financial_reporting,
             urgent_work,
             staffing_work,
         })

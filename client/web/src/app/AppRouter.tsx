@@ -1,4 +1,5 @@
 import { LoaderCircle } from "lucide-react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
 import { AuthUsersPage } from "../features/admin/AuthUsersPage";
 import { AccessControlPage } from "../features/admin/AccessControlPage";
@@ -14,6 +15,23 @@ import { UrgentReconciliationPage } from "../features/operations/UrgentReconcili
 import { UrgentWorkPage } from "../features/operations/UrgentWorkPage";
 import { EmployeesPage } from "../features/people/EmployeesPage";
 import { OperationsLayout } from "../layouts/OperationsLayout";
+
+const FinancialOperationsPage = lazy(async () => {
+  const module = await import("../features/finance/FinancialOperationsPage");
+  return { default: module.FinancialOperationsPage };
+});
+const PayrollAccountingPage = lazy(async () => {
+  const module = await import("../features/finance/PayrollAccountingPage");
+  return { default: module.PayrollAccountingPage };
+});
+
+function DeferredPage({ children }: { children: ReactNode }) {
+  return (
+    <Suspense fallback={<div className="panel p-8 text-center text-sm font-semibold text-slate-500">Đang tải dữ liệu...</div>}>
+      {children}
+    </Suspense>
+  );
+}
 
 function SessionGate() {
   const auth = useAuth();
@@ -64,6 +82,8 @@ export function AppRouter() {
           <Route path="/operations/customers" element={<CustomersPage />} />
           <Route path="/operations/employees" element={<EmployeesPage />} />
           <Route path="/operations/staffing-configuration" element={<StaffingConfigurationPage />} />
+          <Route path="/operations/finance" element={<DeferredPage><FinancialOperationsPage /></DeferredPage>} />
+          <Route path="/operations/payroll-accounting" element={<DeferredPage><PayrollAccountingPage /></DeferredPage>} />
           <Route path="/operations/reconciliation" element={<UrgentReconciliationPage />} />
           <Route path="/operations/reconciliation/planned" element={<ReconciliationPage />} />
           <Route path="/admin/auth-users" element={<AuthUsersPage />} />

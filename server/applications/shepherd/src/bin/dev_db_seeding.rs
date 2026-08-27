@@ -19,10 +19,19 @@ const DEFAULT_DEV_CUSTOMER_CATALOG: &str = "/run/config/dev-customers.tsv";
 const DEV_ATTENDANCE_ID_NAMESPACE: u128 = 0xd3a7_7e00_0000_4000_8000_0000_0000_0000;
 const DEV_STAFFING_SHIFT_ID_NAMESPACE: u128 = 0x51f7_0000_0000_4000_8000_0000_0000_0000;
 const DEV_STAFFING_ASSIGNMENT_ID_NAMESPACE: u128 = 0xa551_0000_0000_4000_8000_0000_0000_0000;
+const DEV_COMPLETED_SHIFT_ID_NAMESPACE: u128 = 0x61f7_0000_0000_4000_8000_0000_0000_0000;
+const DEV_COMPLETED_ASSIGNMENT_ID_NAMESPACE: u128 = 0x6a55_0000_0000_4000_8000_0000_0000_0000;
+const DEV_COMPLETED_SESSION_ID_NAMESPACE: u128 = 0x6e55_0000_0000_4000_8000_0000_0000_0000;
+const DEV_COMPLETED_CUSTOMER_RECORD_ID_NAMESPACE: u128 = 0x6c55_0000_0000_4000_8000_0000_0000_0000;
 const DEV_URGENT_BATCH_ID_NAMESPACE: u128 = 0xb47c_0000_0000_4000_8000_0000_0000_0000;
 const DEV_URGENT_REPORT_ID_NAMESPACE: u128 = 0xc47c_0000_0000_4000_8000_0000_0000_0000;
 const DEV_URGENT_SESSION_ID_NAMESPACE: u128 = 0xd47c_0000_0000_4000_8000_0000_0000_0000;
 const DEV_URGENT_CUSTOMER_RECORD_ID_NAMESPACE: u128 = 0xe47c_0000_0000_4000_8000_0000_0000_0000;
+const DEV_COMPANY_EXPENSE_ID_NAMESPACE: u128 = 0xf100_0000_0000_4000_8000_0000_0000_0000;
+const DEV_PERSONAL_EXPENSE_ID_NAMESPACE: u128 = 0xf200_0000_0000_4000_8000_0000_0000_0000;
+const DEV_EXPENSE_REIMBURSEMENT_ID_NAMESPACE: u128 = 0xf300_0000_0000_4000_8000_0000_0000_0000;
+const DEV_SALARY_ADVANCE_ID_NAMESPACE: u128 = 0xf400_0000_0000_4000_8000_0000_0000_0000;
+const DEV_SALARY_RECOVERY_ID_NAMESPACE: u128 = 0xf500_0000_0000_4000_8000_0000_0000_0000;
 
 struct SeedIdRow {
     id: Uuid,
@@ -461,6 +470,7 @@ async fn seed_tenant(
     seed_branches(db, tenant_id, tenant, &seeded_accounts, owner.id).await?;
     seed_hr_infra(db, tenant_id, tenant, &seeded_accounts, owner.id).await?;
     seed_staffing_business(db, tenant_id, tenant, dev_customers, owner.id).await?;
+    seed_financial_workflows(db, tenant_id, tenant, owner.id).await?;
 
     info!(
         "Development tenant seed completed: tenant_slug={} tenant_id={} accounts={} branches={} employees={}",
@@ -472,6 +482,299 @@ async fn seed_tenant(
             .iter()
             .filter(|account: &&SeedAccount| account.role != DevRole::TenantOwner)
             .count()
+    );
+    Ok(())
+}
+
+async fn seed_financial_workflows(
+    db: &DatabaseAdapter,
+    tenant_id: Uuid,
+    tenant: &DevTenant,
+    owner_account_id: Uuid,
+) -> Result<(), io::Error> {
+    let mut transaction = db.begin_tenant(tenant_id).await.map_err(io::Error::other)?;
+    let branch_id: Uuid = sqlx::query_scalar!(
+        "SELECT id FROM branches WHERE tenant_id = $1 AND code = 'head-office'",
+        tenant_id,
+    )
+    .fetch_one(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    sqlx::query!(
+        r#"
+        INSERT INTO business_expense_categories (tenant_id, code, display_name)
+        VALUES
+            ($1, 'di_chuyen', 'Đi lại và vận chuyển'),
+            ($1, 'vat_tu', 'Vật tư và đồ dùng'),
+            ($1, 'tiep_khach', 'Tiếp khách'),
+            ($1, 'xu_ly_khan_cap', 'Xử lý tình huống khẩn cấp'),
+            ($1, 'khac', 'Chi phí khác')
+        ON CONFLICT (tenant_id, code) DO NOTHING
+        "#,
+        tenant_id,
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    let emergency_category_id: Uuid = sqlx::query_scalar!(
+        "SELECT id FROM business_expense_categories WHERE tenant_id = $1 AND code = 'xu_ly_khan_cap'",
+        tenant_id,
+    )
+    .fetch_one(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    let supplies_category_id: Uuid = sqlx::query_scalar!(
+        "SELECT id FROM business_expense_categories WHERE tenant_id = $1 AND code = 'vat_tu'",
+        tenant_id,
+    )
+    .fetch_one(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    let manager = sqlx::query!(
+        r#"
+        SELECT employee.id AS employee_id, employee.account_id AS "account_id!"
+        FROM hr_employees AS employee
+        JOIN accounts AS account ON account.tenant_id = employee.tenant_id AND account.id = employee.account_id
+        WHERE employee.tenant_id = $1 AND employee.branch_id = $2
+          AND employee.status = 'active' AND account.primary_role_code = 'branch_manager'
+        ORDER BY employee.employee_code LIMIT 1
+        "#,
+        tenant_id,
+        branch_id,
+    )
+    .fetch_one(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    let supervisor = sqlx::query!(
+        r#"
+        SELECT employee.id AS employee_id, employee.account_id AS "account_id!"
+        FROM hr_employees AS employee
+        JOIN accounts AS account ON account.tenant_id = employee.tenant_id AND account.id = employee.account_id
+        WHERE employee.tenant_id = $1 AND employee.branch_id = $2
+          AND employee.status = 'active' AND account.primary_role_code = 'supervisor'
+        ORDER BY employee.employee_code LIMIT 1
+        "#,
+        tenant_id,
+        branch_id,
+    )
+    .fetch_one(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    let staff = sqlx::query!(
+        r#"
+        SELECT employee.id AS employee_id, employee.account_id AS "account_id!"
+        FROM hr_employees AS employee
+        JOIN accounts AS account ON account.tenant_id = employee.tenant_id AND account.id = employee.account_id
+        WHERE employee.tenant_id = $1 AND employee.branch_id = $2
+          AND employee.status = 'active' AND account.primary_role_code = 'staff'
+        ORDER BY employee.employee_code LIMIT 1
+        "#,
+        tenant_id,
+        branch_id,
+    )
+    .fetch_one(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+
+    let company_expense_id: Uuid = Uuid::from_u128(tenant_id.as_u128() ^ DEV_COMPANY_EXPENSE_ID_NAMESPACE);
+    let personal_expense_id: Uuid = Uuid::from_u128(tenant_id.as_u128() ^ DEV_PERSONAL_EXPENSE_ID_NAMESPACE);
+    let reimbursement_id: Uuid = Uuid::from_u128(tenant_id.as_u128() ^ DEV_EXPENSE_REIMBURSEMENT_ID_NAMESPACE);
+    let salary_advance_id: Uuid = Uuid::from_u128(tenant_id.as_u128() ^ DEV_SALARY_ADVANCE_ID_NAMESPACE);
+    let recovery_id: Uuid = Uuid::from_u128(tenant_id.as_u128() ^ DEV_SALARY_RECOVERY_ID_NAMESPACE);
+
+    sqlx::query!(
+        r#"
+        INSERT INTO business_expense_claims (
+            id, tenant_id, branch_id, category_id, funding_source, incurred_on,
+            description, evidence_reference, claimed_amount, approved_amount,
+            currency, status, submitted_by_account_id, approved_by_account_id,
+            approved_at, submission_idempotency_key
+        ) VALUES (
+            $1, $2, $3, $4, 'company_funds', CURRENT_DATE - 2,
+            'Mua vật tư xử lý sự cố điện tại điểm khách hàng', 'HD-DEV-VATTU-001',
+            450000, 450000, 'VND', 'approved', $5, $6, CURRENT_TIMESTAMP, $1
+        ) ON CONFLICT (id) DO NOTHING
+        "#,
+        company_expense_id,
+        tenant_id,
+        branch_id,
+        emergency_category_id,
+        manager.account_id,
+        owner_account_id,
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    sqlx::query!(
+        r#"
+        INSERT INTO business_expense_claims (
+            id, tenant_id, branch_id, category_id, funding_source, paid_by_employee_id,
+            incurred_on, description, evidence_reference, claimed_amount, approved_amount,
+            currency, status, submitted_by_account_id, approved_by_account_id,
+            approved_at, submission_idempotency_key
+        ) VALUES (
+            $1, $2, $3, $4, 'employee_personal', $5, CURRENT_DATE - 1,
+            'Giám sát mua nước và đồ dùng bổ sung cho ca phát sinh', 'HD-DEV-CHIHO-001',
+            320000, 320000, 'VND', 'approved', $6, $7, CURRENT_TIMESTAMP, $1
+        ) ON CONFLICT (id) DO NOTHING
+        "#,
+        personal_expense_id,
+        tenant_id,
+        branch_id,
+        supplies_category_id,
+        supervisor.employee_id,
+        supervisor.account_id,
+        manager.account_id,
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    sqlx::query!(
+        r#"
+        INSERT INTO business_expense_claim_events (
+            tenant_id, branch_id, expense_claim_id, action, actor_account_id,
+            idempotency_key
+        ) VALUES
+            ($1, $2, $3, 'submitted', $4, $3),
+            ($1, $2, $3, 'approved', $5, $6),
+            ($1, $2, $7, 'submitted', $8, $7),
+            ($1, $2, $7, 'approved', $4, $9)
+        ON CONFLICT (tenant_id, actor_account_id, idempotency_key) DO NOTHING
+        "#,
+        tenant_id,
+        branch_id,
+        company_expense_id,
+        manager.account_id,
+        owner_account_id,
+        Uuid::from_u128(company_expense_id.as_u128() ^ 1),
+        personal_expense_id,
+        supervisor.account_id,
+        Uuid::from_u128(personal_expense_id.as_u128() ^ 1),
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    sqlx::query!(
+        r#"
+        INSERT INTO business_expense_reimbursements (
+            id, tenant_id, branch_id, expense_claim_id, employee_id, amount,
+            currency, payment_reference, recorded_by_account_id, idempotency_key
+        ) VALUES ($1, $2, $3, $4, $5, 100000, 'VND', 'CK-DEV-HOAN-001', $6, $1)
+        ON CONFLICT (id) DO NOTHING
+        "#,
+        reimbursement_id,
+        tenant_id,
+        branch_id,
+        personal_expense_id,
+        supervisor.employee_id,
+        manager.account_id,
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    sqlx::query!(
+        r#"
+        INSERT INTO hr_salary_advances (
+            id, tenant_id, branch_id, employee_id, requested_amount, approved_amount,
+            currency, reason, recovery_due_on, status, requested_by_account_id,
+            approved_by_account_id, disbursed_by_account_id, disbursement_reference,
+            approved_at, disbursed_at, request_idempotency_key
+        ) VALUES (
+            $1, $2, $3, $4, 1000000, 1000000, 'VND',
+            'Tạm ứng chi phí gia đình trong tháng', CURRENT_DATE + 20, 'disbursed',
+            $5, $6, $6, 'CK-DEV-TAMUNG-001', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, $1
+        ) ON CONFLICT (id) DO NOTHING
+        "#,
+        salary_advance_id,
+        tenant_id,
+        branch_id,
+        staff.employee_id,
+        staff.account_id,
+        manager.account_id,
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    sqlx::query!(
+        r#"
+        INSERT INTO hr_salary_advance_events (
+            tenant_id, branch_id, salary_advance_id, action, actor_account_id,
+            idempotency_key
+        ) VALUES
+            ($1, $2, $3, 'requested', $4, $3),
+            ($1, $2, $3, 'approved', $5, $6),
+            ($1, $2, $3, 'disbursed', $5, $7)
+        ON CONFLICT (tenant_id, actor_account_id, idempotency_key) DO NOTHING
+        "#,
+        tenant_id,
+        branch_id,
+        salary_advance_id,
+        staff.account_id,
+        manager.account_id,
+        Uuid::from_u128(salary_advance_id.as_u128() ^ 1),
+        Uuid::from_u128(salary_advance_id.as_u128() ^ 2),
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    sqlx::query!(
+        r#"
+        INSERT INTO hr_salary_advance_recoveries (
+            id, tenant_id, branch_id, salary_advance_id, employee_id, amount,
+            currency, recovery_source, settlement_reference, recorded_by_account_id,
+            idempotency_key
+        ) VALUES (
+            $1, $2, $3, $4, $5, 250000, 'VND', 'payroll_deduction',
+            'BANG-LUONG-DEV-001', $6, $1
+        ) ON CONFLICT (id) DO NOTHING
+        "#,
+        recovery_id,
+        tenant_id,
+        branch_id,
+        salary_advance_id,
+        staff.employee_id,
+        manager.account_id,
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+
+    sqlx::query!(
+        r#"
+        INSERT INTO hr_employee_salary_rates (
+            id, tenant_id, branch_id, employee_id, monthly_amount, currency,
+            effective_from, created_by_account_id, idempotency_key
+        )
+        SELECT gen_random_uuid(), employee.tenant_id, employee.branch_id, employee.id,
+               CASE account.primary_role_code
+                   WHEN 'executive_manager' THEN 30000000
+                   WHEN 'branch_manager' THEN 22000000
+                   WHEN 'supervisor' THEN 14000000
+               END,
+               'VND', DATE '2026-01-01', $2, gen_random_uuid()
+        FROM hr_employees AS employee
+        JOIN accounts AS account
+          ON account.tenant_id = employee.tenant_id AND account.id = employee.account_id
+        WHERE employee.tenant_id = $1
+          AND employee.status = 'active'
+          AND account.primary_role_code IN ('executive_manager', 'branch_manager', 'supervisor')
+        ON CONFLICT (tenant_id, branch_id, employee_id, effective_from) DO NOTHING
+        "#,
+        tenant_id,
+        owner_account_id,
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+
+    transaction.commit().await.map_err(io::Error::other)?;
+    info!(
+        tenant_slug = tenant.slug,
+        tenant_id = %tenant_id,
+        company_expense_id = %company_expense_id,
+        personal_expense_id = %personal_expense_id,
+        salary_advance_id = %salary_advance_id,
+        "Development financial workflows committed"
     );
     Ok(())
 }
@@ -617,6 +920,10 @@ async fn seed_staffing_business(
     let karaoke_a_id: Uuid = *head_customer_ids
         .first()
         .ok_or_else(|| io::Error::other("head office development customer was not found"))?;
+    let karaoke_a: &DevCustomer = dev_customers
+        .iter()
+        .find(|customer: &&DevCustomer| customer.branch_code == "head-office")
+        .ok_or_else(|| io::Error::other("head office development customer definition was not found"))?;
     let karaoke_b_id: Uuid = *head_customer_ids
         .get(1)
         .ok_or_else(|| io::Error::other("second head office development customer was not found"))?;
@@ -678,6 +985,178 @@ async fn seed_staffing_business(
         employee_id,
         customer_bill_rate_id,
         worker_pay_rate_id,
+        owner_account_id,
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+
+    let historical_employee: SeedIdRow = sqlx::query_as!(
+        SeedIdRow,
+        r#"
+        SELECT employee.id
+        FROM hr_employees AS employee
+        INNER JOIN accounts AS account
+            ON account.tenant_id = employee.tenant_id
+           AND account.id = employee.account_id
+           AND account.primary_role_code = 'staff'
+        WHERE employee.tenant_id = $1 AND employee.status = 'active'
+          AND employee.branch_id = $2
+        ORDER BY employee.employee_code
+        OFFSET 1 LIMIT 1
+        "#,
+        tenant_id,
+        branch_id,
+    )
+    .fetch_one(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    let historical_employee_id: Uuid = historical_employee.id;
+    let historical_staff_account_id: Uuid = sqlx::query_scalar!(
+        r#"SELECT account_id AS "account_id!" FROM hr_employees WHERE tenant_id = $1 AND id = $2"#,
+        tenant_id,
+        historical_employee_id,
+    )
+    .fetch_one(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    let historical_bill_rate_id: Uuid = sqlx::query_scalar!(
+        r#"
+        SELECT id FROM business_staffing_rates
+        WHERE tenant_id = $1 AND branch_id = $2 AND customer_id = $3
+          AND employee_id IS NULL AND rate_kind = 'customer_bill'
+          AND code = $4 AND effective_from = $5
+        "#,
+        tenant_id,
+        branch_id,
+        karaoke_a_id,
+        format!("{}-default-bill", karaoke_a.code),
+        effective_date,
+    )
+    .fetch_one(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    let historical_pay_rate_id: Uuid = sqlx::query_scalar!(
+        r#"
+        SELECT id FROM business_staffing_rates
+        WHERE tenant_id = $1 AND branch_id = $2 AND customer_id = $3
+          AND employee_id IS NULL AND rate_kind = 'worker_pay'
+          AND code = $4 AND effective_from = $5
+        "#,
+        tenant_id,
+        branch_id,
+        karaoke_a_id,
+        format!("{}-default-pay", karaoke_a.code),
+        effective_date,
+    )
+    .fetch_one(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    let completed_shift_id: Uuid = Uuid::from_u128(tenant_id.as_u128() ^ DEV_COMPLETED_SHIFT_ID_NAMESPACE);
+    let completed_assignment_id: Uuid = Uuid::from_u128(tenant_id.as_u128() ^ DEV_COMPLETED_ASSIGNMENT_ID_NAMESPACE);
+    let completed_session_id: Uuid = Uuid::from_u128(tenant_id.as_u128() ^ DEV_COMPLETED_SESSION_ID_NAMESPACE);
+    let completed_customer_record_id: Uuid =
+        Uuid::from_u128(tenant_id.as_u128() ^ DEV_COMPLETED_CUSTOMER_RECORD_ID_NAMESPACE);
+    sqlx::query!(
+        r#"
+        INSERT INTO business_staffing_shifts (
+            id, tenant_id, branch_id, customer_id, job_id, starts_at, ends_at,
+            required_workers, status, notes, created_by_account_id, updated_by_account_id
+        ) VALUES (
+            $1, $2, $3, $4, $5,
+            (((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Ho_Chi_Minh')::DATE - 1) + TIME '18:00')
+                AT TIME ZONE 'Asia/Ho_Chi_Minh',
+            ((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Ho_Chi_Minh')::DATE + TIME '00:00')
+                AT TIME ZONE 'Asia/Ho_Chi_Minh',
+            1, 'completed', 'Ca đã đối soát mẫu dùng cho báo cáo lương và tài chính', $6, $6
+        )
+        ON CONFLICT (id) DO NOTHING
+        "#,
+        completed_shift_id,
+        tenant_id,
+        branch_id,
+        karaoke_a_id,
+        job_id,
+        owner_account_id,
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    sqlx::query!(
+        r#"
+        INSERT INTO business_shift_assignments (
+            id, tenant_id, branch_id, shift_id, employee_id,
+            customer_bill_rate_id, worker_pay_rate_id, rate_source, currency,
+            bill_hourly_rate_snapshot, worker_hourly_rate_snapshot, status,
+            worked_seconds, customer_amount, worker_amount, margin_amount,
+            approved_at, approved_by_account_id, created_by_account_id
+        ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, 'configured', 'VND',
+            150000, 120000, 'approved', 21600, 900000, 720000, 180000,
+            CURRENT_TIMESTAMP, $8, $8
+        )
+        ON CONFLICT (id) DO NOTHING
+        "#,
+        completed_assignment_id,
+        tenant_id,
+        branch_id,
+        completed_shift_id,
+        historical_employee_id,
+        historical_bill_rate_id,
+        historical_pay_rate_id,
+        owner_account_id,
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    sqlx::query!(
+        r#"
+        INSERT INTO business_shift_work_sessions (
+            id, tenant_id, branch_id, assignment_id, employee_id,
+            started_at, ended_at, start_idempotency_key, end_idempotency_key,
+            started_by_account_id, ended_by_account_id
+        ) VALUES (
+            $1, $2, $3, $4, $5,
+            (((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Ho_Chi_Minh')::DATE - 1) + TIME '18:00')
+                AT TIME ZONE 'Asia/Ho_Chi_Minh',
+            ((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Ho_Chi_Minh')::DATE + TIME '00:00')
+                AT TIME ZONE 'Asia/Ho_Chi_Minh',
+            $1, $6, $7, $7
+        )
+        ON CONFLICT (id) DO NOTHING
+        "#,
+        completed_session_id,
+        tenant_id,
+        branch_id,
+        completed_assignment_id,
+        historical_employee_id,
+        completed_customer_record_id,
+        historical_staff_account_id,
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    sqlx::query!(
+        r#"
+        INSERT INTO business_customer_work_records (
+            id, tenant_id, branch_id, assignment_id, confirmed_customer_id,
+            confirmed_started_at, confirmed_ended_at, customer_reference,
+            notes, recorded_by_account_id
+        ) VALUES (
+            $1, $2, $3, $4, $5,
+            (((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Ho_Chi_Minh')::DATE - 1) + TIME '18:00')
+                AT TIME ZONE 'Asia/Ho_Chi_Minh',
+            ((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Ho_Chi_Minh')::DATE + TIME '00:00')
+                AT TIME ZONE 'Asia/Ho_Chi_Minh',
+            'DEV-DA-DOI-SOAT-001', 'Bằng chứng khách hàng mẫu đã được đối soát', $6
+        )
+        ON CONFLICT (id) DO NOTHING
+        "#,
+        completed_customer_record_id,
+        tenant_id,
+        branch_id,
+        completed_assignment_id,
+        karaoke_a_id,
         owner_account_id,
     )
     .execute(transaction.connection())

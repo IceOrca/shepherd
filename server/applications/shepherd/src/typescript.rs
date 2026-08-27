@@ -35,6 +35,23 @@ use crate::{
             host::ShiftWorkActionRequest,
         },
     },
+    business::finance::{
+        core::{
+            ExpenseCategory, ExpenseClaim, ExpenseClaimStatus, ExpenseFundingSource, SalaryAdvance,
+            SalaryAdvanceRecoverySource, SalaryAdvanceStatus,
+        },
+        host::{
+            ExpenseClaimCreateRequest, FinancialDecisionRequest, FinancialRejectionRequest, FinancialSettlementRequest,
+            SalaryAdvanceCreateRequest, SalaryAdvanceDisbursementRequest, SalaryAdvanceRecoveryRequest,
+        },
+        reporting::{
+            core::{
+                EmployeeSalaryConfiguration, OperatingFinancialLine, OperatingFinancialReport, PayrollLine,
+                PayrollReport,
+            },
+            host::EmployeeSalaryRateCreateRequest,
+        },
+    },
     features::{
         organization::core::BranchSummary,
         people::{
@@ -102,6 +119,26 @@ pub fn contract() -> String {
     push::<ShiftWorkSession>(&mut output, &config);
     push::<OwnStaffingAssignment>(&mut output, &config);
     push::<ShiftWorkActionRequest>(&mut output, &config);
+    push::<ExpenseFundingSource>(&mut output, &config);
+    push::<ExpenseClaimStatus>(&mut output, &config);
+    push::<SalaryAdvanceRecoverySource>(&mut output, &config);
+    push::<SalaryAdvanceStatus>(&mut output, &config);
+    push::<ExpenseCategory>(&mut output, &config);
+    push::<ExpenseClaim>(&mut output, &config);
+    push::<SalaryAdvance>(&mut output, &config);
+    push::<ExpenseClaimCreateRequest>(&mut output, &config);
+    push::<FinancialDecisionRequest>(&mut output, &config);
+    push::<FinancialRejectionRequest>(&mut output, &config);
+    push::<FinancialSettlementRequest>(&mut output, &config);
+    push::<SalaryAdvanceCreateRequest>(&mut output, &config);
+    push::<SalaryAdvanceDisbursementRequest>(&mut output, &config);
+    push::<SalaryAdvanceRecoveryRequest>(&mut output, &config);
+    push::<EmployeeSalaryConfiguration>(&mut output, &config);
+    push::<EmployeeSalaryRateCreateRequest>(&mut output, &config);
+    push::<OperatingFinancialLine>(&mut output, &config);
+    push::<OperatingFinancialReport>(&mut output, &config);
+    push::<PayrollLine>(&mut output, &config);
+    push::<PayrollReport>(&mut output, &config);
     push::<UrgentWorkStatus>(&mut output, &config);
     push::<UrgentWorkActionSource>(&mut output, &config);
     push::<UrgentWorkCustomer>(&mut output, &config);

@@ -1,7 +1,9 @@
 import {
   BriefcaseBusiness,
+  BarChart3,
   Building2,
   CalendarClock,
+  CircleDollarSign,
   ChevronRight,
   CircleUserRound,
   LayoutDashboard,
@@ -37,6 +39,7 @@ interface NavigationItem {
   to?: string;
   icon: typeof LayoutDashboard;
   permission?: string;
+  anyPermissions?: string[];
   soon?: boolean;
 }
 
@@ -77,6 +80,27 @@ const navigation: NavigationItem[] = [
     to: "/operations/staffing-configuration",
     icon: Settings2,
     permission: "business.staffing_rates.read",
+  },
+  {
+    label: "Chi phí và tạm ứng",
+    to: "/operations/finance",
+    icon: CircleDollarSign,
+    anyPermissions: [
+      "business.expenses.self.read",
+      "business.expenses.read",
+      "hr.salary_advances.self.read",
+      "hr.salary_advances.read",
+    ],
+  },
+  {
+    label: "Lương và báo cáo",
+    to: "/operations/payroll-accounting",
+    icon: BarChart3,
+    anyPermissions: [
+      "finance.operating_reports.read",
+      "hr.payroll.read",
+      "hr.salary_rates.read",
+    ],
   },
   {
     label: "Nhân sự",
@@ -142,6 +166,20 @@ function pageTitle(pathname: string): { title: string; description: string } {
     };
   }
 
+  if (pathname === "/operations/finance") {
+    return {
+      title: "Chi phí và tạm ứng",
+      description: "Ghi nhận chi phí, hoàn tiền nhân viên và theo dõi thu hồi tạm ứng lương.",
+    };
+  }
+
+  if (pathname === "/operations/payroll-accounting") {
+    return {
+      title: "Lương và báo cáo tài chính",
+      description: "Tính lương, doanh thu, chi phí và lợi nhuận theo khoảng ngày tùy chọn.",
+    };
+  }
+
   if (pathname === "/operations/employees") {
     return {
       title: "Hồ sơ nhân sự",
@@ -196,8 +234,10 @@ export function OperationsLayout() {
     return null;
   }
 
-  const visibleNavigation = navigation.filter(
-    (item) => !item.permission || profile.permissions.includes(item.permission),
+  const visibleNavigation = navigation.filter((item: NavigationItem): boolean =>
+    (!item.permission || profile.permissions.includes(item.permission))
+    && (!item.anyPermissions
+      || item.anyPermissions.some((permission: string): boolean => profile.permissions.includes(permission))),
   );
   const branches: BranchSummary[] = branchesQuery.data ?? [];
   const activeBranch: BranchSummary | undefined = branches.find(

@@ -1,0 +1,279 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  AlertTriangle,
+  BarChart3,
+  CalendarDays,
+  CircleDollarSign,
+  LoaderCircle,
+  Save,
+  Settings2,
+  TrendingDown,
+  TrendingUp,
+  UsersRound,
+} from "lucide-react";
+import { useMemo, useState, type FormEvent } from "react";
+import type {
+  EmployeeSalaryConfiguration,
+  EmployeeSalaryRateCreateRequest,
+  OperatingFinancialLine,
+  OperatingFinancialReport,
+  PayrollLine,
+  PayrollReport,
+  PermissionCode,
+} from "../../api/generated/contracts";
+import { friendlyApiError } from "../../shared/api/client";
+import { roleLabel } from "../../shared/lib/format";
+import { useAuth } from "../auth/AuthProvider";
+import { useOperationsScope } from "../operations/OperationsScopeProvider";
+import {
+  createEmployeeSalaryRate,
+  financeQueryKeys,
+  getOperatingReportForBranch,
+  getPayrollReportForBranch,
+  listSalaryConfigurations,
+} from "./api";
+
+type ReportTab = "financial" | "payroll" | "salary";
+type ScopeMode = "tenant" | "active_branch";
+
+function localDate(date: Date): string {
+  const offset: number = date.getTimezoneOffset();
+  return new Date(date.getTime() - offset * 60_000).toISOString().slice(0, 10);
+}
+
+function currentMonthRange(): { start: string; end: string } {
+  const now = new Date();
+  return {
+    start: localDate(new Date(now.getFullYear(), now.getMonth(), 1)),
+    end: localDate(new Date(now.getFullYear(), now.getMonth() + 1, 0)),
+  };
+}
+
+function scaledAmount(value: string): bigint {
+  const negative: boolean = value.startsWith("-");
+  const normalized: string = negative ? value.slice(1) : value;
+  const [whole = "0", fraction = ""] = normalized.split(".");
+  const amount: bigint = BigInt(whole || "0") * 10_000n
+    + BigInt(fraction.padEnd(4, "0").slice(0, 4) || "0");
+  return negative ? -amount : amount;
+}
+
+function decimalAmount(value: bigint): string {
+  const negative: boolean = value < 0n;
+  const absolute: bigint = negative ? -value : value;
+  const whole: string = (absolute / 10_000n).toString();
+  const fraction: string = (absolute % 10_000n).toString().padStart(4, "0");
+  return `${negative ? "-" : ""}${whole}.${fraction}`;
+}
+
+function formatMoney(value: string, currency: string): string {
+  const amount: bigint = scaledAmount(value);
+  const negative: boolean = amount < 0n;
+  const absolute: bigint = negative ? -amount : amount;
+  const whole: string = (absolute / 10_000n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  const fraction: string = (absolute % 10_000n).toString().padStart(4, "0").replace(/0+$/, "");
+  return `${negative ? "-" : ""}${whole}${fraction ? `,${fraction}` : ""} ${currency}`;
+}
+
+function sumByCurrency<T>(rows: T[], amount: (row: T) => string, currency: (row: T) => string): string {
+  const totals = new Map<string, bigint>();
+  for (const row of rows) {
+    const code: string = currency(row);
+    totals.set(code, (totals.get(code) ?? 0n) + scaledAmount(amount(row)));
+  }
+  return totals.size === 0
+    ? "0 VND"
+    : [...totals.entries()].map(([code, total]): string => formatMoney(decimalAmount(total), code)).join(" · ");
+}
+
+function aggregateFinancialLines(reports: OperatingFinancialReport[]): OperatingFinancialLine[] {
+  const fields: Array<keyof Omit<OperatingFinancialLine, "currency">> = [
+    "staffing_revenue",
+    "staffing_worker_cost",
+    "coordination_salary_cost",
+    "approved_business_expense",
+    "operating_cost",
+    "operating_profit",
+    "reimbursed_cash",
+    "salary_advance_disbursed",
+    "salary_advance_recovered",
+    "outstanding_expense_reimbursement",
+    "outstanding_salary_advance",
+  ];
+  const totals = new Map<string, Record<string, bigint>>();
+  for (const line of reports.flatMap((report): OperatingFinancialLine[] => report.lines)) {
+    const current: Record<string, bigint> = totals.get(line.currency) ?? {};
+    for (const field of fields) {
+      current[field] = (current[field] ?? 0n) + scaledAmount(line[field]);
+    }
+    totals.set(line.currency, current);
+  }
+  return [...totals.entries()].map(([currency, values]): OperatingFinancialLine => ({
+    currency,
+    staffing_revenue: decimalAmount(values.staffing_revenue ?? 0n),
+    staffing_worker_cost: decimalAmount(values.staffing_worker_cost ?? 0n),
+    coordination_salary_cost: decimalAmount(values.coordination_salary_cost ?? 0n),
+    approved_business_expense: decimalAmount(values.approved_business_expense ?? 0n),
+    operating_cost: decimalAmount(values.operating_cost ?? 0n),
+    operating_profit: decimalAmount(values.operating_profit ?? 0n),
+    reimbursed_cash: decimalAmount(values.reimbursed_cash ?? 0n),
+    salary_advance_disbursed: decimalAmount(values.salary_advance_disbursed ?? 0n),
+    salary_advance_recovered: decimalAmount(values.salary_advance_recovered ?? 0n),
+    outstanding_expense_reimbursement: decimalAmount(values.outstanding_expense_reimbursement ?? 0n),
+    outstanding_salary_advance: decimalAmount(values.outstanding_salary_advance ?? 0n),
+  }));
+}
+
+function hours(seconds: number): string {
+  return `${(seconds / 3_600).toLocaleString("vi-VN", { maximumFractionDigits: 2 })} giờ`;
+}
+
+export function PayrollAccountingPage(): React.JSX.Element {
+  const auth: ReturnType<typeof useAuth> = useAuth();
+  const scope: ReturnType<typeof useOperationsScope> = useOperationsScope();
+  const queryClient = useQueryClient();
+  const permissions: PermissionCode[] = auth.profile?.permissions ?? [];
+  const canReadFinancial: boolean = permissions.includes("finance.operating_reports.read");
+  const canReadPayroll: boolean = permissions.includes("hr.payroll.read");
+  const canReadSalary: boolean = permissions.includes("hr.salary_rates.read");
+  const canManageSalary: boolean = permissions.includes("hr.salary_rates.manage");
+  const initialRange = useMemo(currentMonthRange, []);
+  const [startDate, setStartDate] = useState<string>(initialRange.start);
+  const [endDate, setEndDate] = useState<string>(initialRange.end);
+  const [scopeMode, setScopeMode] = useState<ScopeMode>("active_branch");
+  const [tab, setTab] = useState<ReportTab>(canReadFinancial ? "financial" : "payroll");
+  const [salaryDraft, setSalaryDraft] = useState<EmployeeSalaryRateCreateRequest>({
+    employee_id: "",
+    monthly_amount: "",
+    currency: "VND",
+    effective_from: localDate(new Date()),
+  });
+  const [feedback, setFeedback] = useState<string | null>(null);
+
+  const activeBranchId: string | null = auth.profile?.active_branch_id ?? null;
+  const reportBranchIds: string[] = scopeMode === "tenant"
+    ? scope.branches.map((branch): string => branch.id)
+    : activeBranchId ? [activeBranchId] : [];
+  const reportScopeKey: string = reportBranchIds.join(",") || "none";
+  const validRange: boolean = Boolean(startDate && endDate && startDate <= endDate);
+  const activeTab: ReportTab = tab === "financial" && !canReadFinancial
+    ? canReadPayroll ? "payroll" : "salary"
+    : tab === "payroll" && !canReadPayroll
+      ? canReadFinancial ? "financial" : "salary"
+      : tab === "salary" && !canReadSalary
+        ? canReadFinancial ? "financial" : "payroll"
+        : tab;
+
+  const financialQuery = useQuery({
+    queryKey: [...financeQueryKeys.operatingReport, reportScopeKey, startDate, endDate],
+    queryFn: (): Promise<OperatingFinancialReport[]> => Promise.all(
+      reportBranchIds.map((branchId: string): Promise<OperatingFinancialReport> =>
+        getOperatingReportForBranch(branchId, startDate, endDate)),
+    ),
+    enabled: canReadFinancial && validRange && reportBranchIds.length > 0,
+  });
+  const payrollQuery = useQuery({
+    queryKey: [...financeQueryKeys.payrollReport, reportScopeKey, startDate, endDate],
+    queryFn: (): Promise<PayrollReport[]> => Promise.all(
+      reportBranchIds.map((branchId: string): Promise<PayrollReport> =>
+        getPayrollReportForBranch(branchId, startDate, endDate)),
+    ),
+    enabled: canReadPayroll && validRange && reportBranchIds.length > 0,
+  });
+  const salaryQuery = useQuery({
+    queryKey: [...financeQueryKeys.salaryConfigurations, activeBranchId],
+    queryFn: listSalaryConfigurations,
+    enabled: canReadSalary && activeBranchId !== null,
+  });
+  const salaryMutation = useMutation({
+    mutationFn: createEmployeeSalaryRate,
+    onSuccess: (record: EmployeeSalaryConfiguration): void => {
+      void queryClient.invalidateQueries({ queryKey: financeQueryKeys.salaryConfigurations });
+      void queryClient.invalidateQueries({ queryKey: financeQueryKeys.payrollReport });
+      void queryClient.invalidateQueries({ queryKey: financeQueryKeys.operatingReport });
+      setFeedback(`Đã tạo mức lương mới cho ${record.employee_name}.`);
+      setSalaryDraft((current): EmployeeSalaryRateCreateRequest => ({
+        ...current,
+        employee_id: "",
+        monthly_amount: "",
+      }));
+    },
+  });
+
+  const financialLines: OperatingFinancialLine[] = aggregateFinancialLines(financialQuery.data ?? []);
+  const payrollLines: PayrollLine[] = (payrollQuery.data ?? []).flatMap((report): PayrollLine[] => report.lines);
+  const overlapCount: number = payrollLines.reduce(
+    (total: number, line: PayrollLine): number => total + line.attendance_overlap_count,
+    0,
+  );
+
+  if (!canReadFinancial && !canReadPayroll && !canReadSalary) {
+    return <section className="panel p-8 text-center font-bold text-slate-900">Bạn không có quyền xem lương và báo cáo tài chính.</section>;
+  }
+
+  return (
+    <section className="space-y-5">
+      <div className="panel grid gap-4 p-5 lg:grid-cols-[1fr_1fr_1.2fr]">
+        <label className="text-sm font-semibold text-slate-700">
+          Từ ngày
+          <input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" onChange={(event): void => setStartDate(event.target.value)} type="date" value={startDate} />
+        </label>
+        <label className="text-sm font-semibold text-slate-700">
+          Đến ngày
+          <input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" onChange={(event): void => setEndDate(event.target.value)} type="date" value={endDate} />
+        </label>
+        <label className="text-sm font-semibold text-slate-700">
+          Phạm vi báo cáo
+          <select className="mt-2 min-h-11 w-full rounded-xl border-slate-300" onChange={(event): void => setScopeMode(event.target.value as ScopeMode)} value={scopeMode}>
+            <option value="active_branch">Chi nhánh đang chọn</option>
+            <option value="tenant">Toàn doanh nghiệp</option>
+          </select>
+        </label>
+        {!validRange ? <p className="text-sm font-semibold text-red-600 lg:col-span-3">Khoảng ngày báo cáo không hợp lệ.</p> : null}
+      </div>
+
+      <div className="panel flex flex-wrap gap-2 p-2">
+        {canReadFinancial ? <button className={`flex-1 rounded-xl px-4 py-3 text-sm font-bold ${activeTab === "financial" ? "bg-slate-950 text-white" : "text-slate-600 hover:bg-slate-100"}`} onClick={(): void => setTab("financial")} type="button"><BarChart3 className="mr-2 inline size-4" />Tài chính vận hành</button> : null}
+        {canReadPayroll ? <button className={`flex-1 rounded-xl px-4 py-3 text-sm font-bold ${activeTab === "payroll" ? "bg-slate-950 text-white" : "text-slate-600 hover:bg-slate-100"}`} onClick={(): void => setTab("payroll")} type="button"><UsersRound className="mr-2 inline size-4" />Bảng lương</button> : null}
+        {canReadSalary ? <button className={`flex-1 rounded-xl px-4 py-3 text-sm font-bold ${activeTab === "salary" ? "bg-slate-950 text-white" : "text-slate-600 hover:bg-slate-100"}`} onClick={(): void => setTab("salary")} type="button"><Settings2 className="mr-2 inline size-4" />Cấu hình lương tháng</button> : null}
+      </div>
+
+      {feedback ? <p className="rounded-xl bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">{feedback}</p> : null}
+
+      {activeTab === "financial" && canReadFinancial ? (
+        financialQuery.isPending ? <div className="panel grid min-h-64 place-items-center"><LoaderCircle className="size-7 animate-spin text-blue-600" /></div>
+          : financialQuery.error ? <div className="panel p-5 text-sm text-red-700">{friendlyApiError(financialQuery.error, "Không thể tính báo cáo tài chính.")}</div>
+            : <>
+              <div className="grid gap-4 lg:grid-cols-3">
+                <div className="panel flex items-center gap-4 p-5"><div className="grid size-12 place-items-center rounded-2xl bg-blue-50 text-blue-700"><TrendingUp className="size-6" /></div><div><p className="text-sm font-semibold text-slate-500">Doanh thu đã đối soát</p><p className="mt-1 text-xl font-black text-slate-950">{sumByCurrency(financialLines, (line): string => line.staffing_revenue, (line): string => line.currency)}</p></div></div>
+                <div className="panel flex items-center gap-4 p-5"><div className="grid size-12 place-items-center rounded-2xl bg-amber-50 text-amber-700"><TrendingDown className="size-6" /></div><div><p className="text-sm font-semibold text-slate-500">Tổng chi phí vận hành</p><p className="mt-1 text-xl font-black text-slate-950">{sumByCurrency(financialLines, (line): string => line.operating_cost, (line): string => line.currency)}</p></div></div>
+                <div className="panel flex items-center gap-4 p-5"><div className="grid size-12 place-items-center rounded-2xl bg-emerald-50 text-emerald-700"><CircleDollarSign className="size-6" /></div><div><p className="text-sm font-semibold text-slate-500">Lợi nhuận vận hành</p><p className="mt-1 text-xl font-black text-slate-950">{sumByCurrency(financialLines, (line): string => line.operating_profit, (line): string => line.currency)}</p></div></div>
+              </div>
+              <div className="panel overflow-x-auto">
+                <table className="min-w-full text-sm"><thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-5 py-4">Chi nhánh</th><th className="px-5 py-4">Doanh thu</th><th className="px-5 py-4">Tiền công Staff</th><th className="px-5 py-4">Lương quản lý</th><th className="px-5 py-4">Chi phí khác</th><th className="px-5 py-4">Lợi nhuận</th></tr></thead>
+                  <tbody className="divide-y divide-slate-100">{(financialQuery.data ?? []).flatMap((report: OperatingFinancialReport): React.JSX.Element[] => report.lines.map((line: OperatingFinancialLine): React.JSX.Element => <tr key={`${report.branch_id}:${line.currency}`}><td className="px-5 py-4 font-bold text-slate-900">{report.branch_name}</td><td className="px-5 py-4">{formatMoney(line.staffing_revenue, line.currency)}</td><td className="px-5 py-4">{formatMoney(line.staffing_worker_cost, line.currency)}</td><td className="px-5 py-4">{formatMoney(line.coordination_salary_cost, line.currency)}</td><td className="px-5 py-4">{formatMoney(line.approved_business_expense, line.currency)}</td><td className={`px-5 py-4 font-black ${scaledAmount(line.operating_profit) < 0n ? "text-red-700" : "text-emerald-700"}`}>{formatMoney(line.operating_profit, line.currency)}</td></tr>))}</tbody>
+                </table>
+              </div>
+              <div className="grid gap-4 lg:grid-cols-2">{financialLines.map((line: OperatingFinancialLine): React.JSX.Element => <div className="panel p-5" key={line.currency}><h3 className="font-black text-slate-950">Dòng tiền và số dư · {line.currency}</h3><dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2"><div><dt className="text-slate-500">Đã hoàn chi hộ trong kỳ</dt><dd className="font-bold">{formatMoney(line.reimbursed_cash, line.currency)}</dd></div><div><dt className="text-slate-500">Còn phải hoàn cuối kỳ</dt><dd className="font-bold text-amber-700">{formatMoney(line.outstanding_expense_reimbursement, line.currency)}</dd></div><div><dt className="text-slate-500">Đã chi tạm ứng trong kỳ</dt><dd className="font-bold">{formatMoney(line.salary_advance_disbursed, line.currency)}</dd></div><div><dt className="text-slate-500">Tạm ứng còn phải thu cuối kỳ</dt><dd className="font-bold text-violet-700">{formatMoney(line.outstanding_salary_advance, line.currency)}</dd></div></dl><p className="mt-4 text-xs text-slate-500">Hoàn chi hộ và tạm ứng là dòng tiền hoặc thanh toán công nợ, không được tính lại thành chi phí.</p></div>)}</div>
+            </>
+      ) : null}
+
+      {activeTab === "payroll" && canReadPayroll ? (
+        payrollQuery.isPending ? <div className="panel grid min-h-64 place-items-center"><LoaderCircle className="size-7 animate-spin text-violet-600" /></div>
+          : payrollQuery.error ? <div className="panel p-5 text-sm text-red-700">{friendlyApiError(payrollQuery.error, "Không thể tính bảng lương.")}</div>
+            : <>
+              {overlapCount > 0 ? <div className="flex gap-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-800"><AlertTriangle className="mt-0.5 size-5 shrink-0" /><div><p className="font-black">Có {overlapCount} khoảng làm việc bị trùng nguồn</p><p className="mt-1">Cần xử lý phần giao nhau giữa công việc khách hàng và chấm công nội bộ trước khi dùng bảng này để trả lương.</p></div></div> : null}
+              <div className="grid gap-4 lg:grid-cols-3"><div className="panel p-5"><p className="text-sm font-semibold text-slate-500">Tổng lương gộp</p><p className="mt-1 text-xl font-black">{sumByCurrency(payrollLines, (line): string => line.gross_pay, (line): string => line.currency)}</p></div><div className="panel p-5"><p className="text-sm font-semibold text-slate-500">Khấu trừ tạm ứng đề xuất</p><p className="mt-1 text-xl font-black text-violet-700">{sumByCurrency(payrollLines, (line): string => decimalAmount(scaledAmount(line.recorded_advance_deduction) + scaledAmount(line.suggested_advance_deduction)), (line): string => line.currency)}</p></div><div className="panel p-5"><p className="text-sm font-semibold text-slate-500">Ước tính thực trả</p><p className="mt-1 text-xl font-black text-emerald-700">{sumByCurrency(payrollLines, (line): string => line.estimated_net_pay, (line): string => line.currency)}</p></div></div>
+              <div className="panel overflow-x-auto"><table className="min-w-full text-sm"><thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-5 py-4">Nhân viên</th><th className="px-5 py-4">Nguồn lương</th><th className="px-5 py-4">Lương gộp</th><th className="px-5 py-4">Khấu trừ tạm ứng</th><th className="px-5 py-4">Ước tính thực trả</th></tr></thead><tbody className="divide-y divide-slate-100">{payrollLines.map((line: PayrollLine): React.JSX.Element => <tr className={line.attendance_overlap_count > 0 ? "bg-red-50/60" : ""} key={`${line.branch_id}:${line.employee_id}:${line.currency}`}><td className="px-5 py-4"><p className="font-bold text-slate-950">{line.employee_name}</p><p className="mt-1 text-xs text-slate-500">{line.employee_code} · {roleLabel(line.role)} · {scope.branches.find((branch): boolean => branch.id === line.branch_id)?.name ?? "Chi nhánh"}</p>{line.attendance_overlap_count > 0 ? <p className="mt-1 text-xs font-bold text-red-700">Trùng {line.attendance_overlap_count} khoảng chấm công</p> : null}</td><td className="px-5 py-4"><p>Tiền công: {formatMoney(line.staffing_earnings, line.currency)} · {hours(line.staffing_worked_seconds)}</p><p className="mt-1">Lương tháng phân bổ: {formatMoney(line.prorated_monthly_salary, line.currency)}</p></td><td className="px-5 py-4 font-bold">{formatMoney(line.gross_pay, line.currency)}</td><td className="px-5 py-4"><p>Đã ghi nhận: {formatMoney(line.recorded_advance_deduction, line.currency)}</p><p className="mt-1 font-bold text-violet-700">Đề xuất thêm: {formatMoney(line.suggested_advance_deduction, line.currency)}</p></td><td className="px-5 py-4 font-black text-emerald-700">{formatMoney(line.estimated_net_pay, line.currency)}</td></tr>)}</tbody></table></div>
+            </>
+      ) : null}
+
+      {activeTab === "salary" && canReadSalary ? (
+        <div className="space-y-5">
+          {canManageSalary ? <form className="panel grid gap-4 p-5 lg:grid-cols-[1.5fr_1fr_0.6fr_1fr_auto] lg:items-end" onSubmit={(event: FormEvent<HTMLFormElement>): void => { event.preventDefault(); salaryMutation.mutate(salaryDraft); }}><label className="text-sm font-semibold text-slate-700">Nhân viên quản lý<select className="mt-2 min-h-11 w-full rounded-xl border-slate-300" onChange={(event): void => setSalaryDraft((current): EmployeeSalaryRateCreateRequest => ({ ...current, employee_id: event.target.value }))} required value={salaryDraft.employee_id}><option value="">Chọn nhân viên</option>{(salaryQuery.data ?? []).map((item: EmployeeSalaryConfiguration): React.JSX.Element => <option key={item.employee_id} value={item.employee_id}>{item.employee_name} · {roleLabel(item.role)}</option>)}</select></label><label className="text-sm font-semibold text-slate-700">Lương tháng<input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" inputMode="decimal" onChange={(event): void => setSalaryDraft((current): EmployeeSalaryRateCreateRequest => ({ ...current, monthly_amount: event.target.value }))} required value={salaryDraft.monthly_amount} /></label><label className="text-sm font-semibold text-slate-700">Tiền tệ<input className="mt-2 min-h-11 w-full rounded-xl border-slate-300 uppercase" maxLength={3} onChange={(event): void => setSalaryDraft((current): EmployeeSalaryRateCreateRequest => ({ ...current, currency: event.target.value.toUpperCase() }))} required value={salaryDraft.currency} /></label><label className="text-sm font-semibold text-slate-700">Hiệu lực từ<input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" min={localDate(new Date())} onChange={(event): void => setSalaryDraft((current): EmployeeSalaryRateCreateRequest => ({ ...current, effective_from: event.target.value }))} required type="date" value={salaryDraft.effective_from} /></label><button className="action-primary min-h-11" disabled={salaryMutation.isPending} type="submit">{salaryMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <Save className="size-4" />}Lưu mức lương</button>{salaryMutation.error ? <p className="text-sm font-semibold text-red-700 lg:col-span-5">{friendlyApiError(salaryMutation.error, "Không thể lưu mức lương. Ngày hiệu lực có thể đã bị trùng.")}</p> : null}</form> : null}
+          <div className="panel overflow-hidden"><div className="border-b border-slate-200 px-5 py-4"><h2 className="font-black text-slate-950">Lương tháng tại chi nhánh đang chọn</h2><p className="mt-1 text-sm text-slate-500">Mỗi thay đổi tạo một phiên bản mới; báo cáo tự phân bổ theo số ngày của từng tháng.</p></div>{salaryQuery.isPending ? <div className="grid min-h-48 place-items-center"><LoaderCircle className="size-6 animate-spin" /></div> : salaryQuery.error ? <p className="m-5 text-sm text-red-700">{friendlyApiError(salaryQuery.error, "Không thể tải cấu hình lương.")}</p> : <div className="divide-y divide-slate-100">{(salaryQuery.data ?? []).map((item: EmployeeSalaryConfiguration): React.JSX.Element => <article className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between" key={item.employee_id}><div><p className="font-bold text-slate-950">{item.employee_name}</p><p className="mt-1 text-sm text-slate-500">{item.employee_code} · {roleLabel(item.role)}</p></div><div className="sm:text-right">{item.monthly_amount && item.currency ? <><p className="font-black text-slate-950">{formatMoney(item.monthly_amount, item.currency)} / tháng</p><p className="mt-1 text-xs text-slate-500"><CalendarDays className="mr-1 inline size-3.5" />Hiệu lực {item.effective_from}{item.effective_to ? ` đến ${item.effective_to}` : " trở đi"}</p></> : <p className="font-semibold text-amber-700">Chưa cấu hình lương tháng</p>}</div></article>)}</div>}</div>
+        </div>
+      ) : null}
+    </section>
+  );
+}

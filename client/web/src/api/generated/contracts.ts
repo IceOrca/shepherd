@@ -106,6 +106,46 @@ export type OwnStaffingAssignment = { assignment_id: string, shift_id: string, c
 
 export type ShiftWorkActionRequest = { latitude?: number | null, longitude?: number | null, accuracy_meters?: number | null, };
 
+export type ExpenseFundingSource = "company_funds" | "employee_personal";
+
+export type ExpenseClaimStatus = "submitted" | "approved" | "rejected" | "cancelled";
+
+export type SalaryAdvanceRecoverySource = "manual_repayment" | "payroll_deduction";
+
+export type SalaryAdvanceStatus = "requested" | "approved" | "disbursed" | "recovered" | "rejected" | "cancelled";
+
+export type ExpenseCategory = { id: string, code: string, display_name: string, };
+
+export type ExpenseClaim = { id: string, branch_id: string, category_id: string, category_name: string, funding_source: ExpenseFundingSource, paid_by_employee_id: string | null, paid_by_employee_name: string | null, customer_id: string | null, urgent_work_report_id: string | null, staffing_assignment_id: string | null, incurred_on: string, description: string, evidence_reference: string | null, claimed_amount: string, approved_amount: string | null, reimbursed_amount: string, outstanding_reimbursement: string, currency: string, status: ExpenseClaimStatus, decision_reason: string | null, submitted_by_account_id: string, submitted_by_username: string, approved_by_username: string | null, approved_at: string | null, created_at: string, updated_at: string, };
+
+export type SalaryAdvance = { id: string, branch_id: string, employee_id: string, employee_code: string, employee_name: string, requested_amount: string, approved_amount: string | null, recovered_amount: string, outstanding_amount: string, currency: string, reason: string, recovery_due_on: string | null, status: SalaryAdvanceStatus, decision_reason: string | null, requested_by_username: string, approved_by_username: string | null, disbursed_by_username: string | null, disbursement_reference: string | null, requested_at: string, approved_at: string | null, disbursed_at: string | null, updated_at: string, };
+
+export type ExpenseClaimCreateRequest = { category_id: string, funding_source: ExpenseFundingSource, paid_by_employee_id?: string | null, customer_id?: string | null, urgent_work_report_id?: string | null, staffing_assignment_id?: string | null, incurred_on: string, description: string, evidence_reference?: string | null, claimed_amount: string, currency: string, };
+
+export type FinancialDecisionRequest = { approved_amount: string, reason?: string | null, };
+
+export type FinancialRejectionRequest = { reason: string, };
+
+export type FinancialSettlementRequest = { amount: string, reference: string, };
+
+export type SalaryAdvanceCreateRequest = { employee_id: string, requested_amount: string, currency: string, reason: string, recovery_due_on?: string | null, };
+
+export type SalaryAdvanceDisbursementRequest = { reference: string, };
+
+export type SalaryAdvanceRecoveryRequest = { amount: string, source: SalaryAdvanceRecoverySource, reference: string, };
+
+export type EmployeeSalaryConfiguration = { employee_id: string, branch_id: string, employee_code: string, employee_name: string, role: RoleCode, rate_id: string | null, monthly_amount: string | null, currency: string | null, effective_from: string | null, effective_to: string | null, };
+
+export type EmployeeSalaryRateCreateRequest = { employee_id: string, monthly_amount: string, currency: string, effective_from: string, };
+
+export type OperatingFinancialLine = { currency: string, staffing_revenue: string, staffing_worker_cost: string, coordination_salary_cost: string, approved_business_expense: string, operating_cost: string, operating_profit: string, reimbursed_cash: string, salary_advance_disbursed: string, salary_advance_recovered: string, outstanding_expense_reimbursement: string, outstanding_salary_advance: string, };
+
+export type OperatingFinancialReport = { branch_id: string, branch_name: string, start_date: string, end_date: string, lines: Array<OperatingFinancialLine>, };
+
+export type PayrollLine = { employee_id: string, branch_id: string, employee_code: string, employee_name: string, role: RoleCode, currency: string, staffing_worked_seconds: number, staffing_earnings: string, prorated_monthly_salary: string, gross_pay: string, recorded_advance_deduction: string, outstanding_advance_due: string, suggested_advance_deduction: string, estimated_net_pay: string, attendance_overlap_count: number, };
+
+export type PayrollReport = { branch_id: string, branch_name: string, start_date: string, end_date: string, lines: Array<PayrollLine>, };
+
 export type UrgentWorkStatus = "active" | "completed" | "reconciled" | "cancelled";
 
 export type UrgentWorkActionSource = "self_reported" | "peer";
