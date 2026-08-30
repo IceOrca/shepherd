@@ -6,8 +6,81 @@ pub mod business;
 pub mod features;
 pub mod hr;
 pub mod notifications;
+pub mod pagination;
 pub mod rate_limits;
 pub mod typescript;
+
+#[derive(Clone, Debug)]
+pub struct ListPaginationConfig {
+    pub default_limit: u16,
+    pub minimum_limit: u16,
+    pub maximum_limit: u16,
+}
+
+#[derive(Clone, Debug)]
+pub struct FinanceExportConfig {
+    pub maximum_branches: usize,
+    pub maximum_rows: usize,
+    pub maximum_range_days: i64,
+    pub maximum_bytes: usize,
+    pub timeout_seconds: u64,
+}
+
+impl FinanceExportConfig {
+    fn from_env() -> Result<Self, String> {
+        Ok(Self {
+            maximum_branches: usize::from(required_positive_u16("FINANCE_EXPORT_MAX_BRANCHES")?),
+            maximum_rows: required_positive_usize("FINANCE_EXPORT_MAX_ROWS")?,
+            maximum_range_days: i64::from(required_positive_u16("FINANCE_EXPORT_MAX_RANGE_DAYS")?),
+            maximum_bytes: required_positive_usize("FINANCE_EXPORT_MAX_BYTES")?,
+            timeout_seconds: u64::from(required_positive_u16("FINANCE_EXPORT_TIMEOUT_SECONDS")?),
+        })
+    }
+}
+
+impl ListPaginationConfig {
+    fn from_env() -> Result<Self, String> {
+        let default_limit: u16 = required_positive_u16("API_LIST_PAGE_SIZE_DEFAULT")?;
+        let minimum_limit: u16 = required_positive_u16("API_LIST_PAGE_SIZE_MIN")?;
+        let maximum_limit: u16 = required_positive_u16("API_LIST_PAGE_SIZE_MAX")?;
+        if minimum_limit > default_limit || default_limit > maximum_limit {
+            return Err(
+                "API_LIST_PAGE_SIZE_MIN <= API_LIST_PAGE_SIZE_DEFAULT <= API_LIST_PAGE_SIZE_MAX is required".to_owned(),
+            );
+        }
+        Ok(Self {
+            default_limit,
+            minimum_limit,
+            maximum_limit,
+        })
+    }
+}
+
+fn required_positive_u16(name: &str) -> Result<u16, String> {
+    let raw: String = std::env::var(name).map_err(|_| format!("{name} is required"))?;
+    raw.parse::<u16>()
+        .map_err(|_| format!("{name} must be a positive integer"))
+        .and_then(|value: u16| {
+            if value == 0 {
+                Err(format!("{name} must be greater than zero"))
+            } else {
+                Ok(value)
+            }
+        })
+}
+
+fn required_positive_usize(name: &str) -> Result<usize, String> {
+    let raw: String = std::env::var(name).map_err(|_| format!("{name} is required"))?;
+    raw.parse::<usize>()
+        .map_err(|_| format!("{name} must be a positive integer"))
+        .and_then(|value: usize| {
+            if value == 0 {
+                Err(format!("{name} must be greater than zero"))
+            } else {
+                Ok(value)
+            }
+        })
+}
 
 use std::sync::Arc;
 
@@ -74,10 +147,16 @@ pub struct AppContext {
     pub db: Arc<DatabaseAdapter>,
     pub core: Arc<ApplicationCore>,
     pub notifications: Arc<notifications::NotificationDispatcher>,
+    pub list_pagination: ListPaginationConfig,
+    pub finance_export: FinanceExportConfig,
 }
 
 impl AppContext {
     pub fn new_arc(auth: Arc<infra_auth::AuthService>, db: Arc<DatabaseAdapter>) -> Arc<Self> {
+        let list_pagination: ListPaginationConfig = ListPaginationConfig::from_env()
+            .unwrap_or_else(|error: String| panic!("invalid API list pagination configuration: {error}"));
+        let finance_export: FinanceExportConfig = FinanceExportConfig::from_env()
+            .unwrap_or_else(|error: String| panic!("invalid finance export configuration: {error}"));
         let notifications: Arc<notifications::NotificationDispatcher> =
             notifications::NotificationDispatcher::new_arc(Arc::clone(&db));
         let core: Arc<ApplicationCore> = ApplicationCore::new_arc(Arc::clone(&db));
@@ -86,6 +165,8 @@ impl AppContext {
             db,
             core,
             notifications,
+            list_pagination,
+            finance_export,
         })
     }
 }
@@ -107,7 +188,15 @@ pub fn routes(ctx: Arc<AppContext>) -> Router {
     let identity_routes = authenticated_identity_routes(Arc::clone(&ctx), auth::identity_routes(Arc::clone(&ctx.auth)));
     let auth_routes = protected_routes(
         Arc::clone(&ctx),
-        auth::routes(Arc::clone(&ctx.auth)),
+        auth::routes(
+            Arc::clone(&ctx.auth),
+            infra_auth::ext_service::ListPaginationPolicy::try_new(
+                ctx.list_pagination.default_limit,
+                ctx.list_pagination.minimum_limit,
+                ctx.list_pagination.maximum_limit,
+            )
+            .unwrap_or_else(|error: String| panic!("invalid Auth list pagination configuration: {error}")),
+        ),
         rate_limits::ShepherdRouteGroup::Administration,
     );
     let hr_routes = protected_routes(
@@ -120,10 +209,19 @@ pub fn routes(ctx: Arc<AppContext>) -> Router {
         business::routes().with_state(Arc::clone(&ctx)),
         rate_limits::ShepherdRouteGroup::Operations,
     );
+    let business_export_routes = protected_routes(
+        Arc::clone(&ctx),
+        business::export_routes().with_state(Arc::clone(&ctx)),
+        rate_limits::ShepherdRouteGroup::ReportExport,
+    );
 
     Router::new().nest(
         "/api",
-        identity_routes.merge(merge_api_domains(auth_routes, hr_routes, business_routes)),
+        identity_routes.merge(merge_api_domains(
+            auth_routes,
+            hr_routes,
+            business_routes.merge(business_export_routes),
+        )),
     )
 }
 

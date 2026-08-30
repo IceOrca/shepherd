@@ -1,23 +1,24 @@
 import {
+  useInfiniteQuery,
   useMutation,
-  useQuery,
   useQueryClient,
   type UseMutationResult,
-  type UseQueryResult,
 } from "@tanstack/react-query";
 import { Building2, LoaderCircle, Pencil, Plus, RefreshCw, Search, X } from "lucide-react";
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import type {
   BusinessRecordStatus,
   Customer,
+  CustomerPageResponse,
   CustomerUpsertRequest,
   PermissionCode,
 } from "../../api/generated/contracts";
 import { friendlyApiError } from "../../shared/api/client";
+import { CursorPagination } from "../../shared/components/CursorPagination";
 import { useAuth } from "../auth/AuthProvider";
 import {
   createCustomer,
-  listCustomers,
+  listCustomersPage,
   operationsQueryKeys,
   updateCustomer,
 } from "./api";
@@ -58,29 +59,38 @@ export function CustomersPage(): React.JSX.Element {
   const canRead: boolean = permissions.includes("business.customers.read");
   const canManage: boolean = permissions.includes("business.customers.manage");
   const [search, setSearch] = useState<string>("");
+  const [currentPage, setCurrentPage] = useState<number>(1);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<CustomerUpsertRequest>(emptyDraft);
   const [formOpen, setFormOpen] = useState<boolean>(false);
   const [feedback, setFeedback] = useState<string | null>(null);
 
-  const customersQuery: UseQueryResult<Customer[], Error> = useQuery({
-    queryKey: operationsQueryKeys.customers,
-    queryFn: listCustomers,
+  const customersQuery = useInfiniteQuery({
+    queryKey: [...operationsQueryKeys.customers, "page", search.trim()],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }: { pageParam: string | null }): Promise<CustomerPageResponse> =>
+      listCustomersPage(pageParam, search),
+    getNextPageParam: (lastPage: CustomerPageResponse): string | undefined => lastPage.next_cursor ?? undefined,
     enabled: canRead,
   });
+  const loadedPages: CustomerPageResponse[] = customersQuery.data?.pages ?? [];
+  const visibleCustomers: Customer[] = loadedPages[currentPage - 1]?.items ?? [];
+  const hasNextPage: boolean = currentPage < loadedPages.length || customersQuery.hasNextPage;
 
-  const visibleCustomers: Customer[] = useMemo((): Customer[] => {
-    const normalizedSearch: string = search.trim().toLocaleLowerCase("vi");
-    if (!normalizedSearch) {
-      return customersQuery.data ?? [];
+  useEffect((): void => setCurrentPage(1), [search]);
+
+  const changePage = (nextPage: number): void => {
+    if (nextPage < 1) return;
+    if (nextPage <= loadedPages.length) {
+      setCurrentPage(nextPage);
+      return;
     }
-    return (customersQuery.data ?? []).filter((customer: Customer): boolean =>
-      [customer.code, customer.name, customer.address ?? "", customer.billing_email ?? ""]
-        .join(" ")
-        .toLocaleLowerCase("vi")
-        .includes(normalizedSearch),
-    );
-  }, [customersQuery.data, search]);
+    if (nextPage === loadedPages.length + 1 && customersQuery.hasNextPage) {
+      void customersQuery.fetchNextPage().then((result): void => {
+        if ((result.data?.pages.length ?? 0) >= nextPage) setCurrentPage(nextPage);
+      });
+    }
+  };
 
   const saveMutation: UseMutationResult<Customer, Error, SaveCustomerVariables> = useMutation({
     mutationFn: ({ customerId, payload }: SaveCustomerVariables): Promise<Customer> =>
@@ -210,6 +220,7 @@ export function CustomersPage(): React.JSX.Element {
             ))}
           </div>
         )}
+        <CursorPagination currentItemCount={visibleCustomers.length} currentPage={currentPage} hasNextPage={hasNextPage} nextPagePending={customersQuery.isFetchingNextPage} onPageChange={changePage} />
       </div>
 
       {formOpen ? (

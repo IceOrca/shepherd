@@ -5,4 +5,4 @@ import type { AccessControlPermission } from "./AccessControlPermission";
 import type { AccessControlRole } from "./AccessControlRole";
 import type { AccessControlUser } from "./AccessControlUser";
 
-export type AccessControlSnapshot = { branches: Array<AccessControlBranch>, permissions: Array<AccessControlPermission>, roles: Array<AccessControlRole>, users: Array<AccessControlUser>, audit: Array<AccessControlAuditEntry>, };
+export type AccessControlSnapshot = { branches: Array<AccessControlBranch>, permissions: Array<AccessControlPermission>, roles: Array<AccessControlRole>, users: Array<AccessControlUser>, audit: Array<AccessControlAuditEntry>, role_next_cursor: string | null, role_has_more: boolean, user_next_cursor: string | null, user_has_more: boolean, audit_next_cursor: string | null, audit_has_more: boolean, limit: number, };

@@ -28,10 +28,10 @@ fn admin_policy() -> AuthAdminPolicy {
     .unwrap_or_else(|code_error| panic!("Shepherd Auth administration permission code is invalid: {code_error}"))
 }
 
-pub fn routes(auth: Arc<AuthService>) -> Router {
+pub fn routes(auth: Arc<AuthService>, pagination: infra_auth::ext_service::ListPaginationPolicy) -> Router {
     let provisioner: Arc<dyn infra_auth::ext_service::auth_admin::AuthAccountProvisioner> =
         Arc::new(crate::auth_provisioning::ShepherdAuthAccountProvisioner);
-    infra_auth::ext_service::routes_with_provisioner(auth, admin_policy(), provisioner)
+    infra_auth::ext_service::routes_with_provisioner(auth, admin_policy(), provisioner, pagination)
 }
 
 pub fn identity_routes(auth: Arc<AuthService>) -> Router {

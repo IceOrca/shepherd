@@ -16,9 +16,10 @@ use crate::{
             StaffingRateKind, StaffingReconciliation, StaffingShift, StaffingShiftStatus, StaffingStaff,
         },
         host::{
-            CustomerUpsertRequest, CustomerWorkRecordUpsertRequest, ManualRateOverrideRequest,
+            CustomerPageResponse, CustomerUpsertRequest, CustomerWorkRecordUpsertRequest, ManualRateOverrideRequest,
             ShiftAssignmentApproveRequest, ShiftAssignmentCreateRequest, StaffingEligibilityCreateRequest,
-            StaffingPriceSetRequest, StaffingShiftCreateRequest,
+            StaffingPriceSetRequest, StaffingRatePageResponse, StaffingReconciliationPageResponse,
+            StaffingShiftCreateRequest, StaffingStaffPageResponse,
         },
         urgent_work::{
             core::{
@@ -27,7 +28,7 @@ use crate::{
             },
             host::{
                 UrgentCustomerWorkRecordUpsertRequest, UrgentWorkAcceptStaffRecordRequest, UrgentWorkEndRequest,
-                UrgentWorkReconcileRequest, UrgentWorkStartRequest,
+                UrgentReconciliationPageResponse, UrgentWorkReconcileRequest, UrgentWorkStartRequest,
             },
         },
         work_session::{
@@ -37,25 +38,29 @@ use crate::{
     },
     business::finance::{
         core::{
-            ExpenseCategory, ExpenseClaim, ExpenseClaimStatus, ExpenseFundingSource, SalaryAdvance,
-            SalaryAdvanceRecoverySource, SalaryAdvanceStatus,
+            ExpenseCategory, ExpenseClaim, ExpenseClaimRevision, ExpenseClaimStatus, ExpenseFundingSource,
+            SalaryAdvance, SalaryAdvanceRecoverySource, SalaryAdvanceRevision, SalaryAdvanceStatus,
         },
         host::{
-            ExpenseClaimCreateRequest, FinancialDecisionRequest, FinancialRejectionRequest, FinancialSettlementRequest,
-            SalaryAdvanceCreateRequest, SalaryAdvanceDisbursementRequest, SalaryAdvanceRecoveryRequest,
+            ExpenseClaimCreateRequest, ExpenseCorrectionRequest, ExpensePageResponse, ExpenseRevisionPageResponse,
+            FinancialDecisionRequest, FinancialRejectionRequest, FinancialSettlementRequest,
+            SalaryAdvanceCorrectionRequest, SalaryAdvanceCreateRequest, SalaryAdvanceDisbursementRequest,
+            SalaryAdvancePageResponse, SalaryAdvanceRecoveryRequest, SalaryAdvanceRevisionPageResponse,
         },
         reporting::{
             core::{
-                EmployeeSalaryConfiguration, OperatingFinancialLine, OperatingFinancialReport, PayrollLine,
-                PayrollReport,
+                EmployeeSalaryConfiguration, FinancialPeriodState, FinancialPeriodStatus, OperatingFinancialLine,
+                OperatingFinancialReport, PayrollLine, PayrollReport,
             },
-            host::EmployeeSalaryRateCreateRequest,
+            export::ReportExportKind,
+            host::{EmployeeSalaryRateCreateRequest, FinancialPeriodChangeRequest, FinancialReportExportRequest},
         },
     },
     features::{
         organization::core::BranchSummary,
         people::{
             core::{AttendanceSession, Employee, EmployeeSensitiveProfile, EmployeeStatus, Gender},
+            host::handler::{AttendancePageResponse, EmployeePageResponse},
             host::dto::{AttendanceCheckInRequest, EmployeeCitizenIdUpdateRequest, EmployeeUpsertRequest},
         },
     },
@@ -97,9 +102,12 @@ pub fn contract() -> String {
     push::<RateSource>(&mut output, &config);
     push::<StaffingRateKind>(&mut output, &config);
     push::<Customer>(&mut output, &config);
+    push::<CustomerPageResponse>(&mut output, &config);
     push::<StaffingJob>(&mut output, &config);
     push::<StaffingRate>(&mut output, &config);
+    push::<StaffingRatePageResponse>(&mut output, &config);
     push::<StaffingStaff>(&mut output, &config);
+    push::<StaffingStaffPageResponse>(&mut output, &config);
     push::<StaffingPriceSet>(&mut output, &config);
     push::<StaffingShift>(&mut output, &config);
     push::<ShiftAssignment>(&mut output, &config);
@@ -108,6 +116,7 @@ pub fn contract() -> String {
     push::<ReconciliationStatus>(&mut output, &config);
     push::<CustomerWorkRecord>(&mut output, &config);
     push::<StaffingReconciliation>(&mut output, &config);
+    push::<StaffingReconciliationPageResponse>(&mut output, &config);
     push::<CustomerWorkRecordUpsertRequest>(&mut output, &config);
     push::<CustomerUpsertRequest>(&mut output, &config);
     push::<StaffingPriceSetRequest>(&mut output, &config);
@@ -125,20 +134,33 @@ pub fn contract() -> String {
     push::<SalaryAdvanceStatus>(&mut output, &config);
     push::<ExpenseCategory>(&mut output, &config);
     push::<ExpenseClaim>(&mut output, &config);
+    push::<ExpensePageResponse>(&mut output, &config);
+    push::<ExpenseClaimRevision>(&mut output, &config);
+    push::<ExpenseRevisionPageResponse>(&mut output, &config);
     push::<SalaryAdvance>(&mut output, &config);
+    push::<SalaryAdvancePageResponse>(&mut output, &config);
+    push::<SalaryAdvanceRevision>(&mut output, &config);
+    push::<SalaryAdvanceRevisionPageResponse>(&mut output, &config);
     push::<ExpenseClaimCreateRequest>(&mut output, &config);
+    push::<ExpenseCorrectionRequest>(&mut output, &config);
     push::<FinancialDecisionRequest>(&mut output, &config);
     push::<FinancialRejectionRequest>(&mut output, &config);
     push::<FinancialSettlementRequest>(&mut output, &config);
     push::<SalaryAdvanceCreateRequest>(&mut output, &config);
+    push::<SalaryAdvanceCorrectionRequest>(&mut output, &config);
     push::<SalaryAdvanceDisbursementRequest>(&mut output, &config);
     push::<SalaryAdvanceRecoveryRequest>(&mut output, &config);
     push::<EmployeeSalaryConfiguration>(&mut output, &config);
     push::<EmployeeSalaryRateCreateRequest>(&mut output, &config);
+    push::<FinancialPeriodStatus>(&mut output, &config);
+    push::<FinancialPeriodState>(&mut output, &config);
+    push::<FinancialPeriodChangeRequest>(&mut output, &config);
     push::<OperatingFinancialLine>(&mut output, &config);
     push::<OperatingFinancialReport>(&mut output, &config);
     push::<PayrollLine>(&mut output, &config);
     push::<PayrollReport>(&mut output, &config);
+    push::<ReportExportKind>(&mut output, &config);
+    push::<FinancialReportExportRequest>(&mut output, &config);
     push::<UrgentWorkStatus>(&mut output, &config);
     push::<UrgentWorkActionSource>(&mut output, &config);
     push::<UrgentWorkCustomer>(&mut output, &config);
@@ -146,6 +168,7 @@ pub fn contract() -> String {
     push::<UrgentWorkItem>(&mut output, &config);
     push::<UrgentCustomerWorkRecord>(&mut output, &config);
     push::<UrgentWorkReconciliation>(&mut output, &config);
+    push::<UrgentReconciliationPageResponse>(&mut output, &config);
     push::<UrgentWorkStartRequest>(&mut output, &config);
     push::<UrgentWorkEndRequest>(&mut output, &config);
     push::<UrgentCustomerWorkRecordUpsertRequest>(&mut output, &config);
@@ -156,6 +179,8 @@ pub fn contract() -> String {
     push::<Employee>(&mut output, &config);
     push::<EmployeeSensitiveProfile>(&mut output, &config);
     push::<AttendanceSession>(&mut output, &config);
+    push::<AttendancePageResponse>(&mut output, &config);
+    push::<EmployeePageResponse>(&mut output, &config);
     push::<AttendanceCheckInRequest>(&mut output, &config);
     push::<EmployeeUpsertRequest>(&mut output, &config);
     push::<EmployeeCitizenIdUpdateRequest>(&mut output, &config);

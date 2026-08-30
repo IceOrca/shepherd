@@ -2,12 +2,13 @@ use std::sync::Arc;
 
 use axum::{
     Extension, Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     routing::{get, post, put},
 };
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, trace, warn};
 use ts_rs::TS;
 use uuid::Uuid;
@@ -16,10 +17,25 @@ use crate::{AppContext, auth::AuthenticatedUser};
 
 use super::super::{core::ManualRateOverride, host::ManualRateOverrideRequest};
 use super::core::{
-    UrgentCustomerWorkRecord, UrgentCustomerWorkRecordInput, UrgentWorkEmployee, UrgentWorkEndInput, UrgentWorkError,
-    UrgentWorkCustomer, UrgentWorkItem, UrgentWorkLocationInput, UrgentWorkReconcileInput, UrgentWorkReconciliation,
-    UrgentWorkStartInput,
+    UrgentCustomerWorkRecord, UrgentCustomerWorkRecordInput, UrgentReconciliationCursor, UrgentReconciliationPage,
+    UrgentWorkEmployee, UrgentWorkEndInput, UrgentWorkError, UrgentWorkCustomer, UrgentWorkItem,
+    UrgentWorkLocationInput, UrgentWorkReconcileInput, UrgentWorkReconciliation, UrgentWorkStartInput,
 };
+
+#[derive(Debug, Deserialize)]
+pub struct UrgentReconciliationPageQuery {
+    pub limit: Option<u16>,
+    pub cursor: Option<String>,
+    pub customer_id: Option<Uuid>,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct UrgentReconciliationPageResponse {
+    pub items: Vec<UrgentWorkReconciliation>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+    pub limit: u16,
+}
 
 #[derive(Debug, Deserialize, TS)]
 pub struct UrgentWorkStartRequest {
@@ -200,15 +216,46 @@ async fn end_work(
 async fn list_reconciliations(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
-) -> Result<Json<Vec<UrgentWorkReconciliation>>, StatusCode> {
+    Query(query): Query<UrgentReconciliationPageQuery>,
+) -> Result<Json<UrgentReconciliationPageResponse>, StatusCode> {
     require_permission(&user, "business.reconciliation.read")?;
-    let reconciliations: Vec<UrgentWorkReconciliation> = context
+    let pagination = &context.list_pagination;
+    let limit: u16 = query.limit.unwrap_or(pagination.default_limit);
+    if !(pagination.minimum_limit..=pagination.maximum_limit).contains(&limit) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let cursor: Option<UrgentReconciliationCursor> = query
+        .cursor
+        .as_deref()
+        .map(decode_urgent_reconciliation_cursor)
+        .transpose()?;
+    let page: UrgentReconciliationPage = context
         .core
         .urgent_work
-        .list_reconciliations(user.tenant_id)
+        .list_reconciliations(user.tenant_id, query.customer_id, i64::from(limit), cursor)
         .await
         .map_err(|operation_error: UrgentWorkError| status("list urgent reconciliations", &user, operation_error))?;
-    Ok(Json(reconciliations))
+    let next_cursor: Option<String> = page
+        .next_cursor
+        .as_ref()
+        .map(encode_urgent_reconciliation_cursor)
+        .transpose()?;
+    Ok(Json(UrgentReconciliationPageResponse {
+        has_more: next_cursor.is_some(),
+        items: page.items,
+        next_cursor,
+        limit,
+    }))
+}
+
+fn decode_urgent_reconciliation_cursor(value: &str) -> Result<UrgentReconciliationCursor, StatusCode> {
+    let bytes: Vec<u8> = URL_SAFE_NO_PAD.decode(value).map_err(|_| StatusCode::BAD_REQUEST)?;
+    serde_json::from_slice(&bytes).map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+fn encode_urgent_reconciliation_cursor(cursor: &UrgentReconciliationCursor) -> Result<String, StatusCode> {
+    let bytes: Vec<u8> = serde_json::to_vec(cursor).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
 async fn upsert_customer_record(

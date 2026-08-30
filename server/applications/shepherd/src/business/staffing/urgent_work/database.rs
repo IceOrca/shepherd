@@ -10,8 +10,9 @@ use uuid::Uuid;
 use super::super::core::{ManualRateOverride, ReconciliationStatus};
 use super::core::{
     UrgentCustomerWorkRecord, UrgentCustomerWorkRecordInput, UrgentWorkActionSource, UrgentWorkEmployee,
-    UrgentWorkCustomer, UrgentWorkEndInput, UrgentWorkError, UrgentWorkItem, UrgentWorkReconcileInput,
-    UrgentWorkReconciliation, UrgentWorkRepo, UrgentWorkStartInput, UrgentWorkStatus,
+    UrgentReconciliationCursor, UrgentReconciliationPage, UrgentWorkCustomer, UrgentWorkEndInput, UrgentWorkError,
+    UrgentWorkItem, UrgentWorkReconcileInput, UrgentWorkReconciliation, UrgentWorkRepo, UrgentWorkStartInput,
+    UrgentWorkStatus,
 };
 
 pub struct UrgentWorkDb {
@@ -222,6 +223,15 @@ struct ReconciliationRow {
     customer_reference: Option<String>,
     customer_notes: Option<String>,
     customer_updated_at: Option<DateTime<Utc>>,
+}
+
+struct ReconciliationRowQuery {
+    report_id: Option<Uuid>,
+    cursor_active: Option<bool>,
+    cursor_started_at: Option<DateTime<Utc>>,
+    cursor_report_id: Option<Uuid>,
+    customer_id: Option<Uuid>,
+    limit: i64,
 }
 
 #[derive(Debug)]
@@ -741,15 +751,53 @@ impl UrgentWorkRepo for UrgentWorkDb {
         UrgentWorkItem::try_from(row)
     }
 
-    async fn list_reconciliations(&self, tenant_id: Uuid) -> Result<Vec<UrgentWorkReconciliation>, UrgentWorkError> {
-        let rows: Vec<ReconciliationRow> = self
+    async fn list_reconciliations(
+        &self,
+        tenant_id: Uuid,
+        customer_id: Option<Uuid>,
+        limit: i64,
+        cursor: Option<&UrgentReconciliationCursor>,
+    ) -> Result<UrgentReconciliationPage, UrgentWorkError> {
+        let cursor_active: Option<bool> = cursor.map(|value: &UrgentReconciliationCursor| value.active);
+        let cursor_started_at: Option<DateTime<Utc>> =
+            cursor.map(|value: &UrgentReconciliationCursor| value.started_at);
+        let cursor_report_id: Option<Uuid> = cursor.map(|value: &UrgentReconciliationCursor| value.report_id);
+        let query_limit: i64 = limit + 1;
+        let mut rows: Vec<ReconciliationRow> = self
             .db
             .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
-                load_reconciliation_rows(connection, tenant_id, None).await
+                load_reconciliation_rows(
+                    connection,
+                    tenant_id,
+                    ReconciliationRowQuery {
+                        report_id: None,
+                        cursor_active,
+                        cursor_started_at,
+                        cursor_report_id,
+                        customer_id,
+                        limit: query_limit,
+                    },
+                )
+                .await
             })
             .await
             .map_err(|error: TenantDbErr| tenant_runner_failure("list urgent reconciliations", tenant_id, error))?;
-        rows.into_iter().map(reconciliation_from_row).collect()
+        let has_more: bool = rows.len() > limit as usize;
+        rows.truncate(limit as usize);
+        let next_cursor: Option<UrgentReconciliationCursor> = if has_more {
+            rows.last().map(|row: &ReconciliationRow| UrgentReconciliationCursor {
+                active: row.report_status == "active",
+                started_at: row.started_at,
+                report_id: row.report_id,
+            })
+        } else {
+            None
+        };
+        let items: Vec<UrgentWorkReconciliation> = rows
+            .into_iter()
+            .map(reconciliation_from_row)
+            .collect::<Result<Vec<UrgentWorkReconciliation>, UrgentWorkError>>()?;
+        Ok(UrgentReconciliationPage { items, next_cursor })
     }
 
     async fn upsert_customer_record(
@@ -1134,7 +1182,7 @@ async fn load_customer_record(
 async fn load_reconciliation_rows(
     connection: &mut sqlx::PgConnection,
     tenant_id: Uuid,
-    report_id: Option<Uuid>,
+    query: ReconciliationRowQuery,
 ) -> Result<Vec<ReconciliationRow>, sqlx::Error> {
     sqlx::query_as!(
         ReconciliationRow,
@@ -1188,10 +1236,23 @@ async fn load_reconciliation_rows(
         LEFT JOIN business_staffing_shifts AS final_shift
             ON final_shift.tenant_id = assignment.tenant_id AND final_shift.id = assignment.shift_id
         WHERE report.tenant_id = $1 AND ($2::UUID IS NULL OR report.id = $2)
-        ORDER BY (report.status = 'active') DESC, session.started_at DESC, employee.display_name, report.id
+          AND ($3::BOOLEAN IS NULL
+               OR ((report.status = 'active'), session.started_at, report.id)
+                  < ($3, $4::TIMESTAMPTZ, $5::UUID))
+          AND ($6::UUID IS NULL
+               OR report.claimed_customer_id = $6
+               OR customer_record.confirmed_customer_id = $6
+               OR final_shift.customer_id = $6)
+        ORDER BY (report.status = 'active') DESC, session.started_at DESC, report.id DESC
+        LIMIT $7
         "#,
         tenant_id,
-        report_id,
+        query.report_id,
+        query.cursor_active,
+        query.cursor_started_at,
+        query.cursor_report_id,
+        query.customer_id,
+        query.limit,
     )
     .fetch_all(connection)
     .await
@@ -1331,6 +1392,19 @@ async fn reconcile_report_in_transaction(
     report_id: Uuid,
     input: &UrgentWorkReconcileInput,
 ) -> Result<UrgentWorkReconciliation, UrgentWorkError> {
+    let status: Option<String> = sqlx::query_scalar!(
+        "SELECT status FROM business_urgent_work_reports WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
+        tenant_id,
+        report_id,
+    )
+    .fetch_optional(transaction.connection())
+    .await
+    .map_err(|error| database_failure("lock urgent report for reconciliation", tenant_id, error))?;
+    match status.as_deref() {
+        None => return Err(UrgentWorkError::NotFound),
+        Some("completed") => {}
+        Some(_) => return Err(UrgentWorkError::Conflict),
+    }
     let context: ReconcileContextRow = sqlx::query_as!(
         ReconcileContextRow,
         r#"
@@ -1632,10 +1706,20 @@ async fn reconcile_report_in_transaction(
         return Err(UrgentWorkError::Conflict);
     }
     trace!(tenant_id = %tenant_id, report_id = %report_id, shift_id = %shift_id, assignment_id = %assignment_id, shift_rows = shift_insert.rows_affected(), assignment_rows = assignment_insert.rows_affected(), customer_rows = customer_copy.rows_affected(), "Urgent work converted to approved staffing snapshot");
-    let mut rows: Vec<ReconciliationRow> =
-        load_reconciliation_rows(transaction.connection(), tenant_id, Some(report_id))
-            .await
-            .map_err(|error: sqlx::Error| database_failure("load reconciled urgent work", tenant_id, error))?;
+    let mut rows: Vec<ReconciliationRow> = load_reconciliation_rows(
+        transaction.connection(),
+        tenant_id,
+        ReconciliationRowQuery {
+            report_id: Some(report_id),
+            cursor_active: None,
+            cursor_started_at: None,
+            cursor_report_id: None,
+            customer_id: None,
+            limit: 1,
+        },
+    )
+    .await
+    .map_err(|error: sqlx::Error| database_failure("load reconciled urgent work", tenant_id, error))?;
     let row: ReconciliationRow = rows.pop().ok_or(UrgentWorkError::BackendUnavailable)?;
     reconciliation_from_row(row)
 }

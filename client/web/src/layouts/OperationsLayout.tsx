@@ -189,15 +189,15 @@ function pageTitle(pathname: string): { title: string; description: string } {
 
   if (pathname === "/operations/reconciliation") {
     return {
-      title: "Đối soát công việc phát sinh",
-      description: "So sánh khách hàng và thời gian nhân viên ghi với bill của khách hàng.",
+      title: "Đối soát",
+      description: "So sánh dữ liệu nhân viên với xác nhận hoặc bill của khách hàng.",
     };
   }
 
   if (pathname === "/operations/reconciliation/planned") {
     return {
-      title: "Đối soát ca kế hoạch",
-      description: "Đối soát các ca đã được tạo và phân công trước.",
+      title: "Đối soát",
+      description: "So sánh dữ liệu nhân viên với xác nhận hoặc bill của khách hàng.",
     };
   }
 

@@ -1,10 +1,12 @@
 import type {
   BranchSummary,
   Customer,
+  CustomerPageResponse,
   CustomerUpsertRequest,
   CustomerWorkRecord,
   CustomerWorkRecordUpsertRequest,
   Employee,
+  EmployeePageResponse,
   StaffingJob,
   OwnStaffingAssignment,
   ShiftAssignment,
@@ -18,10 +20,12 @@ import type {
   StaffingPriceSet,
   StaffingPriceSetRequest,
   StaffingRate,
-  StaffingReconciliation,
+  StaffingRatePageResponse,
+  StaffingReconciliationPageResponse,
   StaffingShift,
   StaffingShiftCreateRequest,
   StaffingStaff,
+  StaffingStaffPageResponse,
   UrgentCustomerWorkRecord,
   UrgentCustomerWorkRecordUpsertRequest,
   UrgentWorkAcceptStaffRecordRequest,
@@ -31,9 +35,11 @@ import type {
   UrgentWorkItem,
   UrgentWorkReconcileRequest,
   UrgentWorkReconciliation,
+  UrgentReconciliationPageResponse,
   UrgentWorkStartRequest,
 } from "../../api/generated/contracts";
 import { apiRequest, apiRequestForBranch } from "../../shared/api/client";
+import { collectCursorPages } from "../../shared/api/pagination";
 
 export const operationsQueryKeys = {
   all: ["operations"] as const,
@@ -77,12 +83,31 @@ export interface UrgentEndActionInput {
   payload: UrgentWorkEndRequest;
 }
 
+function customerPagePath(cursor: string | null, search: string): string {
+  const parameters: URLSearchParams = new URLSearchParams();
+  if (cursor !== null) parameters.set("cursor", cursor);
+  if (search.trim() !== "") parameters.set("search", search.trim());
+  const query: string = parameters.toString();
+  return `/api/business/customers${query ? `?${query}` : ""}`;
+}
+
+export function listCustomersPage(
+  cursor: string | null,
+  search: string,
+): Promise<CustomerPageResponse> {
+  return apiRequest<CustomerPageResponse>(customerPagePath(cursor, search));
+}
+
 export function listCustomers(): Promise<Customer[]> {
-  return apiRequest<Customer[]>("/api/business/customers");
+  return collectCursorPages<Customer>((cursor: string | null): Promise<CustomerPageResponse> =>
+    listCustomersPage(cursor, ""),
+  );
 }
 
 export function listCustomersForBranch(branchId: string): Promise<Customer[]> {
-  return apiRequestForBranch<Customer[]>("/api/business/customers", branchId);
+  return collectCursorPages<Customer>((cursor: string | null): Promise<CustomerPageResponse> =>
+    apiRequestForBranch<CustomerPageResponse>(customerPagePath(cursor, ""), branchId),
+  );
 }
 
 export function createCustomer(payload: CustomerUpsertRequest): Promise<Customer> {
@@ -108,15 +133,31 @@ export function listJobsForBranch(branchId: string): Promise<StaffingJob[]> {
 }
 
 export function listEmployees(): Promise<Employee[]> {
-  return apiRequest<Employee[]>("/api/hr/employees");
+  return collectCursorPages<Employee>((cursor: string | null): Promise<EmployeePageResponse> => {
+    const path: string = cursor === null
+      ? "/api/hr/employees"
+      : `/api/hr/employees?cursor=${encodeURIComponent(cursor)}`;
+    return apiRequest<EmployeePageResponse>(path);
+  });
 }
 
-export function listStaffingRates(): Promise<StaffingRate[]> {
-  return apiRequest<StaffingRate[]>("/api/business/staffing/rates");
+export function listStaffingRates(customerId: string): Promise<StaffingRate[]> {
+  return collectCursorPages<StaffingRate>((cursor: string | null): Promise<StaffingRatePageResponse> => {
+    const parameters: URLSearchParams = new URLSearchParams({ customer_id: customerId });
+    if (cursor !== null) parameters.set("cursor", cursor);
+    return apiRequest<StaffingRatePageResponse>(`/api/business/staffing/rates?${parameters.toString()}`);
+  });
 }
 
-export function listStaffingStaff(): Promise<StaffingStaff[]> {
-  return apiRequest<StaffingStaff[]>("/api/business/staffing/staff");
+export function listStaffingStaff(
+  cursor: string | null,
+  search: string,
+): Promise<StaffingStaffPageResponse> {
+  const parameters: URLSearchParams = new URLSearchParams();
+  if (cursor !== null) parameters.set("cursor", cursor);
+  if (search.trim() !== "") parameters.set("search", search.trim());
+  const query: string = parameters.toString();
+  return apiRequest<StaffingStaffPageResponse>(`/api/business/staffing/staff${query ? `?${query}` : ""}`);
 }
 
 export function setStaffingPrices(payload: StaffingPriceSetRequest): Promise<StaffingPriceSet> {
@@ -190,15 +231,38 @@ export function createShiftAssignmentForBranch(
   );
 }
 
-export function listReconciliations(): Promise<StaffingReconciliation[]> {
-  return apiRequest<StaffingReconciliation[]>("/api/business/staffing/reconciliations");
+function reconciliationPagePath(
+  path: string,
+  cursor: string | null,
+  customerId: string | null,
+): string {
+  const parameters: URLSearchParams = new URLSearchParams();
+  if (cursor !== null) {
+    parameters.set("cursor", cursor);
+  }
+  if (customerId !== null) {
+    parameters.set("customer_id", customerId);
+  }
+  const query: string = parameters.toString();
+  return query.length === 0 ? path : `${path}?${query}`;
+}
+
+export function listReconciliations(
+  cursor: string | null = null,
+  customerId: string | null = null,
+): Promise<StaffingReconciliationPageResponse> {
+  return apiRequest<StaffingReconciliationPageResponse>(
+    reconciliationPagePath("/api/business/staffing/reconciliations", cursor, customerId),
+  );
 }
 
 export function listReconciliationsForBranch(
   branchId: string,
-): Promise<StaffingReconciliation[]> {
-  return apiRequestForBranch<StaffingReconciliation[]>(
-    "/api/business/staffing/reconciliations",
+  cursor: string | null = null,
+  customerId: string | null = null,
+): Promise<StaffingReconciliationPageResponse> {
+  return apiRequestForBranch<StaffingReconciliationPageResponse>(
+    reconciliationPagePath("/api/business/staffing/reconciliations", cursor, customerId),
     branchId,
   );
 }
@@ -309,15 +373,22 @@ export function endUrgentWork(input: UrgentEndActionInput): Promise<UrgentWorkIt
   });
 }
 
-export function listUrgentReconciliations(): Promise<UrgentWorkReconciliation[]> {
-  return apiRequest<UrgentWorkReconciliation[]>("/api/business/staffing/urgent-work/reconciliations");
+export function listUrgentReconciliations(
+  cursor: string | null = null,
+  customerId: string | null = null,
+): Promise<UrgentReconciliationPageResponse> {
+  return apiRequest<UrgentReconciliationPageResponse>(
+    reconciliationPagePath("/api/business/staffing/urgent-work/reconciliations", cursor, customerId),
+  );
 }
 
 export function listUrgentReconciliationsForBranch(
   branchId: string,
-): Promise<UrgentWorkReconciliation[]> {
-  return apiRequestForBranch<UrgentWorkReconciliation[]>(
-    "/api/business/staffing/urgent-work/reconciliations",
+  cursor: string | null = null,
+  customerId: string | null = null,
+): Promise<UrgentReconciliationPageResponse> {
+  return apiRequestForBranch<UrgentReconciliationPageResponse>(
+    reconciliationPagePath("/api/business/staffing/urgent-work/reconciliations", cursor, customerId),
     branchId,
   );
 }

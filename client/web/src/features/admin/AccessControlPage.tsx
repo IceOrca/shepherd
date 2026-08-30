@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Building2,
   Check,
@@ -34,6 +34,7 @@ import type {
   UpdateAccountAccessRequest,
 } from "../../api/generated/contracts";
 import { friendlyApiError } from "../../shared/api/client";
+import { CursorPagination } from "../../shared/components/CursorPagination";
 import { roleLabel } from "../../shared/lib/format";
 import {
   authAdminQueryKeys,
@@ -146,21 +147,85 @@ export function AccessControlPage() {
   const [overridePermissionCode, setOverridePermissionCode] = useState<PermissionCode>("");
   const [overrideBranchId, setOverrideBranchId] = useState<string>("");
   const [overrideEffect, setOverrideEffect] = useState<PermissionOverrideEffect>("allow");
+  const [rolePage, setRolePage] = useState<number>(1);
+  const [userPage, setUserPage] = useState<number>(1);
+  const [auditPage, setAuditPage] = useState<number>(1);
 
-  const snapshotQuery = useQuery<AccessControlSnapshot>({
-    queryKey: authAdminQueryKeys.accessControl,
-    queryFn: getAccessControlSnapshot,
+  const snapshotQuery = useInfiniteQuery({
+    queryKey: [...authAdminQueryKeys.accessControl, "roles"],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }: { pageParam: string | null }): Promise<AccessControlSnapshot> =>
+      getAccessControlSnapshot({ roleCursor: pageParam }),
+    getNextPageParam: (lastPage: AccessControlSnapshot): string | undefined =>
+      lastPage.role_next_cursor ?? undefined,
   });
-  const snapshot: AccessControlSnapshot | undefined = snapshotQuery.data;
+  const userQuery = useInfiniteQuery({
+    queryKey: [...authAdminQueryKeys.accessControl, "users"],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }: { pageParam: string | null }): Promise<AccessControlSnapshot> =>
+      getAccessControlSnapshot({ userCursor: pageParam }),
+    getNextPageParam: (lastPage: AccessControlSnapshot): string | undefined =>
+      lastPage.user_next_cursor ?? undefined,
+  });
+  const auditQuery = useInfiniteQuery({
+    queryKey: [...authAdminQueryKeys.accessControl, "audit"],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }: { pageParam: string | null }): Promise<AccessControlSnapshot> =>
+      getAccessControlSnapshot({ auditCursor: pageParam }),
+    getNextPageParam: (lastPage: AccessControlSnapshot): string | undefined =>
+      lastPage.audit_next_cursor ?? undefined,
+  });
+  const rolePages: AccessControlSnapshot[] = snapshotQuery.data?.pages ?? [];
+  const userPages: AccessControlSnapshot[] = userQuery.data?.pages ?? [];
+  const auditPages: AccessControlSnapshot[] = auditQuery.data?.pages ?? [];
+  const snapshot: AccessControlSnapshot | undefined = rolePages[0];
   const branches: AccessControlBranch[] = snapshot?.branches ?? [];
-  const roles: AccessControlRole[] = snapshot?.roles ?? [];
   const permissions: AccessControlPermission[] = snapshot?.permissions ?? [];
-  const users: AccessControlUser[] = snapshot?.users ?? [];
-  const activeRoles: AccessControlRole[] = roles.filter(
+  const roles: AccessControlRole[] = rolePages[rolePage - 1]?.roles ?? [];
+  const allLoadedRoles: AccessControlRole[] = rolePages.flatMap(
+    (page: AccessControlSnapshot): AccessControlRole[] => page.roles,
+  );
+  const users: AccessControlUser[] = userPages[userPage - 1]?.users ?? [];
+  const auditEntries = auditPages[auditPage - 1]?.audit ?? [];
+  const activeRoles: AccessControlRole[] = allLoadedRoles.filter(
     (role: AccessControlRole): boolean => role.is_active,
   );
+
   useEffect((): void => {
-    if (selectedRoleCode === "" && roles.length > 0) {
+    if (snapshotQuery.hasNextPage && !snapshotQuery.isFetchingNextPage) {
+      void snapshotQuery.fetchNextPage();
+    }
+  }, [snapshotQuery.hasNextPage, snapshotQuery.isFetchingNextPage, snapshotQuery.fetchNextPage]);
+
+  const changeRolePage = (nextPage: number): void => {
+    if (nextPage < 1) return;
+    if (nextPage <= rolePages.length) return setRolePage(nextPage);
+    if (nextPage === rolePages.length + 1 && snapshotQuery.hasNextPage) {
+      void snapshotQuery.fetchNextPage().then((result): void => {
+        if ((result.data?.pages.length ?? 0) >= nextPage) setRolePage(nextPage);
+      });
+    }
+  };
+  const changeUserPage = (nextPage: number): void => {
+    if (nextPage < 1) return;
+    if (nextPage <= userPages.length) return setUserPage(nextPage);
+    if (nextPage === userPages.length + 1 && userQuery.hasNextPage) {
+      void userQuery.fetchNextPage().then((result): void => {
+        if ((result.data?.pages.length ?? 0) >= nextPage) setUserPage(nextPage);
+      });
+    }
+  };
+  const changeAuditPage = (nextPage: number): void => {
+    if (nextPage < 1) return;
+    if (nextPage <= auditPages.length) return setAuditPage(nextPage);
+    if (nextPage === auditPages.length + 1 && auditQuery.hasNextPage) {
+      void auditQuery.fetchNextPage().then((result): void => {
+        if ((result.data?.pages.length ?? 0) >= nextPage) setAuditPage(nextPage);
+      });
+    }
+  };
+  useEffect((): void => {
+    if (roles.length > 0 && !roles.some((role: AccessControlRole): boolean => role.code === selectedRoleCode)) {
       setSelectedRoleCode(roles[0]?.code ?? "");
     }
   }, [roles, selectedRoleCode]);
@@ -184,7 +249,7 @@ export function AccessControlPage() {
   }, [roles, selectedRoleCode]);
 
   useEffect((): void => {
-    if (selectedUserId === "" && users.length > 0) {
+    if (users.length > 0 && !users.some((user: AccessControlUser): boolean => user.account_id === selectedUserId)) {
       setSelectedUserId(users[0]?.account_id ?? "");
     }
   }, [selectedUserId, users]);
@@ -422,6 +487,7 @@ export function AccessControlPage() {
                   <span className="mt-1 block text-xs opacity-70">{roleScopeLabel(role.scope)} · {role.assigned_account_count} người</span>
                 </button>
               ))}
+              <CursorPagination currentItemCount={roles.length} currentPage={rolePage} hasNextPage={rolePage < rolePages.length || snapshotQuery.hasNextPage} nextPagePending={snapshotQuery.isFetchingNextPage} onPageChange={changeRolePage} />
             </section>
             <form className="surface-card space-y-3 p-5" onSubmit={submitRole}>
               <h2 className="font-bold">Tạo vai trò tùy chỉnh</h2>
@@ -459,8 +525,8 @@ export function AccessControlPage() {
 
       {tab === "users" && userEditor ? (
         <div className="grid gap-6 xl:grid-cols-[300px_minmax(0,1fr)]">
-          <section className="surface-card max-h-[760px] overflow-y-auto">{users.map((user: AccessControlUser): React.ReactNode => <button className={`block w-full border-b border-slate-100 px-5 py-4 text-left ${selectedUserId === user.account_id ? "bg-blue-50" : "hover:bg-slate-50"}`} key={user.account_id} onClick={(): void => setSelectedUserId(user.account_id)} type="button"><span className="block font-bold text-slate-900">{user.username}</span><span className="mt-1 block truncate text-xs text-slate-500">{user.email ?? "Không có email"} · {roleName(roles, user.primary_role)}</span></button>)}</section>
-          <section className="surface-card p-5 sm:p-6"><div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><div><h2 className="text-lg font-bold">{users.find((user: AccessControlUser): boolean => user.account_id === userEditor.account_id)?.username}</h2><p className="mt-1 text-sm text-slate-500">Gán vai trò trên toàn doanh nghiệp hoặc theo từng chi nhánh; quyền từ chi nhánh khác không được cộng vào.</p></div><select className="min-h-10 rounded-xl border-slate-300" value={userEditor.primary_role} onChange={(event): void => setUserEditor({ ...userEditor, primary_role: event.target.value })}>{roles.filter((role: AccessControlRole): boolean => role.is_system).map((role: AccessControlRole): React.ReactNode => <option key={role.code} value={role.code}>{role.display_name}</option>)}</select></div>
+          <section className="surface-card max-h-[760px] overflow-y-auto">{users.map((user: AccessControlUser): React.ReactNode => <button className={`block w-full border-b border-slate-100 px-5 py-4 text-left ${selectedUserId === user.account_id ? "bg-blue-50" : "hover:bg-slate-50"}`} key={user.account_id} onClick={(): void => setSelectedUserId(user.account_id)} type="button"><span className="block font-bold text-slate-900">{user.username}</span><span className="mt-1 block truncate text-xs text-slate-500">{user.email ?? "Không có email"} · {roleName(allLoadedRoles, user.primary_role)}</span></button>)}<CursorPagination currentItemCount={users.length} currentPage={userPage} hasNextPage={userPage < userPages.length || userQuery.hasNextPage} nextPagePending={userQuery.isFetchingNextPage} onPageChange={changeUserPage} /></section>
+          <section className="surface-card p-5 sm:p-6"><div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><div><h2 className="text-lg font-bold">{users.find((user: AccessControlUser): boolean => user.account_id === userEditor.account_id)?.username}</h2><p className="mt-1 text-sm text-slate-500">Gán vai trò trên toàn doanh nghiệp hoặc theo từng chi nhánh; quyền từ chi nhánh khác không được cộng vào.</p></div><select className="min-h-10 rounded-xl border-slate-300" value={userEditor.primary_role} onChange={(event): void => setUserEditor({ ...userEditor, primary_role: event.target.value })}>{allLoadedRoles.filter((role: AccessControlRole): boolean => role.is_system).map((role: AccessControlRole): React.ReactNode => <option key={role.code} value={role.code}>{role.display_name}</option>)}</select></div>
             <div className="mt-6"><h3 className="font-bold">Vai trò được gán</h3><div className="mt-3 space-y-2">{userEditor.assignments.map((assignment: AccountRoleAssignmentContract, index: number): React.ReactNode => <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-4 py-3" key={`${assignment.role_code}-${assignment.branch_id}-${index}`}><span className="text-sm"><span className="font-bold">{roleName(roles, assignment.role_code)}</span><span className="ml-2 text-slate-500">{branchName(branches, assignment.branch_id)}</span></span><button aria-label="Xóa vai trò" className="text-red-500" onClick={(): void => setUserEditor({ ...userEditor, assignments: userEditor.assignments.filter((_item: AccountRoleAssignmentContract, itemIndex: number): boolean => itemIndex !== index) })} type="button"><Trash2 className="size-4" /></button></div>)}</div><div className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto]"><select className="min-h-10 rounded-xl border-slate-300" value={assignmentRoleCode} onChange={(event): void => setAssignmentRoleCode(event.target.value)}><option value="">Chọn vai trò</option>{activeRoles.map((role: AccessControlRole): React.ReactNode => <option key={role.code} value={role.code}>{role.display_name}</option>)}</select><select className="min-h-10 rounded-xl border-slate-300" value={assignmentBranchId} onChange={(event): void => setAssignmentBranchId(event.target.value)}><option value="">Toàn doanh nghiệp / chọn chi nhánh</option>{branches.filter((branch: AccessControlBranch): boolean => branch.status === "active").map((branch: AccessControlBranch): React.ReactNode => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</select><button className="action-secondary" onClick={addAssignment} type="button"><Plus className="size-4" />Thêm</button></div></div>
             <div className="mt-8"><h3 className="font-bold">Ngoại lệ quyền cá nhân</h3><p className="mt-1 text-xs leading-5 text-slate-500">Từ chối luôn được ưu tiên hơn Cho phép. Để trống chi nhánh nếu ngoại lệ áp dụng toàn doanh nghiệp.</p><div className="mt-3 space-y-2">{userEditor.permission_overrides.map((accountOverride: AccountPermissionOverrideContract, index: number): React.ReactNode => <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-4 py-3" key={`${accountOverride.permission_code}-${accountOverride.branch_id}-${index}`}><span className="text-sm"><span className={`mr-2 rounded px-2 py-0.5 text-xs font-bold ${accountOverride.effect === "allow" ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"}`}>{accountOverride.effect === "allow" ? "CHO PHÉP" : "TỪ CHỐI"}</span><span className="font-semibold">{permissionName(permissions, accountOverride.permission_code)}</span><span className="ml-2 text-slate-500">{branchName(branches, accountOverride.branch_id)}</span></span><button className="text-red-500" onClick={(): void => setUserEditor({ ...userEditor, permission_overrides: userEditor.permission_overrides.filter((_item: AccountPermissionOverrideContract, itemIndex: number): boolean => itemIndex !== index) })} type="button"><Trash2 className="size-4" /></button></div>)}</div><div className="mt-3 grid gap-2 lg:grid-cols-[1.4fr_1fr_120px_auto]"><select className="min-h-10 rounded-xl border-slate-300" value={overridePermissionCode} onChange={(event): void => setOverridePermissionCode(event.target.value)}><option value="">Chọn quyền</option>{permissions.map((permission: AccessControlPermission): React.ReactNode => <option key={permission.code} value={permission.code}>{permission.display_name}</option>)}</select><select className="min-h-10 rounded-xl border-slate-300" value={overrideBranchId} onChange={(event): void => setOverrideBranchId(event.target.value)}><option value="">Toàn doanh nghiệp</option>{branches.filter((branch: AccessControlBranch): boolean => branch.status === "active").map((branch: AccessControlBranch): React.ReactNode => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</select><select className="min-h-10 rounded-xl border-slate-300" value={overrideEffect} onChange={(event): void => setOverrideEffect(event.target.value as PermissionOverrideEffect)}><option value="allow">Cho phép</option><option value="deny">Từ chối</option></select><button className="action-secondary" onClick={addOverride} type="button"><Plus className="size-4" />Thêm</button></div></div>
             <div className="mt-8 flex justify-end"><button className="action-primary" disabled={userUpdateMutation.isPending} onClick={(): void => userUpdateMutation.mutate(userEditor)} type="button">{userUpdateMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <Save className="size-4" />}Lưu phạm vi và quyền</button></div>
@@ -468,7 +534,7 @@ export function AccessControlPage() {
         </div>
       ) : null}
 
-      {tab === "audit" ? <section className="surface-card overflow-x-auto"><table className="w-full min-w-[760px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-5 py-3">Thời gian</th><th className="px-5 py-3">Hành động</th><th className="px-5 py-3">Đối tượng</th><th className="px-5 py-3">Người thực hiện</th></tr></thead><tbody className="divide-y divide-slate-100">{snapshot.audit.map((entry): React.ReactNode => <tr key={entry.id}><td className="px-5 py-4 text-slate-500">{new Intl.DateTimeFormat("vi-VN", { dateStyle: "short", timeStyle: "short" }).format(new Date(entry.created_at))}</td><td className="px-5 py-4 font-semibold">{entry.action}</td><td className="px-5 py-4">{entry.object_type} · {entry.object_id}</td><td className="px-5 py-4 text-slate-500">{users.find((user: AccessControlUser): boolean => user.account_id === entry.actor_account_id)?.username ?? entry.actor_account_id}</td></tr>)}</tbody></table>{snapshot.audit.length === 0 ? <div className="p-10 text-center text-sm text-slate-500"><KeyRound className="mx-auto mb-3 size-8 text-slate-300" />Chưa có thay đổi phân quyền nào.</div> : null}</section> : null}
+      {tab === "audit" ? <section className="surface-card overflow-x-auto"><table className="w-full min-w-[760px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-5 py-3">Thời gian</th><th className="px-5 py-3">Hành động</th><th className="px-5 py-3">Đối tượng</th><th className="px-5 py-3">Người thực hiện</th></tr></thead><tbody className="divide-y divide-slate-100">{auditEntries.map((entry): React.ReactNode => <tr key={entry.id}><td className="px-5 py-4 text-slate-500">{new Intl.DateTimeFormat("vi-VN", { dateStyle: "short", timeStyle: "short" }).format(new Date(entry.created_at))}</td><td className="px-5 py-4 font-semibold">{entry.action}</td><td className="px-5 py-4">{entry.object_type} · {entry.object_id}</td><td className="px-5 py-4 text-slate-500">{users.find((user: AccessControlUser): boolean => user.account_id === entry.actor_account_id)?.username ?? entry.actor_account_id}</td></tr>)}</tbody></table>{auditEntries.length === 0 ? <div className="p-10 text-center text-sm text-slate-500"><KeyRound className="mx-auto mb-3 size-8 text-slate-300" />Chưa có thay đổi phân quyền nào.</div> : null}<CursorPagination currentItemCount={auditEntries.length} currentPage={auditPage} hasNextPage={auditPage < auditPages.length || auditQuery.hasNextPage} nextPagePending={auditQuery.isFetchingNextPage} onPageChange={changeAuditPage} /></section> : null}
     </div>
   );
 }

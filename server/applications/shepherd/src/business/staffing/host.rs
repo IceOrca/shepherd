@@ -2,24 +2,88 @@ use std::sync::Arc;
 
 use axum::{
     Extension, Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::{get, post, put},
 };
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, NaiveDate, Utc};
 use tracing::{error, warn, info, debug, trace};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::{AppContext, auth::AuthenticatedUser};
+use crate::pagination::{decode_cursor, encode_cursor, normalize_search, resolve_limit};
 
 use super::core::{
-    BusinessRecordStatus, Customer, CustomerInput, CustomerWorkRecord, CustomerWorkRecordInput, ManualRateOverride,
-    ShiftAssignment, ShiftAssignmentInput, StaffingCandidate, StaffingEligibility, StaffingEligibilityInput,
-    StaffingError, StaffingJob, StaffingPriceSet, StaffingPriceSetInput, StaffingRate, StaffingReconciliation,
-    StaffingShift, StaffingShiftInput, StaffingStaff,
+    BusinessRecordStatus, Customer, CustomerCursor, CustomerInput, CustomerPage, CustomerWorkRecord,
+    CustomerWorkRecordInput, ManualRateOverride, ShiftAssignment, ShiftAssignmentInput, StaffingCandidate,
+    StaffingEligibility, StaffingEligibilityInput, StaffingError, StaffingJob, StaffingPriceSet, StaffingPriceSetInput,
+    StaffingRate, StaffingRateCursor, StaffingRatePage, StaffingReconciliation, StaffingReconciliationCursor,
+    StaffingReconciliationPage, StaffingShift, StaffingShiftInput, StaffingStaff, StaffingStaffCursor,
+    StaffingStaffPage,
 };
+
+#[derive(Debug, Deserialize)]
+pub struct ReconciliationPageQuery {
+    pub limit: Option<u16>,
+    pub cursor: Option<String>,
+    pub customer_id: Option<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CustomerPageQuery {
+    pub limit: Option<u16>,
+    pub cursor: Option<String>,
+    pub search: Option<String>,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct CustomerPageResponse {
+    pub items: Vec<Customer>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+    pub limit: u16,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StaffingRatePageQuery {
+    pub limit: Option<u16>,
+    pub cursor: Option<String>,
+    pub customer_id: Option<Uuid>,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct StaffingRatePageResponse {
+    pub items: Vec<StaffingRate>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+    pub limit: u16,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StaffingStaffPageQuery {
+    pub limit: Option<u16>,
+    pub cursor: Option<String>,
+    pub search: Option<String>,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct StaffingStaffPageResponse {
+    pub items: Vec<StaffingStaff>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+    pub limit: u16,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct StaffingReconciliationPageResponse {
+    pub items: Vec<StaffingReconciliation>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+    pub limit: u16,
+}
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(optional_fields = nullable)]
@@ -219,15 +283,24 @@ pub fn routes() -> Router<Arc<AppContext>> {
 pub async fn list_customers(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
-) -> Result<Json<Vec<Customer>>, StatusCode> {
+    Query(query): Query<CustomerPageQuery>,
+) -> Result<Json<CustomerPageResponse>, StatusCode> {
     require_permission(&user, "business.customers.read")?;
-    context
+    let limit: u16 = resolve_limit(&context.list_pagination, query.limit)?;
+    let cursor: Option<CustomerCursor> = decode_cursor(query.cursor.as_deref())?;
+    let page: CustomerPage = context
         .core
         .staffing
-        .list_customers(user.tenant_id)
+        .list_customers(user.tenant_id, normalize_search(query.search), i64::from(limit), cursor)
         .await
-        .map(Json)
-        .map_err(|error| staffing_status("list customers", &user, error))
+        .map_err(|error| staffing_status("list customers", &user, error))?;
+    let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
+    Ok(Json(CustomerPageResponse {
+        has_more: next_cursor.is_some(),
+        items: page.items,
+        next_cursor,
+        limit,
+    }))
 }
 
 pub async fn create_customer(
@@ -264,15 +337,24 @@ pub async fn update_customer(
 pub async fn list_rates(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
-) -> Result<Json<Vec<StaffingRate>>, StatusCode> {
+    Query(query): Query<StaffingRatePageQuery>,
+) -> Result<Json<StaffingRatePageResponse>, StatusCode> {
     require_permission(&user, "business.staffing_rates.read")?;
-    context
+    let limit: u16 = resolve_limit(&context.list_pagination, query.limit)?;
+    let cursor: Option<StaffingRateCursor> = decode_cursor(query.cursor.as_deref())?;
+    let page: StaffingRatePage = context
         .core
         .staffing
-        .list_rates(user.tenant_id)
+        .list_rates(user.tenant_id, query.customer_id, i64::from(limit), cursor)
         .await
-        .map(Json)
-        .map_err(|error| staffing_status("list staffing rates", &user, error))
+        .map_err(|error| staffing_status("list staffing rates", &user, error))?;
+    let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
+    Ok(Json(StaffingRatePageResponse {
+        has_more: next_cursor.is_some(),
+        items: page.items,
+        next_cursor,
+        limit,
+    }))
 }
 
 pub async fn list_jobs(
@@ -292,15 +374,24 @@ pub async fn list_jobs(
 pub async fn list_staff(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
-) -> Result<Json<Vec<StaffingStaff>>, StatusCode> {
+    Query(query): Query<StaffingStaffPageQuery>,
+) -> Result<Json<StaffingStaffPageResponse>, StatusCode> {
     require_permission(&user, "business.staffing_rates.read")?;
-    context
+    let limit: u16 = resolve_limit(&context.list_pagination, query.limit)?;
+    let cursor: Option<StaffingStaffCursor> = decode_cursor(query.cursor.as_deref())?;
+    let page: StaffingStaffPage = context
         .core
         .staffing
-        .list_staff(user.tenant_id)
+        .list_staff(user.tenant_id, normalize_search(query.search), i64::from(limit), cursor)
         .await
-        .map(Json)
-        .map_err(|error| staffing_status("list staffing staff", &user, error))
+        .map_err(|error| staffing_status("list staffing staff", &user, error))?;
+    let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
+    Ok(Json(StaffingStaffPageResponse {
+        has_more: next_cursor.is_some(),
+        items: page.items,
+        next_cursor,
+        limit,
+    }))
 }
 
 pub async fn set_prices(
@@ -425,15 +516,46 @@ pub async fn create_shift_assignment(
 pub async fn list_reconciliations(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
-) -> Result<Json<Vec<StaffingReconciliation>>, StatusCode> {
+    Query(query): Query<ReconciliationPageQuery>,
+) -> Result<Json<StaffingReconciliationPageResponse>, StatusCode> {
     require_permission(&user, "business.reconciliation.read")?;
-    context
+    let pagination = &context.list_pagination;
+    let limit: u16 = query.limit.unwrap_or(pagination.default_limit);
+    if !(pagination.minimum_limit..=pagination.maximum_limit).contains(&limit) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let cursor: Option<StaffingReconciliationCursor> = query
+        .cursor
+        .as_deref()
+        .map(decode_staffing_reconciliation_cursor)
+        .transpose()?;
+    let page: StaffingReconciliationPage = context
         .core
         .staffing
-        .list_reconciliations(user.tenant_id)
+        .list_reconciliations(user.tenant_id, query.customer_id, i64::from(limit), cursor)
         .await
-        .map(Json)
-        .map_err(|error| staffing_status("list staffing reconciliations", &user, error))
+        .map_err(|error| staffing_status("list staffing reconciliations", &user, error))?;
+    let next_cursor: Option<String> = page
+        .next_cursor
+        .as_ref()
+        .map(encode_staffing_reconciliation_cursor)
+        .transpose()?;
+    Ok(Json(StaffingReconciliationPageResponse {
+        has_more: next_cursor.is_some(),
+        items: page.items,
+        next_cursor,
+        limit,
+    }))
+}
+
+fn decode_staffing_reconciliation_cursor(value: &str) -> Result<StaffingReconciliationCursor, StatusCode> {
+    let bytes: Vec<u8> = URL_SAFE_NO_PAD.decode(value).map_err(|_| StatusCode::BAD_REQUEST)?;
+    serde_json::from_slice(&bytes).map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+fn encode_staffing_reconciliation_cursor(cursor: &StaffingReconciliationCursor) -> Result<String, StatusCode> {
+    let bytes: Vec<u8> = serde_json::to_vec(cursor).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
 pub async fn upsert_customer_work_record(

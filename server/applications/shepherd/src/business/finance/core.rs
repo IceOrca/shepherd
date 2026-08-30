@@ -31,7 +31,7 @@ impl ExpenseFundingSource {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, TS)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ExpenseClaimStatus {
     Submitted,
@@ -41,6 +41,15 @@ pub enum ExpenseClaimStatus {
 }
 
 impl ExpenseClaimStatus {
+    pub fn as_code(self) -> &'static str {
+        match self {
+            Self::Submitted => "submitted",
+            Self::Approved => "approved",
+            Self::Rejected => "rejected",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
     pub fn from_code(code: &str) -> Option<Self> {
         match code {
             "submitted" => Some(Self::Submitted),
@@ -68,7 +77,7 @@ impl SalaryAdvanceRecoverySource {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, TS)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum SalaryAdvanceStatus {
     Requested,
@@ -80,6 +89,17 @@ pub enum SalaryAdvanceStatus {
 }
 
 impl SalaryAdvanceStatus {
+    pub fn as_code(self) -> &'static str {
+        match self {
+            Self::Requested => "requested",
+            Self::Approved => "approved",
+            Self::Disbursed => "disbursed",
+            Self::Recovered => "recovered",
+            Self::Rejected => "rejected",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
     pub fn from_code(code: &str) -> Option<Self> {
         match code {
             "requested" => Some(Self::Requested),
@@ -126,6 +146,13 @@ pub struct ExpenseClaim {
     pub submitted_by_username: String,
     pub approved_by_username: Option<String>,
     pub approved_at: Option<DateTime<Utc>>,
+    pub revision_id: Uuid,
+    pub revision_number: i64,
+    pub revision_kind: String,
+    pub correction_reason: Option<String>,
+    pub revised_by_username: String,
+    pub revised_at: DateTime<Utc>,
+    pub financial_period_open: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -149,6 +176,41 @@ pub struct ExpenseClaimInput {
 pub struct ExpenseDecisionInput {
     pub approved_amount: String,
     pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ExpenseCorrectionInput {
+    pub expected_revision_id: Uuid,
+    pub correction_reason: String,
+    pub category_id: Uuid,
+    pub funding_source: ExpenseFundingSource,
+    pub paid_by_employee_id: Option<Uuid>,
+    pub customer_id: Option<Uuid>,
+    pub urgent_work_report_id: Option<Uuid>,
+    pub staffing_assignment_id: Option<Uuid>,
+    pub incurred_on: NaiveDate,
+    pub description: String,
+    pub evidence_reference: Option<String>,
+    pub claimed_amount: String,
+    pub approved_amount: Option<String>,
+    pub currency: String,
+}
+
+#[derive(Clone, Debug, Serialize, TS)]
+pub struct ExpenseClaimRevision {
+    pub revision_id: Uuid,
+    pub revision_number: i64,
+    pub revision_kind: String,
+    pub correction_reason: Option<String>,
+    pub revised_by_username: String,
+    pub revised_at: DateTime<Utc>,
+    pub category_name: String,
+    pub incurred_on: NaiveDate,
+    pub description: String,
+    pub claimed_amount: String,
+    pub approved_amount: Option<String>,
+    pub currency: String,
+    pub status: ExpenseClaimStatus,
 }
 
 #[derive(Clone, Debug)]
@@ -180,6 +242,12 @@ pub struct SalaryAdvance {
     pub requested_at: DateTime<Utc>,
     pub approved_at: Option<DateTime<Utc>>,
     pub disbursed_at: Option<DateTime<Utc>>,
+    pub revision_id: Uuid,
+    pub revision_number: i64,
+    pub revision_kind: String,
+    pub correction_reason: Option<String>,
+    pub revised_by_username: String,
+    pub revised_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -196,6 +264,91 @@ pub struct SalaryAdvanceInput {
 pub struct SalaryAdvanceDecisionInput {
     pub approved_amount: String,
     pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SalaryAdvanceCorrectionInput {
+    pub expected_revision_id: Uuid,
+    pub correction_reason: String,
+    pub employee_id: Uuid,
+    pub requested_amount: String,
+    pub approved_amount: Option<String>,
+    pub currency: String,
+    pub reason: String,
+    pub recovery_due_on: Option<NaiveDate>,
+}
+
+#[derive(Clone, Debug, Serialize, TS)]
+pub struct SalaryAdvanceRevision {
+    pub revision_id: Uuid,
+    pub revision_number: i64,
+    pub revision_kind: String,
+    pub correction_reason: Option<String>,
+    pub revised_by_username: String,
+    pub revised_at: DateTime<Utc>,
+    pub employee_name: String,
+    pub requested_amount: String,
+    pub approved_amount: Option<String>,
+    pub currency: String,
+    pub reason: String,
+    pub recovery_due_on: Option<NaiveDate>,
+    pub status: SalaryAdvanceStatus,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ExpenseCursor {
+    pub incurred_on: NaiveDate,
+    pub created_at: DateTime<Utc>,
+    pub expense_id: Uuid,
+}
+
+#[derive(Clone, Debug)]
+pub struct ExpensePage {
+    pub items: Vec<ExpenseClaim>,
+    pub next_cursor: Option<ExpenseCursor>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SalaryAdvanceCursor {
+    pub requested_at: DateTime<Utc>,
+    pub advance_id: Uuid,
+}
+
+#[derive(Clone, Debug)]
+pub struct SalaryAdvancePage {
+    pub items: Vec<SalaryAdvance>,
+    pub next_cursor: Option<SalaryAdvanceCursor>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RevisionCursor {
+    pub revision_number: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct ExpenseRevisionPage {
+    pub items: Vec<ExpenseClaimRevision>,
+    pub next_cursor: Option<RevisionCursor>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SalaryAdvanceRevisionPage {
+    pub items: Vec<SalaryAdvanceRevision>,
+    pub next_cursor: Option<RevisionCursor>,
+}
+
+pub struct ExpenseListQuery {
+    pub status: Option<ExpenseClaimStatus>,
+    pub search: Option<String>,
+    pub limit: i64,
+    pub cursor: Option<ExpenseCursor>,
+}
+
+pub struct SalaryAdvanceListQuery {
+    pub status: Option<SalaryAdvanceStatus>,
+    pub search: Option<String>,
+    pub limit: i64,
+    pub cursor: Option<SalaryAdvanceCursor>,
 }
 
 #[derive(Clone, Debug)]
@@ -236,7 +389,8 @@ pub trait FinanceRepo: Send + Sync {
         tenant_id: Uuid,
         actor_account_id: Uuid,
         can_read_all: bool,
-    ) -> Result<Vec<ExpenseClaim>, FinanceError>;
+        query: &ExpenseListQuery,
+    ) -> Result<ExpensePage, FinanceError>;
     async fn create_expense(
         &self,
         tenant_id: Uuid,
@@ -245,6 +399,24 @@ pub trait FinanceRepo: Send + Sync {
         idempotency_key: Uuid,
         input: &ExpenseClaimInput,
     ) -> Result<ExpenseClaim, FinanceError>;
+    async fn correct_expense(
+        &self,
+        tenant_id: Uuid,
+        expense_id: Uuid,
+        actor_account_id: Uuid,
+        can_correct_confirmed: bool,
+        idempotency_key: Uuid,
+        input: &ExpenseCorrectionInput,
+    ) -> Result<ExpenseClaim, FinanceError>;
+    async fn list_expense_revisions(
+        &self,
+        tenant_id: Uuid,
+        expense_id: Uuid,
+        actor_account_id: Uuid,
+        can_read_all: bool,
+        limit: i64,
+        cursor: Option<&RevisionCursor>,
+    ) -> Result<ExpenseRevisionPage, FinanceError>;
     async fn decide_expense(
         &self,
         tenant_id: Uuid,
@@ -264,7 +436,8 @@ pub trait FinanceRepo: Send + Sync {
         tenant_id: Uuid,
         actor_account_id: Uuid,
         can_read_all: bool,
-    ) -> Result<Vec<SalaryAdvance>, FinanceError>;
+        query: &SalaryAdvanceListQuery,
+    ) -> Result<SalaryAdvancePage, FinanceError>;
     async fn create_salary_advance(
         &self,
         tenant_id: Uuid,
@@ -273,6 +446,24 @@ pub trait FinanceRepo: Send + Sync {
         idempotency_key: Uuid,
         input: &SalaryAdvanceInput,
     ) -> Result<SalaryAdvance, FinanceError>;
+    async fn correct_salary_advance(
+        &self,
+        tenant_id: Uuid,
+        advance_id: Uuid,
+        actor_account_id: Uuid,
+        can_correct_confirmed: bool,
+        idempotency_key: Uuid,
+        input: &SalaryAdvanceCorrectionInput,
+    ) -> Result<SalaryAdvance, FinanceError>;
+    async fn list_salary_advance_revisions(
+        &self,
+        tenant_id: Uuid,
+        advance_id: Uuid,
+        actor_account_id: Uuid,
+        can_read_all: bool,
+        limit: i64,
+        cursor: Option<&RevisionCursor>,
+    ) -> Result<SalaryAdvanceRevisionPage, FinanceError>;
     async fn decide_salary_advance(
         &self,
         tenant_id: Uuid,
@@ -315,8 +506,12 @@ impl FinanceService {
         tenant_id: Uuid,
         actor_account_id: Uuid,
         can_read_all: bool,
-    ) -> Result<Vec<ExpenseClaim>, FinanceError> {
-        self.repo.list_expenses(tenant_id, actor_account_id, can_read_all).await
+        query: ExpenseListQuery,
+    ) -> Result<ExpensePage, FinanceError> {
+        validate_page_limit(query.limit)?;
+        self.repo
+            .list_expenses(tenant_id, actor_account_id, can_read_all, &query)
+            .await
     }
 
     pub async fn create_expense(
@@ -355,6 +550,77 @@ impl FinanceService {
                 can_submit_for_others,
                 idempotency_key,
                 &input,
+            )
+            .await
+    }
+
+    pub async fn correct_expense(
+        &self,
+        tenant_id: Uuid,
+        expense_id: Uuid,
+        actor_account_id: Uuid,
+        can_correct_confirmed: bool,
+        idempotency_key: Uuid,
+        input: ExpenseCorrectionInput,
+    ) -> Result<ExpenseClaim, FinanceError> {
+        validate_uuid(expense_id)?;
+        validate_uuid(input.expected_revision_id)?;
+        validate_uuid(input.category_id)?;
+        validate_text(&input.correction_reason, 3, 500, "correction reason is invalid")?;
+        validate_context_values(input.urgent_work_report_id, input.staffing_assignment_id)?;
+        validate_money(&input.claimed_amount, &input.currency)?;
+        if let Some(approved_amount) = input.approved_amount.as_deref() {
+            validate_positive_decimal(approved_amount)?;
+        }
+        validate_text(&input.description, 3, 1000, "expense description is invalid")?;
+        validate_optional_text(
+            input.evidence_reference.as_deref(),
+            1,
+            500,
+            "expense evidence is invalid",
+        )?;
+        match input.funding_source {
+            ExpenseFundingSource::CompanyFunds if input.paid_by_employee_id.is_some() => {
+                return Err(FinanceError::InvalidInput(
+                    "company-funded expense cannot have an employee payer",
+                ));
+            }
+            ExpenseFundingSource::EmployeePersonal if input.paid_by_employee_id.is_none() => {
+                return Err(FinanceError::InvalidInput("employee-paid expense requires a payer"));
+            }
+            _ => {}
+        }
+        self.repo
+            .correct_expense(
+                tenant_id,
+                expense_id,
+                actor_account_id,
+                can_correct_confirmed,
+                idempotency_key,
+                &input,
+            )
+            .await
+    }
+
+    pub async fn list_expense_revisions(
+        &self,
+        tenant_id: Uuid,
+        expense_id: Uuid,
+        actor_account_id: Uuid,
+        can_read_all: bool,
+        limit: i64,
+        cursor: Option<RevisionCursor>,
+    ) -> Result<ExpenseRevisionPage, FinanceError> {
+        validate_uuid(expense_id)?;
+        validate_page_limit(limit)?;
+        self.repo
+            .list_expense_revisions(
+                tenant_id,
+                expense_id,
+                actor_account_id,
+                can_read_all,
+                limit,
+                cursor.as_ref(),
             )
             .await
     }
@@ -429,9 +695,11 @@ impl FinanceService {
         tenant_id: Uuid,
         actor_account_id: Uuid,
         can_read_all: bool,
-    ) -> Result<Vec<SalaryAdvance>, FinanceError> {
+        query: SalaryAdvanceListQuery,
+    ) -> Result<SalaryAdvancePage, FinanceError> {
+        validate_page_limit(query.limit)?;
         self.repo
-            .list_salary_advances(tenant_id, actor_account_id, can_read_all)
+            .list_salary_advances(tenant_id, actor_account_id, can_read_all, &query)
             .await
     }
 
@@ -453,6 +721,59 @@ impl FinanceService {
                 can_request_for_others,
                 idempotency_key,
                 &input,
+            )
+            .await
+    }
+
+    pub async fn correct_salary_advance(
+        &self,
+        tenant_id: Uuid,
+        advance_id: Uuid,
+        actor_account_id: Uuid,
+        can_correct_confirmed: bool,
+        idempotency_key: Uuid,
+        input: SalaryAdvanceCorrectionInput,
+    ) -> Result<SalaryAdvance, FinanceError> {
+        validate_uuid(advance_id)?;
+        validate_uuid(input.expected_revision_id)?;
+        validate_uuid(input.employee_id)?;
+        validate_text(&input.correction_reason, 3, 500, "correction reason is invalid")?;
+        validate_money(&input.requested_amount, &input.currency)?;
+        if let Some(approved_amount) = input.approved_amount.as_deref() {
+            validate_positive_decimal(approved_amount)?;
+        }
+        validate_text(&input.reason, 3, 500, "salary advance reason is invalid")?;
+        self.repo
+            .correct_salary_advance(
+                tenant_id,
+                advance_id,
+                actor_account_id,
+                can_correct_confirmed,
+                idempotency_key,
+                &input,
+            )
+            .await
+    }
+
+    pub async fn list_salary_advance_revisions(
+        &self,
+        tenant_id: Uuid,
+        advance_id: Uuid,
+        actor_account_id: Uuid,
+        can_read_all: bool,
+        limit: i64,
+        cursor: Option<RevisionCursor>,
+    ) -> Result<SalaryAdvanceRevisionPage, FinanceError> {
+        validate_uuid(advance_id)?;
+        validate_page_limit(limit)?;
+        self.repo
+            .list_salary_advance_revisions(
+                tenant_id,
+                advance_id,
+                actor_account_id,
+                can_read_all,
+                limit,
+                cursor.as_ref(),
             )
             .await
     }
@@ -544,8 +865,23 @@ fn validate_uuid(value: Uuid) -> Result<(), FinanceError> {
     }
 }
 
+fn validate_page_limit(limit: i64) -> Result<(), FinanceError> {
+    if limit <= 0 {
+        Err(FinanceError::InvalidInput("finance page size must be positive"))
+    } else {
+        Ok(())
+    }
+}
+
 fn validate_context(input: &ExpenseClaimInput) -> Result<(), FinanceError> {
-    let specific_contexts: usize = [input.urgent_work_report_id, input.staffing_assignment_id]
+    validate_context_values(input.urgent_work_report_id, input.staffing_assignment_id)
+}
+
+fn validate_context_values(
+    urgent_work_report_id: Option<Uuid>,
+    staffing_assignment_id: Option<Uuid>,
+) -> Result<(), FinanceError> {
+    let specific_contexts: usize = [urgent_work_report_id, staffing_assignment_id]
         .into_iter()
         .flatten()
         .count();

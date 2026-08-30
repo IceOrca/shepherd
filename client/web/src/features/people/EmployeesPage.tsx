@@ -1,14 +1,14 @@
 import {
+  useInfiniteQuery,
   useMutation,
-  useQuery,
   useQueryClient,
   type UseMutationResult,
-  type UseQueryResult,
 } from "@tanstack/react-query";
 import { Eye, LoaderCircle, Pencil, RefreshCw, Search, ShieldCheck, UserRound, X } from "lucide-react";
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import type {
   Employee,
+  EmployeePageResponse,
   EmployeeCitizenIdUpdateRequest,
   EmployeeSensitiveProfile,
   EmployeeStatus,
@@ -17,6 +17,7 @@ import type {
   PermissionCode,
 } from "../../api/generated/contracts";
 import { friendlyApiError } from "../../shared/api/client";
+import { CursorPagination } from "../../shared/components/CursorPagination";
 import { useAuth } from "../auth/AuthProvider";
 import {
   getEmployeeCitizenId,
@@ -82,6 +83,7 @@ export function EmployeesPage(): React.JSX.Element {
   const canReadSensitive: boolean = permissions.includes("hr.employees.sensitive.read");
   const canManageSensitive: boolean = permissions.includes("hr.employees.sensitive.manage");
   const [search, setSearch] = useState<string>("");
+  const [currentPage, setCurrentPage] = useState<number>(1);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [draft, setDraft] = useState<EmployeeUpsertRequest | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -91,26 +93,32 @@ export function EmployeesPage(): React.JSX.Element {
   const [sensitiveLoading, setSensitiveLoading] = useState<boolean>(false);
   const [sensitiveError, setSensitiveError] = useState<string | null>(null);
 
-  const employeesQuery: UseQueryResult<Employee[], Error> = useQuery({
-    queryKey: peopleQueryKeys.employees,
-    queryFn: listEmployees,
+  const employeesQuery = useInfiniteQuery({
+    queryKey: [...peopleQueryKeys.employees, "search", search.trim()],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }: { pageParam: string | null }): Promise<EmployeePageResponse> =>
+      listEmployees(pageParam, search),
+    getNextPageParam: (lastPage: EmployeePageResponse): string | undefined => lastPage.next_cursor ?? undefined,
     enabled: canRead,
   });
+  const loadedPages: EmployeePageResponse[] = employeesQuery.data?.pages ?? [];
+  const visibleEmployees: Employee[] = loadedPages[currentPage - 1]?.items ?? [];
+  const hasNextPage: boolean = currentPage < loadedPages.length || employeesQuery.hasNextPage;
 
-  const visibleEmployees: Employee[] = useMemo((): Employee[] => {
-    const needle: string = search.trim().toLocaleLowerCase("vi");
-    if (!needle) return employeesQuery.data ?? [];
-    return (employeesQuery.data ?? []).filter((employee: Employee): boolean =>
-      [
-        employee.employee_code,
-        employee.display_name,
-        employee.legal_first_name ?? "",
-        employee.legal_middle_name ?? "",
-        employee.legal_last_name ?? "",
-        employee.personal_phone_e164 ?? "",
-      ].join(" ").toLocaleLowerCase("vi").includes(needle),
-    );
-  }, [employeesQuery.data, search]);
+  useEffect((): void => setCurrentPage(1), [search]);
+
+  const changePage = (nextPage: number): void => {
+    if (nextPage < 1) return;
+    if (nextPage <= loadedPages.length) {
+      setCurrentPage(nextPage);
+      return;
+    }
+    if (nextPage === loadedPages.length + 1 && employeesQuery.hasNextPage) {
+      void employeesQuery.fetchNextPage().then((result): void => {
+        if ((result.data?.pages.length ?? 0) >= nextPage) setCurrentPage(nextPage);
+      });
+    }
+  };
 
   const saveMutation: UseMutationResult<Employee, Error, EmployeeSaveVariables> = useMutation({
     mutationFn: ({ employeeId, payload }: EmployeeSaveVariables): Promise<Employee> =>
@@ -232,7 +240,7 @@ export function EmployeesPage(): React.JSX.Element {
       <div className="panel overflow-hidden">
         <div className="border-b border-slate-200 px-5 py-4">
           <h2 className="font-black text-slate-950">Nhân viên trong chi nhánh đang chọn</h2>
-          <p className="mt-1 text-sm text-slate-500">{visibleEmployees.length} nhân viên · chủ doanh nghiệp không thuộc danh sách nhân viên</p>
+          <p className="mt-1 text-sm text-slate-500">{visibleEmployees.length} nhân viên trên trang · chủ doanh nghiệp không thuộc danh sách nhân viên</p>
         </div>
         {employeesQuery.isPending ? (
           <div className="grid min-h-48 place-items-center"><LoaderCircle className="size-6 animate-spin text-blue-600" /></div>
@@ -257,6 +265,7 @@ export function EmployeesPage(): React.JSX.Element {
             ))}
           </div>
         )}
+        <CursorPagination currentItemCount={visibleEmployees.length} currentPage={currentPage} hasNextPage={hasNextPage} nextPagePending={employeesQuery.isFetchingNextPage} onPageChange={changePage} />
       </div>
 
       {editingEmployee && draft ? (

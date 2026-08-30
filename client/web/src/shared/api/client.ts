@@ -93,7 +93,9 @@ async function sendRequest(path: string, init: RequestInit): Promise<Response> {
   const hasAccessToken: boolean = accessToken !== null;
   const method: string = requestMethod(init);
 
-  headers.set("Accept", "application/json");
+  if (!headers.has("Accept")) {
+    headers.set("Accept", "application/json");
+  }
   if (hasBody && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
@@ -161,6 +163,60 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
     throw new ApiError(response.status, payload);
   }
   return payload as T;
+}
+
+export interface DownloadedFile {
+  blob: Blob;
+  filename: string | null;
+}
+
+function attachmentFilename(response: Response): string | null {
+  const disposition: string | null = response.headers.get("Content-Disposition");
+  if (!disposition) return null;
+  const match: RegExpMatchArray | null = disposition.match(/filename="([^"\\\r\n]+)"/i);
+  return match?.[1] ?? null;
+}
+
+export async function apiFileRequest(path: string, init: RequestInit = {}): Promise<DownloadedFile> {
+  const method: string = requestMethod(init);
+  const hasBody: boolean = typeof init.body === "string";
+  const hadAccessToken: boolean = accessToken !== null;
+  const headers: Headers = new Headers(init.headers);
+  headers.set("Accept", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  const requestInit: RequestInit = { ...init, headers };
+  let response: Response = await sendRequest(path, requestInit);
+  let refreshed: boolean = false;
+
+  if (response.status === 401 && authenticationRefreshHandler) {
+    console.info("Staffing API authentication refresh requested", { path, method });
+    const refreshedToken: string | null = await authenticationRefreshHandler();
+    if (refreshedToken) {
+      refreshed = true;
+      response = await sendRequest(path, requestInit);
+    } else {
+      console.warn("Staffing API authentication refresh did not return a usable token", { path, method });
+    }
+  }
+
+  logClientApiResponse({
+    path,
+    method,
+    hasAccessToken: hadAccessToken,
+    hasBody,
+    status: response.status,
+    refreshed,
+    activeTenantId,
+    activeBranchId,
+  });
+  if (!response.ok) {
+    const payload: unknown = await readPayload(response);
+    if (response.status === 401) authenticationLostHandler?.();
+    throw new ApiError(response.status, payload);
+  }
+  return {
+    blob: await response.blob(),
+    filename: attachmentFilename(response),
+  };
 }
 
 export function apiRequestForBranch<T>(

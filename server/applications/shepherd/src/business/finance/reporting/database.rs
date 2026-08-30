@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 use infra_postgres::{DatabaseAdapter, TenantDbErr, TenantTransaction};
 use sqlx::{FromRow, PgConnection};
 use tracing::error;
@@ -12,8 +12,9 @@ use crate::auth::RoleCode;
 use super::{
     super::core::FinanceError,
     core::{
-        EmployeeSalaryConfiguration, EmployeeSalaryRateInput, FinancialReportingRepo, OperatingFinancialLine,
-        OperatingFinancialReport, PayrollLine, PayrollReport,
+        EmployeeSalaryConfiguration, EmployeeSalaryRateInput, FinancialPeriodChangeInput, FinancialPeriodState,
+        FinancialPeriodStatus, FinancialReportingRepo, OperatingFinancialLine, OperatingFinancialReport, PayrollLine,
+        PayrollReport,
     },
 };
 
@@ -38,6 +39,38 @@ impl FinancialReportingDb {
 struct BranchRow {
     id: Uuid,
     name: String,
+}
+
+#[derive(FromRow)]
+struct FinancialPeriodRow {
+    branch_id: Uuid,
+    period_start: NaiveDate,
+    status: String,
+    revision_number: i64,
+    reason: Option<String>,
+    actor_username: Option<String>,
+    occurred_at: Option<DateTime<Utc>>,
+}
+
+impl TryFrom<FinancialPeriodRow> for FinancialPeriodState {
+    type Error = FinanceError;
+
+    fn try_from(row: FinancialPeriodRow) -> Result<Self, Self::Error> {
+        let status: FinancialPeriodStatus = match row.status.as_str() {
+            "open" => FinancialPeriodStatus::Open,
+            "closed" => FinancialPeriodStatus::Closed,
+            _ => return Err(FinanceError::BackendUnavailable),
+        };
+        Ok(Self {
+            branch_id: row.branch_id,
+            period_start: row.period_start,
+            status,
+            revision_number: row.revision_number,
+            reason: row.reason,
+            actor_username: row.actor_username,
+            occurred_at: row.occurred_at,
+        })
+    }
 }
 
 #[derive(FromRow)]
@@ -447,6 +480,144 @@ fn map_sqlx(error: sqlx::Error) -> FinanceError {
 
 #[async_trait]
 impl FinancialReportingRepo for FinancialReportingDb {
+    async fn list_financial_periods(
+        &self,
+        tenant_id: Uuid,
+        start_date: NaiveDate,
+        end_date: NaiveDate,
+    ) -> Result<Vec<FinancialPeriodState>, FinanceError> {
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        let connection: &mut PgConnection = transaction.connection();
+        let branch_row: BranchRow = branch(&mut *connection, tenant_id).await?;
+        let rows: Vec<FinancialPeriodRow> = sqlx::query_as(
+            r#"
+            SELECT $2::UUID AS branch_id, month.period_start::DATE AS period_start,
+                   COALESCE(event.status, 'open') AS status,
+                   COALESCE(event.revision_number, 0) AS revision_number,
+                   event.reason, account.username AS actor_username, event.occurred_at
+            FROM generate_series(
+                date_trunc('month', $3::DATE),
+                date_trunc('month', $4::DATE),
+                INTERVAL '1 month'
+            ) AS month(period_start)
+            LEFT JOIN LATERAL (
+                SELECT period.status, period.revision_number, period.reason,
+                       period.actor_account_id, period.occurred_at
+                FROM business_financial_period_events AS period
+                WHERE period.tenant_id = $1
+                  AND period.branch_id = $2
+                  AND period.period_start = month.period_start::DATE
+                ORDER BY period.revision_number DESC
+                LIMIT 1
+            ) AS event ON TRUE
+            LEFT JOIN accounts AS account
+              ON account.tenant_id = $1 AND account.id = event.actor_account_id
+            ORDER BY month.period_start DESC
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(branch_row.id)
+        .bind(start_date)
+        .bind(end_date)
+        .fetch_all(&mut *connection)
+        .await
+        .map_err(map_sqlx)?;
+        let result: Vec<FinancialPeriodState> = rows.into_iter().map(TryInto::try_into).collect::<Result<_, _>>()?;
+        transaction.commit().await.map_err(map_sqlx)?;
+        Ok(result)
+    }
+
+    async fn change_financial_period(
+        &self,
+        tenant_id: Uuid,
+        actor_account_id: Uuid,
+        idempotency_key: Uuid,
+        input: &FinancialPeriodChangeInput,
+    ) -> Result<FinancialPeriodState, FinanceError> {
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        let connection: &mut PgConnection = transaction.connection();
+        let branch_row: BranchRow = sqlx::query_as(
+            "SELECT id, name FROM branches WHERE tenant_id = $1 AND id = shepherd_current_branch_id() FOR UPDATE",
+        )
+        .bind(tenant_id)
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(map_sqlx)?;
+
+        if let Some(row) = sqlx::query_as::<_, FinancialPeriodRow>(
+            r#"
+            SELECT event.branch_id, event.period_start, event.status, event.revision_number,
+                   event.reason, account.username AS actor_username, event.occurred_at
+            FROM business_financial_period_events AS event
+            JOIN accounts AS account
+              ON account.tenant_id = event.tenant_id AND account.id = event.actor_account_id
+            WHERE event.tenant_id = $1 AND event.branch_id = $2
+              AND event.actor_account_id = $3 AND event.idempotency_key = $4
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(branch_row.id)
+        .bind(actor_account_id)
+        .bind(idempotency_key)
+        .fetch_optional(&mut *connection)
+        .await
+        .map_err(map_sqlx)?
+        {
+            let result: FinancialPeriodState = row.try_into()?;
+            transaction.commit().await.map_err(map_sqlx)?;
+            return Ok(result);
+        }
+
+        let current_revision: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COALESCE(MAX(revision_number), 0)
+            FROM business_financial_period_events
+            WHERE tenant_id = $1 AND branch_id = $2 AND period_start = $3
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(branch_row.id)
+        .bind(input.period_start)
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(map_sqlx)?;
+        if current_revision != input.expected_revision_number {
+            return Err(FinanceError::Conflict);
+        }
+
+        let row: FinancialPeriodRow = sqlx::query_as(
+            r#"
+            WITH inserted AS (
+                INSERT INTO business_financial_period_events (
+                    tenant_id, branch_id, period_start, status, revision_number,
+                    reason, actor_account_id, idempotency_key
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                RETURNING *
+            )
+            SELECT inserted.branch_id, inserted.period_start, inserted.status,
+                   inserted.revision_number, inserted.reason,
+                   account.username AS actor_username, inserted.occurred_at
+            FROM inserted
+            JOIN accounts AS account
+              ON account.tenant_id = inserted.tenant_id AND account.id = inserted.actor_account_id
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(branch_row.id)
+        .bind(input.period_start)
+        .bind(input.status.as_str())
+        .bind(current_revision + 1)
+        .bind(&input.reason)
+        .bind(actor_account_id)
+        .bind(idempotency_key)
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(map_sqlx)?;
+        let result: FinancialPeriodState = row.try_into()?;
+        transaction.commit().await.map_err(map_sqlx)?;
+        Ok(result)
+    }
+
     async fn list_salary_configurations(
         &self,
         tenant_id: Uuid,

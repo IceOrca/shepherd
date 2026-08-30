@@ -31,6 +31,10 @@ use crate::business::staffing::{
 
 type TestResult = Result<(), Box<dyn Error>>;
 
+fn reconciliation_page_size() -> Result<i64, Box<dyn Error>> {
+    Ok(std::env::var("API_LIST_PAGE_SIZE_DEFAULT")?.parse::<i64>()?)
+}
+
 struct SnapshotRow {
     status: String,
     urgent_work_report_id: Option<Uuid>,
@@ -831,9 +835,13 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
                 )
                 .await,
         )?;
-        let pending: Vec<super::core::UrgentWorkReconciliation> =
-            require_urgent(service.list_reconciliations(fixture.tenant_id).await)?;
+        let pending: super::core::UrgentReconciliationPage = require_urgent(
+            service
+                .list_reconciliations(fixture.tenant_id, None, reconciliation_page_size()?, None)
+                .await,
+        )?;
         let report: &super::core::UrgentWorkReconciliation = pending
+            .items
             .iter()
             .find(|candidate: &&super::core::UrgentWorkReconciliation| candidate.work.report_id == report_id)
             .ok_or_else(|| io::Error::other("urgent reconciliation missing"))?;
@@ -955,18 +963,22 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
         assert!(snapshot.worker_amount.is_some());
         assert!(snapshot.profit_consistent);
 
-        let planned_reconciliations: Vec<crate::business::staffing::core::StaffingReconciliation> =
+        let planned_reconciliations: crate::business::staffing::core::StaffingReconciliationPage =
             crate::business::staffing::core::StaffingRepo::list_reconciliations(
                 &*StaffingDb::new_arc(Arc::clone(&fixture.database)),
                 fixture.tenant_id,
+                None,
+                reconciliation_page_size()?,
+                None,
             )
             .await
             .map_err(|operation_error: StaffingError| {
                 io::Error::other(format!("planned reconciliation list failed: {operation_error:?}"))
             })?;
-        assert_eq!(planned_reconciliations.len(), 1);
+        assert_eq!(planned_reconciliations.items.len(), 1);
         assert_eq!(
             planned_reconciliations
+                .items
                 .first()
                 .map(|item: &crate::business::staffing::core::StaffingReconciliation| item.assignment_id),
             Some(fixture.planned_assignment_id)

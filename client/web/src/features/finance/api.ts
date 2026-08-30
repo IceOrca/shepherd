@@ -2,29 +2,43 @@ import type {
   ExpenseCategory,
   ExpenseClaim,
   ExpenseClaimCreateRequest,
+  ExpenseClaimRevision,
+  ExpensePageResponse,
+  ExpenseRevisionPageResponse,
+  ExpenseCorrectionRequest,
   Employee,
   EmployeeSalaryConfiguration,
   EmployeeSalaryRateCreateRequest,
   FinancialDecisionRequest,
+  FinancialPeriodChangeRequest,
+  FinancialPeriodState,
+  FinancialReportExportRequest,
   FinancialRejectionRequest,
   FinancialSettlementRequest,
   OperatingFinancialReport,
   PayrollReport,
   SalaryAdvance,
+  SalaryAdvanceCorrectionRequest,
   SalaryAdvanceCreateRequest,
   SalaryAdvanceDisbursementRequest,
   SalaryAdvanceRecoveryRequest,
+  SalaryAdvanceRevision,
+  SalaryAdvancePageResponse,
+  SalaryAdvanceRevisionPageResponse,
 } from "../../api/generated/contracts";
-import { apiRequest, apiRequestForBranch } from "../../shared/api/client";
+import { apiFileRequest, apiRequest, apiRequestForBranch, type DownloadedFile } from "../../shared/api/client";
 
 export const financeQueryKeys = {
   all: ["finance"] as const,
   expenseCategories: ["finance", "expense-categories"] as const,
   expenses: ["finance", "expenses"] as const,
+  expenseRevisions: (expenseId: string) => ["finance", "expenses", expenseId, "revisions"] as const,
   salaryAdvances: ["finance", "salary-advances"] as const,
+  salaryAdvanceRevisions: (advanceId: string) => ["finance", "salary-advances", advanceId, "revisions"] as const,
   salaryConfigurations: ["finance", "salary-configurations"] as const,
   operatingReport: ["finance", "operating-report"] as const,
   payrollReport: ["finance", "payroll-report"] as const,
+  financialPeriods: ["finance", "periods"] as const,
 };
 
 function mutationHeaders(): HeadersInit {
@@ -39,8 +53,21 @@ export function getOwnEmployee(): Promise<Employee> {
   return apiRequest<Employee>("/api/hr/employees/me");
 }
 
-export function listExpenses(): Promise<ExpenseClaim[]> {
-  return apiRequest<ExpenseClaim[]>("/api/business/finance/expenses");
+function pageQuery(cursor: string | null, status?: string, search?: string): string {
+  const parameters: URLSearchParams = new URLSearchParams();
+  if (cursor !== null) parameters.set("cursor", cursor);
+  if (status) parameters.set("status", status);
+  if (search?.trim()) parameters.set("search", search.trim());
+  const query: string = parameters.toString();
+  return query ? `?${query}` : "";
+}
+
+export function listExpenses(
+  cursor: string | null,
+  status?: string,
+  search?: string,
+): Promise<ExpensePageResponse> {
+  return apiRequest<ExpensePageResponse>(`/api/business/finance/expenses${pageQuery(cursor, status, search)}`);
 }
 
 export function createExpense(payload: ExpenseClaimCreateRequest): Promise<ExpenseClaim> {
@@ -49,6 +76,23 @@ export function createExpense(payload: ExpenseClaimCreateRequest): Promise<Expen
     headers: mutationHeaders(),
     body: JSON.stringify(payload),
   });
+}
+
+export function correctExpense(expenseId: string, payload: ExpenseCorrectionRequest): Promise<ExpenseClaim> {
+  return apiRequest<ExpenseClaim>(`/api/business/finance/expenses/${expenseId}/correct`, {
+    method: "POST",
+    headers: mutationHeaders(),
+    body: JSON.stringify(payload),
+  });
+}
+
+export function listExpenseRevisions(
+  expenseId: string,
+  cursor: string | null,
+): Promise<ExpenseRevisionPageResponse> {
+  return apiRequest<ExpenseRevisionPageResponse>(
+    `/api/business/finance/expenses/${expenseId}/revisions${pageQuery(cursor)}`,
+  );
 }
 
 export function approveExpense(expenseId: string, payload: FinancialDecisionRequest): Promise<ExpenseClaim> {
@@ -75,8 +119,14 @@ export function reimburseExpense(expenseId: string, payload: FinancialSettlement
   });
 }
 
-export function listSalaryAdvances(): Promise<SalaryAdvance[]> {
-  return apiRequest<SalaryAdvance[]>("/api/business/finance/salary-advances");
+export function listSalaryAdvances(
+  cursor: string | null,
+  status?: string,
+  search?: string,
+): Promise<SalaryAdvancePageResponse> {
+  return apiRequest<SalaryAdvancePageResponse>(
+    `/api/business/finance/salary-advances${pageQuery(cursor, status, search)}`,
+  );
 }
 
 export function createSalaryAdvance(payload: SalaryAdvanceCreateRequest): Promise<SalaryAdvance> {
@@ -85,6 +135,26 @@ export function createSalaryAdvance(payload: SalaryAdvanceCreateRequest): Promis
     headers: mutationHeaders(),
     body: JSON.stringify(payload),
   });
+}
+
+export function correctSalaryAdvance(
+  advanceId: string,
+  payload: SalaryAdvanceCorrectionRequest,
+): Promise<SalaryAdvance> {
+  return apiRequest<SalaryAdvance>(`/api/business/finance/salary-advances/${advanceId}/correct`, {
+    method: "POST",
+    headers: mutationHeaders(),
+    body: JSON.stringify(payload),
+  });
+}
+
+export function listSalaryAdvanceRevisions(
+  advanceId: string,
+  cursor: string | null,
+): Promise<SalaryAdvanceRevisionPageResponse> {
+  return apiRequest<SalaryAdvanceRevisionPageResponse>(
+    `/api/business/finance/salary-advances/${advanceId}/revisions${pageQuery(cursor)}`,
+  );
 }
 
 export function approveSalaryAdvance(
@@ -150,6 +220,28 @@ function reportQuery(startDate: string, endDate: string): string {
   return params.toString();
 }
 
+export function listFinancialPeriodsForBranch(
+  branchId: string,
+  startDate: string,
+  endDate: string,
+): Promise<FinancialPeriodState[]> {
+  return apiRequestForBranch<FinancialPeriodState[]>(
+    `/api/business/finance/periods?${reportQuery(startDate, endDate)}`,
+    branchId,
+  );
+}
+
+export function changeFinancialPeriodForBranch(
+  branchId: string,
+  payload: FinancialPeriodChangeRequest,
+): Promise<FinancialPeriodState> {
+  return apiRequestForBranch<FinancialPeriodState>("/api/business/finance/periods", branchId, {
+    method: "POST",
+    headers: mutationHeaders(),
+    body: JSON.stringify(payload),
+  });
+}
+
 export function getOperatingReportForBranch(
   branchId: string,
   startDate: string,
@@ -170,4 +262,11 @@ export function getPayrollReportForBranch(
     `/api/business/finance/payroll-report?${reportQuery(startDate, endDate)}`,
     branchId,
   );
+}
+
+export function downloadFinancialReport(payload: FinancialReportExportRequest): Promise<DownloadedFile> {
+  return apiFileRequest("/api/business/finance/report-exports/xlsx", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }

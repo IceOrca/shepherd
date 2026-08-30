@@ -4,10 +4,22 @@
 # and browser preflight behavior without sending credentials or tokens.
 set -eu
 
+repository_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 environment_file="${1:-deploy/secrets_example/example.env}"
+production_caddyfile="${SHEPHERD_PRODUCTION_CADDYFILE:-${repository_root}/deploy/Caddy/prod/Caddyfile}"
 
 if [ ! -f "${environment_file}" ]; then
     echo >&2 "Production environment file does not exist: ${environment_file}"
+    exit 2
+fi
+
+if [ ! -f "${production_caddyfile}" ]; then
+    echo >&2 "Production Caddyfile does not exist: ${production_caddyfile}"
+    exit 2
+fi
+
+if grep -Eq '^[[:space:]]*bind([[:space:]]|$)' "${production_caddyfile}"; then
+    echo >&2 "Production Caddy must use wildcard listeners; remove the bind directive from ${production_caddyfile}"
     exit 2
 fi
 
@@ -72,12 +84,31 @@ settings_headers="${temporary_directory}/settings.headers"
 settings_body="${temporary_directory}/settings.json"
 preflight_headers="${temporary_directory}/preflight.headers"
 
+http_status="$(curl \
+    --silent \
+    --show-error \
+    --output /dev/null \
+    --write-out '%{http_code}' \
+    --connect-timeout 10 \
+    --max-time 30 \
+    "http://${auth_dns_name}/")"
+
+case "${http_status}" in
+    301|302|307|308) ;;
+    *)
+        echo >&2 "Public Caddy HTTP endpoint returned ${http_status}; expected an HTTPS redirect"
+        exit 1
+        ;;
+esac
+
 settings_status="$(curl \
     --silent \
     --show-error \
     --dump-header "${settings_headers}" \
     --output "${settings_body}" \
     --write-out '%{http_code}' \
+    --connect-timeout 10 \
+    --max-time 30 \
     --header "Origin: ${web_origin}" \
     "${auth_public_url}/settings")"
 
@@ -113,6 +144,8 @@ preflight_status="$(curl \
     --dump-header "${preflight_headers}" \
     --output /dev/null \
     --write-out '%{http_code}' \
+    --connect-timeout 10 \
+    --max-time 30 \
     --header "Origin: ${web_origin}" \
     --header 'Access-Control-Request-Method: POST' \
     --header 'Access-Control-Request-Headers: authorization,content-type' \
@@ -134,5 +167,6 @@ esac
 
 echo "Production Auth edge is healthy"
 echo "Settings endpoint: ${auth_public_url}/settings"
+echo "Public HTTP to HTTPS redirect: verified"
 echo "Public signup disabled: true"
 echo "TLS and browser CORS preflight: verified"

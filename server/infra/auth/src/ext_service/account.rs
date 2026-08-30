@@ -85,6 +85,28 @@ impl AuthenticatedUser {
             .any(|current: &PermissionCode| current.as_str() == permission)
     }
 
+    /// Evaluates the effective permission set for an explicitly selected branch
+    /// without changing the request's active write branch. Tenant-wide and
+    /// matching branch grants apply, and any applicable deny wins.
+    pub fn has_permission_for_branch(&self, branch_id: Uuid, permission: &str) -> bool {
+        if !self.branch_ids.contains(&branch_id) {
+            return false;
+        }
+        let mut allowed: bool = false;
+        for grant in &self.authorization_permissions {
+            if grant.permission_code.as_str() != permission
+                || (grant.branch_id.is_some() && grant.branch_id != Some(branch_id))
+            {
+                continue;
+            }
+            match grant.effect {
+                PermissionEffect::Allow => allowed = true,
+                PermissionEffect::Deny => return false,
+            }
+        }
+        allowed
+    }
+
     fn profile(&self) -> CurrentUserProfile {
         CurrentUserProfile {
             tenant_id: self.tenant_id,

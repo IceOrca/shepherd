@@ -4,7 +4,10 @@ import {
   BarChart3,
   CalendarDays,
   CircleDollarSign,
+  Download,
   LoaderCircle,
+  LockKeyhole,
+  LockOpen,
   Save,
   Settings2,
   TrendingDown,
@@ -15,26 +18,98 @@ import { useMemo, useState, type FormEvent } from "react";
 import type {
   EmployeeSalaryConfiguration,
   EmployeeSalaryRateCreateRequest,
+  FinancialPeriodChangeRequest,
+  FinancialPeriodState,
   OperatingFinancialLine,
   OperatingFinancialReport,
   PayrollLine,
   PayrollReport,
   PermissionCode,
+  ReportExportKind,
 } from "../../api/generated/contracts";
-import { friendlyApiError } from "../../shared/api/client";
+import { friendlyApiError, type DownloadedFile } from "../../shared/api/client";
 import { roleLabel } from "../../shared/lib/format";
 import { useAuth } from "../auth/AuthProvider";
 import { useOperationsScope } from "../operations/OperationsScopeProvider";
 import {
   createEmployeeSalaryRate,
+  downloadFinancialReport,
+  changeFinancialPeriodForBranch,
   financeQueryKeys,
   getOperatingReportForBranch,
   getPayrollReportForBranch,
+  listFinancialPeriodsForBranch,
   listSalaryConfigurations,
 } from "./api";
 
 type ReportTab = "financial" | "payroll" | "salary";
 type ScopeMode = "tenant" | "active_branch";
+
+function monthLabel(value: string): string {
+  const [year, month] = value.split("-");
+  return `Tháng ${Number(month)}/${year}`;
+}
+
+function FinancialPeriodDialog({
+  period,
+  pending,
+  error,
+  onClose,
+  onSubmit,
+}: {
+  period: FinancialPeriodState;
+  pending: boolean;
+  error: Error | null;
+  onClose: () => void;
+  onSubmit: (request: FinancialPeriodChangeRequest) => void;
+}): React.JSX.Element {
+  const targetStatus: FinancialPeriodChangeRequest["status"] = period.status === "open" ? "closed" : "open";
+  const [reason, setReason] = useState<string>("");
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/50 p-4">
+      <form
+        className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl"
+        onSubmit={(event: FormEvent<HTMLFormElement>): void => {
+          event.preventDefault();
+          onSubmit({
+            period_start: period.period_start,
+            status: targetStatus,
+            expected_revision_number: period.revision_number,
+            reason: reason.trim(),
+          });
+        }}
+      >
+        <div className="flex items-start gap-4">
+          <div className={`grid size-11 shrink-0 place-items-center rounded-xl ${targetStatus === "closed" ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700"}`}>
+            {targetStatus === "closed" ? <LockKeyhole className="size-5" /> : <LockOpen className="size-5" />}
+          </div>
+          <div>
+            <h2 className="text-xl font-black text-slate-950">
+              {targetStatus === "closed" ? "Khóa" : "Mở lại"} {monthLabel(period.period_start)}
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              {targetStatus === "closed"
+                ? "Sau khi khóa, dữ liệu tài chính của tháng này không thể điều chỉnh cho đến khi được mở lại."
+                : "Việc mở lại tạo một quyết định mới và giữ nguyên toàn bộ lịch sử khóa kỳ trước đó."}
+            </p>
+          </div>
+        </div>
+        <label className="mt-5 block text-sm font-semibold text-slate-700">
+          Lý do
+          <textarea className="mt-2 min-h-28 w-full rounded-xl border-slate-300" maxLength={500} minLength={3} onChange={(event): void => setReason(event.target.value)} required value={reason} />
+        </label>
+        {error ? <p className="mt-3 text-sm font-semibold text-red-700">{friendlyApiError(error, "Không thể thay đổi trạng thái kỳ tài chính. Dữ liệu có thể vừa được người khác cập nhật.")}</p> : null}
+        <div className="mt-5 flex justify-end gap-3">
+          <button className="action-secondary" disabled={pending} onClick={onClose} type="button">Hủy</button>
+          <button className="action-primary" disabled={pending} type="submit">
+            {pending ? <LoaderCircle className="size-4 animate-spin" /> : targetStatus === "closed" ? <LockKeyhole className="size-4" /> : <LockOpen className="size-4" />}
+            {targetStatus === "closed" ? "Khóa kỳ" : "Mở lại kỳ"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
 
 function localDate(date: Date): string {
   const offset: number = date.getTimezoneOffset();
@@ -128,6 +203,17 @@ function hours(seconds: number): string {
   return `${(seconds / 3_600).toLocaleString("vi-VN", { maximumFractionDigits: 2 })} giờ`;
 }
 
+function saveDownloadedFile(file: DownloadedFile): void {
+  const url: string = URL.createObjectURL(file.blob);
+  const link: HTMLAnchorElement = document.createElement("a");
+  link.href = url;
+  link.download = file.filename ?? "bao-cao.xlsx";
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 export function PayrollAccountingPage(): React.JSX.Element {
   const auth: ReturnType<typeof useAuth> = useAuth();
   const scope: ReturnType<typeof useOperationsScope> = useOperationsScope();
@@ -135,8 +221,11 @@ export function PayrollAccountingPage(): React.JSX.Element {
   const permissions: PermissionCode[] = auth.profile?.permissions ?? [];
   const canReadFinancial: boolean = permissions.includes("finance.operating_reports.read");
   const canReadPayroll: boolean = permissions.includes("hr.payroll.read");
+  const canExportFinancial: boolean = permissions.includes("finance.operating_reports.export");
+  const canExportPayroll: boolean = permissions.includes("hr.payroll.export");
   const canReadSalary: boolean = permissions.includes("hr.salary_rates.read");
   const canManageSalary: boolean = permissions.includes("hr.salary_rates.manage");
+  const canManagePeriods: boolean = permissions.includes("finance.periods.manage");
   const initialRange = useMemo(currentMonthRange, []);
   const [startDate, setStartDate] = useState<string>(initialRange.start);
   const [endDate, setEndDate] = useState<string>(initialRange.end);
@@ -149,6 +238,7 @@ export function PayrollAccountingPage(): React.JSX.Element {
     effective_from: localDate(new Date()),
   });
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [periodAction, setPeriodAction] = useState<FinancialPeriodState | null>(null);
 
   const activeBranchId: string | null = auth.profile?.active_branch_id ?? null;
   const reportBranchIds: string[] = scopeMode === "tenant"
@@ -185,6 +275,15 @@ export function PayrollAccountingPage(): React.JSX.Element {
     queryFn: listSalaryConfigurations,
     enabled: canReadSalary && activeBranchId !== null,
   });
+  const periodsQuery = useQuery({
+    queryKey: [...financeQueryKeys.financialPeriods, activeBranchId, startDate, endDate],
+    queryFn: (): Promise<FinancialPeriodState[]> => listFinancialPeriodsForBranch(
+      activeBranchId ?? "",
+      startDate,
+      endDate,
+    ),
+    enabled: canReadFinancial && validRange && activeBranchId !== null,
+  });
   const salaryMutation = useMutation({
     mutationFn: createEmployeeSalaryRate,
     onSuccess: (record: EmployeeSalaryConfiguration): void => {
@@ -197,6 +296,30 @@ export function PayrollAccountingPage(): React.JSX.Element {
         employee_id: "",
         monthly_amount: "",
       }));
+    },
+  });
+  const periodMutation = useMutation<FinancialPeriodState, Error, FinancialPeriodChangeRequest>({
+    mutationFn: (request: FinancialPeriodChangeRequest): Promise<FinancialPeriodState> =>
+      changeFinancialPeriodForBranch(activeBranchId ?? "", request),
+    onSuccess: (period: FinancialPeriodState): void => {
+      void queryClient.invalidateQueries({ queryKey: financeQueryKeys.financialPeriods });
+      void queryClient.invalidateQueries({ queryKey: financeQueryKeys.expenses });
+      void queryClient.invalidateQueries({ queryKey: financeQueryKeys.operatingReport });
+      void queryClient.invalidateQueries({ queryKey: financeQueryKeys.payrollReport });
+      setPeriodAction(null);
+      setFeedback(`${monthLabel(period.period_start)} đã được ${period.status === "closed" ? "khóa" : "mở lại"}.`);
+    },
+  });
+  const exportMutation = useMutation<DownloadedFile, Error, ReportExportKind>({
+    mutationFn: (reportKind: ReportExportKind): Promise<DownloadedFile> => downloadFinancialReport({
+      report_kind: reportKind,
+      start_date: startDate,
+      end_date: endDate,
+      branch_ids: reportBranchIds,
+    }),
+    onSuccess: (file: DownloadedFile, reportKind: ReportExportKind): void => {
+      saveDownloadedFile(file);
+      setFeedback(reportKind === "payroll" ? "Đã tạo và tải bảng lương Excel." : "Đã tạo và tải báo cáo tài chính Excel.");
     },
   });
 
@@ -230,6 +353,30 @@ export function PayrollAccountingPage(): React.JSX.Element {
           </select>
         </label>
         {!validRange ? <p className="text-sm font-semibold text-red-600 lg:col-span-3">Khoảng ngày báo cáo không hợp lệ.</p> : null}
+        {activeTab !== "salary" && ((activeTab === "financial" && canExportFinancial) || (activeTab === "payroll" && canExportPayroll)) ? (
+          <div className="flex flex-col gap-2 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between lg:col-span-3">
+            <p className="text-sm text-slate-500">File Excel dùng đúng khoảng ngày và phạm vi chi nhánh đang chọn. Trạng thái kỳ và các cảnh báo được ghi trong file.</p>
+            <button
+              className="action-primary min-h-11 w-full shrink-0 sm:w-auto"
+              disabled={
+                exportMutation.isPending
+                || !validRange
+                || reportBranchIds.length === 0
+                || (activeTab === "financial" ? financialQuery.isPending || financialQuery.isError : payrollQuery.isPending || payrollQuery.isError)
+              }
+              onClick={(): void => {
+                if (activeTab === "payroll" && overlapCount > 0 && !window.confirm("Bảng lương còn khoảng làm việc trùng nguồn. Bạn vẫn muốn xuất file để kiểm tra?")) return;
+                exportMutation.reset();
+                exportMutation.mutate(activeTab === "payroll" ? "payroll" : "operating_financial");
+              }}
+              type="button"
+            >
+              {exportMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <Download className="size-4" />}
+              {activeTab === "payroll" ? "Xuất bảng lương Excel" : "Xuất báo cáo Excel"}
+            </button>
+          </div>
+        ) : null}
+        {exportMutation.error ? <p className="text-sm font-semibold text-red-700 lg:col-span-3">{friendlyApiError(exportMutation.error, "Không thể tạo file Excel. Vui lòng thu hẹp khoảng ngày hoặc phạm vi chi nhánh rồi thử lại.")}</p> : null}
       </div>
 
       <div className="panel flex flex-wrap gap-2 p-2">
@@ -237,6 +384,21 @@ export function PayrollAccountingPage(): React.JSX.Element {
         {canReadPayroll ? <button className={`flex-1 rounded-xl px-4 py-3 text-sm font-bold ${activeTab === "payroll" ? "bg-slate-950 text-white" : "text-slate-600 hover:bg-slate-100"}`} onClick={(): void => setTab("payroll")} type="button"><UsersRound className="mr-2 inline size-4" />Bảng lương</button> : null}
         {canReadSalary ? <button className={`flex-1 rounded-xl px-4 py-3 text-sm font-bold ${activeTab === "salary" ? "bg-slate-950 text-white" : "text-slate-600 hover:bg-slate-100"}`} onClick={(): void => setTab("salary")} type="button"><Settings2 className="mr-2 inline size-4" />Cấu hình lương tháng</button> : null}
       </div>
+
+      {canReadFinancial && activeBranchId ? (
+        <div className="panel p-5">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h2 className="font-black text-slate-950">Kỳ tài chính · {scope.branches.find((branch): boolean => branch.id === activeBranchId)?.name ?? "Chi nhánh đang chọn"}</h2>
+              <p className="mt-1 text-sm text-slate-500">Kỳ mở cho phép tạo phiên bản điều chỉnh. Kỳ khóa giữ ổn định số liệu đã báo cáo; chỉ người có quyền mới có thể mở lại và phải ghi lý do.</p>
+            </div>
+            {scopeMode === "tenant" ? <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-bold text-amber-800">Chỉ áp dụng cho chi nhánh đang chọn</span> : null}
+          </div>
+          {periodsQuery.isPending ? <div className="mt-4 flex items-center gap-2 text-sm text-slate-500"><LoaderCircle className="size-4 animate-spin" />Đang tải trạng thái kỳ...</div>
+            : periodsQuery.error ? <p className="mt-4 text-sm font-semibold text-red-700">{friendlyApiError(periodsQuery.error, "Không thể tải trạng thái kỳ tài chính.")}</p>
+              : <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{(periodsQuery.data ?? []).map((period: FinancialPeriodState): React.JSX.Element => <article className="rounded-xl border border-slate-200 p-4" key={period.period_start}><div className="flex items-start justify-between gap-3"><div><p className="font-bold text-slate-950">{monthLabel(period.period_start)}</p><p className="mt-1 text-xs text-slate-500">Phiên bản {period.revision_number || "mặc định"}{period.actor_username ? ` · ${period.actor_username}` : ""}</p></div><span className={`rounded-full px-2 py-1 text-xs font-bold ${period.status === "closed" ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700"}`}>{period.status === "closed" ? "Đã khóa" : "Đang mở"}</span></div>{period.reason ? <p className="mt-3 text-sm text-slate-600">{period.reason}</p> : null}{canManagePeriods ? <button className="action-secondary mt-4 w-full" onClick={(): void => { periodMutation.reset(); setPeriodAction(period); }} type="button">{period.status === "closed" ? <LockOpen className="size-4" /> : <LockKeyhole className="size-4" />}{period.status === "closed" ? "Mở lại kỳ" : "Khóa kỳ"}</button> : null}</article>)}</div>}
+        </div>
+      ) : null}
 
       {feedback ? <p className="rounded-xl bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">{feedback}</p> : null}
 
@@ -274,6 +436,7 @@ export function PayrollAccountingPage(): React.JSX.Element {
           <div className="panel overflow-hidden"><div className="border-b border-slate-200 px-5 py-4"><h2 className="font-black text-slate-950">Lương tháng tại chi nhánh đang chọn</h2><p className="mt-1 text-sm text-slate-500">Mỗi thay đổi tạo một phiên bản mới; báo cáo tự phân bổ theo số ngày của từng tháng.</p></div>{salaryQuery.isPending ? <div className="grid min-h-48 place-items-center"><LoaderCircle className="size-6 animate-spin" /></div> : salaryQuery.error ? <p className="m-5 text-sm text-red-700">{friendlyApiError(salaryQuery.error, "Không thể tải cấu hình lương.")}</p> : <div className="divide-y divide-slate-100">{(salaryQuery.data ?? []).map((item: EmployeeSalaryConfiguration): React.JSX.Element => <article className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between" key={item.employee_id}><div><p className="font-bold text-slate-950">{item.employee_name}</p><p className="mt-1 text-sm text-slate-500">{item.employee_code} · {roleLabel(item.role)}</p></div><div className="sm:text-right">{item.monthly_amount && item.currency ? <><p className="font-black text-slate-950">{formatMoney(item.monthly_amount, item.currency)} / tháng</p><p className="mt-1 text-xs text-slate-500"><CalendarDays className="mr-1 inline size-3.5" />Hiệu lực {item.effective_from}{item.effective_to ? ` đến ${item.effective_to}` : " trở đi"}</p></> : <p className="font-semibold text-amber-700">Chưa cấu hình lương tháng</p>}</div></article>)}</div>}</div>
         </div>
       ) : null}
+      {periodAction ? <FinancialPeriodDialog error={periodMutation.error} onClose={(): void => setPeriodAction(null)} onSubmit={(request: FinancialPeriodChangeRequest): void => periodMutation.mutate(request)} pending={periodMutation.isPending} period={periodAction} /> : null}
     </section>
   );
 }

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::NaiveDate;
-use serde::Serialize;
+use chrono::{DateTime, Datelike, NaiveDate, Utc};
+use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use uuid::Uuid;
 
@@ -30,6 +30,42 @@ pub struct EmployeeSalaryRateInput {
     pub monthly_amount: String,
     pub currency: String,
     pub effective_from: NaiveDate,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum FinancialPeriodStatus {
+    Open,
+    Closed,
+}
+
+impl FinancialPeriodStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Closed => "closed",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, TS)]
+pub struct FinancialPeriodState {
+    pub branch_id: Uuid,
+    pub period_start: NaiveDate,
+    pub status: FinancialPeriodStatus,
+    pub revision_number: i64,
+    pub reason: Option<String>,
+    pub actor_username: Option<String>,
+    pub occurred_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct FinancialPeriodChangeInput {
+    pub period_start: NaiveDate,
+    pub status: FinancialPeriodStatus,
+    pub expected_revision_number: i64,
+    pub reason: String,
 }
 
 #[derive(Clone, Debug, Serialize, TS)]
@@ -87,6 +123,21 @@ pub struct PayrollReport {
 
 #[async_trait]
 pub trait FinancialReportingRepo: Send + Sync {
+    async fn list_financial_periods(
+        &self,
+        tenant_id: Uuid,
+        start_date: NaiveDate,
+        end_date: NaiveDate,
+    ) -> Result<Vec<FinancialPeriodState>, FinanceError>;
+
+    async fn change_financial_period(
+        &self,
+        tenant_id: Uuid,
+        actor_account_id: Uuid,
+        idempotency_key: Uuid,
+        input: &FinancialPeriodChangeInput,
+    ) -> Result<FinancialPeriodState, FinanceError>;
+
     async fn list_salary_configurations(
         &self,
         tenant_id: Uuid,
@@ -129,6 +180,39 @@ impl FinancialReportingService {
         tenant_id: Uuid,
     ) -> Result<Vec<EmployeeSalaryConfiguration>, FinanceError> {
         self.repo.list_salary_configurations(tenant_id).await
+    }
+
+    pub async fn list_financial_periods(
+        &self,
+        tenant_id: Uuid,
+        start_date: NaiveDate,
+        end_date: NaiveDate,
+    ) -> Result<Vec<FinancialPeriodState>, FinanceError> {
+        validate_range(start_date, end_date)?;
+        self.repo.list_financial_periods(tenant_id, start_date, end_date).await
+    }
+
+    pub async fn change_financial_period(
+        &self,
+        tenant_id: Uuid,
+        actor_account_id: Uuid,
+        idempotency_key: Uuid,
+        input: FinancialPeriodChangeInput,
+    ) -> Result<FinancialPeriodState, FinanceError> {
+        if input.period_start.day() != 1 {
+            return Err(FinanceError::InvalidInput(
+                "financial period must start on the first day of a month",
+            ));
+        }
+        if input.expected_revision_number < 0 {
+            return Err(FinanceError::InvalidInput(
+                "financial period revision cannot be negative",
+            ));
+        }
+        validate_text(&input.reason, 3, 500, "financial period reason is invalid")?;
+        self.repo
+            .change_financial_period(tenant_id, actor_account_id, idempotency_key, &input)
+            .await
     }
 
     pub async fn create_salary_rate(
@@ -214,6 +298,15 @@ fn validate_positive_decimal(value: &str) -> Result<(), FinanceError> {
         return Err(FinanceError::InvalidInput("amount must be a positive decimal"));
     }
     Ok(())
+}
+
+fn validate_text(value: &str, minimum: usize, maximum: usize, message: &'static str) -> Result<(), FinanceError> {
+    let length: usize = value.chars().count();
+    if value != value.trim() || length < minimum || length > maximum {
+        Err(FinanceError::InvalidInput(message))
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

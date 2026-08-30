@@ -2,7 +2,7 @@ use std::{collections::BTreeSet, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, trace, warn};
 use ts_rs::TS;
 use uuid::Uuid;
@@ -115,6 +115,19 @@ pub struct UrgentWorkReconciliation {
     pub eligibility_exception_reason: Option<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct UrgentReconciliationCursor {
+    pub active: bool,
+    pub started_at: DateTime<Utc>,
+    pub report_id: Uuid,
+}
+
+#[derive(Clone, Debug)]
+pub struct UrgentReconciliationPage {
+    pub items: Vec<UrgentWorkReconciliation>,
+    pub next_cursor: Option<UrgentReconciliationCursor>,
+}
+
 #[derive(Clone, Debug)]
 pub struct UrgentWorkLocationInput {
     pub latitude: Option<f64>,
@@ -221,7 +234,13 @@ pub trait UrgentWorkRepo {
         report_id: Uuid,
         input: &UrgentWorkEndInput,
     ) -> Result<UrgentWorkItem, UrgentWorkError>;
-    async fn list_reconciliations(&self, tenant_id: Uuid) -> Result<Vec<UrgentWorkReconciliation>, UrgentWorkError>;
+    async fn list_reconciliations(
+        &self,
+        tenant_id: Uuid,
+        customer_id: Option<Uuid>,
+        limit: i64,
+        cursor: Option<&UrgentReconciliationCursor>,
+    ) -> Result<UrgentReconciliationPage, UrgentWorkError>;
     async fn upsert_customer_record(
         &self,
         tenant_id: Uuid,
@@ -389,9 +408,19 @@ impl UrgentWorkService {
     pub async fn list_reconciliations(
         &self,
         tenant_id: Uuid,
-    ) -> Result<Vec<UrgentWorkReconciliation>, UrgentWorkError> {
-        let result: Result<Vec<UrgentWorkReconciliation>, UrgentWorkError> =
-            self.repo.list_reconciliations(tenant_id).await;
+        customer_id: Option<Uuid>,
+        limit: i64,
+        cursor: Option<UrgentReconciliationCursor>,
+    ) -> Result<UrgentReconciliationPage, UrgentWorkError> {
+        if limit <= 0 {
+            return Err(UrgentWorkError::InvalidInput(
+                "urgent reconciliation page size must be positive",
+            ));
+        }
+        let result: Result<UrgentReconciliationPage, UrgentWorkError> = self
+            .repo
+            .list_reconciliations(tenant_id, customer_id, limit, cursor.as_ref())
+            .await;
         log_result("urgent_work.list_reconciliations", tenant_id, None, None, &result);
         result
     }

@@ -1,4 +1,5 @@
 import {
+  useInfiniteQuery,
   useMutation,
   useQuery,
   useQueryClient,
@@ -23,8 +24,10 @@ import type {
   StaffingRate,
   StaffingRateKind,
   StaffingStaff,
+  StaffingStaffPageResponse,
 } from "../../api/generated/contracts";
 import { friendlyApiError } from "../../shared/api/client";
+import { CursorPagination } from "../../shared/components/CursorPagination";
 import { useAuth } from "../auth/AuthProvider";
 import {
   listCustomers,
@@ -141,17 +144,21 @@ export function StaffingConfigurationPage(): React.JSX.Element {
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>("");
   const [viewDate, setViewDate] = useState<string>(today);
   const [search, setSearch] = useState<string>("");
+  const [currentPage, setCurrentPage] = useState<number>(1);
   const [draft, setDraft] = useState<PriceDraft | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
 
   const ratesQuery: UseQueryResult<StaffingRate[], Error> = useQuery({
-    queryKey: operationsQueryKeys.staffingRates,
-    queryFn: listStaffingRates,
-    enabled: canRead,
+    queryKey: [...operationsQueryKeys.staffingRates, "customer", selectedCustomerId],
+    queryFn: (): Promise<StaffingRate[]> => listStaffingRates(selectedCustomerId),
+    enabled: canRead && selectedCustomerId !== "",
   });
-  const staffQuery: UseQueryResult<StaffingStaff[], Error> = useQuery({
-    queryKey: operationsQueryKeys.staffingStaff,
-    queryFn: listStaffingStaff,
+  const staffQuery = useInfiniteQuery({
+    queryKey: [...operationsQueryKeys.staffingStaff, "search", search.trim()],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }: { pageParam: string | null }): Promise<StaffingStaffPageResponse> =>
+      listStaffingStaff(pageParam, search),
+    getNextPageParam: (lastPage: StaffingStaffPageResponse): string | undefined => lastPage.next_cursor ?? undefined,
     enabled: canRead,
   });
   const customersQuery: UseQueryResult<Customer[], Error> = useQuery({
@@ -171,6 +178,25 @@ export function StaffingConfigurationPage(): React.JSX.Element {
     }
   }, [activeCustomers, selectedCustomerId]);
 
+  const loadedStaffPages: StaffingStaffPageResponse[] = staffQuery.data?.pages ?? [];
+  const pageStaff: StaffingStaff[] = loadedStaffPages[currentPage - 1]?.items ?? [];
+  const hasNextPage: boolean = currentPage < loadedStaffPages.length || staffQuery.hasNextPage;
+
+  useEffect((): void => setCurrentPage(1), [search, selectedCustomerId]);
+
+  const changePage = (nextPage: number): void => {
+    if (nextPage < 1) return;
+    if (nextPage <= loadedStaffPages.length) {
+      setCurrentPage(nextPage);
+      return;
+    }
+    if (nextPage === loadedStaffPages.length + 1 && staffQuery.hasNextPage) {
+      void staffQuery.fetchNextPage().then((result): void => {
+        if ((result.data?.pages.length ?? 0) >= nextPage) setCurrentPage(nextPage);
+      });
+    }
+  };
+
   const rows: PriceRow[] = useMemo((): PriceRow[] => {
     if (selectedCustomerId === "") return [];
     const rates: StaffingRate[] = ratesQuery.data ?? [];
@@ -184,18 +210,11 @@ export function StaffingConfigurationPage(): React.JSX.Element {
         workerPay: resolveRate(rates, "worker_pay", selectedCustomerId, employeeId, viewDate),
       };
     };
-    return [makeRow(null), ...(staffQuery.data ?? []).map((staff: StaffingStaff): PriceRow => makeRow(staff))];
-  }, [ratesQuery.data, selectedCustomerId, staffQuery.data, viewDate]);
+    const defaultRows: PriceRow[] = currentPage === 1 ? [makeRow(null)] : [];
+    return [...defaultRows, ...pageStaff.map((staff: StaffingStaff): PriceRow => makeRow(staff))];
+  }, [currentPage, pageStaff, ratesQuery.data, selectedCustomerId, viewDate]);
 
-  const visibleRows: PriceRow[] = useMemo((): PriceRow[] => {
-    const normalizedSearch: string = search.trim().toLocaleLowerCase("vi");
-    if (normalizedSearch === "") return rows;
-    return rows.filter((row: PriceRow): boolean =>
-      row.employeeId === null
-      || row.displayName.toLocaleLowerCase("vi").includes(normalizedSearch)
-      || (row.employeeCode ?? "").toLocaleLowerCase("vi").includes(normalizedSearch),
-    );
-  }, [rows, search]);
+  const visibleRows: PriceRow[] = rows;
 
   const priceMutation: UseMutationResult<StaffingPriceSet, Error, StaffingPriceSetRequest> = useMutation({
     mutationFn: setStaffingPrices,
@@ -342,6 +361,7 @@ export function StaffingConfigurationPage(): React.JSX.Element {
             {visibleRows.length === 0 ? <p className="p-8 text-center text-sm text-slate-500">Không tìm thấy Staff phù hợp.</p> : null}
           </div>
         )}
+        <CursorPagination currentItemCount={visibleRows.length} currentPage={currentPage} hasNextPage={hasNextPage} nextPagePending={staffQuery.isFetchingNextPage} onPageChange={changePage} />
       </section>
 
       {draft !== null && editingRow !== null && selectedCustomer !== null ? (

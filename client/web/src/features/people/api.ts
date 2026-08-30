@@ -1,5 +1,6 @@
 import type {
   Employee,
+  EmployeePageResponse,
   EmployeeCitizenIdUpdateRequest,
   EmployeeSensitiveProfile,
   EmployeeUpsertRequest,
@@ -10,8 +11,12 @@ export const peopleQueryKeys = {
   employees: ["people", "employees"] as const,
 };
 
-export function listEmployees(): Promise<Employee[]> {
-  return apiRequest<Employee[]>("/api/hr/employees");
+export function listEmployees(cursor: string | null, search: string): Promise<EmployeePageResponse> {
+  const parameters: URLSearchParams = new URLSearchParams();
+  if (cursor !== null) parameters.set("cursor", cursor);
+  if (search.trim() !== "") parameters.set("search", search.trim());
+  const query: string = parameters.toString();
+  return apiRequest<EmployeePageResponse>(`/api/hr/employees${query ? `?${query}` : ""}`);
 }
 
 export function updateEmployee(employeeId: string, payload: EmployeeUpsertRequest): Promise<Employee> {

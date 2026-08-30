@@ -2,23 +2,84 @@ use std::sync::Arc;
 
 use axum::{
     Extension, Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     routing::{get, post},
 };
 use chrono::NaiveDate;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 use ts_rs::TS;
 use uuid::Uuid;
 
-use crate::{AppContext, auth::AuthenticatedUser};
+use crate::{
+    AppContext,
+    auth::AuthenticatedUser,
+    pagination::{decode_cursor, encode_cursor, normalize_search, resolve_limit},
+};
 
 use super::core::{
-    ExpenseCategory, ExpenseClaim, ExpenseClaimInput, ExpenseDecisionInput, ExpenseFundingSource, FinanceError,
-    FinancialSettlementInput, SalaryAdvance, SalaryAdvanceDecisionInput, SalaryAdvanceInput,
-    SalaryAdvanceRecoveryInput, SalaryAdvanceRecoverySource,
+    ExpenseCategory, ExpenseClaim, ExpenseClaimInput, ExpenseClaimRevision, ExpenseCorrectionInput, ExpenseCursor,
+    ExpenseClaimStatus, ExpenseDecisionInput, ExpenseFundingSource, ExpenseListQuery, ExpensePage, ExpenseRevisionPage,
+    FinanceError, FinancialSettlementInput, RevisionCursor, SalaryAdvance, SalaryAdvanceCorrectionInput,
+    SalaryAdvanceCursor, SalaryAdvanceDecisionInput, SalaryAdvanceInput, SalaryAdvanceListQuery, SalaryAdvancePage,
+    SalaryAdvanceRecoveryInput, SalaryAdvanceRecoverySource, SalaryAdvanceRevision, SalaryAdvanceRevisionPage,
+    SalaryAdvanceStatus,
 };
+
+#[derive(Debug, Deserialize)]
+pub struct FinanceCursorQuery {
+    pub limit: Option<u16>,
+    pub cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExpensePageQuery {
+    pub limit: Option<u16>,
+    pub cursor: Option<String>,
+    pub status: Option<ExpenseClaimStatus>,
+    pub search: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SalaryAdvancePageQuery {
+    pub limit: Option<u16>,
+    pub cursor: Option<String>,
+    pub status: Option<SalaryAdvanceStatus>,
+    pub search: Option<String>,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct ExpensePageResponse {
+    pub items: Vec<ExpenseClaim>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+    pub limit: u16,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct ExpenseRevisionPageResponse {
+    pub items: Vec<ExpenseClaimRevision>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+    pub limit: u16,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct SalaryAdvancePageResponse {
+    pub items: Vec<SalaryAdvance>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+    pub limit: u16,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct SalaryAdvanceRevisionPageResponse {
+    pub items: Vec<SalaryAdvanceRevision>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+    pub limit: u16,
+}
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(optional_fields = nullable)]
@@ -62,6 +123,25 @@ pub struct FinancialDecisionRequest {
 }
 
 #[derive(Debug, Deserialize, TS)]
+#[ts(optional_fields = nullable)]
+pub struct ExpenseCorrectionRequest {
+    pub expected_revision_id: Uuid,
+    pub correction_reason: String,
+    pub category_id: Uuid,
+    pub funding_source: ExpenseFundingSource,
+    pub paid_by_employee_id: Option<Uuid>,
+    pub customer_id: Option<Uuid>,
+    pub urgent_work_report_id: Option<Uuid>,
+    pub staffing_assignment_id: Option<Uuid>,
+    pub incurred_on: NaiveDate,
+    pub description: String,
+    pub evidence_reference: Option<String>,
+    pub claimed_amount: String,
+    pub approved_amount: Option<String>,
+    pub currency: String,
+}
+
+#[derive(Debug, Deserialize, TS)]
 pub struct FinancialRejectionRequest {
     pub reason: String,
 }
@@ -100,6 +180,19 @@ pub struct SalaryAdvanceDisbursementRequest {
 }
 
 #[derive(Debug, Deserialize, TS)]
+#[ts(optional_fields = nullable)]
+pub struct SalaryAdvanceCorrectionRequest {
+    pub expected_revision_id: Uuid,
+    pub correction_reason: String,
+    pub employee_id: Uuid,
+    pub requested_amount: String,
+    pub approved_amount: Option<String>,
+    pub currency: String,
+    pub reason: String,
+    pub recovery_due_on: Option<NaiveDate>,
+}
+
+#[derive(Debug, Deserialize, TS)]
 pub struct SalaryAdvanceRecoveryRequest {
     pub amount: String,
     pub source: SalaryAdvanceRecoverySource,
@@ -110,6 +203,8 @@ pub fn routes() -> Router<Arc<AppContext>> {
     Router::new()
         .route("/finance/expense-categories", get(list_expense_categories))
         .route("/finance/expenses", get(list_expenses).post(create_expense))
+        .route("/finance/expenses/{expense_id}/correct", post(correct_expense))
+        .route("/finance/expenses/{expense_id}/revisions", get(list_expense_revisions))
         .route("/finance/expenses/{expense_id}/approve", post(approve_expense))
         .route("/finance/expenses/{expense_id}/reject", post(reject_expense))
         .route("/finance/expenses/{expense_id}/reimburse", post(reimburse_expense))
@@ -120,6 +215,14 @@ pub fn routes() -> Router<Arc<AppContext>> {
         .route(
             "/finance/salary-advances/{advance_id}/approve",
             post(approve_salary_advance),
+        )
+        .route(
+            "/finance/salary-advances/{advance_id}/correct",
+            post(correct_salary_advance),
+        )
+        .route(
+            "/finance/salary-advances/{advance_id}/revisions",
+            get(list_salary_advance_revisions),
         )
         .route(
             "/finance/salary-advances/{advance_id}/reject",
@@ -152,19 +255,34 @@ async fn list_expense_categories(
 async fn list_expenses(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
-) -> Result<Json<Vec<ExpenseClaim>>, StatusCode> {
+    Query(query): Query<ExpensePageQuery>,
+) -> Result<Json<ExpensePageResponse>, StatusCode> {
     require_any_permission(&user, &["business.expenses.self.read", "business.expenses.read"])?;
-    context
+    let limit: u16 = resolve_limit(&context.list_pagination, query.limit)?;
+    let cursor: Option<ExpenseCursor> = decode_cursor(query.cursor.as_deref())?;
+    let page: ExpensePage = context
         .core
         .finance
         .list_expenses(
             user.tenant_id,
             user.account_id,
             user.has_permission("business.expenses.read"),
+            ExpenseListQuery {
+                status: query.status,
+                search: normalize_search(query.search),
+                limit: i64::from(limit),
+                cursor,
+            },
         )
         .await
-        .map(Json)
-        .map_err(|error: FinanceError| finance_status("list expenses", &user, error))
+        .map_err(|error: FinanceError| finance_status("list expenses", &user, error))?;
+    let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
+    Ok(Json(ExpensePageResponse {
+        has_more: next_cursor.is_some(),
+        items: page.items,
+        next_cursor,
+        limit,
+    }))
 }
 
 async fn create_expense(
@@ -213,6 +331,76 @@ async fn approve_expense(
         .await
         .map(Json)
         .map_err(|error: FinanceError| finance_status("approve expense", &user, error))
+}
+
+async fn correct_expense(
+    State(context): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(expense_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(payload): Json<ExpenseCorrectionRequest>,
+) -> Result<Json<ExpenseClaim>, StatusCode> {
+    require_any_permission(&user, &["business.expenses.submit", "business.expenses.correct"])?;
+    context
+        .core
+        .finance
+        .correct_expense(
+            user.tenant_id,
+            expense_id,
+            user.account_id,
+            user.has_permission("business.expenses.correct"),
+            idempotency_key(&headers, &user)?,
+            ExpenseCorrectionInput {
+                expected_revision_id: payload.expected_revision_id,
+                correction_reason: payload.correction_reason.trim().to_owned(),
+                category_id: payload.category_id,
+                funding_source: payload.funding_source,
+                paid_by_employee_id: payload.paid_by_employee_id,
+                customer_id: payload.customer_id,
+                urgent_work_report_id: payload.urgent_work_report_id,
+                staffing_assignment_id: payload.staffing_assignment_id,
+                incurred_on: payload.incurred_on,
+                description: payload.description.trim().to_owned(),
+                evidence_reference: normalize_optional(payload.evidence_reference),
+                claimed_amount: payload.claimed_amount.trim().to_owned(),
+                approved_amount: normalize_optional(payload.approved_amount),
+                currency: payload.currency.trim().to_ascii_uppercase(),
+            },
+        )
+        .await
+        .map(Json)
+        .map_err(|error: FinanceError| finance_status("correct expense", &user, error))
+}
+
+async fn list_expense_revisions(
+    State(context): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(expense_id): Path<Uuid>,
+    Query(query): Query<FinanceCursorQuery>,
+) -> Result<Json<ExpenseRevisionPageResponse>, StatusCode> {
+    require_any_permission(&user, &["business.expenses.self.read", "business.expenses.read"])?;
+    let limit: u16 = resolve_limit(&context.list_pagination, query.limit)?;
+    let cursor: Option<RevisionCursor> = decode_cursor(query.cursor.as_deref())?;
+    let page: ExpenseRevisionPage = context
+        .core
+        .finance
+        .list_expense_revisions(
+            user.tenant_id,
+            expense_id,
+            user.account_id,
+            user.has_permission("business.expenses.read"),
+            i64::from(limit),
+            cursor,
+        )
+        .await
+        .map_err(|error: FinanceError| finance_status("list expense revisions", &user, error))?;
+    let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
+    Ok(Json(ExpenseRevisionPageResponse {
+        has_more: next_cursor.is_some(),
+        items: page.items,
+        next_cursor,
+        limit,
+    }))
 }
 
 async fn reject_expense(
@@ -267,19 +455,34 @@ async fn reimburse_expense(
 async fn list_salary_advances(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
-) -> Result<Json<Vec<SalaryAdvance>>, StatusCode> {
+    Query(query): Query<SalaryAdvancePageQuery>,
+) -> Result<Json<SalaryAdvancePageResponse>, StatusCode> {
     require_any_permission(&user, &["hr.salary_advances.self.read", "hr.salary_advances.read"])?;
-    context
+    let limit: u16 = resolve_limit(&context.list_pagination, query.limit)?;
+    let cursor: Option<SalaryAdvanceCursor> = decode_cursor(query.cursor.as_deref())?;
+    let page: SalaryAdvancePage = context
         .core
         .finance
         .list_salary_advances(
             user.tenant_id,
             user.account_id,
             user.has_permission("hr.salary_advances.read"),
+            SalaryAdvanceListQuery {
+                status: query.status,
+                search: normalize_search(query.search),
+                limit: i64::from(limit),
+                cursor,
+            },
         )
         .await
-        .map(Json)
-        .map_err(|error: FinanceError| finance_status("list salary advances", &user, error))
+        .map_err(|error: FinanceError| finance_status("list salary advances", &user, error))?;
+    let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
+    Ok(Json(SalaryAdvancePageResponse {
+        has_more: next_cursor.is_some(),
+        items: page.items,
+        next_cursor,
+        limit,
+    }))
 }
 
 async fn create_salary_advance(
@@ -328,6 +531,77 @@ async fn approve_salary_advance(
         .await
         .map(Json)
         .map_err(|error: FinanceError| finance_status("approve salary advance", &user, error))
+}
+
+async fn correct_salary_advance(
+    State(context): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(advance_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(payload): Json<SalaryAdvanceCorrectionRequest>,
+) -> Result<Json<SalaryAdvance>, StatusCode> {
+    require_any_permission(
+        &user,
+        &[
+            "hr.salary_advances.self.request",
+            "hr.salary_advances.manage",
+            "hr.salary_advances.correct",
+        ],
+    )?;
+    context
+        .core
+        .finance
+        .correct_salary_advance(
+            user.tenant_id,
+            advance_id,
+            user.account_id,
+            user.has_permission("hr.salary_advances.correct"),
+            idempotency_key(&headers, &user)?,
+            SalaryAdvanceCorrectionInput {
+                expected_revision_id: payload.expected_revision_id,
+                correction_reason: payload.correction_reason.trim().to_owned(),
+                employee_id: payload.employee_id,
+                requested_amount: payload.requested_amount.trim().to_owned(),
+                approved_amount: normalize_optional(payload.approved_amount),
+                currency: payload.currency.trim().to_ascii_uppercase(),
+                reason: payload.reason.trim().to_owned(),
+                recovery_due_on: payload.recovery_due_on,
+            },
+        )
+        .await
+        .map(Json)
+        .map_err(|error: FinanceError| finance_status("correct salary advance", &user, error))
+}
+
+async fn list_salary_advance_revisions(
+    State(context): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(advance_id): Path<Uuid>,
+    Query(query): Query<FinanceCursorQuery>,
+) -> Result<Json<SalaryAdvanceRevisionPageResponse>, StatusCode> {
+    require_any_permission(&user, &["hr.salary_advances.self.read", "hr.salary_advances.read"])?;
+    let limit: u16 = resolve_limit(&context.list_pagination, query.limit)?;
+    let cursor: Option<RevisionCursor> = decode_cursor(query.cursor.as_deref())?;
+    let page: SalaryAdvanceRevisionPage = context
+        .core
+        .finance
+        .list_salary_advance_revisions(
+            user.tenant_id,
+            advance_id,
+            user.account_id,
+            user.has_permission("hr.salary_advances.read"),
+            i64::from(limit),
+            cursor,
+        )
+        .await
+        .map_err(|error: FinanceError| finance_status("list salary advance revisions", &user, error))?;
+    let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
+    Ok(Json(SalaryAdvanceRevisionPageResponse {
+        has_more: next_cursor.is_some(),
+        items: page.items,
+        next_cursor,
+        limit,
+    }))
 }
 
 async fn reject_salary_advance(

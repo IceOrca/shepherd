@@ -1,4 +1,5 @@
 import {
+  useInfiniteQuery,
   useMutation,
   useQuery,
   useQueryClient,
@@ -7,14 +8,14 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 import { CheckCircle2, CircleAlert, GitCompareArrows, MapPin, RefreshCw, Save } from "lucide-react";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useState, type FormEvent } from "react";
 import type {
   StaffingJob,
   ManualRateOverrideRequest,
   PermissionCode,
   ReconciliationStatus,
   UrgentCustomerWorkRecord,
+  UrgentReconciliationPageResponse,
   UrgentWorkCustomer,
   UrgentWorkReconciliation,
 } from "../../api/generated/contracts";
@@ -31,6 +32,14 @@ import {
   saveUrgentCustomerWorkRecordForBranch,
 } from "./api";
 import { useOperationsScope } from "./OperationsScopeProvider";
+import { ReconciliationModeSelector } from "./ReconciliationModeSelector";
+import { ReconciliationPagination } from "./ReconciliationPagination";
+import {
+  createReconciliationScopeCursor,
+  loadReconciliationScopePage,
+  type ReconciliationScopeCursor,
+  type ReconciliationScopePage,
+} from "./reconciliationCursor";
 
 interface EvidenceDraft {
   customerId: string;
@@ -112,21 +121,24 @@ function initialFinal(item: UrgentWorkReconciliation): FinalDraft {
   };
 }
 
-async function loadScopedReconciliations(
-  branchIds: string[],
-): Promise<UrgentWorkReconciliation[]> {
-  const groups: UrgentWorkReconciliation[][] = await Promise.all(
-    branchIds.map(
-      (branchId: string): Promise<UrgentWorkReconciliation[]> =>
-        listUrgentReconciliationsForBranch(branchId),
-    ),
-  );
-  return groups
-    .flat()
-    .sort(
-      (left: UrgentWorkReconciliation, right: UrgentWorkReconciliation): number =>
-        new Date(right.work.started_at).getTime() - new Date(left.work.started_at).getTime(),
-    );
+function compareUrgentReconciliations(
+  left: UrgentWorkReconciliation,
+  right: UrgentWorkReconciliation,
+): number {
+  const leftActive: number = left.work.status === "active" ? 1 : 0;
+  const rightActive: number = right.work.status === "active" ? 1 : 0;
+  if (leftActive !== rightActive) {
+    return rightActive - leftActive;
+  }
+  const timeDifference: number =
+    new Date(right.work.started_at).getTime() - new Date(left.work.started_at).getTime();
+  if (timeDifference !== 0) {
+    return timeDifference;
+  }
+  if (left.work.report_id === right.work.report_id) {
+    return 0;
+  }
+  return left.work.report_id < right.work.report_id ? 1 : -1;
 }
 
 export function UrgentReconciliationPage(): React.JSX.Element {
@@ -137,6 +149,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
   const canRead: boolean = permissions.includes("business.reconciliation.read");
   const canManage: boolean = permissions.includes("business.urgent_work.reconcile");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState<number>(1);
   const [evidence, setEvidence] = useState<EvidenceDraft>({
     customerId: "",
     startedAt: "",
@@ -157,35 +170,77 @@ export function UrgentReconciliationPage(): React.JSX.Element {
   });
   const [message, setMessage] = useState<string | null>(null);
 
-  const reconciliationQuery: UseQueryResult<UrgentWorkReconciliation[], Error> = useQuery({
-    queryKey: [...operationsQueryKeys.urgentReconciliations, "scope", scope.scopeKey],
-    queryFn: (): Promise<UrgentWorkReconciliation[]> =>
-      loadScopedReconciliations(scope.branchIds),
+  const reconciliationQuery = useInfiniteQuery({
+    queryKey: [
+      ...operationsQueryKeys.urgentReconciliations,
+      "scope",
+      scope.scopeKey,
+      "customer",
+      scope.selectedCustomerId ?? "all",
+    ],
+    initialPageParam: createReconciliationScopeCursor<UrgentWorkReconciliation>(scope.branchIds),
+    queryFn: ({ pageParam }: { pageParam: ReconciliationScopeCursor<UrgentWorkReconciliation> }): Promise<ReconciliationScopePage<UrgentWorkReconciliation>> =>
+      loadReconciliationScopePage<UrgentWorkReconciliation>({
+        cursor: pageParam,
+        fetchBranchPage: (
+          branchId: string,
+          cursor: string | null,
+        ): Promise<UrgentReconciliationPageResponse> =>
+          listUrgentReconciliationsForBranch(
+            branchId,
+            cursor,
+            scope.selectedCustomerId,
+          ),
+        compare: compareUrgentReconciliations,
+        itemKey: (item: UrgentWorkReconciliation): string => item.work.report_id,
+      }),
+    getNextPageParam: (
+      lastPage: ReconciliationScopePage<UrgentWorkReconciliation>,
+    ): ReconciliationScopeCursor<UrgentWorkReconciliation> | undefined => lastPage.nextCursor ?? undefined,
     enabled: canRead && scope.branchIds.length > 0,
   });
-
-  const items: UrgentWorkReconciliation[] = useMemo<UrgentWorkReconciliation[]>(
-    (): UrgentWorkReconciliation[] =>
-      (reconciliationQuery.data ?? []).filter(
-        (item: UrgentWorkReconciliation): boolean =>
-          scope.selectedCustomerId === null ||
-          item.work.claimed_customer_id === scope.selectedCustomerId ||
-          item.customer_record?.confirmed_customer_id === scope.selectedCustomerId ||
-          item.final_customer_id === scope.selectedCustomerId,
-      ),
-    [reconciliationQuery.data, scope.selectedCustomerId],
-  );
+  const loadedPages: ReconciliationScopePage<UrgentWorkReconciliation>[] =
+    reconciliationQuery.data?.pages ?? [];
+  const pageItems: UrgentWorkReconciliation[] = loadedPages[currentPage - 1]?.items ?? [];
+  const hasNextPage: boolean = currentPage < loadedPages.length || reconciliationQuery.hasNextPage;
   const selected: UrgentWorkReconciliation | null =
-    items.find((item: UrgentWorkReconciliation): boolean => item.work.report_id === selectedId) ?? null;
+    pageItems.find((item: UrgentWorkReconciliation): boolean => item.work.report_id === selectedId) ?? null;
 
   useEffect((): void => {
-    const selectionRemainsVisible: boolean = items.some(
+    setCurrentPage(1);
+  }, [scope.scopeKey, scope.selectedCustomerId]);
+
+  useEffect((): void => {
+    if (loadedPages.length > 0 && currentPage > loadedPages.length) {
+      setCurrentPage(loadedPages.length);
+    }
+  }, [currentPage, loadedPages.length]);
+
+  const changePage = (nextPage: number): void => {
+    if (nextPage < 1) {
+      return;
+    }
+    if (nextPage <= loadedPages.length) {
+      setCurrentPage(nextPage);
+      return;
+    }
+    if (nextPage === loadedPages.length + 1 && reconciliationQuery.hasNextPage) {
+      void reconciliationQuery.fetchNextPage().then((result): void => {
+        if ((result.data?.pages.length ?? 0) >= nextPage) {
+          setCurrentPage(nextPage);
+        }
+      });
+    }
+  };
+
+  useEffect((): void => {
+    const selectionRemainsVisible: boolean = pageItems.some(
       (item: UrgentWorkReconciliation): boolean => item.work.report_id === selectedId,
     );
     if (!selectionRemainsVisible) {
-      setSelectedId(items.at(0)?.work.report_id ?? null);
+      setSelectedId(pageItems.at(0)?.work.report_id ?? null);
     }
-  }, [items, selectedId]);
+  }, [pageItems, selectedId]);
 
   const selectedBranchId: string | null = selected?.work.branch_id ?? null;
   const customersQuery: UseQueryResult<UrgentWorkCustomer[], Error> = useQuery({
@@ -341,23 +396,37 @@ export function UrgentReconciliationPage(): React.JSX.Element {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900">
-        <p><strong>Mặc định:</strong> đối soát công việc phát sinh không có ca tạo trước.</p>
-        <Link className="font-bold text-blue-700 hover:underline" to="/operations/reconciliation/planned">
-          Mở đối soát ca kế hoạch
-        </Link>
-      </div>
+      <ReconciliationModeSelector mode="urgent" />
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(300px,0.8fr)_minmax(0,1.2fr)]">
-        <section className="panel overflow-hidden">
+      <label className="panel block p-4 text-sm font-semibold text-slate-700 md:hidden">
+        Chọn công việc cần đối soát
+        <select
+          className="mt-2 min-h-11 w-full rounded-xl border-slate-300 bg-white px-3"
+          onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => setSelectedId(event.target.value || null)}
+          value={selectedId ?? ""}
+        >
+          <option value="">Chọn công việc</option>
+          {pageItems.map((item: UrgentWorkReconciliation): React.JSX.Element => (
+            <option key={item.work.report_id} value={item.work.report_id}>
+              {item.work.employee_name} · {item.work.customer_name} · {statusLabel(item.reconciliation_status)}
+            </option>
+          ))}
+        </select>
+        {pageItems.length === 0 ? <p className="mt-2 font-normal text-slate-500">Chưa có công việc phát sinh cần đối soát.</p> : null}
+      </label>
+      <ReconciliationPagination className="panel rounded-2xl md:hidden" currentItemCount={pageItems.length} currentPage={currentPage} hasNextPage={hasNextPage} nextPagePending={reconciliationQuery.isFetchingNextPage} onPageChange={changePage} />
+
+      <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(280px,0.72fr)_minmax(0,1.28fr)]">
+        <section className="panel hidden overflow-hidden md:block">
           <div className="border-b border-slate-200 px-5 py-4">
             <h2 className="font-bold text-slate-950">Công việc cần đối soát</h2>
             <p className="mt-1 text-sm text-slate-500">Kiểm tra nơi làm việc và thời gian nhân viên đã ghi nhận.</p>
           </div>
           <div className="max-h-[72vh] divide-y divide-slate-100 overflow-y-auto">
-            {items.map((item: UrgentWorkReconciliation): React.JSX.Element => (
+            {pageItems.map((item: UrgentWorkReconciliation): React.JSX.Element => (
               <button
                 className={`w-full px-5 py-4 text-left hover:bg-slate-50 ${selectedId === item.work.report_id ? "bg-blue-50" : ""}`}
+                aria-pressed={selectedId === item.work.report_id}
                 key={item.work.report_id}
                 onClick={(): void => setSelectedId(item.work.report_id)}
                 type="button"
@@ -376,21 +445,22 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                 <p className="mt-2 text-xs text-slate-500">{formatDateTime(item.work.started_at)}</p>
               </button>
             ))}
-            {items.length === 0 ? (
+            {pageItems.length === 0 ? (
               <p className="p-8 text-center text-sm text-slate-500">Chưa có công việc phát sinh cần đối soát.</p>
             ) : null}
           </div>
+          <ReconciliationPagination currentItemCount={pageItems.length} currentPage={currentPage} hasNextPage={hasNextPage} nextPagePending={reconciliationQuery.isFetchingNextPage} onPageChange={changePage} />
         </section>
 
         {selected ? (
-          <div className="space-y-5">
+          <div className="min-w-0 space-y-5">
             {message ? (
               <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-medium text-blue-800">
                 {message}
               </div>
             ) : null}
 
-            <section className="panel p-5 sm:p-6">
+            <section className="panel p-4 sm:p-6">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <h2 className="text-lg font-black text-slate-950">{selected.work.employee_name}</h2>
@@ -402,7 +472,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                   {statusLabel(selected.reconciliation_status)}
                 </span>
               </div>
-              <div className="mt-5 grid gap-3 lg:grid-cols-3">
+              <div className="mt-5 grid gap-3 md:grid-cols-3">
                 <div className="rounded-xl bg-violet-50 p-4">
                   <p className="text-xs font-bold uppercase text-violet-600">Nhân viên khai</p>
                   <p className="mt-2 font-black text-violet-950">{selected.work.customer_name}</p>
@@ -433,7 +503,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
               </div>
             </section>
 
-            <form className="panel p-5 sm:p-6" onSubmit={saveEvidence}>
+            <form className="panel p-4 sm:p-6" onSubmit={saveEvidence}>
               <div className="flex items-center gap-2">
                 <MapPin className="size-5 text-amber-600" />
                 <h3 className="font-bold text-slate-950">Xác nhận / bill từ khách hàng</h3>
@@ -460,11 +530,11 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                   ))}
                 </select>
               </label>
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <label className="text-sm font-semibold text-slate-700">
+              <div className="mt-3 grid min-w-0 gap-3 sm:grid-cols-2">
+                <label className="min-w-0 text-sm font-semibold text-slate-700">
                   Bắt đầu xác nhận
                   <input
-                    className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5"
+                    className="mt-1.5 min-w-0 w-full max-w-full rounded-xl border border-slate-200 px-3 py-2.5"
                     disabled={!canManage || selected.reconciliation_status === "reconciled"}
                     onChange={(event: React.ChangeEvent<HTMLInputElement>): void =>
                       setEvidence((current: EvidenceDraft): EvidenceDraft => ({ ...current, startedAt: event.target.value }))
@@ -474,10 +544,10 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                     value={evidence.startedAt}
                   />
                 </label>
-                <label className="text-sm font-semibold text-slate-700">
+                <label className="min-w-0 text-sm font-semibold text-slate-700">
                   Kết thúc xác nhận
                   <input
-                    className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5"
+                    className="mt-1.5 min-w-0 w-full max-w-full rounded-xl border border-slate-200 px-3 py-2.5"
                     disabled={!canManage || selected.reconciliation_status === "reconciled"}
                     onChange={(event: React.ChangeEvent<HTMLInputElement>): void =>
                       setEvidence((current: EvidenceDraft): EvidenceDraft => ({ ...current, endedAt: event.target.value }))
@@ -512,14 +582,14 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                 />
               </label>
               {selected.reconciliation_status !== "reconciled" ? (
-                <button className="action-secondary mt-4" disabled={!canManage || evidenceMutation.isPending} type="submit">
+                <button className="action-secondary mt-4 w-full sm:w-auto" disabled={!canManage || evidenceMutation.isPending} type="submit">
                   <Save className="size-4" />
                   {evidenceMutation.isPending ? "Đang lưu..." : "Lưu bằng chứng khách hàng"}
                 </button>
               ) : null}
             </form>
 
-            <section className="panel p-5 sm:p-6">
+            <section className="panel p-4 sm:p-6">
               <div className="flex items-center gap-2">
                 <GitCompareArrows className="size-5 text-blue-600" />
                 <h3 className="font-bold text-slate-950">Chốt đối soát</h3>
@@ -534,7 +604,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                     <p className="mt-2 text-sm font-semibold text-amber-700">Vui lòng chọn công việc bên dưới trước khi xác nhận.</p>
                   ) : null}
                   <button
-                    className="mt-3 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 text-sm font-bold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 text-sm font-bold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
                     disabled={
                       !canManage ||
                       !finalDraft.jobId ||
@@ -559,7 +629,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                   Nhập dữ liệu khách hàng trước. Nút xác nhận nhanh chỉ xuất hiện khi khách hàng và nhân viên ghi nhận hoàn toàn giống nhau.
                 </p>
               ) : null}
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <div className="mt-4 grid min-w-0 gap-3 sm:grid-cols-2">
                 <label className="text-sm font-semibold text-slate-700">
                   Khách hàng cuối cùng
                   <select
@@ -622,7 +692,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                 </label>
               </div>
 
-              <label className="mt-4 flex items-center gap-3 text-sm font-semibold text-slate-700">
+              <label className="mt-4 flex items-start gap-3 text-sm font-semibold leading-5 text-slate-700">
                 <input
                   checked={finalDraft.useManualRate}
                   disabled={selected.reconciliation_status === "reconciled"}
@@ -649,7 +719,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                 </p>
               ) : (
                 <button
-                  className="action-primary mt-4"
+                  className="action-primary mt-4 w-full sm:w-auto"
                   disabled={
                     !canManage ||
                     !selected.customer_record ||

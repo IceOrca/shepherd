@@ -8,6 +8,8 @@ const HR_REPLENISH_MILLIS_ENV: &str = "HTTP_RATE_LIMIT_PROTECTED_REPLENISH_MILLI
 const HR_BURST_ENV: &str = "HTTP_RATE_LIMIT_PROTECTED_BURST";
 const OPERATIONS_REPLENISH_MILLIS_ENV: &str = "HTTP_RATE_LIMIT_HIGH_FREQUENCY_REPLENISH_MILLIS";
 const OPERATIONS_BURST_ENV: &str = "HTTP_RATE_LIMIT_HIGH_FREQUENCY_BURST";
+const REPORT_EXPORT_REPLENISH_MILLIS_ENV: &str = "HTTP_RATE_LIMIT_FINANCE_EXPORT_REPLENISH_MILLIS";
+const REPORT_EXPORT_BURST_ENV: &str = "HTTP_RATE_LIMIT_FINANCE_EXPORT_BURST";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ShepherdRouteGroup {
@@ -15,6 +17,7 @@ pub enum ShepherdRouteGroup {
     Administration,
     HumanResources,
     Operations,
+    ReportExport,
 }
 
 pub fn policy(group: ShepherdRouteGroup) -> RateLimitPolicy {
@@ -47,6 +50,13 @@ pub fn policy(group: ShepherdRouteGroup) -> RateLimitPolicy {
             100,
             120,
         ),
+        ShepherdRouteGroup::ReportExport => (
+            "shepherd-finance-export",
+            REPORT_EXPORT_REPLENISH_MILLIS_ENV,
+            REPORT_EXPORT_BURST_ENV,
+            5_000,
+            3,
+        ),
     };
     RateLimitPolicy::from_env(name, replenish_env, burst_env, default_replenish_millis, default_burst)
 }
@@ -62,8 +72,9 @@ mod tests {
             ShepherdRouteGroup::Administration,
             ShepherdRouteGroup::HumanResources,
             ShepherdRouteGroup::Operations,
+            ShepherdRouteGroup::ReportExport,
         ];
 
-        assert_eq!(groups.len(), 4);
+        assert_eq!(groups.len(), 5);
     }
 }

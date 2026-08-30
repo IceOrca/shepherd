@@ -127,6 +127,19 @@ pub struct Customer {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CustomerCursor {
+    pub normalized_name: String,
+    pub code: String,
+    pub customer_id: Uuid,
+}
+
+#[derive(Clone, Debug)]
+pub struct CustomerPage {
+    pub items: Vec<Customer>,
+    pub next_cursor: Option<CustomerCursor>,
+}
+
 #[derive(Clone, Debug, Serialize, TS)]
 pub struct StaffingJob {
     pub id: Uuid,
@@ -159,6 +172,31 @@ pub struct StaffingStaff {
     pub employee_id: Uuid,
     pub employee_code: String,
     pub display_name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct StaffingStaffCursor {
+    pub normalized_display_name: String,
+    pub employee_code: String,
+    pub employee_id: Uuid,
+}
+
+#[derive(Clone, Debug)]
+pub struct StaffingStaffPage {
+    pub items: Vec<StaffingStaff>,
+    pub next_cursor: Option<StaffingStaffCursor>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct StaffingRateCursor {
+    pub created_at: DateTime<Utc>,
+    pub rate_id: Uuid,
+}
+
+#[derive(Clone, Debug)]
+pub struct StaffingRatePage {
+    pub items: Vec<StaffingRate>,
+    pub next_cursor: Option<StaffingRateCursor>,
 }
 
 #[derive(Clone, Debug, Serialize, TS)]
@@ -271,6 +309,18 @@ pub struct StaffingReconciliation {
     pub reconciliation_status: ReconciliationStatus,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct StaffingReconciliationCursor {
+    pub scheduled_starts_at: DateTime<Utc>,
+    pub assignment_id: Uuid,
+}
+
+#[derive(Clone, Debug)]
+pub struct StaffingReconciliationPage {
+    pub items: Vec<StaffingReconciliation>,
+    pub next_cursor: Option<StaffingReconciliationCursor>,
+}
+
 #[derive(Clone, Debug)]
 pub struct CustomerInput {
     pub code: String,
@@ -344,7 +394,13 @@ pub enum StaffingError {
 
 #[async_trait]
 pub trait StaffingRepo {
-    async fn list_customers(&self, tenant_id: Uuid) -> Result<Vec<Customer>, StaffingError>;
+    async fn list_customers(
+        &self,
+        tenant_id: Uuid,
+        search: Option<&str>,
+        limit: i64,
+        cursor: Option<&CustomerCursor>,
+    ) -> Result<CustomerPage, StaffingError>;
     async fn list_jobs(&self, tenant_id: Uuid) -> Result<Vec<StaffingJob>, StaffingError>;
     async fn create_customer(
         &self,
@@ -360,8 +416,20 @@ pub trait StaffingRepo {
         input: &CustomerInput,
         audit_account_id: Uuid,
     ) -> Result<Customer, StaffingError>;
-    async fn list_rates(&self, tenant_id: Uuid) -> Result<Vec<StaffingRate>, StaffingError>;
-    async fn list_staff(&self, tenant_id: Uuid) -> Result<Vec<StaffingStaff>, StaffingError>;
+    async fn list_rates(
+        &self,
+        tenant_id: Uuid,
+        customer_id: Option<Uuid>,
+        limit: i64,
+        cursor: Option<&StaffingRateCursor>,
+    ) -> Result<StaffingRatePage, StaffingError>;
+    async fn list_staff(
+        &self,
+        tenant_id: Uuid,
+        search: Option<&str>,
+        limit: i64,
+        cursor: Option<&StaffingStaffCursor>,
+    ) -> Result<StaffingStaffPage, StaffingError>;
     async fn set_prices(
         &self,
         tenant_id: Uuid,
@@ -416,7 +484,13 @@ pub trait StaffingRepo {
         assignment_id: Uuid,
         audit_account_id: Uuid,
     ) -> Result<ShiftAssignment, StaffingError>;
-    async fn list_reconciliations(&self, tenant_id: Uuid) -> Result<Vec<StaffingReconciliation>, StaffingError>;
+    async fn list_reconciliations(
+        &self,
+        tenant_id: Uuid,
+        customer_id: Option<Uuid>,
+        limit: i64,
+        cursor: Option<&StaffingReconciliationCursor>,
+    ) -> Result<StaffingReconciliationPage, StaffingError>;
     async fn upsert_customer_work_record(
         &self,
         tenant_id: Uuid,
@@ -437,9 +511,21 @@ impl StaffingService {
         Arc::new(Self { repo })
     }
 
-    pub async fn list_customers(&self, tenant_id: Uuid) -> Result<Vec<Customer>, StaffingError> {
+    pub async fn list_customers(
+        &self,
+        tenant_id: Uuid,
+        search: Option<String>,
+        limit: i64,
+        cursor: Option<CustomerCursor>,
+    ) -> Result<CustomerPage, StaffingError> {
+        if limit <= 0 {
+            return Err(StaffingError::InvalidInput("customer page size must be positive"));
+        }
         debug!(operation = "list_customers", tenant_id = %tenant_id, "Staffing service operation accepted");
-        let result: Result<Vec<Customer>, StaffingError> = self.repo.list_customers(tenant_id).await;
+        let result: Result<CustomerPage, StaffingError> = self
+            .repo
+            .list_customers(tenant_id, search.as_deref(), limit, cursor.as_ref())
+            .await;
         log_staffing_operation("list_customers", tenant_id, None, None, &result);
         result
     }
@@ -520,16 +606,40 @@ impl StaffingService {
         result
     }
 
-    pub async fn list_rates(&self, tenant_id: Uuid) -> Result<Vec<StaffingRate>, StaffingError> {
+    pub async fn list_rates(
+        &self,
+        tenant_id: Uuid,
+        customer_id: Option<Uuid>,
+        limit: i64,
+        cursor: Option<StaffingRateCursor>,
+    ) -> Result<StaffingRatePage, StaffingError> {
+        if limit <= 0 {
+            return Err(StaffingError::InvalidInput("staffing rate page size must be positive"));
+        }
         debug!(operation = "list_rates", tenant_id = %tenant_id, "Staffing service operation accepted");
-        let result: Result<Vec<StaffingRate>, StaffingError> = self.repo.list_rates(tenant_id).await;
+        let result: Result<StaffingRatePage, StaffingError> = self
+            .repo
+            .list_rates(tenant_id, customer_id, limit, cursor.as_ref())
+            .await;
         log_staffing_operation("list_rates", tenant_id, None, None, &result);
         result
     }
 
-    pub async fn list_staff(&self, tenant_id: Uuid) -> Result<Vec<StaffingStaff>, StaffingError> {
+    pub async fn list_staff(
+        &self,
+        tenant_id: Uuid,
+        search: Option<String>,
+        limit: i64,
+        cursor: Option<StaffingStaffCursor>,
+    ) -> Result<StaffingStaffPage, StaffingError> {
+        if limit <= 0 {
+            return Err(StaffingError::InvalidInput("staffing staff page size must be positive"));
+        }
         debug!(operation = "list_staffing_staff", tenant_id = %tenant_id, "Staffing service operation accepted");
-        let result: Result<Vec<StaffingStaff>, StaffingError> = self.repo.list_staff(tenant_id).await;
+        let result: Result<StaffingStaffPage, StaffingError> = self
+            .repo
+            .list_staff(tenant_id, search.as_deref(), limit, cursor.as_ref())
+            .await;
         log_staffing_operation("list_staffing_staff", tenant_id, None, None, &result);
         result
     }
@@ -803,10 +913,21 @@ impl StaffingService {
         result
     }
 
-    pub async fn list_reconciliations(&self, tenant_id: Uuid) -> Result<Vec<StaffingReconciliation>, StaffingError> {
+    pub async fn list_reconciliations(
+        &self,
+        tenant_id: Uuid,
+        customer_id: Option<Uuid>,
+        limit: i64,
+        cursor: Option<StaffingReconciliationCursor>,
+    ) -> Result<StaffingReconciliationPage, StaffingError> {
+        if limit <= 0 {
+            return Err(StaffingError::InvalidInput("reconciliation page size must be positive"));
+        }
         debug!(operation = "list_staffing_reconciliations", tenant_id = %tenant_id, "Staffing service operation accepted");
-        let result: Result<Vec<StaffingReconciliation>, StaffingError> =
-            self.repo.list_reconciliations(tenant_id).await;
+        let result: Result<StaffingReconciliationPage, StaffingError> = self
+            .repo
+            .list_reconciliations(tenant_id, customer_id, limit, cursor.as_ref())
+            .await;
         log_staffing_operation("list_staffing_reconciliations", tenant_id, None, None, &result);
         result
     }

@@ -2986,6 +2986,7 @@ version = "0.98.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e291f3208e0ed430e5c49d240adbf2935a94bbbf5fed945bbf096cf024585355"
 dependencies = [
+ "chrono",
  "zip",
 ]
 

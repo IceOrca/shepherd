@@ -65,7 +65,7 @@ chrono = { version = "*", features = ["serde"] }
 time = { version = "*", features = ["parsing", "macros"] }
 ts-rs = { version = "*", features = ["chrono-impl", "uuid-impl"] }
 calamine = { version = "*" }
-rust_xlsxwriter = { version = "*" }
+rust_xlsxwriter = { version = "*", features = ["chrono"] }
 # reusable infra crates
 infra-kernel = { path = "infra/kernel" }
 # infra-ntree = { path = "infra/ntree" }

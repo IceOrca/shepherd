@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 use crate::{
     AuthCodeError, AuthService, PermissionCode, RoleCode,
+    ext_service::ListPaginationPolicy,
     ext_service::account::{AccountStatus, AuthenticatedUser},
 };
 
@@ -62,6 +63,7 @@ struct AuthAdminContext {
     auth: Arc<AuthService>,
     policy: AuthAdminPolicy,
     provisioner: Arc<dyn AuthAccountProvisioner>,
+    pagination: ListPaginationPolicy,
 }
 
 impl Deref for AuthAdminContext {
@@ -386,14 +388,15 @@ pub enum AuthProviderUserStatus {
     Missing,
 }
 
-pub fn routes(auth: Arc<AuthService>, policy: AuthAdminPolicy) -> Router {
-    routes_with_provisioner(auth, policy, Arc::new(NoopAuthAccountProvisioner))
+pub fn routes(auth: Arc<AuthService>, policy: AuthAdminPolicy, pagination: ListPaginationPolicy) -> Router {
+    routes_with_provisioner(auth, policy, Arc::new(NoopAuthAccountProvisioner), pagination)
 }
 
 pub fn routes_with_provisioner(
     auth: Arc<AuthService>,
     policy: AuthAdminPolicy,
     provisioner: Arc<dyn AuthAccountProvisioner>,
+    pagination: ListPaginationPolicy,
 ) -> Router {
     debug!(
         read_permission = %policy.read_permission,
@@ -409,6 +412,7 @@ pub fn routes_with_provisioner(
         auth,
         policy,
         provisioner,
+        pagination,
     });
     Router::new()
         .route("/admin/auth-users", get(list_users).post(create_user))

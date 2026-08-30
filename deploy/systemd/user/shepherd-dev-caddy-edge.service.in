@@ -1,0 +1,8 @@
+[Unit]
+Description=Check and recover the Shepherd development Caddy edge
+
+[Service]
+Type=oneshot
+WorkingDirectory=@SHEPHERD_REPOSITORY_ROOT@
+ExecStart=@SHEPHERD_REPOSITORY_ROOT@/scripts/recover-development-caddy-edge.sh
+TimeoutStartSec=600s

@@ -19,8 +19,21 @@ export const authAdminQueryKeys = {
   accessControl: ["admin", "access-control"] as const,
 };
 
-export function getAccessControlSnapshot(): Promise<AccessControlSnapshot> {
-  return apiRequest<AccessControlSnapshot>("/api/admin/access-control");
+export function getAccessControlSnapshot({
+  roleCursor,
+  userCursor,
+  auditCursor,
+}: {
+  roleCursor?: string | null;
+  userCursor?: string | null;
+  auditCursor?: string | null;
+} = {}): Promise<AccessControlSnapshot> {
+  const parameters: URLSearchParams = new URLSearchParams();
+  if (roleCursor) parameters.set("role_cursor", roleCursor);
+  if (userCursor) parameters.set("user_cursor", userCursor);
+  if (auditCursor) parameters.set("audit_cursor", auditCursor);
+  const query: string = parameters.toString();
+  return apiRequest<AccessControlSnapshot>(`/api/admin/access-control${query ? `?${query}` : ""}`);
 }
 
 export function createAccessControlBranch(

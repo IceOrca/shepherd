@@ -108,6 +108,31 @@ pub struct AttendanceSession {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct EmployeeCursor {
+    pub normalized_display_name: String,
+    pub employee_code: String,
+    pub employee_id: Uuid,
+}
+
+#[derive(Clone, Debug)]
+pub struct EmployeePage {
+    pub items: Vec<Employee>,
+    pub next_cursor: Option<EmployeeCursor>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct AttendanceCursor {
+    pub check_in_at: DateTime<Utc>,
+    pub attendance_session_id: Uuid,
+}
+
+#[derive(Clone, Debug)]
+pub struct AttendancePage {
+    pub items: Vec<AttendanceSession>,
+    pub next_cursor: Option<AttendanceCursor>,
+}
+
 #[derive(Clone, Debug)]
 pub struct EmployeeInput {
     pub account_id: Option<Uuid>,
@@ -141,7 +166,13 @@ pub enum HrError {
 
 #[async_trait]
 pub trait PeopleRepo {
-    async fn list_employees(&self, tenant_id: Uuid) -> Result<Vec<Employee>, HrError>;
+    async fn list_employees(
+        &self,
+        tenant_id: Uuid,
+        search: Option<&str>,
+        limit: i64,
+        cursor: Option<&EmployeeCursor>,
+    ) -> Result<EmployeePage, HrError>;
     async fn find_employee(&self, tenant_id: Uuid, employee_id: Uuid) -> Result<Option<Employee>, HrError>;
     async fn find_employee_by_account(&self, tenant_id: Uuid, account_id: Uuid) -> Result<Option<Employee>, HrError>;
     async fn create_employee(
@@ -181,7 +212,9 @@ pub trait PeopleRepo {
         &self,
         tenant_id: Uuid,
         employee_id: Uuid,
-    ) -> Result<Vec<AttendanceSession>, HrError>;
+        limit: i64,
+        cursor: Option<&AttendanceCursor>,
+    ) -> Result<AttendancePage, HrError>;
     async fn check_in(
         &self,
         tenant_id: Uuid,
@@ -209,8 +242,19 @@ impl PeopleService {
         Arc::new(Self { repo })
     }
 
-    pub async fn list_employees(&self, tenant_id: Uuid) -> Result<Vec<Employee>, HrError> {
-        self.repo.list_employees(tenant_id).await
+    pub async fn list_employees(
+        &self,
+        tenant_id: Uuid,
+        search: Option<String>,
+        limit: i64,
+        cursor: Option<EmployeeCursor>,
+    ) -> Result<EmployeePage, HrError> {
+        if limit <= 0 {
+            return Err(HrError::InvalidInput("employee page size must be positive"));
+        }
+        self.repo
+            .list_employees(tenant_id, search.as_deref(), limit, cursor.as_ref())
+            .await
     }
 
     pub async fn find_employee(&self, tenant_id: Uuid, employee_id: Uuid) -> Result<Option<Employee>, HrError> {
@@ -291,8 +335,15 @@ impl PeopleService {
         &self,
         tenant_id: Uuid,
         employee_id: Uuid,
-    ) -> Result<Vec<AttendanceSession>, HrError> {
-        self.repo.list_attendance_sessions(tenant_id, employee_id).await
+        limit: i64,
+        cursor: Option<AttendanceCursor>,
+    ) -> Result<AttendancePage, HrError> {
+        if limit <= 0 {
+            return Err(HrError::InvalidInput("attendance page size must be positive"));
+        }
+        self.repo
+            .list_attendance_sessions(tenant_id, employee_id, limit, cursor.as_ref())
+            .await
     }
 
     pub async fn check_in(

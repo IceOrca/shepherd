@@ -7,11 +7,13 @@ use tracing::{debug, error, info, trace, warn};
 use uuid::Uuid;
 
 use super::core::{
-    BusinessRecordStatus, Customer, CustomerInput, CustomerWorkRecord, CustomerWorkRecordInput, ManualRateOverride,
-    RateSource, ReconciliationStatus, ShiftAssignment, ShiftAssignmentInput, ShiftAssignmentStatus, StaffingCandidate,
-    StaffingEligibility, StaffingEligibilityInput, StaffingError, StaffingPriceSet, StaffingPriceSetInput, StaffingJob,
-    StaffingRate, StaffingRateKind, StaffingReconciliation, StaffingRepo, StaffingShift, StaffingShiftInput,
-    StaffingShiftStatus, StaffingStaff,
+    BusinessRecordStatus, Customer, CustomerCursor, CustomerInput, CustomerPage, CustomerWorkRecord,
+    CustomerWorkRecordInput, ManualRateOverride, RateSource, ReconciliationStatus, ShiftAssignment,
+    ShiftAssignmentInput, ShiftAssignmentStatus, StaffingCandidate, StaffingEligibility, StaffingEligibilityInput,
+    StaffingError, StaffingJob, StaffingPriceSet, StaffingPriceSetInput, StaffingRate, StaffingRateCursor,
+    StaffingRateKind, StaffingRatePage, StaffingReconciliation, StaffingReconciliationCursor,
+    StaffingReconciliationPage, StaffingRepo, StaffingShift, StaffingShiftInput, StaffingShiftStatus, StaffingStaff,
+    StaffingStaffCursor, StaffingStaffPage,
 };
 
 pub struct StaffingDb {
@@ -373,8 +375,19 @@ struct ResolvedRateRow {
 
 #[async_trait]
 impl StaffingRepo for StaffingDb {
-    async fn list_customers(&self, tenant_id: Uuid) -> Result<Vec<Customer>, StaffingError> {
-        let rows: Vec<CustomerRow> = self
+    async fn list_customers(
+        &self,
+        tenant_id: Uuid,
+        search: Option<&str>,
+        limit: i64,
+        cursor: Option<&CustomerCursor>,
+    ) -> Result<CustomerPage, StaffingError> {
+        let normalized_search: Option<String> = search.map(str::to_owned);
+        let cursor_name: Option<String> = cursor.map(|value: &CustomerCursor| value.normalized_name.clone());
+        let cursor_code: Option<String> = cursor.map(|value: &CustomerCursor| value.code.clone());
+        let cursor_id: Option<Uuid> = cursor.map(|value: &CustomerCursor| value.customer_id);
+        let query_limit: i64 = limit + 1;
+        let mut rows: Vec<CustomerRow> = self
             .db
             .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
                 sqlx::query_as!(
@@ -383,16 +396,43 @@ impl StaffingRepo for StaffingDb {
                     SELECT id, code, name, address, time_zone, billing_email, status, created_at, updated_at
                     FROM business_customers
                     WHERE tenant_id = $1
-                    ORDER BY lower(name), code
+                      AND ($2::TEXT IS NULL
+                           OR lower(name) LIKE '%' || $2 || '%'
+                           OR lower(code) LIKE '%' || $2 || '%'
+                           OR lower(COALESCE(address, '')) LIKE '%' || $2 || '%'
+                           OR lower(COALESCE(billing_email, '')) LIKE '%' || $2 || '%')
+                      AND ($3::TEXT IS NULL OR (lower(name), code, id) > ($3, $4::TEXT, $5::UUID))
+                    ORDER BY lower(name), code, id
+                    LIMIT $6
                     "#,
                     tenant_id,
+                    normalized_search,
+                    cursor_name,
+                    cursor_code,
+                    cursor_id,
+                    query_limit,
                 )
                 .fetch_all(connection)
                 .await
             })
             .await
             .map_err(|error: TenantDbErr| tenant_database_failure("list customers", tenant_id, error))?;
-        rows.into_iter().map(Customer::try_from).collect()
+        let has_more: bool = rows.len() > limit as usize;
+        rows.truncate(limit as usize);
+        let next_cursor: Option<CustomerCursor> = if has_more {
+            rows.last().map(|row: &CustomerRow| CustomerCursor {
+                normalized_name: row.name.to_lowercase(),
+                code: row.code.clone(),
+                customer_id: row.id,
+            })
+        } else {
+            None
+        };
+        let items: Vec<Customer> = rows
+            .into_iter()
+            .map(Customer::try_from)
+            .collect::<Result<Vec<Customer>, StaffingError>>()?;
+        Ok(CustomerPage { items, next_cursor })
     }
 
     async fn list_jobs(&self, tenant_id: Uuid) -> Result<Vec<StaffingJob>, StaffingError> {
@@ -508,8 +548,17 @@ impl StaffingRepo for StaffingDb {
         Customer::try_from(row)
     }
 
-    async fn list_rates(&self, tenant_id: Uuid) -> Result<Vec<StaffingRate>, StaffingError> {
-        let rows: Vec<StaffingRateRow> = self
+    async fn list_rates(
+        &self,
+        tenant_id: Uuid,
+        customer_id: Option<Uuid>,
+        limit: i64,
+        cursor: Option<&StaffingRateCursor>,
+    ) -> Result<StaffingRatePage, StaffingError> {
+        let cursor_created_at: Option<DateTime<Utc>> = cursor.map(|value: &StaffingRateCursor| value.created_at);
+        let cursor_id: Option<Uuid> = cursor.map(|value: &StaffingRateCursor| value.rate_id);
+        let query_limit: i64 = limit + 1;
+        let mut rows: Vec<StaffingRateRow> = self
             .db
             .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
                 sqlx::query_as!(
@@ -520,20 +569,52 @@ impl StaffingRepo for StaffingDb {
                            priority, effective_from, effective_to, is_active, created_at
                     FROM business_staffing_rates
                     WHERE tenant_id = $1
-                    ORDER BY rate_kind, lower(name), effective_from DESC, priority DESC
+                      AND ($2::UUID IS NULL
+                           OR customer_id = $2
+                           OR (rate_kind = 'worker_pay' AND customer_id IS NULL))
+                      AND ($3::TIMESTAMPTZ IS NULL OR (created_at, id) < ($3, $4::UUID))
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT $5
                     "#,
                     tenant_id,
+                    customer_id,
+                    cursor_created_at,
+                    cursor_id,
+                    query_limit,
                 )
                 .fetch_all(connection)
                 .await
             })
             .await
             .map_err(|error: TenantDbErr| tenant_database_failure("list staffing rates", tenant_id, error))?;
-        Ok(rows.into_iter().map(StaffingRate::from).collect())
+        let has_more: bool = rows.len() > limit as usize;
+        rows.truncate(limit as usize);
+        let next_cursor: Option<StaffingRateCursor> = if has_more {
+            rows.last().map(|row: &StaffingRateRow| StaffingRateCursor {
+                created_at: row.created_at,
+                rate_id: row.id,
+            })
+        } else {
+            None
+        };
+        let items: Vec<StaffingRate> = rows.into_iter().map(StaffingRate::from).collect();
+        Ok(StaffingRatePage { items, next_cursor })
     }
 
-    async fn list_staff(&self, tenant_id: Uuid) -> Result<Vec<StaffingStaff>, StaffingError> {
-        let rows: Vec<StaffingStaffRow> = self
+    async fn list_staff(
+        &self,
+        tenant_id: Uuid,
+        search: Option<&str>,
+        limit: i64,
+        cursor: Option<&StaffingStaffCursor>,
+    ) -> Result<StaffingStaffPage, StaffingError> {
+        let normalized_search: Option<String> = search.map(str::to_owned);
+        let cursor_name: Option<String> =
+            cursor.map(|value: &StaffingStaffCursor| value.normalized_display_name.clone());
+        let cursor_code: Option<String> = cursor.map(|value: &StaffingStaffCursor| value.employee_code.clone());
+        let cursor_id: Option<Uuid> = cursor.map(|value: &StaffingStaffCursor| value.employee_id);
+        let query_limit: i64 = limit + 1;
+        let mut rows: Vec<StaffingStaffRow> = self
             .db
             .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
                 sqlx::query_as!(
@@ -548,16 +629,40 @@ impl StaffingRepo for StaffingDb {
                       AND employee.status = 'active'
                       AND account.status = 'active'
                       AND account.primary_role_code = 'staff'
+                      AND ($2::TEXT IS NULL
+                           OR lower(employee.display_name) LIKE '%' || $2 || '%'
+                           OR lower(employee.employee_code) LIKE '%' || $2 || '%')
+                      AND ($3::TEXT IS NULL
+                           OR (lower(employee.display_name), employee.employee_code, employee.id)
+                              > ($3, $4::TEXT, $5::UUID))
                     ORDER BY lower(employee.display_name), employee.employee_code, employee.id
+                    LIMIT $6
                     "#,
                     tenant_id,
+                    normalized_search,
+                    cursor_name,
+                    cursor_code,
+                    cursor_id,
+                    query_limit,
                 )
                 .fetch_all(connection)
                 .await
             })
             .await
             .map_err(|error: TenantDbErr| tenant_database_failure("list staffing staff", tenant_id, error))?;
-        Ok(rows.into_iter().map(StaffingStaff::from).collect())
+        let has_more: bool = rows.len() > limit as usize;
+        rows.truncate(limit as usize);
+        let next_cursor: Option<StaffingStaffCursor> = if has_more {
+            rows.last().map(|row: &StaffingStaffRow| StaffingStaffCursor {
+                normalized_display_name: row.display_name.to_lowercase(),
+                employee_code: row.employee_code.clone(),
+                employee_id: row.employee_id,
+            })
+        } else {
+            None
+        };
+        let items: Vec<StaffingStaff> = rows.into_iter().map(StaffingStaff::from).collect();
+        Ok(StaffingStaffPage { items, next_cursor })
     }
 
     async fn set_prices(
@@ -1256,8 +1361,18 @@ impl StaffingRepo for StaffingDb {
         ShiftAssignment::try_from(row)
     }
 
-    async fn list_reconciliations(&self, tenant_id: Uuid) -> Result<Vec<StaffingReconciliation>, StaffingError> {
-        let rows: Vec<ReconciliationRow> = self
+    async fn list_reconciliations(
+        &self,
+        tenant_id: Uuid,
+        customer_id: Option<Uuid>,
+        limit: i64,
+        cursor: Option<&StaffingReconciliationCursor>,
+    ) -> Result<StaffingReconciliationPage, StaffingError> {
+        let cursor_started_at: Option<DateTime<Utc>> =
+            cursor.map(|value: &StaffingReconciliationCursor| value.scheduled_starts_at);
+        let cursor_assignment_id: Option<Uuid> = cursor.map(|value: &StaffingReconciliationCursor| value.assignment_id);
+        let query_limit: i64 = limit + 1;
+        let mut rows: Vec<ReconciliationRow> = self
             .db
             .run_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
                 sqlx::query_as!(
@@ -1302,9 +1417,17 @@ impl StaffingRepo for StaffingDb {
             WHERE assignment.tenant_id = $1
               AND assignment.status <> 'cancelled'
               AND assignment.urgent_work_report_id IS NULL
-            ORDER BY shift.starts_at DESC, employee.display_name, assignment.id
+              AND ($2::TIMESTAMPTZ IS NULL
+                   OR (shift.starts_at, assignment.id) < ($2, $3::UUID))
+              AND ($4::UUID IS NULL OR shift.customer_id = $4)
+            ORDER BY shift.starts_at DESC, assignment.id DESC
+            LIMIT $5
             "#,
                     tenant_id,
+                    cursor_started_at,
+                    cursor_assignment_id,
+                    customer_id,
+                    query_limit,
                 )
                 .fetch_all(connection)
                 .await
@@ -1312,7 +1435,18 @@ impl StaffingRepo for StaffingDb {
             .await
             .map_err(|error: TenantDbErr| tenant_database_failure("list staffing reconciliations", tenant_id, error))?;
 
-        rows.into_iter()
+        let has_more: bool = rows.len() > limit as usize;
+        rows.truncate(limit as usize);
+        let next_cursor: Option<StaffingReconciliationCursor> = if has_more {
+            rows.last().map(|row: &ReconciliationRow| StaffingReconciliationCursor {
+                scheduled_starts_at: row.scheduled_starts_at,
+                assignment_id: row.assignment_id,
+            })
+        } else {
+            None
+        };
+        let items: Vec<StaffingReconciliation> = rows
+            .into_iter()
             .map(|row| {
                 let assignment_status: ShiftAssignmentStatus = ShiftAssignmentStatus::from_code(&row.assignment_status)
                     .ok_or(StaffingError::BackendUnavailable)?;
@@ -1386,7 +1520,8 @@ impl StaffingRepo for StaffingDb {
                     reconciliation_status,
                 })
             })
-            .collect()
+            .collect::<Result<Vec<StaffingReconciliation>, StaffingError>>()?;
+        Ok(StaffingReconciliationPage { items, next_cursor })
     }
 
     async fn upsert_customer_work_record(
@@ -1463,6 +1598,19 @@ async fn approve_shift_assignment_in_transaction(
     adjustment_reason: Option<String>,
     audit_account_id: Uuid,
 ) -> Result<AssignmentRow, StaffingError> {
+    let status: Option<String> = sqlx::query_scalar!(
+        "SELECT status FROM business_shift_assignments WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
+        tenant_id,
+        assignment_id,
+    )
+    .fetch_optional(transaction.connection())
+    .await
+    .map_err(|error| database_failure("lock staffing assignment for reconciliation", tenant_id, error))?;
+    match status.as_deref() {
+        None => return Err(StaffingError::NotFound),
+        Some("assigned") => {}
+        Some(_) => return Err(StaffingError::Conflict),
+    }
     let row: Option<AssignmentRow> = sqlx::query_as!(
         AssignmentRow,
         r#"

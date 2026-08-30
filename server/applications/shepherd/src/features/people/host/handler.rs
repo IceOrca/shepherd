@@ -2,28 +2,70 @@ use std::sync::Arc;
 
 use axum::{
     Json,
-    extract::{Extension, Path, State},
+    extract::{Extension, Path, Query, State},
     http::StatusCode,
 };
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 use tracing::{error, warn, info, debug, trace};
-use crate::features::people::core::{AttendanceSession, Employee, EmployeeSensitiveProfile, HrError};
+use crate::features::people::core::{
+    AttendanceCursor, AttendancePage, AttendanceSession, Employee, EmployeeCursor, EmployeePage,
+    EmployeeSensitiveProfile, HrError,
+};
 use uuid::Uuid;
 
-use crate::{AppContext, auth::AuthenticatedUser};
+use crate::{
+    AppContext,
+    auth::AuthenticatedUser,
+    pagination::{decode_cursor, encode_cursor, normalize_search, resolve_limit},
+};
 
 use super::dto::{AttendanceCheckInRequest, EmployeeCitizenIdUpdateRequest, EmployeeUpsertRequest};
+
+#[derive(Debug, Deserialize)]
+pub struct PeoplePageQuery {
+    pub limit: Option<u16>,
+    pub cursor: Option<String>,
+    pub search: Option<String>,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct EmployeePageResponse {
+    pub items: Vec<Employee>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+    pub limit: u16,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct AttendancePageResponse {
+    pub items: Vec<AttendanceSession>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+    pub limit: u16,
+}
 
 pub async fn list_employees(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
-) -> Result<Json<Vec<Employee>>, StatusCode> {
+    Query(query): Query<PeoplePageQuery>,
+) -> Result<Json<EmployeePageResponse>, StatusCode> {
     require_permission(&user, "hr.employees.read")?;
-    host.core
+    let limit: u16 = resolve_limit(&host.list_pagination, query.limit)?;
+    let cursor: Option<EmployeeCursor> = decode_cursor(query.cursor.as_deref())?;
+    let page: EmployeePage = host
+        .core
         .people
-        .list_employees(user.tenant_id)
+        .list_employees(user.tenant_id, normalize_search(query.search), i64::from(limit), cursor)
         .await
-        .map(Json)
-        .map_err(|error| hr_status("list employees", &user, error))
+        .map_err(|error| hr_status("list employees", &user, error))?;
+    let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
+    Ok(Json(EmployeePageResponse {
+        has_more: next_cursor.is_some(),
+        items: page.items,
+        next_cursor,
+        limit,
+    }))
 }
 
 pub async fn create_employee(
@@ -73,7 +115,8 @@ pub async fn get_own_employee(
 pub async fn list_own_attendance_sessions(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
-) -> Result<Json<Vec<AttendanceSession>>, StatusCode> {
+    Query(query): Query<PeoplePageQuery>,
+) -> Result<Json<AttendancePageResponse>, StatusCode> {
     require_permission(&user, "hr.attendance.self.read")?;
     let employee: Employee = host
         .core
@@ -82,12 +125,21 @@ pub async fn list_own_attendance_sessions(
         .await
         .map_err(|error| hr_status("find employee for own attendance", &user, error))?
         .ok_or(StatusCode::NOT_FOUND)?;
-    host.core
+    let limit: u16 = resolve_limit(&host.list_pagination, query.limit)?;
+    let cursor: Option<AttendanceCursor> = decode_cursor(query.cursor.as_deref())?;
+    let page: AttendancePage = host
+        .core
         .people
-        .list_attendance_sessions(user.tenant_id, employee.id)
+        .list_attendance_sessions(user.tenant_id, employee.id, i64::from(limit), cursor)
         .await
-        .map(Json)
-        .map_err(|error| hr_status("list own attendance sessions", &user, error))
+        .map_err(|error| hr_status("list own attendance sessions", &user, error))?;
+    let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
+    Ok(Json(AttendancePageResponse {
+        has_more: next_cursor.is_some(),
+        items: page.items,
+        next_cursor,
+        limit,
+    }))
 }
 
 pub async fn check_in(
@@ -151,14 +203,24 @@ pub async fn list_employee_attendance_sessions(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthenticatedUser>,
     Path(employee_id): Path<Uuid>,
-) -> Result<Json<Vec<AttendanceSession>>, StatusCode> {
+    Query(query): Query<PeoplePageQuery>,
+) -> Result<Json<AttendancePageResponse>, StatusCode> {
     require_permission(&user, "hr.attendance.read")?;
-    host.core
+    let limit: u16 = resolve_limit(&host.list_pagination, query.limit)?;
+    let cursor: Option<AttendanceCursor> = decode_cursor(query.cursor.as_deref())?;
+    let page: AttendancePage = host
+        .core
         .people
-        .list_attendance_sessions(user.tenant_id, employee_id)
+        .list_attendance_sessions(user.tenant_id, employee_id, i64::from(limit), cursor)
         .await
-        .map(Json)
-        .map_err(|error| hr_status("list employee attendance sessions", &user, error))
+        .map_err(|error| hr_status("list employee attendance sessions", &user, error))?;
+    let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
+    Ok(Json(AttendancePageResponse {
+        has_more: next_cursor.is_some(),
+        items: page.items,
+        next_cursor,
+        limit,
+    }))
 }
 
 pub async fn update_employee(

@@ -51,19 +51,20 @@ case "${auth_health_interval_secs}" in
         ;;
 esac
 
-# SQLx resets the one shared database, so GoTrue must release its connections
-# first. PostgreSQL roles survive the reset; the same one-shot Compose bootstrap
-# job then recreates Auth schema ownership before GoTrue applies its migrations.
-docker compose stop supabase-auth
+# SQLx resets the one shared database, so both long-running database clients
+# must release their connections first. PostgreSQL roles survive the reset; the
+# same one-shot Compose bootstrap job then recreates Auth schema ownership
+# before GoTrue applies its migrations.
+docker compose stop server supabase-auth
 
 docker compose exec -T postgres-db sh -c \
     'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '\''$POSTGRES_DB'\'' AND pid <> pg_backend_pid();"'
 
-docker compose exec -T server bash -c 'cargo sqlx database reset -y'
+docker compose run --rm --no-deps server bash -c 'cargo sqlx database reset -y'
 
 docker compose run --rm postgres-bootstrap
 
-docker compose up -d --no-deps --force-recreate supabase-auth
+docker compose up -d --no-deps --force-recreate supabase-auth server
 
 auth_health_attempt=1
 while ! curl --fail --silent --show-error --output /dev/null "${auth_admin_url}/health"; do

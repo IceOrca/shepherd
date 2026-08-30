@@ -70,6 +70,48 @@ read results. Any mutation from an aggregated result is sent with that result's
 authoritative branch. This reporting scope is deliberately separate from the
 active branch used when creating operational data.
 
+Reconciliation lists use opaque keyset cursors from the server rather than
+loading a complete result set or using database offsets. Planned work is
+ordered by scheduled start and assignment ID; urgent work is ordered with
+active reports first, followed by staff start and report ID. The optional
+`customer_id` filter is applied in PostgreSQL before the page limit. For a
+multi-branch result scope, the browser keeps an independent cursor and bounded
+buffer for each authorized branch, sends every request with that branch's
+explicit `X-Branch-Id`, and merges only the current candidates into one page.
+It does not request or calculate an unbounded total count.
+
+The server owns the shared list page-size quota. Development values live in
+`server.env`; production operators set the same required variables in their
+server secret environment file, using
+`deploy/secrets_example/server.prod.env.example` as the template:
+
+- `API_LIST_PAGE_SIZE_DEFAULT`: page size used when the client omits
+  `limit`. The Shepherd UI deliberately omits it and uses the `limit` returned
+  by the API.
+- `API_LIST_PAGE_SIZE_MIN`: smallest accepted explicit API limit.
+- `API_LIST_PAGE_SIZE_MAX`: largest accepted explicit API limit.
+- `FINANCE_EXPORT_MAX_BRANCHES`: maximum distinct branches in one Excel export.
+- `FINANCE_EXPORT_MAX_ROWS`: maximum report data rows in one workbook.
+- `FINANCE_EXPORT_MAX_RANGE_DAYS`: maximum report interval in days.
+- `FINANCE_EXPORT_MAX_BYTES`: maximum generated workbook size.
+- `FINANCE_EXPORT_TIMEOUT_SECONDS`: maximum time the request waits for workbook generation.
+- `HTTP_RATE_LIMIT_FINANCE_EXPORT_REPLENISH_MILLIS` and
+  `HTTP_RATE_LIMIT_FINANCE_EXPORT_BURST`: dedicated per-principal throttling for
+  the CPU-intensive export route (development defaults: one token per five
+  seconds, burst three).
+
+All three values must be positive integers and satisfy
+`MIN <= DEFAULT <= MAX`; the server rejects invalid startup configuration.
+Paged endpoints return `{ items, next_cursor, has_more, limit }` (the
+access-control snapshot exposes independent role, user, and audit cursors).
+Reconciliation, employee and attendance history, customer and pricing Staff,
+expense and salary-advance records, immutable finance revision history, and
+access-control record lists fetch at most `limit + 1` rows inside PostgreSQL to
+determine `has_more`, return at most `limit` records, and reject malformed
+cursors or out-of-policy limits. Search and status/customer filters are applied
+before pagination so a page cannot hide matching records in a later unfiltered
+database slice.
+
 Staff urgent-work history displays the branch, customer, server check-in and
 check-out timestamps, worked interval, and the usernames that pressed Start and
 Finish, including self/peer provenance. These actor names are resolved by the
@@ -78,6 +120,65 @@ server from the immutable actor account IDs rather than inferred in the UI.
 This separation of evidence and mandatory human conclusion is the heart of the
 product. Scheduling, employee profiles, authentication, and administration
 support that workflow; they are not the product's primary purpose.
+
+### “Xác nhận giờ nhân viên” exact-match shortcut
+
+The reconciliation pages provide **Xác nhận giờ nhân viên** as a convenience
+for supervisors. It does not copy a staff record into the customer record and
+does not turn staff evidence into customer evidence. The supervisor must first
+enter the independent customer confirmation, bill, or time record through the
+normal customer-evidence form.
+
+The button appears only when Shepherd derives `matched`, meaning customer,
+exact start, exact end, and duration all agree. Pressing it is still the
+required explicit human reconciliation action. It performs the same final
+business transition as the ordinary reconciliation form, but the server derives
+the final customer and duration from the already matching records and accepts
+no adjustment reason or manual override.
+
+For planned work, the shortcut requires an `assigned` assignment, positive
+completed staff time, no open work session, and an existing exact customer
+record. It approves the existing assignment, calculates the immutable billing,
+worker-pay, and profit values, records the approving account and server time,
+and completes the shift when no assigned work remains.
+
+For urgent work, the shortcut requires a `completed` report, a closed positive
+staff session, an existing exact urgent customer record, and an active job
+selected by the supervisor. It resolves configured rates and atomically creates
+the same completed formal shift, approved assignment, linked formal customer
+record, financial snapshot, and `reconciled` report transition as ordinary
+urgent reconciliation. Manual urgent pricing and every discrepancy continue
+through the full reconciliation form.
+
+The API endpoints are:
+
+- `POST /api/business/staffing/assignments/{assignment_id}/accept-staff-record`
+  with no request body.
+- `POST /api/business/staffing/urgent-work/{report_id}/accept-staff-record`
+  with `{ "job_id": "<uuid>" }`.
+
+Both endpoints are branch- and tenant-scoped and permission-checked. The
+database revalidates every precondition; hiding the button is not an
+authorization or integrity boundary. Planned finalization locks the assignment
+before reading evidence and reuses the ordinary assignment-approval transaction
+helper. Urgent finalization locks the report before reading evidence and reuses
+the ordinary urgent reconciliation helper.
+Every final state change and financial calculation commits together or rolls
+back together.
+
+The shortcut never updates the existing planned or urgent source customer
+record, so it cannot archive a replacement or alter source evidence history.
+Urgent conversion does insert the new formal assignment's linked customer
+record, as ordinary urgent reconciliation already does; that row is a new
+formal snapshot rather than a modification of the urgent source evidence.
+Normal evidence-save operations lock the assignment or urgent report before an
+insert/update, preventing a concurrent save from racing past terminal
+reconciliation.
+
+If evidence is absent or different, staff time is open or invalid, the job or
+configured urgent rate is unavailable, or the work is already terminal, the
+request fails without partial writes. Repeating the shortcut after a successful
+finalization returns a conflict and leaves the immutable result unchanged.
 
 
 ### Customer-dependent pay and company profit
@@ -120,10 +221,74 @@ original recorder, and superseding actor. Planned and urgent records are
 classified as matched only when customer, exact start, exact end, and duration
 all agree; human reconciliation remains mandatory.
 
-An aligned payroll flow has not yet been implemented. When added, it must
-consume only the locked worker-pay snapshot, date work from the
-customer-confirmed interval, and reject overlap with internal HR attendance so
-the same work cannot be paid from two sources.
+Payroll consumes only locked worker-pay snapshots, dates staffing earnings from
+the customer-confirmed local work interval, and rejects overlap with internal
+HR attendance so the same work cannot be paid from two sources.
+
+### Payroll and financial Excel exports
+
+The financial and payroll tabs can export their currently selected date range
+and branch scope through `POST /api/business/finance/report-exports/xlsx`.
+The server recalculates the same authoritative synchronous reports used by the
+web page; the browser never reconstructs financial totals from displayed or
+paginated rows. Whole-business requests evaluate the dedicated export
+permission separately for every requested branch and run each report under
+that branch's validated RLS context. The two permissions are
+`finance.operating_reports.export` and `hr.payroll.export`.
+
+Generated workbooks contain Vietnamese business headings, typed date, money,
+and duration cells, per-currency totals without cross-currency summation,
+branch detail, financial-period status, and payroll overlap warnings. Financial
+files contain **Thông tin**, **Tổng hợp**, and **Theo chi nhánh** sheets;
+payroll files contain **Thông tin**, **Tổng hợp**, **Bảng lương**, and
+**Cảnh báo**. A payroll warning does not disappear merely because the file was
+exported; it must still be resolved before payment.
+
+Every successful generation appends metadata to
+`business_report_export_events`, including actor, range, branch IDs, row and
+warning counts, currencies, open-period indicator, and SHA-256 of the exact
+workbook. The audit table is tenant-RLS protected and rejects update/delete.
+Workbook bytes are returned with `Cache-Control: no-store` and are not retained
+by Shepherd. Limits and timeout are required environment configuration via the
+five `FINANCE_EXPORT_*` variables above; invalid values prevent server startup.
+
+## Safe corrections without history rewriting
+
+Authorized users can correct expense claims and salary advances from the UI,
+including confirmed records when they hold the dedicated correction
+permission. The edit form sends the current revision ID, a required reason,
+and an idempotency key. The server locks the record and rejects a stale edit,
+while PostgreSQL appends a complete new revision in the same transaction.
+The list shows the current projection; **Lịch sử** shows every retained version
+with its actor and reason. Neither the projection nor a historical revision is
+deleted.
+
+The correction mechanism depends on the kind of data:
+
+| Data | Correction model |
+| --- | --- |
+| Staff clock-in/out and actor provenance | Immutable evidence; no edit control |
+| Customer evidence before reconciliation | Current record plus superseded-history rows |
+| Reconciled assignment money and configured rates | Locked assignment snapshot; new effective-dated rate versions affect future work only |
+| Expense claims and salary advances | Current projection plus append-only full snapshot revisions |
+| Reimbursements and advance recoveries | Immutable settlement facts; monetary mistakes require a compensating entry, never source rewriting |
+| Monthly financial availability | Append-only open/closed period decisions |
+
+The accounting page exposes branch-local monthly periods. Closing a month
+stabilizes its financial source values; reopening requires permission and a
+recorded reason and creates another period revision instead of deleting the
+close event. Expense corrections check both the original and proposed month in
+PostgreSQL. Reports are calculated synchronously from committed transactional
+data, so an accepted open-period correction is visible atomically and there is
+no asynchronous report cache to repair.
+
+PostgreSQL triggers reject updates/deletes on revision and period-event tables
+and reject deletion of the financial projections. `REVOKE` from `PUBLIC` is
+also applied as defense in depth. Development still uses one schema-owning
+`shepherdapp` connection role, so a true GRANT-level least-privilege boundary
+requires a coordinated future split between migration-owner and runtime roles;
+the project does not overstate the current `REVOKE` as protection from the
+table owner.
 
 ## Core product principles
 
@@ -374,11 +539,36 @@ URL chain, verify the public boundary:
 sh scripts/check-production-auth-edge.sh /etc/shepherd/shepherd.env
 ```
 
+Run it on the VPS with
+`SHEPHERD_PRODUCTION_CADDYFILE=/etc/caddy/Caddyfile` to validate the deployed
+file rather than only the repository copy.
+
 The checker sends no credentials or tokens. It verifies the DNS address,
-public TLS, `GET /auth/v1/settings`, `disable_signup=true`, and the browser
+public HTTP-to-HTTPS redirect, TLS, wildcard-listener policy,
+`GET /auth/v1/settings`, `disable_signup=true`, and the browser
 CORS preflight needed for token and logout requests. Shepherd's `/api/*`
 routes remain same-origin with the web application, so the Shepherd API does
 not need broad cross-origin access.
+
+Development Caddy binds Docker ports to `REMOTE_DEV_BIND_IP`. If Tailscale
+assigns that address after Docker restores containers, Docker can leave Caddy
+running without published ports. Install the boot-safe recovery service once:
+
+```sh
+sudo sh scripts/install-development-caddy-edge-service.sh
+```
+
+It waits for the address, recreates only Caddy, and verifies both host ports.
+When sudo is not available, the login-scoped fallback can be installed with
+`sh scripts/install-development-caddy-edge-user-watchdog.sh`; it checks once
+per minute without recreating a healthy edge. The machine-wide service remains
+the preferred boot-before-login protection.
+
+Production does not have that explicit-IP Docker race: Compose disables its
+Caddy edge and host Caddy listens on wildcard ports. Install
+`deploy/systemd/caddy.service.d/shepherd-network-online.conf` on the VPS so the
+host service follows `network-online.target` and retries transient failures;
+keep `PUBLIC_VPS_IPV4_PROD` for DNS checks rather than a Caddy `bind` address.
 
 Changing from an old same-origin issuer to the Auth subdomain is a coordinated
 cutover. Rebuild the frontend and recreate GoTrue and Shepherd together before
@@ -544,11 +734,13 @@ rerunning the same one-shot bootstrap job, GoTrue migrations, API-based Auth
 provisioning, and Shepherd data seeding. Never run that destructive development
 workflow in production.
 
-Each development tenant receives two branches: `head-office` and
-`north-branch`. Above them are one `tenant_owner` and one
-`executive_manager`; the executive manager is assigned to both branches. Each
-branch has exactly one `branch_manager`, two `supervisor` accounts, and four
-`staff` accounts, for 16 accounts per tenant and 48 application accounts.
+Each development tenant receives three branches: `head-office`,
+`north-branch`, and `south-branch`. Above them are one `tenant_owner` and one
+`executive_manager`; the executive manager is assigned to all three branches.
+The seeded account catalog currently supplies managers, supervisors, and staff
+for the head and north branches; the south branch and its Vietnamese customer
+catalog demonstrate expansion without inventing extra identities. There are
+16 accounts per tenant and 48 application accounts.
 There are 48 distinct GoTrue identities. The development owners are
 `acme_owner` / `acme.owner@shepherd.local`, `acme1_owner` /
 `acme1.owner@shepherd.local`, and `acme2_owner` /

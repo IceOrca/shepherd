@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use tracing::{error, warn, info, debug, trace};
 use crate::features::people::core::{
-    AttendanceSession, Employee, EmployeeCitizenIdInput, EmployeeInput, EmployeeSensitiveProfile, EmployeeStatus,
-    Gender, HrError, PeopleRepo,
+    AttendanceCursor, AttendancePage, AttendanceSession, Employee, EmployeeCitizenIdInput, EmployeeCursor,
+    EmployeeInput, EmployeePage, EmployeeSensitiveProfile, EmployeeStatus, Gender, HrError, PeopleRepo,
 };
 use crate::features::people::security::{CitizenIdProtector, ProtectedCitizenId};
 use uuid::Uuid;
@@ -177,8 +177,19 @@ impl From<AttendanceSessionRow> for AttendanceSession {
 
 #[async_trait]
 impl PeopleRepo for PeopleDb {
-    async fn list_employees(&self, tenant_id: Uuid) -> Result<Vec<Employee>, HrError> {
-        let rows: Vec<EmployeeRow> = self
+    async fn list_employees(
+        &self,
+        tenant_id: Uuid,
+        search: Option<&str>,
+        limit: i64,
+        cursor: Option<&EmployeeCursor>,
+    ) -> Result<EmployeePage, HrError> {
+        let normalized_search: Option<String> = search.map(str::to_owned);
+        let cursor_name: Option<String> = cursor.map(|value: &EmployeeCursor| value.normalized_display_name.clone());
+        let cursor_code: Option<String> = cursor.map(|value: &EmployeeCursor| value.employee_code.clone());
+        let cursor_id: Option<Uuid> = cursor.map(|value: &EmployeeCursor| value.employee_id);
+        let query_limit: i64 = limit + 1;
+        let mut rows: Vec<EmployeeRow> = self
             .db
             .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
                 sqlx::query_as!(
@@ -192,21 +203,44 @@ impl PeopleRepo for PeopleDb {
                            status, hire_date, termination_date, version, created_at, updated_at
                     FROM hr_employees
                     WHERE tenant_id = $1
-                    ORDER BY lower(display_name), employee_code
+                      AND ($2::TEXT IS NULL
+                           OR lower(display_name) LIKE '%' || $2 || '%'
+                           OR lower(employee_code) LIKE '%' || $2 || '%'
+                           OR lower(COALESCE(personal_phone_e164, '')) LIKE '%' || $2 || '%')
+                      AND ($3::TEXT IS NULL
+                           OR (lower(display_name), employee_code, id) > ($3, $4::TEXT, $5::UUID))
+                    ORDER BY lower(display_name), employee_code, id
+                    LIMIT $6
                     "#,
                     tenant_id,
+                    normalized_search,
+                    cursor_name,
+                    cursor_code,
+                    cursor_id,
+                    query_limit,
                 )
                 .fetch_all(connection)
                 .await
             })
             .await
             .map_err(|error: TenantDbErr| tenant_database_failure("list employees", tenant_id, error))?;
-        info!(
-            "Tenant employee directory loaded: tenant_id={} employees={}",
-            tenant_id,
-            rows.len()
-        );
-        rows.into_iter().map(Employee::try_from).collect()
+        let has_more: bool = rows.len() > limit as usize;
+        rows.truncate(limit as usize);
+        let next_cursor: Option<EmployeeCursor> = if has_more {
+            rows.last().map(|row: &EmployeeRow| EmployeeCursor {
+                normalized_display_name: row.display_name.to_lowercase(),
+                employee_code: row.employee_code.clone(),
+                employee_id: row.id,
+            })
+        } else {
+            None
+        };
+        info!(tenant_id = %tenant_id, employee_count = rows.len(), has_more, "Tenant employee page loaded");
+        let items: Vec<Employee> = rows
+            .into_iter()
+            .map(Employee::try_from)
+            .collect::<Result<Vec<Employee>, HrError>>()?;
+        Ok(EmployeePage { items, next_cursor })
     }
 
     async fn find_employee(&self, tenant_id: Uuid, employee_id: Uuid) -> Result<Option<Employee>, HrError> {
@@ -593,7 +627,12 @@ impl PeopleRepo for PeopleDb {
         &self,
         tenant_id: Uuid,
         employee_id: Uuid,
-    ) -> Result<Vec<AttendanceSession>, HrError> {
+        limit: i64,
+        cursor: Option<&AttendanceCursor>,
+    ) -> Result<AttendancePage, HrError> {
+        let cursor_check_in_at: Option<DateTime<Utc>> = cursor.map(|value: &AttendanceCursor| value.check_in_at);
+        let cursor_id: Option<Uuid> = cursor.map(|value: &AttendanceCursor| value.attendance_session_id);
+        let query_limit: i64 = limit + 1;
         let result: (bool, Vec<AttendanceSessionRow>) = self
             .db
             .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
@@ -613,10 +652,15 @@ impl PeopleRepo for PeopleDb {
                            worked_seconds, created_at, updated_at
                     FROM hr_attendance_sessions
                     WHERE tenant_id = $1 AND employee_id = $2
+                      AND ($3::TIMESTAMPTZ IS NULL OR (check_in_at, id) < ($3, $4::UUID))
                     ORDER BY check_in_at DESC, id DESC
+                    LIMIT $5
                     "#,
                     tenant_id,
                     employee_id,
+                    cursor_check_in_at,
+                    cursor_id,
+                    query_limit,
                 )
                 .fetch_all(connection)
                 .await?;
@@ -626,11 +670,22 @@ impl PeopleRepo for PeopleDb {
             .map_err(|error: TenantDbErr| {
                 tenant_database_failure("list employee attendance sessions", tenant_id, error)
             })?;
-        let (employee_exists, rows): (bool, Vec<AttendanceSessionRow>) = result;
+        let (employee_exists, mut rows): (bool, Vec<AttendanceSessionRow>) = result;
         if !employee_exists {
             return Err(HrError::NotFound);
         }
-        Ok(rows.into_iter().map(AttendanceSession::from).collect())
+        let has_more: bool = rows.len() > limit as usize;
+        rows.truncate(limit as usize);
+        let next_cursor: Option<AttendanceCursor> = if has_more {
+            rows.last().map(|row: &AttendanceSessionRow| AttendanceCursor {
+                check_in_at: row.check_in_at,
+                attendance_session_id: row.id,
+            })
+        } else {
+            None
+        };
+        let items: Vec<AttendanceSession> = rows.into_iter().map(AttendanceSession::from).collect();
+        Ok(AttendancePage { items, next_cursor })
     }
 
     async fn check_in(

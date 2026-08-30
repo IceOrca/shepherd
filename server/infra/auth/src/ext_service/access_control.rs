@@ -2,11 +2,12 @@ use std::{collections::BTreeSet, sync::Arc};
 
 use axum::{
     Extension, Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post, put},
 };
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
 use infra_postgres::TenantDbErr;
 use serde::{Deserialize, Serialize};
@@ -16,7 +17,7 @@ use tracing::{debug, error, info, trace, warn};
 use ts_rs::TS;
 use uuid::Uuid;
 
-use crate::{AuthCodeError, AuthService, PermissionCode, RoleCode};
+use crate::{AuthCodeError, AuthService, PermissionCode, RoleCode, ext_service::ListPaginationPolicy};
 
 use super::{
     account::{AccountStatus, AuthenticatedUser},
@@ -24,13 +25,12 @@ use super::{
     auth_admin::{AuthAccountAccessContext, AuthAccountProvisioner, AuthAccountProvisioningError, AuthAdminPolicy},
 };
 
-const MAX_AUDIT_ROWS: i64 = 100;
-
 #[derive(Clone)]
 struct AccessControlContext {
     auth: Arc<AuthService>,
     policy: AuthAdminPolicy,
     provisioner: Arc<dyn AuthAccountProvisioner>,
+    pagination: ListPaginationPolicy,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
@@ -176,6 +176,40 @@ pub struct AccessControlSnapshot {
     pub roles: Vec<AccessControlRole>,
     pub users: Vec<AccessControlUser>,
     pub audit: Vec<AccessControlAuditEntry>,
+    pub role_next_cursor: Option<String>,
+    pub role_has_more: bool,
+    pub user_next_cursor: Option<String>,
+    pub user_has_more: bool,
+    pub audit_next_cursor: Option<String>,
+    pub audit_has_more: bool,
+    pub limit: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct RoleCursor {
+    is_system: bool,
+    name: String,
+    code: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct UserCursor {
+    username: String,
+    id: Uuid,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct AuditCursor {
+    created_at: DateTime<Utc>,
+    id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+struct AccessControlPageQuery {
+    limit: Option<u16>,
+    role_cursor: Option<String>,
+    user_cursor: Option<String>,
+    audit_cursor: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, TS)]
@@ -273,6 +307,23 @@ impl IntoResponse for AccessControlError {
     }
 }
 
+fn decode_cursor<T: for<'de> Deserialize<'de>>(cursor: Option<&str>) -> Result<Option<T>, AccessControlError> {
+    cursor
+        .map(|value: &str| {
+            let bytes: Vec<u8> = URL_SAFE_NO_PAD
+                .decode(value)
+                .map_err(|_| AccessControlError::Validation("The pagination cursor is invalid.".to_owned()))?;
+            serde_json::from_slice::<T>(&bytes)
+                .map_err(|_| AccessControlError::Validation("The pagination cursor is invalid.".to_owned()))
+        })
+        .transpose()
+}
+
+fn encode_cursor<T: Serialize>(cursor: &T) -> Result<String, AccessControlError> {
+    let bytes: Vec<u8> = serde_json::to_vec(cursor).map_err(|_| AccessControlError::Internal)?;
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
+}
+
 struct BranchRow {
     id: Uuid,
     code: String,
@@ -350,6 +401,30 @@ type AccessControlSnapshotRows = (
     Vec<AuditRow>,
 );
 
+type PagedAccessControlSnapshotRows = (
+    Vec<BranchRow>,
+    Vec<PermissionRow>,
+    Vec<RoleRow>,
+    Vec<RolePermissionRow>,
+    Vec<UserRow>,
+    Vec<AssignmentRow>,
+    Vec<OverrideRow>,
+    Vec<AuditRow>,
+    bool,
+    bool,
+    bool,
+);
+
+struct SnapshotPageMetadata {
+    role_next_cursor: Option<String>,
+    role_has_more: bool,
+    user_next_cursor: Option<String>,
+    user_has_more: bool,
+    audit_next_cursor: Option<String>,
+    audit_has_more: bool,
+    limit: u16,
+}
+
 struct AccessAuditMutation {
     action: &'static str,
     object_type: &'static str,
@@ -369,11 +444,17 @@ struct RoleRuleRow {
     max_assignments: Option<i16>,
 }
 
-pub fn routes(auth: Arc<AuthService>, policy: AuthAdminPolicy, provisioner: Arc<dyn AuthAccountProvisioner>) -> Router {
+pub fn routes(
+    auth: Arc<AuthService>,
+    policy: AuthAdminPolicy,
+    provisioner: Arc<dyn AuthAccountProvisioner>,
+    pagination: ListPaginationPolicy,
+) -> Router {
     let context: Arc<AccessControlContext> = Arc::new(AccessControlContext {
         auth,
         policy,
         provisioner,
+        pagination,
     });
     info!(
         operation = "register_access_control_routes",
@@ -392,12 +473,26 @@ pub fn routes(auth: Arc<AuthService>, policy: AuthAdminPolicy, provisioner: Arc<
 async fn snapshot(
     State(context): State<Arc<AccessControlContext>>,
     Extension(actor): Extension<AuthenticatedUser>,
+    Query(query): Query<AccessControlPageQuery>,
 ) -> Result<Json<AccessControlSnapshot>, AccessControlError> {
-    // The snapshot intentionally contains every tenant branch and account. It
-    // is therefore a management view, not the branch-filtered role catalog.
     require_permission(&actor, &context.policy.role_manage_permission)?;
+    let limit: u16 = context
+        .pagination
+        .resolve(query.limit)
+        .map_err(AccessControlError::Validation)?;
+    let role_cursor: Option<RoleCursor> = decode_cursor(query.role_cursor.as_deref())?;
+    let user_cursor: Option<UserCursor> = decode_cursor(query.user_cursor.as_deref())?;
+    let audit_cursor: Option<AuditCursor> = decode_cursor(query.audit_cursor.as_deref())?;
     info!(operation = "access_control.snapshot", tenant_id = %actor.tenant_id, actor_id = %actor.account_id, "Access-control snapshot request accepted");
-    let snapshot: AccessControlSnapshot = load_snapshot(&context.auth, actor.tenant_id).await?;
+    let snapshot: AccessControlSnapshot = load_snapshot(
+        &context.auth,
+        actor.tenant_id,
+        limit,
+        role_cursor,
+        user_cursor,
+        audit_cursor,
+    )
+    .await?;
     debug!(
         operation = "access_control.snapshot",
         tenant_id = %actor.tenant_id,
@@ -919,15 +1014,23 @@ async fn update_user_access(
     Ok(Json(user))
 }
 
-async fn load_snapshot(auth: &AuthService, tenant_id: Uuid) -> Result<AccessControlSnapshot, AccessControlError> {
-    let rows: AccessControlSnapshotRows = auth
+async fn load_snapshot(
+    auth: &AuthService,
+    tenant_id: Uuid,
+    limit: u16,
+    role_cursor: Option<RoleCursor>,
+    user_cursor: Option<UserCursor>,
+    audit_cursor: Option<AuditCursor>,
+) -> Result<AccessControlSnapshot, AccessControlError> {
+    let fetch_limit: i64 = i64::from(limit) + 1;
+    let rows: PagedAccessControlSnapshotRows = auth
         .db
         .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
             let branches: Vec<BranchRow> = sqlx::query_as!(BranchRow, "SELECT id, code, name, time_zone, status, version FROM branches WHERE tenant_id = $1 ORDER BY lower(name), id", tenant_id)
                 .fetch_all(&mut *connection).await?;
             let permissions: Vec<PermissionRow> = sqlx::query_as!(PermissionRow, "SELECT code, display_name, description FROM permissions ORDER BY lower(display_name), code")
                 .fetch_all(&mut *connection).await?;
-            let roles: Vec<RoleRow> = sqlx::query_as!(
+            let mut roles: Vec<RoleRow> = sqlx::query_as!(
                 RoleRow,
                 r#"
                 SELECT role.code, role.display_name, role.description, role.scope_type,
@@ -938,29 +1041,124 @@ async fn load_snapshot(auth: &AuthService, tenant_id: Uuid) -> Result<AccessCont
                     ON assignment.tenant_id = role.tenant_id
                    AND assignment.role_code = role.code
                 WHERE role.tenant_id = $1
+                  AND (
+                    $2::BOOLEAN IS NULL
+                    OR role.is_system < $2
+                    OR (
+                      role.is_system = $2
+                      AND (lower(role.display_name), role.code) > ($3, $4)
+                    )
+                  )
                 GROUP BY role.tenant_id, role.code
                 ORDER BY role.is_system DESC, lower(role.display_name), role.code
+                LIMIT $5
                 "#,
                 tenant_id,
+                role_cursor.as_ref().map(|cursor: &RoleCursor| cursor.is_system),
+                role_cursor.as_ref().map(|cursor: &RoleCursor| cursor.name.as_str()),
+                role_cursor.as_ref().map(|cursor: &RoleCursor| cursor.code.as_str()),
+                fetch_limit,
             ).fetch_all(&mut *connection).await?;
-            let role_permissions: Vec<RolePermissionRow> = sqlx::query_as!(RolePermissionRow, "SELECT role_code, permission_code FROM tenant_role_permissions WHERE tenant_id = $1 ORDER BY role_code, permission_code", tenant_id)
+            let role_has_more: bool = roles.len() > usize::from(limit);
+            roles.truncate(usize::from(limit));
+            let role_codes: Vec<String> = roles.iter().map(|row: &RoleRow| row.code.clone()).collect();
+            let role_permissions: Vec<RolePermissionRow> = sqlx::query_as!(RolePermissionRow, "SELECT role_code, permission_code FROM tenant_role_permissions WHERE tenant_id = $1 AND role_code = ANY($2) ORDER BY role_code, permission_code", tenant_id, &role_codes)
                 .fetch_all(&mut *connection).await?;
-            let users: Vec<UserRow> = sqlx::query_as!(UserRow, "SELECT id AS account_id, username, email, status, primary_role_code, authorization_version FROM accounts WHERE tenant_id = $1 ORDER BY lower(username), id", tenant_id)
+            let mut users: Vec<UserRow> = sqlx::query_as!(UserRow, r#"SELECT id AS account_id, username, email, status, primary_role_code, authorization_version FROM accounts WHERE tenant_id = $1 AND ($2::TEXT IS NULL OR (lower(username), id) > ($2, $3)) ORDER BY lower(username), id LIMIT $4"#, tenant_id, user_cursor.as_ref().map(|cursor: &UserCursor| cursor.username.as_str()), user_cursor.as_ref().map(|cursor: &UserCursor| cursor.id), fetch_limit)
                 .fetch_all(&mut *connection).await?;
-            let assignments: Vec<AssignmentRow> = sqlx::query_as!(AssignmentRow, "SELECT account_id, role_code, branch_id FROM account_role_assignments WHERE tenant_id = $1 ORDER BY account_id, branch_id NULLS FIRST, role_code", tenant_id)
+            let user_has_more: bool = users.len() > usize::from(limit);
+            users.truncate(usize::from(limit));
+            let account_ids: Vec<Uuid> = users.iter().map(|row: &UserRow| row.account_id).collect();
+            let assignments: Vec<AssignmentRow> = sqlx::query_as!(AssignmentRow, "SELECT account_id, role_code, branch_id FROM account_role_assignments WHERE tenant_id = $1 AND account_id = ANY($2) ORDER BY account_id, branch_id NULLS FIRST, role_code", tenant_id, &account_ids)
                 .fetch_all(&mut *connection).await?;
-            let overrides: Vec<OverrideRow> = sqlx::query_as!(OverrideRow, "SELECT account_id, permission_code, branch_id, effect, expires_at FROM account_permission_overrides WHERE tenant_id = $1 ORDER BY account_id, branch_id NULLS FIRST, permission_code", tenant_id)
+            let overrides: Vec<OverrideRow> = sqlx::query_as!(OverrideRow, "SELECT account_id, permission_code, branch_id, effect, expires_at FROM account_permission_overrides WHERE tenant_id = $1 AND account_id = ANY($2) ORDER BY account_id, branch_id NULLS FIRST, permission_code", tenant_id, &account_ids)
                 .fetch_all(&mut *connection).await?;
-            let audit: Vec<AuditRow> = sqlx::query_as!(AuditRow, "SELECT id, actor_account_id, action, object_type, object_id, branch_id, before_value, after_value, created_at FROM access_control_audit_log WHERE tenant_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2", tenant_id, MAX_AUDIT_ROWS)
+            let mut audit: Vec<AuditRow> = sqlx::query_as!(AuditRow, "SELECT id, actor_account_id, action, object_type, object_id, branch_id, before_value, after_value, created_at FROM access_control_audit_log WHERE tenant_id = $1 AND ($2::TIMESTAMPTZ IS NULL OR (created_at, id) < ($2, $3)) ORDER BY created_at DESC, id DESC LIMIT $4", tenant_id, audit_cursor.as_ref().map(|cursor: &AuditCursor| cursor.created_at), audit_cursor.as_ref().map(|cursor: &AuditCursor| cursor.id), fetch_limit)
                 .fetch_all(&mut *connection).await?;
-            Ok((branches, permissions, roles, role_permissions, users, assignments, overrides, audit))
+            let audit_has_more: bool = audit.len() > usize::from(limit);
+            audit.truncate(usize::from(limit));
+            Ok((branches, permissions, roles, role_permissions, users, assignments, overrides, audit, role_has_more, user_has_more, audit_has_more))
         })
         .await
         .map_err(|database_error: TenantDbErr| database_error_status("load access-control snapshot", tenant_id, Uuid::nil(), database_error))?;
-    snapshot_from_rows(rows)
+    let (
+        branches,
+        permissions,
+        roles,
+        role_permissions,
+        users,
+        assignments,
+        overrides,
+        audit,
+        role_has_more,
+        user_has_more,
+        audit_has_more,
+    ) = rows;
+    let metadata: SnapshotPageMetadata = SnapshotPageMetadata {
+        role_next_cursor: if role_has_more {
+            roles
+                .last()
+                .map(|row: &RoleRow| {
+                    encode_cursor(&RoleCursor {
+                        is_system: row.is_system,
+                        name: row.display_name.to_lowercase(),
+                        code: row.code.clone(),
+                    })
+                })
+                .transpose()?
+        } else {
+            None
+        },
+        role_has_more,
+        user_next_cursor: if user_has_more {
+            users
+                .last()
+                .map(|row: &UserRow| {
+                    encode_cursor(&UserCursor {
+                        username: row.username.to_lowercase(),
+                        id: row.account_id,
+                    })
+                })
+                .transpose()?
+        } else {
+            None
+        },
+        user_has_more,
+        audit_next_cursor: if audit_has_more {
+            audit
+                .last()
+                .map(|row: &AuditRow| {
+                    encode_cursor(&AuditCursor {
+                        created_at: row.created_at,
+                        id: row.id,
+                    })
+                })
+                .transpose()?
+        } else {
+            None
+        },
+        audit_has_more,
+        limit,
+    };
+    snapshot_from_rows(
+        (
+            branches,
+            permissions,
+            roles,
+            role_permissions,
+            users,
+            assignments,
+            overrides,
+            audit,
+        ),
+        metadata,
+    )
 }
 
-fn snapshot_from_rows(rows: AccessControlSnapshotRows) -> Result<AccessControlSnapshot, AccessControlError> {
+fn snapshot_from_rows(
+    rows: AccessControlSnapshotRows,
+    metadata: SnapshotPageMetadata,
+) -> Result<AccessControlSnapshot, AccessControlError> {
     let (
         branch_rows,
         permission_rows,
@@ -1039,6 +1237,13 @@ fn snapshot_from_rows(rows: AccessControlSnapshotRows) -> Result<AccessControlSn
         roles,
         users,
         audit,
+        role_next_cursor: metadata.role_next_cursor,
+        role_has_more: metadata.role_has_more,
+        user_next_cursor: metadata.user_next_cursor,
+        user_has_more: metadata.user_has_more,
+        audit_next_cursor: metadata.audit_next_cursor,
+        audit_has_more: metadata.audit_has_more,
+        limit: metadata.limit,
     })
 }
 
@@ -1047,12 +1252,28 @@ async fn load_role(
     tenant_id: Uuid,
     role_code: &RoleCode,
 ) -> Result<AccessControlRole, AccessControlError> {
-    let snapshot: AccessControlSnapshot = load_snapshot(auth, tenant_id).await?;
-    snapshot
-        .roles
+    let role_code_value: String = role_code.to_string();
+    let rows: (Option<RoleRow>, Vec<RolePermissionRow>) = auth
+        .db
+        .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            let role: Option<RoleRow> = sqlx::query_as!(RoleRow, r#"SELECT role.code, role.display_name, role.description, role.scope_type, role.is_system, role.is_active, role.version, COUNT(DISTINCT assignment.account_id)::BIGINT AS "assigned_account_count!" FROM tenant_roles AS role LEFT JOIN account_role_assignments AS assignment ON assignment.tenant_id = role.tenant_id AND assignment.role_code = role.code WHERE role.tenant_id = $1 AND role.code = $2 GROUP BY role.tenant_id, role.code"#, tenant_id, role_code_value)
+                .fetch_optional(&mut *connection).await?;
+            let permissions: Vec<RolePermissionRow> = sqlx::query_as!(RolePermissionRow, "SELECT role_code, permission_code FROM tenant_role_permissions WHERE tenant_id = $1 AND role_code = $2 ORDER BY permission_code", tenant_id, role_code_value)
+                .fetch_all(&mut *connection).await?;
+            Ok((role, permissions))
+        })
+        .await
+        .map_err(|database_error: TenantDbErr| database_error_status("load access-control role", tenant_id, Uuid::nil(), database_error))?;
+    let mut role: AccessControlRole = role_from_row(
+        rows.0
+            .ok_or_else(|| AccessControlError::NotFound("The tenant role does not exist.".to_owned()))?,
+    )?;
+    role.permission_codes = rows
+        .1
         .into_iter()
-        .find(|role: &AccessControlRole| role.code == *role_code)
-        .ok_or_else(|| AccessControlError::NotFound("The tenant role does not exist.".to_owned()))
+        .map(|row: RolePermissionRow| parse_permission(row.permission_code))
+        .collect::<Result<Vec<PermissionCode>, AccessControlError>>()?;
+    Ok(role)
 }
 
 async fn load_user(
@@ -1060,12 +1281,46 @@ async fn load_user(
     tenant_id: Uuid,
     account_id: Uuid,
 ) -> Result<AccessControlUser, AccessControlError> {
-    let snapshot: AccessControlSnapshot = load_snapshot(auth, tenant_id).await?;
-    snapshot
-        .users
+    let rows: (Option<UserRow>, Vec<AssignmentRow>, Vec<OverrideRow>) = auth
+        .db
+        .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            let user: Option<UserRow> = sqlx::query_as!(UserRow, "SELECT id AS account_id, username, email, status, primary_role_code, authorization_version FROM accounts WHERE tenant_id = $1 AND id = $2", tenant_id, account_id)
+                .fetch_optional(&mut *connection).await?;
+            let assignments: Vec<AssignmentRow> = sqlx::query_as!(AssignmentRow, "SELECT account_id, role_code, branch_id FROM account_role_assignments WHERE tenant_id = $1 AND account_id = $2 ORDER BY branch_id NULLS FIRST, role_code", tenant_id, account_id)
+                .fetch_all(&mut *connection).await?;
+            let overrides: Vec<OverrideRow> = sqlx::query_as!(OverrideRow, "SELECT account_id, permission_code, branch_id, effect, expires_at FROM account_permission_overrides WHERE tenant_id = $1 AND account_id = $2 ORDER BY branch_id NULLS FIRST, permission_code", tenant_id, account_id)
+                .fetch_all(&mut *connection).await?;
+            Ok((user, assignments, overrides))
+        })
+        .await
+        .map_err(|database_error: TenantDbErr| database_error_status("load access-control user", tenant_id, account_id, database_error))?;
+    let mut user: AccessControlUser = user_from_row(
+        rows.0
+            .ok_or_else(|| AccessControlError::NotFound("The tenant account does not exist.".to_owned()))?,
+    )?;
+    user.assignments = rows
+        .1
         .into_iter()
-        .find(|user: &AccessControlUser| user.account_id == account_id)
-        .ok_or_else(|| AccessControlError::NotFound("The tenant account does not exist.".to_owned()))
+        .map(|row: AssignmentRow| {
+            Ok(AccountRoleAssignmentContract {
+                role_code: parse_role(row.role_code)?,
+                branch_id: row.branch_id,
+            })
+        })
+        .collect::<Result<Vec<AccountRoleAssignmentContract>, AccessControlError>>()?;
+    user.permission_overrides = rows
+        .2
+        .into_iter()
+        .map(|row: OverrideRow| {
+            Ok(AccountPermissionOverrideContract {
+                permission_code: parse_permission(row.permission_code)?,
+                branch_id: row.branch_id,
+                effect: PermissionOverrideEffect::from_code(&row.effect).ok_or(AccessControlError::Internal)?,
+                expires_at: row.expires_at,
+            })
+        })
+        .collect::<Result<Vec<AccountPermissionOverrideContract>, AccessControlError>>()?;
+    Ok(user)
 }
 
 async fn load_role_row(
