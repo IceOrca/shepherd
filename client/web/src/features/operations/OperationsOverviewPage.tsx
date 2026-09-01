@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { useMemo } from "react";
 import { Link } from "react-router-dom";
-import type { PermissionCode, StaffingShift, UrgentWorkItem } from "../../api/generated/contracts";
+import type { PermissionCode, StaffingShift, UrgentOwnWorkPageRsp, UrgentWorkItem } from "../../api/generated/contracts";
 import { useAuth } from "../auth/AuthProvider";
 import { friendlyApiError } from "../../shared/api/client";
 import { formatDateTime, formatDuration, shiftStatusLabel } from "../../shared/lib/format";
@@ -138,9 +138,9 @@ export function OperationsOverviewPage(): React.JSX.Element {
     queryFn: (): Promise<ScopedStaffingShift[]> => loadScopedShifts(scope.branchIds),
     enabled: canReadShifts && scope.branchIds.length > 0,
   });
-  const ownUrgentWorkQuery: UseQueryResult<UrgentWorkItem[], Error> = useQuery({
+  const ownUrgentWorkQuery: UseQueryResult<UrgentOwnWorkPageRsp, Error> = useQuery({
     queryKey: operationsQueryKeys.urgentOwnWork,
-    queryFn: listOwnUrgentWork,
+    queryFn: (): Promise<UrgentOwnWorkPageRsp> => listOwnUrgentWork(),
     enabled: canReadUrgentWork && !canReadShifts,
   });
 
@@ -219,7 +219,7 @@ export function OperationsOverviewPage(): React.JSX.Element {
   }
 
   if (!canReadShifts) {
-    const work: UrgentWorkItem[] = ownUrgentWorkQuery.data ?? [];
+    const work: UrgentWorkItem[] = ownUrgentWorkQuery.data?.items ?? [];
     const active: UrgentWorkItem[] = work.filter((item: UrgentWorkItem): boolean => item.status === "active");
     const completed: UrgentWorkItem[] = work.filter(
       (item: UrgentWorkItem): boolean => item.status === "completed" || item.status === "reconciled",

@@ -25,11 +25,12 @@ use crate::{
         urgent_work::{
             core::{
                 UrgentCustomerWorkRecord, UrgentWorkActionSource, UrgentWorkCustomer, UrgentWorkEmployee,
-                UrgentWorkItem, UrgentWorkReconcile, UrgentWorkStatus,
+                UrgentWorkItem, UrgentWorkReconcile, UrgentWorkStatus, UrgentWorkSubmissionKind,
             },
             host::{
                 UrgentCustomerWorkRecordUpsertReq, UrgentWorkAcceptStaffRecordReq, UrgentWorkEndReq,
-                UrgentReconcileRsp, UrgentWorkReconcileReq, UrgentWorkStartReq,
+                UrgentOwnWorkPageRsp, UrgentReconcileRsp, UrgentWorkManualReq, UrgentWorkReconcileReq,
+                UrgentWorkStartReq,
             },
         },
         work_session::{
@@ -166,14 +167,17 @@ pub fn contract() -> String {
     push::<FinancialReportExportReq>(&mut output, &config);
     push::<UrgentWorkStatus>(&mut output, &config);
     push::<UrgentWorkActionSource>(&mut output, &config);
+    push::<UrgentWorkSubmissionKind>(&mut output, &config);
     push::<UrgentWorkCustomer>(&mut output, &config);
     push::<UrgentWorkEmployee>(&mut output, &config);
     push::<UrgentWorkItem>(&mut output, &config);
+    push::<UrgentOwnWorkPageRsp>(&mut output, &config);
     push::<UrgentCustomerWorkRecord>(&mut output, &config);
     push::<UrgentWorkReconcile>(&mut output, &config);
     push::<UrgentReconcileRsp>(&mut output, &config);
     push::<UrgentWorkStartReq>(&mut output, &config);
     push::<UrgentWorkEndReq>(&mut output, &config);
+    push::<UrgentWorkManualReq>(&mut output, &config);
     push::<UrgentCustomerWorkRecordUpsertReq>(&mut output, &config);
     push::<UrgentWorkReconcileReq>(&mut output, &config);
     push::<UrgentWorkAcceptStaffRecordReq>(&mut output, &config);

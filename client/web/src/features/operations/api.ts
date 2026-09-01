@@ -30,11 +30,13 @@ import type {
   StaffingStaffPageResponse,
   UrgentCustomerWorkRecord,
   UrgentCustomerWorkRecordUpsertReq as UrgentCustomerWorkRecordUpsertRequest,
+  UrgentOwnWorkPageRsp,
   UrgentWorkAcceptStaffRecordReq as UrgentWorkAcceptStaffRecordRequest,
   UrgentWorkEmployee,
   UrgentWorkEndReq as UrgentWorkEndRequest,
   UrgentWorkCustomer,
   UrgentWorkItem,
+  UrgentWorkManualReq as UrgentWorkManualRequest,
   UrgentWorkReconcileReq as UrgentWorkReconcileRequest,
   UrgentWorkReconcile,
   UrgentReconcileRsp as UrgentReconcilePageRsp,
@@ -83,6 +85,11 @@ export interface UrgentEndActionInput {
   idempotencyKey: string;
   reportId: string;
   payload: UrgentWorkEndRequest;
+}
+
+export interface UrgentManualActionInput {
+  idempotencyKey: string;
+  payload: UrgentWorkManualRequest;
 }
 
 function customerPagePath(cursor: string | null, search: string): string {
@@ -372,8 +379,9 @@ export function listUrgentEmployees(): Promise<UrgentWorkEmployee[]> {
   return apiRequest<UrgentWorkEmployee[]>("/api/business/staffing/urgent-work/employees");
 }
 
-export function listOwnUrgentWork(): Promise<UrgentWorkItem[]> {
-  return apiRequest<UrgentWorkItem[]>("/api/business/staffing/urgent-work/me");
+export function listOwnUrgentWork(cursor: string | null = null): Promise<UrgentOwnWorkPageRsp> {
+  const query: string = cursor === null ? "" : `?cursor=${encodeURIComponent(cursor)}`;
+  return apiRequest<UrgentOwnWorkPageRsp>(`/api/business/staffing/urgent-work/me${query}`);
 }
 
 export function listTeamUrgentWork(): Promise<UrgentWorkItem[]> {
@@ -390,6 +398,14 @@ export function startUrgentWork(input: UrgentStartActionInput): Promise<UrgentWo
 
 export function endUrgentWork(input: UrgentEndActionInput): Promise<UrgentWorkItem> {
   return apiRequest<UrgentWorkItem>(`/api/business/staffing/urgent-work/${input.reportId}/end`, {
+    method: "POST",
+    headers: { "Idempotency-Key": input.idempotencyKey },
+    body: JSON.stringify(input.payload),
+  });
+}
+
+export function submitManualUrgentWork(input: UrgentManualActionInput): Promise<UrgentWorkItem> {
+  return apiRequest<UrgentWorkItem>("/api/business/staffing/urgent-work/manual", {
     method: "POST",
     headers: { "Idempotency-Key": input.idempotencyKey },
     body: JSON.stringify(input.payload),

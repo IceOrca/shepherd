@@ -37,6 +37,23 @@ pub enum UrgentWorkActionSource {
     Peer,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum UrgentWorkSubmissionKind {
+    Live,
+    Manual,
+}
+
+impl UrgentWorkSubmissionKind {
+    pub fn from_code(code: &str) -> Option<Self> {
+        match code {
+            "live" => Some(Self::Live),
+            "manual" => Some(Self::Manual),
+            _ => None,
+        }
+    }
+}
+
 impl UrgentWorkActionSource {
     pub fn from_code(code: &str) -> Option<Self> {
         match code {
@@ -74,6 +91,8 @@ pub struct UrgentWorkItem {
     pub employee_name: String,
     pub claimed_customer_id: Uuid,
     pub customer_name: String,
+    pub submission_kind: UrgentWorkSubmissionKind,
+    pub staff_note: Option<String>,
     pub status: UrgentWorkStatus,
     pub started_at: DateTime<Utc>,
     pub ended_at: Option<DateTime<Utc>>,
@@ -172,6 +191,28 @@ pub struct UrgentWorkEndInput {
 }
 
 #[derive(Clone, Debug)]
+pub struct UrgentWorkManualInput {
+    pub customer_id: Uuid,
+    pub started_at: DateTime<Utc>,
+    pub ended_at: DateTime<Utc>,
+    pub note: Option<String>,
+    pub idempotency_key: Uuid,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct UrgentOwnWorkCursor {
+    pub active: bool,
+    pub started_at: DateTime<Utc>,
+    pub report_id: Uuid,
+}
+
+#[derive(Clone, Debug)]
+pub struct UrgentOwnWorkPage {
+    pub items: Vec<UrgentWorkItem>,
+    pub next_cursor: Option<UrgentOwnWorkCursor>,
+}
+
+#[derive(Clone, Debug)]
 pub struct UrgentCustomerWorkRecordInput {
     pub confirmed_customer_id: Uuid,
     pub confirmed_started_at: DateTime<Utc>,
@@ -211,7 +252,9 @@ pub trait UrgentWorkRepo {
         &self,
         tenant_id: Uuid,
         actor_account_id: Uuid,
-    ) -> Result<Vec<UrgentWorkItem>, UrgentWorkError>;
+        limit: i64,
+        cursor: Option<&UrgentOwnWorkCursor>,
+    ) -> Result<UrgentOwnWorkPage, UrgentWorkError>;
     async fn list_team_work(
         &self,
         tenant_id: Uuid,
@@ -235,6 +278,16 @@ pub trait UrgentWorkRepo {
         allow_peer: bool,
         report_id: Uuid,
         input: &UrgentWorkEndInput,
+    ) -> Result<UrgentWorkItem, UrgentWorkError>;
+    #[allow(clippy::too_many_arguments)]
+    async fn submit_manual(
+        &self,
+        tenant_id: Uuid,
+        actor_account_id: Uuid,
+        batch_id: Uuid,
+        report_id: Uuid,
+        session_id: Uuid,
+        input: &UrgentWorkManualInput,
     ) -> Result<UrgentWorkItem, UrgentWorkError>;
     #[allow(clippy::too_many_arguments)]
     async fn list_reconciliations(
@@ -317,9 +370,18 @@ impl UrgentWorkService {
         &self,
         tenant_id: Uuid,
         actor_account_id: Uuid,
-    ) -> Result<Vec<UrgentWorkItem>, UrgentWorkError> {
-        let result: Result<Vec<UrgentWorkItem>, UrgentWorkError> =
-            self.repo.list_own_work(tenant_id, actor_account_id).await;
+        limit: i64,
+        cursor: Option<UrgentOwnWorkCursor>,
+    ) -> Result<UrgentOwnWorkPage, UrgentWorkError> {
+        if limit <= 0 {
+            return Err(UrgentWorkError::InvalidInput(
+                "urgent own-work page size must be positive",
+            ));
+        }
+        let result: Result<UrgentOwnWorkPage, UrgentWorkError> = self
+            .repo
+            .list_own_work(tenant_id, actor_account_id, limit, cursor.as_ref())
+            .await;
         log_result("urgent_work.list_own", tenant_id, Some(actor_account_id), None, &result);
         result
     }
@@ -404,6 +466,51 @@ impl UrgentWorkService {
             .await;
         log_result(
             "urgent_work.end",
+            tenant_id,
+            Some(actor_account_id),
+            Some(report_id),
+            &result,
+        );
+        result
+    }
+
+    pub async fn submit_manual(
+        &self,
+        tenant_id: Uuid,
+        actor_account_id: Uuid,
+        mut input: UrgentWorkManualInput,
+    ) -> Result<UrgentWorkItem, UrgentWorkError> {
+        if input.customer_id.is_nil()
+            || input.idempotency_key.is_nil()
+            || input.ended_at <= input.started_at
+            || input.ended_at > Utc::now() + chrono::Duration::minutes(5)
+        {
+            return Err(UrgentWorkError::InvalidInput(
+                "manual urgent-work declaration is invalid",
+            ));
+        }
+        input.note = input
+            .note
+            .take()
+            .map(|note: String| note.trim().to_owned())
+            .filter(|note: &String| !note.is_empty());
+        if input.note.as_deref().is_some_and(|note: &str| note.len() > 1000) {
+            return Err(UrgentWorkError::InvalidInput("manual urgent-work note is invalid"));
+        }
+        let report_id: Uuid = Uuid::new_v4();
+        let result: Result<UrgentWorkItem, UrgentWorkError> = self
+            .repo
+            .submit_manual(
+                tenant_id,
+                actor_account_id,
+                Uuid::new_v4(),
+                report_id,
+                Uuid::new_v4(),
+                &input,
+            )
+            .await;
+        log_result(
+            "urgent_work.submit_manual",
             tenant_id,
             Some(actor_account_id),
             Some(report_id),

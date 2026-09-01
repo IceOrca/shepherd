@@ -13,17 +13,36 @@ use tracing::{debug, error, info, trace, warn};
 use ts_rs::TS;
 use uuid::Uuid;
 
-use crate::{AppContext, auth::AuthedUser};
+use crate::{
+    AppContext,
+    auth::AuthedUser,
+    pagination::{decode_cursor, encode_cursor, resolve_limit},
+};
 
 use super::super::{
     core::{ManualRateOverride, ReconcileCollection},
     host::ManualRateOverrideRequest,
 };
 use super::core::{
-    UrgentCustomerWorkRecord, UrgentCustomerWorkRecordInput, UrgentReconcileCursor, UrgentReconcilePage,
-    UrgentWorkEmployee, UrgentWorkEndInput, UrgentWorkError, UrgentWorkCustomer, UrgentWorkItem,
-    UrgentWorkLocationInput, UrgentWorkReconcileInput, UrgentWorkReconcile, UrgentWorkStartInput,
+    UrgentCustomerWorkRecord, UrgentCustomerWorkRecordInput, UrgentOwnWorkCursor, UrgentOwnWorkPage,
+    UrgentReconcileCursor, UrgentReconcilePage, UrgentWorkEmployee, UrgentWorkEndInput, UrgentWorkError,
+    UrgentWorkCustomer, UrgentWorkItem, UrgentWorkLocationInput, UrgentWorkManualInput, UrgentWorkReconcileInput,
+    UrgentWorkReconcile, UrgentWorkStartInput,
 };
+
+#[derive(Debug, Deserialize)]
+pub struct UrgentOwnWorkPageQuery {
+    pub limit: Option<u16>,
+    pub cursor: Option<String>,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct UrgentOwnWorkPageRsp {
+    pub items: Vec<UrgentWorkItem>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+    pub limit: u16,
+}
 
 #[derive(Debug, Deserialize)]
 pub struct UrgentReconcilePageQuery {
@@ -61,6 +80,15 @@ pub struct UrgentWorkEndReq {
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(optional_fields = nullable)]
+pub struct UrgentWorkManualReq {
+    pub customer_id: Uuid,
+    pub started_at: DateTime<Utc>,
+    pub ended_at: DateTime<Utc>,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(optional_fields = nullable)]
 pub struct UrgentCustomerWorkRecordUpsertReq {
     pub confirmed_customer_id: Uuid,
     pub confirmed_started_at: DateTime<Utc>,
@@ -92,6 +120,7 @@ pub fn routes() -> Router<Arc<AppContext>> {
         .route("/staffing/urgent-work/me", get(list_own_work))
         .route("/staffing/urgent-work/team", get(list_team_work))
         .route("/staffing/urgent-work/start", post(start_work))
+        .route("/staffing/urgent-work/manual", post(submit_manual_work))
         .route("/staffing/urgent-work/{report_id}/end", post(end_work))
         .route("/staffing/urgent-work/reconciliations", get(list_reconciliations))
         .route(
@@ -138,15 +167,24 @@ async fn list_employees(
 async fn list_own_work(
     State(ctx): State<Arc<AppContext>>,
     Extension(user): Extension<AuthedUser>,
-) -> Result<Json<Vec<UrgentWorkItem>>, StatusCode> {
+    Query(query): Query<UrgentOwnWorkPageQuery>,
+) -> Result<Json<UrgentOwnWorkPageRsp>, StatusCode> {
     require_permission(&user, "business.urgent_work.read")?;
-    let work: Vec<UrgentWorkItem> = ctx
+    let limit: u16 = resolve_limit(&ctx.list_pagination, query.limit)?;
+    let cursor: Option<UrgentOwnWorkCursor> = decode_cursor(query.cursor.as_deref())?;
+    let page: UrgentOwnWorkPage = ctx
         .core
         .urgent_work
-        .list_own_work(user.tenant_id, user.account_id)
+        .list_own_work(user.tenant_id, user.account_id, i64::from(limit), cursor)
         .await
         .map_err(|operation_error: UrgentWorkError| status("list own urgent work", &user, operation_error))?;
-    Ok(Json(work))
+    let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
+    Ok(Json(UrgentOwnWorkPageRsp {
+        has_more: next_cursor.is_some(),
+        items: page.items,
+        next_cursor,
+        limit,
+    }))
 }
 
 async fn list_team_work(
@@ -217,6 +255,31 @@ async fn end_work(
     ctx.notifications.wake();
     info!(tenant_id = %user.tenant_id, account_id = %user.account_id, report_id = %report_id, worked_seconds = ?work.worked_seconds, "Urgent-work end request completed");
     Ok(Json(work))
+}
+
+async fn submit_manual_work(
+    State(ctx): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthedUser>,
+    headers: HeaderMap,
+    Json(request): Json<UrgentWorkManualReq>,
+) -> Result<(StatusCode, Json<UrgentWorkItem>), StatusCode> {
+    require_permission(&user, "business.urgent_work.start")?;
+    let idempotency_key: Uuid = idempotency_key(&headers, &user)?;
+    let input: UrgentWorkManualInput = UrgentWorkManualInput {
+        customer_id: request.customer_id,
+        started_at: request.started_at,
+        ended_at: request.ended_at,
+        note: normalize_optional(request.note),
+        idempotency_key,
+    };
+    let work: UrgentWorkItem = ctx
+        .core
+        .urgent_work
+        .submit_manual(user.tenant_id, user.account_id, input)
+        .await
+        .map_err(|operation_error: UrgentWorkError| status("submit manual urgent work", &user, operation_error))?;
+    ctx.notifications.wake();
+    Ok((StatusCode::CREATED, Json(work)))
 }
 
 async fn list_reconciliations(

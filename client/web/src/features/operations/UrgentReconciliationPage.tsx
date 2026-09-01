@@ -530,6 +530,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
               <div className="mt-5 grid gap-3 md:grid-cols-3">
                 <div className="rounded-xl bg-violet-50 p-4">
                   <p className="text-xs font-bold uppercase text-violet-600">Nhân viên khai</p>
+                  <p className="mt-2 text-[11px] font-bold text-violet-700">{selected.work.submission_kind === "manual" ? `Tự khai bổ sung · gửi ${formatDateTime(selected.work.created_at)}` : "Ghi trực tiếp tại nơi làm việc"}</p>
                   <p className="mt-2 font-black text-violet-950">{selected.work.customer_name}</p>
                   <p className="mt-1 text-sm font-bold text-violet-900">
                     {formatDuration(selected.work.worked_seconds ?? 0)}
@@ -537,6 +538,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                   <p className="mt-1 text-xs text-violet-700">
                     {formatDateTime(selected.work.started_at)} → {selected.work.ended_at ? formatDateTime(selected.work.ended_at) : "đang làm"}
                   </p>
+                  {selected.work.staff_note ? <p className="mt-2 text-xs leading-5 text-violet-800">Ghi chú: {selected.work.staff_note}</p> : null}
                 </div>
                 <div className="rounded-xl bg-amber-50 p-4">
                   <p className="text-xs font-bold uppercase text-amber-600">Khách hàng xác nhận</p>

@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, Once},
 };
 
-use chrono::Duration;
+use chrono::{Duration, TimeZone, Utc};
 use infra_postgres::DatabaseAdapter;
 use sqlx::postgres::PgQueryResult;
 use uuid::Uuid;
@@ -13,7 +13,8 @@ use uuid::Uuid;
 use super::{
     core::{
         UrgentCustomerWorkRecordInput, UrgentWorkActionSource, UrgentWorkEndInput, UrgentWorkError,
-        UrgentWorkLocationInput, UrgentWorkReconcileInput, UrgentWorkService, UrgentWorkStartInput,
+        UrgentWorkLocationInput, UrgentWorkManualInput, UrgentWorkReconcileInput, UrgentWorkService,
+        UrgentWorkStartInput, UrgentWorkStatus, UrgentWorkSubmissionKind,
     },
     database::UrgentWorkDb,
 };
@@ -578,6 +579,115 @@ fn urgent_location_is_optional_and_validated_when_present() {
         accuracy_meters: None,
     };
     assert!(matches!(incomplete.validate(), Err(UrgentWorkError::InvalidInput(_))));
+}
+
+#[tokio::test]
+async fn manual_self_declaration_is_immutable_idempotent_and_keyset_paginated() -> TestResult {
+    let fixture: Fixture = Fixture::create().await?;
+    let test_result: TestResult = infra_postgres::with_active_branch(fixture.branch_id, async {
+        let service: Arc<UrgentWorkService> = fixture.urgent_service();
+        let first_key: Uuid = Uuid::new_v4();
+        let first_input: UrgentWorkManualInput = UrgentWorkManualInput {
+            customer_id: fixture.customer_id,
+            started_at: Utc
+                .with_ymd_and_hms(2026, 8, 20, 8, 0, 0)
+                .single()
+                .ok_or_else(|| io::Error::other("manual start timestamp is invalid"))?,
+            ended_at: Utc
+                .with_ymd_and_hms(2026, 8, 20, 16, 30, 0)
+                .single()
+                .ok_or_else(|| io::Error::other("manual end timestamp is invalid"))?,
+            note: Some("Forgot to check in at the customer workplace".to_owned()),
+            idempotency_key: first_key,
+        };
+        let first = require_urgent(
+            service
+                .submit_manual(fixture.tenant_id, fixture.actor_account_id, first_input.clone())
+                .await,
+        )?;
+        let repeated = require_urgent(
+            service
+                .submit_manual(fixture.tenant_id, fixture.actor_account_id, first_input.clone())
+                .await,
+        )?;
+        assert_eq!(first.report_id, repeated.report_id);
+        assert_eq!(first.status, UrgentWorkStatus::Completed);
+        assert_eq!(first.submission_kind, UrgentWorkSubmissionKind::Manual);
+        assert_eq!(first.start_source, UrgentWorkActionSource::SelfReported);
+        assert_eq!(first.end_source, Some(UrgentWorkActionSource::SelfReported));
+        assert_eq!(first.started_by_account_id, fixture.actor_account_id);
+        assert_eq!(first.ended_by_account_id, Some(fixture.actor_account_id));
+
+        let conflicting: Result<super::core::UrgentWorkItem, UrgentWorkError> = service
+            .submit_manual(
+                fixture.tenant_id,
+                fixture.actor_account_id,
+                UrgentWorkManualInput {
+                    ended_at: first_input.ended_at + Duration::minutes(1),
+                    ..first_input
+                },
+            )
+            .await;
+        assert!(matches!(conflicting, Err(UrgentWorkError::Conflict)));
+
+        let second = require_urgent(
+            service
+                .submit_manual(
+                    fixture.tenant_id,
+                    fixture.actor_account_id,
+                    UrgentWorkManualInput {
+                        customer_id: fixture.alternate_customer_id,
+                        started_at: Utc
+                            .with_ymd_and_hms(2026, 8, 21, 9, 0, 0)
+                            .single()
+                            .ok_or_else(|| io::Error::other("second manual start timestamp is invalid"))?,
+                        ended_at: Utc
+                            .with_ymd_and_hms(2026, 8, 21, 14, 0, 0)
+                            .single()
+                            .ok_or_else(|| io::Error::other("second manual end timestamp is invalid"))?,
+                        note: None,
+                        idempotency_key: Uuid::new_v4(),
+                    },
+                )
+                .await,
+        )?;
+        let first_page = require_urgent(
+            service
+                .list_own_work(fixture.tenant_id, fixture.actor_account_id, 1, None)
+                .await,
+        )?;
+        assert_eq!(first_page.items.len(), 1);
+        assert_eq!(
+            first_page
+                .items
+                .first()
+                .ok_or_else(|| io::Error::other("first manual history page is empty"))?
+                .report_id,
+            second.report_id,
+        );
+        let cursor = first_page
+            .next_cursor
+            .ok_or_else(|| io::Error::other("manual history next cursor is missing"))?;
+        let second_page = require_urgent(
+            service
+                .list_own_work(fixture.tenant_id, fixture.actor_account_id, 1, Some(cursor))
+                .await,
+        )?;
+        assert_eq!(second_page.items.len(), 1);
+        assert_eq!(
+            second_page
+                .items
+                .first()
+                .ok_or_else(|| io::Error::other("second manual history page is empty"))?
+                .report_id,
+            first.report_id,
+        );
+        Ok(())
+    })
+    .await;
+    let cleanup_result: TestResult = fixture.cleanup().await;
+    cleanup_result?;
+    test_result
 }
 
 #[tokio::test]

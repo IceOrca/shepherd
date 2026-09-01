@@ -188,11 +188,15 @@ export type UrgentWorkStatus = "active" | "completed" | "reconciled" | "cancelle
 
 export type UrgentWorkActionSource = "self_reported" | "peer";
 
+export type UrgentWorkSubmissionKind = "live" | "manual";
+
 export type UrgentWorkCustomer = { customer_id: string, customer_name: string, address: string | null, time_zone: string, };
 
 export type UrgentWorkEmployee = { employee_id: string, employee_code: string, display_name: string, is_self: boolean, has_open_work: boolean, };
 
-export type UrgentWorkItem = { report_id: string, branch_id: string, branch_name: string, employee_id: string, employee_code: string, employee_name: string, claimed_customer_id: string, customer_name: string, status: UrgentWorkStatus, started_at: string, ended_at: string | null, worked_seconds: number | null, started_by_account_id: string, started_by_username: string, start_source: UrgentWorkActionSource, ended_by_account_id: string | null, ended_by_username: string | null, end_source: UrgentWorkActionSource | null, reconciled_assignment_id: string | null, created_at: string, updated_at: string, };
+export type UrgentWorkItem = { report_id: string, branch_id: string, branch_name: string, employee_id: string, employee_code: string, employee_name: string, claimed_customer_id: string, customer_name: string, submission_kind: UrgentWorkSubmissionKind, staff_note: string | null, status: UrgentWorkStatus, started_at: string, ended_at: string | null, worked_seconds: number | null, started_by_account_id: string, started_by_username: string, start_source: UrgentWorkActionSource, ended_by_account_id: string | null, ended_by_username: string | null, end_source: UrgentWorkActionSource | null, reconciled_assignment_id: string | null, created_at: string, updated_at: string, };
+
+export type UrgentOwnWorkPageRsp = { items: Array<UrgentWorkItem>, next_cursor: string | null, has_more: boolean, limit: number, };
 
 export type UrgentCustomerWorkRecord = { id: string, report_id: string, confirmed_customer_id: string, confirmed_customer_name: string, confirmed_started_at: string, confirmed_ended_at: string, confirmed_worked_seconds: number, customer_reference: string | null, notes: string | null, updated_at: string, };
 
@@ -203,6 +207,8 @@ export type UrgentReconcileRsp = { items: Array<UrgentWorkReconcile>, next_curso
 export type UrgentWorkStartReq = { customer_id: string, employee_ids: Array<string>, latitude: number | null, longitude: number | null, accuracy_meters: number | null, };
 
 export type UrgentWorkEndReq = { latitude: number | null, longitude: number | null, accuracy_meters: number | null, };
+
+export type UrgentWorkManualReq = { customer_id: string, started_at: string, ended_at: string, note?: string | null, };
 
 export type UrgentCustomerWorkRecordUpsertReq = { confirmed_customer_id: string, confirmed_started_at: string, confirmed_ended_at: string, customer_reference?: string | null, notes?: string | null, };
 

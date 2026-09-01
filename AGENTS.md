@@ -17,9 +17,10 @@ Use these terms consistently:
 - **Customer**: the external workplace buying staffing services from one branch of A, such as a restaurant, coffee shop, karaoke business, or hotel. Shepherd intentionally does not model the customer's internal organization or facilities.
 - **Staff / employee**: A's worker assigned to one branch and sent to perform work at a customer workplace.
 - **Supervisor / coordinator**: A's user who dispatches workers, optionally creates planned shifts, monitors work, enters customer evidence, and reconciles results.
-- **Urgent work report**: staff evidence created without a pre-existing shift. It records the employee, staff-claimed customer, server timestamps, and the accounts that pressed Start and Finish.
+- **Urgent work report**: staff evidence created without a pre-existing shift. A live report records server-owned Start/Finish timestamps and acting accounts; a missed-attendance report records a Staff-declared completed interval plus the server-owned submission timestamp.
 - **Peer clocking**: one staff member starts or finishes urgent work for another staff member at the same customer workplace. It is valid staff-side evidence and must retain actor provenance; it is not supervisor-authored routine time.
-- **Staff work evidence**: immutable server-timestamped start/end sessions created when a staff member presses Start or Finish for themselves or a coworker.
+- **Missed-attendance declaration**: an immutable, self-only completed work interval entered later by the Staff member who forgot live Check-in/Check-out. It is Staff evidence, never customer confirmation or an approved result.
+- **Staff work evidence**: immutable live server-timestamped sessions or immutable self-declared missed-attendance intervals. Both retain actor and submission provenance and require manager reconciliation.
 - **Customer work evidence**: the independent confirmation, bill, or time record supplied by the customer.
 - **Reconciled result**: the final locked duration and financial snapshot accepted after comparing both evidence sources.
 
@@ -31,12 +32,14 @@ The primary, urgent/unplanned business workflow is:
 2. At the workplace, an active employee logs in, selects an active customer from their branch's manager-maintained list, and selects themselves plus any coworkers whose work they are starting. The customer is selected, never manually typed.
 3. The employee presses **Start**. Shepherd creates one immutable urgent report per selected employee in a single idempotent batch. The first peer batch includes the acting employee; later peer actions require the actor to have work evidence at the same customer.
 4. After work, each employee may press **Finish** for themselves, or a coworker at that customer may finish for them. Every transition stores both the subject employee and acting account with `self` or `peer` provenance.
-5. PostgreSQL/server processing owns all work timestamps. Browser or device time is never authoritative.
+5. PostgreSQL/server processing owns every live Start/Finish timestamp. Browser or device time is never authoritative for the live workflow.
 6. A supervisor receives separate customer confirmation or a bill and records the customer-confirmed customer and time interval without modifying staff evidence.
 7. Shepherd compares claimed versus confirmed customer and exact start/end time and classifies the report as waiting for staff, waiting for customer, matched, discrepant, or reconciled.
 8. At the end of the day, a supervisor must review every completed report, including reports classified as matched. `matched` is evidence comparison only and never triggers automatic approval.
 9. If evidence differs, the supervisor contacts the customer and agrees on the true customer workplace and time. The supervisor records that conclusion and its normalized audit reason.
 10. The supervisor explicitly reconciles and locks the final customer, job, duration, rates, and financial result. Reconciliation atomically creates a completed formal shift and approved assignment linked to the urgent report so billing, worker pay, margin, and payroll use the existing immutable assignment snapshot.
+
+If Staff forgot live Start or Finish, an active Staff account may instead submit one completed missed-attendance declaration for itself. The Staff selects an active customer from its branch, enters start/end instants and an optional note, and sends an idempotency key. The server revalidates the account/employee/customer scope, stores `submission_kind = manual`, stores `created_at` as the server-owned submission instant, and inserts the claimed interval atomically as immutable Staff evidence. This path cannot select a coworker, cannot create customer evidence, and cannot approve, bill, or pay the work. It enters the same urgent reconciliation queue as live evidence.
 
 The optional planned workflow remains supported. A supervisor may create a shift, inspect suitability and availability, assign staff up to capacity, and let each assigned employee start and finish the assignment. In planned mode, the customer derives from the assignment; staff do not choose it.
 
@@ -57,7 +60,7 @@ List quota values are configuration, not source constants.
 `API_LIST_PAGE_SIZE_DEFAULT`, `API_LIST_PAGE_SIZE_MIN`, and
 `API_LIST_PAGE_SIZE_MAX` are required in development `server.env` and the
 production server secret environment file. They apply to reconciliation,
-employees, attendance history, customers, pricing Staff, finance records and
+employees, attendance history, Staff urgent-work history, customers, pricing Staff, finance records and
 revision history, and access-control records. They must be positive and satisfy
 `MIN <= DEFAULT <= MAX`; invalid configuration prevents server startup. Apply
 search and business filters in PostgreSQL before the keyset predicate, fetch
@@ -65,7 +68,7 @@ only `limit + 1`, and never use an unbounded count merely to render pagination.
 The browser omits `limit`, learns the effective value from the API response,
 and contains no duplicate page-size constant.
 
-The staff-facing urgent-work history shows the authoritative branch and customer, exact server check-in and check-out timestamps, completed interval, and both acting usernames with self/peer provenance. Actor names must come from server-side joins using the immutable `started_by_account_id` and `ended_by_account_id`; the frontend must not infer the actor from the current session or employee name.
+The staff-facing urgent-work history is an opaque keyset-paginated stream sorted by active status first and then `(started_at, report_id)` descending. PostgreSQL fetches only `limit + 1`; the API returns `{ items, next_cursor, has_more, limit }`; the browser contains no duplicate page-size constant. Each row shows authoritative branch/customer, completed interval, and live acting usernames with self/peer provenance. Manual rows are visibly labeled, show the server submission instant and Staff note, and must not be described as server Check-in/Check-out timestamps. Actor names always come from server joins over immutable actor account IDs.
 
 `Urgent` is only work-origination provenance: the work starts without a supervisor pre-creating a planned shift or assignment. It is not a separate kind of tenant, branch, account, employee, job, or customer. Urgent reports must reference the same master records used by planned staffing, and reconciliation later creates the formal shift/assignment snapshot. Never create production or development master-data rows such as urgent tenants, branches, accounts, customers, or jobs merely to support the urgent workflow.
 
@@ -75,7 +78,7 @@ Current scope and non-goals:
 
 - Customer systems do not integrate or synchronize with Shepherd yet; customer evidence is entered manually by A.
 - GPS collection is disabled. Preserve the existing location DTOs, columns, and code for a future opt-in feature, but do not expose a GPS control or store coordinates while the flags are false.
-- Shepherd does not infer presence, silently auto-clock workers, or trust browser timestamps.
+- Shepherd does not infer presence or silently auto-clock workers. User-entered timestamps are accepted only as explicitly labeled missed-attendance Staff claims; they never masquerade as live server timestamps or final results.
 - Reconciliation is never automatic. Every completed planned assignment or urgent report requires an explicit supervisor action before it becomes an approved financial or payroll input.
 - `matched` means that independent evidence currently agrees; it does not mean approved, reconciled, billable, or payable.
 - A matched duration may be finalized without an adjustment reason. Any mismatch or manual final-duration override requires a normalized audit reason.
@@ -95,7 +98,7 @@ Preserve these rules in database constraints and server-side transactions, not o
 - A shift assignment fixes the employee and snapshots independently resolved customer-bill and worker-pay rates. Later rate changes must not rewrite historical assignments. A manual rate requires its own normalized audit reason and must never masquerade as a configured rate.
 - An employee may have at most one open staffing work session across planned and urgent work, and a planned assignment or urgent report may have at most one open session.
 - Start and finish operations require idempotency keys. Repeated delivery of the same action must return the same transition; competing actions must create exactly one transition.
-- Work-session timestamps are generated by PostgreSQL/server processing. In planned mode, customer and employee identity derive from the assignment. In urgent mode, the selected active customer and employee set are fixed in the accepted batch and cannot later be rewritten.
+- Live work-session timestamps are generated by PostgreSQL/server processing. In planned mode, customer and employee identity derive from the assignment. In urgent live mode, the selected active customer and employee set are fixed in the accepted batch. A manual urgent declaration is the only exception: its user-entered completed interval is stored as an immutable Staff claim, while `created_at` remains the server-owned submission timestamp; it is self-only and cannot be updated into a different claim.
 - Urgent peer start/end requires the actor to be an active employee with authorized same-customer work context in the active branch. A selectable peer target must be an active employee linked to an active account with the effective `business.urgent_work.start` permission; coordination accounts are not valid peer targets unless separately granted staff-clocking permission. Apply active per-account allow/deny overrides when deriving eligibility, and revalidate targets inside the start transaction rather than trusting the frontend list. Store the acting account and `self`/`peer` source on each transition.
 - Completed work-session totals are immutable staff evidence. Planned customer evidence is stored in `business_customer_work_records`; urgent customer evidence, including the confirmed customer, is stored in `business_urgent_customer_work_records`. Each has one current record per subject and its own audit account and timestamps. Updating either current record archives the superseded version, original recorder, and superseding actor in its tenant-scoped history table.
 - Planned and urgent evidence match only when customer, exact start, exact end, and duration all agree. Final reconciliation requires an explicit authorized supervisor action, positive completed staff time, customer evidence, and no open session. A discrepancy or final-duration override requires an adjustment reason. Exact matches still require the explicit action but do not require an adjustment reason.
@@ -123,10 +126,10 @@ Keep the database explicit rather than collapsing evidence or customer locations
 - `business_staffing_employee_eligibilities`: dormant compatibility data for a possible future client that prices or dispatches by service suitability. It is not exposed or enforced for the current client.
 - `business_staffing_shifts`: one branch-owned customer order interval, job, required capacity, and operational status.
 - `business_urgent_work_batches`: one idempotent urgent Start action, acting account, selected customer, and target employee set.
-- `business_urgent_work_reports`: one employee's urgent staff-side claim, lifecycle, and immutable selected customer.
+- `business_urgent_work_reports`: one employee's urgent staff-side claim, lifecycle, immutable selected customer, `live`/`manual` submission kind, optional immutable Staff note, and server submission timestamp.
 - `business_shift_assignments`: one employee allocated to a shift plus immutable rate snapshots and the eventual reconciled financial result.
 - `business_shift_work_sessions`: one or more employee start/end intervals and optional reserved GPS fields.
-- `business_urgent_work_sessions`: urgent start/end evidence with self/peer actor provenance and reserved GPS fields.
+- `business_urgent_work_sessions`: urgent start/end evidence with self/peer actor provenance and reserved GPS fields. For a manual report, the already-closed interval is the Staff-declared claim and both actors are the submitting Staff account.
 - `business_customer_work_records`: the current planned customer/time evidence kept separate from employee sessions.
 - `business_customer_work_record_history`: superseded planned customer evidence retained for the reconciliation conversation audit.
 - `business_urgent_customer_work_records`: the current urgent customer/time evidence kept separate from staff claims.
@@ -137,7 +140,7 @@ State transitions are monotonic:
 
 - Shift: `open -> filled -> in_progress -> completed`; `cancelled` is terminal. A shift may remain `open` until required capacity is reached. The first staff start moves it into progress. Completion follows reconciliation of all non-cancelled assignments.
 - Assignment: `assigned -> approved` after reconciliation, or `assigned -> cancelled`; approved and cancelled assignments are terminal.
-- Urgent report: `active -> completed -> reconciled`; `cancelled` is terminal. Reconciliation creates a linked terminal assignment snapshot rather than rewriting the urgent evidence.
+- Urgent live report: `active -> completed -> reconciled`; a manual report is inserted directly as `completed` in the same transaction as its closed session. `cancelled` is terminal. Reconciliation creates a linked terminal assignment snapshot rather than rewriting either kind of urgent evidence.
 - Work session: open with `started_at`, then closed once with `ended_at` and generated positive duration.
 - Reconciliation status is derived from evidence and assignment state (`pending_staff`, `pending_customer`, `matched`, `discrepancy`, `reconciled`) rather than maintained as a second mutable source of truth.
 

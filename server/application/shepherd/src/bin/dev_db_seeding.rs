@@ -32,6 +32,7 @@ const DEV_PERSONAL_EXPENSE_ID_NAMESPACE: u128 = 0xf200_0000_0000_4000_8000_0000_
 const DEV_EXPENSE_REIMBURSEMENT_ID_NAMESPACE: u128 = 0xf300_0000_0000_4000_8000_0000_0000_0000;
 const DEV_SALARY_ADVANCE_ID_NAMESPACE: u128 = 0xf400_0000_0000_4000_8000_0000_0000_0000;
 const DEV_SALARY_RECOVERY_ID_NAMESPACE: u128 = 0xf500_0000_0000_4000_8000_0000_0000_0000;
+const DEV_STAFF_WORK_HISTORY_DAYS: i32 = 14;
 
 struct SeedIdRow {
     id: Uuid,
@@ -1262,10 +1263,180 @@ async fn seed_staffing_business(
         "Development matched urgent-work evidence ensured"
     );
 
+    seed_staff_work_history(
+        &mut transaction,
+        tenant_id,
+        owner_account_id,
+        DEV_STAFF_WORK_HISTORY_DAYS,
+    )
+    .await?;
+
     transaction.commit().await.map_err(io::Error::other)?;
     info!(
         "Development staffing business committed: tenant_slug={} tenant_id={} sample_employee_id={} sample_shift_id={} sample_assignment_id={} urgent_report_id={}",
         tenant.slug, tenant_id, employee_id, shift_id, assignment_id, urgent_report_id
+    );
+    Ok(())
+}
+
+async fn seed_staff_work_history(
+    transaction: &mut infra_postgres::TenantTransaction,
+    tenant_id: Uuid,
+    owner_account_id: Uuid,
+    history_days: i32,
+) -> Result<(), io::Error> {
+    let report_insert = sqlx::query(
+        r#"
+        WITH work_seed AS (
+            SELECT employee.id AS employee_id, employee.account_id,
+                   employee.branch_id, customer.id AS customer_id,
+                   day_index,
+                   (day_index % 4 = 0) AS is_manual,
+                   (md5($1::TEXT || ':demo-work-batch:' || employee.id::TEXT || ':' || day_index::TEXT))::UUID AS batch_id,
+                   (md5($1::TEXT || ':demo-work-report:' || employee.id::TEXT || ':' || day_index::TEXT))::UUID AS report_id,
+                   ((((CURRENT_TIMESTAMP AT TIME ZONE customer.time_zone)::DATE - day_index)
+                       + CASE WHEN day_index % 4 = 0 THEN TIME '18:00' ELSE TIME '08:00' END)
+                       AT TIME ZONE customer.time_zone) AS submitted_at
+            FROM hr_employees AS employee
+            INNER JOIN accounts AS account
+                ON account.tenant_id = employee.tenant_id AND account.id = employee.account_id
+            CROSS JOIN generate_series(1, $2) AS day_index
+            CROSS JOIN LATERAL (
+                SELECT candidate.id, candidate.time_zone
+                FROM business_customers AS candidate
+                WHERE candidate.tenant_id = employee.tenant_id
+                  AND candidate.branch_id = employee.branch_id
+                  AND candidate.status = 'active'
+                ORDER BY candidate.code, candidate.id
+                OFFSET ((day_index - 1) % 3)
+                LIMIT 1
+            ) AS customer
+            WHERE employee.tenant_id = $1 AND employee.status = 'active'
+              AND account.status = 'active' AND account.primary_role_code = 'staff'
+        ), inserted_batches AS (
+            INSERT INTO business_urgent_work_batches (
+                id, tenant_id, branch_id, actor_account_id, claimed_customer_id,
+                idempotency_key, created_at
+            )
+            SELECT batch_id, $1, branch_id, account_id, customer_id, batch_id, submitted_at
+            FROM work_seed
+            ON CONFLICT (tenant_id, branch_id, actor_account_id, idempotency_key)
+            DO UPDATE SET claimed_customer_id = business_urgent_work_batches.claimed_customer_id
+            RETURNING id
+        )
+        INSERT INTO business_urgent_work_reports (
+            id, tenant_id, branch_id, start_batch_id, employee_id,
+            claimed_customer_id, status, created_by_account_id,
+            submission_kind, staff_note, created_at, updated_at
+        )
+        SELECT seed.report_id, $1, seed.branch_id, seed.batch_id, seed.employee_id,
+               seed.customer_id, 'completed', seed.account_id,
+               CASE WHEN seed.is_manual THEN 'manual' ELSE 'live' END,
+               CASE WHEN seed.is_manual
+                    THEN 'Dữ liệu demo: nhân viên quên chấm công và tự khai bổ sung.'
+                    ELSE NULL END,
+               seed.submitted_at, seed.submitted_at
+        FROM work_seed AS seed
+        INNER JOIN inserted_batches AS batch ON batch.id = seed.batch_id
+        ON CONFLICT (id) DO NOTHING
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(history_days)
+    .execute(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+
+    let session_insert = sqlx::query(
+        r#"
+        WITH work_seed AS (
+            SELECT employee.id AS employee_id, day_index,
+                   (md5($1::TEXT || ':demo-work-report:' || employee.id::TEXT || ':' || day_index::TEXT))::UUID AS report_id,
+                   (md5($1::TEXT || ':demo-work-session:' || employee.id::TEXT || ':' || day_index::TEXT))::UUID AS session_id
+            FROM hr_employees AS employee
+            INNER JOIN accounts AS account
+                ON account.tenant_id = employee.tenant_id AND account.id = employee.account_id
+            CROSS JOIN generate_series(1, $2) AS day_index
+            WHERE employee.tenant_id = $1 AND employee.status = 'active'
+              AND account.status = 'active' AND account.primary_role_code = 'staff'
+        )
+        INSERT INTO business_urgent_work_sessions (
+            id, tenant_id, branch_id, report_id, employee_id,
+            started_at, ended_at, end_idempotency_key,
+            started_by_account_id, start_source, ended_by_account_id, end_source,
+            created_at, updated_at
+        )
+        SELECT seed.session_id, report.tenant_id, report.branch_id, report.id, seed.employee_id,
+               CASE WHEN report.submission_kind = 'manual'
+                    THEN report.created_at - INTERVAL '10 hours'
+                    ELSE report.created_at END,
+               CASE WHEN report.submission_kind = 'manual'
+                    THEN report.created_at - INTERVAL '2 hours'
+                    ELSE report.created_at + INTERVAL '8 hours' END,
+               report.start_batch_id, report.created_by_account_id, 'self',
+               report.created_by_account_id, 'self', report.created_at, report.created_at
+        FROM work_seed AS seed
+        INNER JOIN business_urgent_work_reports AS report
+            ON report.tenant_id = $1 AND report.id = seed.report_id
+        ON CONFLICT (id) DO NOTHING
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(history_days)
+    .execute(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+
+    let customer_record_insert = sqlx::query(
+        r#"
+        WITH work_seed AS (
+            SELECT employee.id AS employee_id, employee.employee_code, day_index,
+                   (md5($1::TEXT || ':demo-work-report:' || employee.id::TEXT || ':' || day_index::TEXT))::UUID AS report_id,
+                   (md5($1::TEXT || ':demo-work-customer:' || employee.id::TEXT || ':' || day_index::TEXT))::UUID AS customer_record_id
+            FROM hr_employees AS employee
+            INNER JOIN accounts AS account
+                ON account.tenant_id = employee.tenant_id AND account.id = employee.account_id
+            CROSS JOIN generate_series(1, $3) AS day_index
+            WHERE employee.tenant_id = $1 AND employee.status = 'active'
+              AND account.status = 'active' AND account.primary_role_code = 'staff'
+              AND day_index % 3 <> 2
+        )
+        INSERT INTO business_urgent_customer_work_records (
+            id, tenant_id, branch_id, report_id, confirmed_customer_id,
+            confirmed_started_at, confirmed_ended_at, customer_reference,
+            notes, recorded_by_account_id, created_at, updated_at
+        )
+        SELECT seed.customer_record_id, report.tenant_id, report.branch_id, report.id,
+               report.claimed_customer_id, session.started_at,
+               CASE WHEN seed.day_index % 3 = 0
+                    THEN session.ended_at ELSE session.ended_at - INTERVAL '15 minutes' END,
+               'DEMO-' || to_char(session.started_at, 'YYYYMMDD') || '-' || seed.employee_code,
+               CASE WHEN seed.day_index % 3 = 0
+                    THEN 'Dữ liệu demo: khách hàng xác nhận khớp với nhân viên.'
+                    ELSE 'Dữ liệu demo: khách hàng xác nhận lệch 15 phút.' END,
+               $2, report.created_at + INTERVAL '1 day', report.created_at + INTERVAL '1 day'
+        FROM work_seed AS seed
+        INNER JOIN business_urgent_work_reports AS report
+            ON report.tenant_id = $1 AND report.id = seed.report_id
+        INNER JOIN business_urgent_work_sessions AS session
+            ON session.tenant_id = report.tenant_id AND session.report_id = report.id
+        ON CONFLICT (id) DO NOTHING
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(owner_account_id)
+    .bind(history_days)
+    .execute(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+
+    info!(
+        tenant_id = %tenant_id,
+        history_days,
+        report_rows = report_insert.rows_affected(),
+        session_rows = session_insert.rows_affected(),
+        customer_record_rows = customer_record_insert.rows_affected(),
+        "Development Staff work history committed"
     );
     Ok(())
 }

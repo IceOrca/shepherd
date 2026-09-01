@@ -80,6 +80,11 @@ buffer for each authorized branch, sends every request with that branch's
 explicit `X-Branch-Id`, and merges only the current candidates into one page.
 It does not request or calculate an unbounded total count.
 
+Staff **Lịch sử của tôi** uses the same bounded model. It keeps an active live
+session first, then orders by `(started_at, report_id)` descending, and fetches only `limit + 1` rows in
+PostgreSQL, and returns `{ items, next_cursor, has_more, limit }`. The browser
+loads one page at a time and does not slice an unbounded response.
+
 The server owns the shared list page-size quota. Development values live in
 `server.env`; production operators set the same required variables in their
 server secret environment file, using
@@ -112,10 +117,22 @@ cursors or out-of-policy limits. Search and status/customer filters are applied
 before pagination so a page cannot hide matching records in a later unfiltered
 database slice.
 
-Staff urgent-work history displays the branch, customer, server check-in and
-check-out timestamps, worked interval, and the usernames that pressed Start and
-Finish, including self/peer provenance. These actor names are resolved by the
-server from the immutable actor account IDs rather than inferred in the UI.
+Staff urgent-work history displays branch, customer, interval, submission kind,
+and immutable actor provenance. Live rows show server Check-in/Check-out
+timestamps and the usernames that pressed Start and Finish. Manual rows show
+the Staff-declared interval, optional note, and separate server-owned submission
+instant, and are visibly labeled **Nhân viên tự khai bổ sung**. Actor names are
+resolved by the server rather than inferred in the UI.
+
+When Staff forgets live Check-in/Check-out, `POST
+/api/business/staffing/urgent-work/manual` accepts an idempotency key, active
+branch customer, completed start/end interval, and optional note. It always
+resolves the subject from the authenticated active Staff account; no coworker
+can be selected. PostgreSQL atomically creates a completed urgent report and
+closed session with `submission_kind = manual`. This is immutable Staff-side
+evidence only: it creates no customer record and has no bill, payroll, or
+approval effect until ordinary manager reconciliation creates the formal
+assignment snapshot.
 
 This separation of evidence and mandatory human conclusion is the heart of the
 product. Scheduling, employee profiles, authentication, and administration
@@ -343,6 +360,8 @@ table owner.
 - Optimize for the customer's actual staffing operation, not generic ERP
   conventions.
 - Make urgent, staff-recorded work the shortest and most prominent workflow.
+- Let Staff recover a forgotten live action through an explicitly labeled,
+  immutable self-declared interval without presenting it as server clock data.
 - Preserve who recorded work for whom through explicit self/peer provenance.
 - Keep staff evidence immutable and customer evidence independent.
 - Require a supervisor to reconcile every completed work report, including an
@@ -351,8 +370,9 @@ table owner.
   evidence exactly matches the staff record. This convenience action uses the
   ordinary final reconciliation transaction and never creates, copies, or
   updates customer evidence or its history.
-- Use PostgreSQL/server timestamps and tenant-scoped RLS as authoritative
-  boundaries.
+- Use PostgreSQL/server timestamps for live actions and submission audit;
+  treat manually entered intervals only as Staff claims. Tenant/branch RLS and
+  explicit manager reconciliation remain authoritative boundaries.
 - Keep GPS disabled until the customer explicitly chooses to introduce it.
 
 ## Authentication and tenant access
@@ -726,7 +746,8 @@ inheritance:
 - `executive_manager` receives one or more branches selected by the owner.
 - `branch_manager`, `supervisor`, and `staff` each belong to exactly one branch.
 - Coordination roles do not receive staff-only clocking permissions. `staff`
-  owns urgent self/peer Start and Finish plus planned **My shifts** self-service.
+  owns urgent self/peer Start and Finish, self-only missed-attendance
+  declarations, plus planned **My shifts** self-service.
 
 Role delegation and branch cardinality are database-driven. Tenant owners may
 create any catalog role; executive managers may create branch managers,

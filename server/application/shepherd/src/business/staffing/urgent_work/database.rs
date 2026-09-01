@@ -10,9 +10,9 @@ use uuid::Uuid;
 use super::super::core::{ManualRateOverride, ReconcileCollection, ReconcileStatus};
 use super::core::{
     UrgentCustomerWorkRecord, UrgentCustomerWorkRecordInput, UrgentWorkActionSource, UrgentWorkEmployee,
-    UrgentReconcileCursor, UrgentReconcilePage, UrgentWorkCustomer, UrgentWorkEndInput, UrgentWorkError,
-    UrgentWorkItem, UrgentWorkReconcileInput, UrgentWorkReconcile, UrgentWorkRepo, UrgentWorkStartInput,
-    UrgentWorkStatus,
+    UrgentOwnWorkCursor, UrgentOwnWorkPage, UrgentReconcileCursor, UrgentReconcilePage, UrgentWorkCustomer,
+    UrgentWorkEndInput, UrgentWorkError, UrgentWorkItem, UrgentWorkManualInput, UrgentWorkReconcileInput,
+    UrgentWorkReconcile, UrgentWorkRepo, UrgentWorkStartInput, UrgentWorkStatus, UrgentWorkSubmissionKind,
 };
 
 pub struct UrgentWorkDb {
@@ -96,6 +96,14 @@ struct ExistingBatchRow {
 }
 
 #[derive(Debug)]
+struct ExistingManualRow {
+    report_id: Uuid,
+    started_at: DateTime<Utc>,
+    ended_at: DateTime<Utc>,
+    staff_note: Option<String>,
+}
+
+#[derive(Debug)]
 struct WorkItemRow {
     report_id: Uuid,
     branch_id: Uuid,
@@ -105,6 +113,8 @@ struct WorkItemRow {
     employee_name: String,
     claimed_customer_id: Uuid,
     customer_name: String,
+    submission_kind: String,
+    staff_note: Option<String>,
     status: String,
     started_at: DateTime<Utc>,
     ended_at: Option<DateTime<Utc>>,
@@ -137,6 +147,9 @@ impl TryFrom<WorkItemRow> for UrgentWorkItem {
             employee_name: row.employee_name,
             claimed_customer_id: row.claimed_customer_id,
             customer_name: row.customer_name,
+            submission_kind: UrgentWorkSubmissionKind::from_code(&row.submission_kind)
+                .ok_or(UrgentWorkError::BackendUnavailable)?,
+            staff_note: row.staff_note,
             status: UrgentWorkStatus::from_code(&row.status).ok_or(UrgentWorkError::BackendUnavailable)?,
             started_at: row.started_at,
             ended_at: row.ended_at,
@@ -196,6 +209,8 @@ struct ReconcileRow {
     employee_name: String,
     claimed_customer_id: Uuid,
     customer_name: String,
+    submission_kind: String,
+    staff_note: Option<String>,
     report_status: String,
     started_at: DateTime<Utc>,
     ended_at: Option<DateTime<Utc>>,
@@ -351,15 +366,45 @@ impl UrgentWorkRepo for UrgentWorkDb {
         &self,
         tenant_id: Uuid,
         actor_account_id: Uuid,
-    ) -> Result<Vec<UrgentWorkItem>, UrgentWorkError> {
-        let rows: Vec<WorkItemRow> = self
+        limit: i64,
+        cursor: Option<&UrgentOwnWorkCursor>,
+    ) -> Result<UrgentOwnWorkPage, UrgentWorkError> {
+        let cursor_active: Option<bool> = cursor.map(|value: &UrgentOwnWorkCursor| value.active);
+        let cursor_started_at: Option<DateTime<Utc>> = cursor.map(|value: &UrgentOwnWorkCursor| value.started_at);
+        let cursor_report_id: Option<Uuid> = cursor.map(|value: &UrgentOwnWorkCursor| value.report_id);
+        let query_limit: i64 = limit + 1;
+        let mut rows: Vec<WorkItemRow> = self
             .db
             .tran_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
-                load_work_items(connection, tenant_id, actor_account_id, false).await
+                load_own_work_items(
+                    connection,
+                    tenant_id,
+                    actor_account_id,
+                    cursor_active,
+                    cursor_started_at,
+                    cursor_report_id,
+                    query_limit,
+                )
+                .await
             })
             .await
             .map_err(|error: TenantDbErr| tenant_runner_failure("list own urgent work", tenant_id, error))?;
-        rows.into_iter().map(UrgentWorkItem::try_from).collect()
+        let has_more: bool = rows.len() > limit as usize;
+        rows.truncate(limit as usize);
+        let next_cursor: Option<UrgentOwnWorkCursor> = if has_more {
+            rows.last().map(|row: &WorkItemRow| UrgentOwnWorkCursor {
+                active: row.status == "active",
+                started_at: row.started_at,
+                report_id: row.report_id,
+            })
+        } else {
+            None
+        };
+        let items: Vec<UrgentWorkItem> = rows
+            .into_iter()
+            .map(UrgentWorkItem::try_from)
+            .collect::<Result<Vec<UrgentWorkItem>, UrgentWorkError>>()?;
+        Ok(UrgentOwnWorkPage { items, next_cursor })
     }
 
     async fn list_team_work(
@@ -756,6 +801,185 @@ impl UrgentWorkRepo for UrgentWorkDb {
         UrgentWorkItem::try_from(row)
     }
 
+    async fn submit_manual(
+        &self,
+        tenant_id: Uuid,
+        actor_account_id: Uuid,
+        batch_id: Uuid,
+        report_id: Uuid,
+        session_id: Uuid,
+        input: &UrgentWorkManualInput,
+    ) -> Result<UrgentWorkItem, UrgentWorkError> {
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        let actor_employee: Option<IdRow> = sqlx::query_as!(
+            IdRow,
+            r#"
+            SELECT employee.id
+            FROM hr_employees AS employee
+            INNER JOIN accounts AS account
+                ON account.tenant_id = employee.tenant_id AND account.id = employee.account_id
+            WHERE employee.tenant_id = $1 AND employee.account_id = $2
+              AND employee.status = 'active' AND account.status = 'active'
+              AND shepherd_account_has_permission(
+                  employee.tenant_id, employee.account_id, employee.branch_id,
+                  'business.urgent_work.start'
+              )
+            FOR UPDATE OF employee
+            "#,
+            tenant_id,
+            actor_account_id,
+        )
+        .fetch_optional(transaction.connection())
+        .await
+        .map_err(|error: sqlx::Error| database_failure("resolve manual urgent-work employee", tenant_id, error))?;
+        let employee_id: Uuid = actor_employee.ok_or(UrgentWorkError::Forbidden)?.id;
+
+        let existing_batch: Option<ExistingBatchRow> = sqlx::query_as!(
+            ExistingBatchRow,
+            r#"
+            SELECT id, claimed_customer_id
+            FROM business_urgent_work_batches
+            WHERE tenant_id = $1 AND actor_account_id = $2 AND idempotency_key = $3
+            "#,
+            tenant_id,
+            actor_account_id,
+            input.idempotency_key,
+        )
+        .fetch_optional(transaction.connection())
+        .await
+        .map_err(|error: sqlx::Error| {
+            database_failure("find manual urgent-work idempotency batch", tenant_id, error)
+        })?;
+        if let Some(existing_batch) = existing_batch {
+            if existing_batch.claimed_customer_id != input.customer_id {
+                return Err(UrgentWorkError::Conflict);
+            }
+            let existing: Option<ExistingManualRow> = sqlx::query_as!(
+                ExistingManualRow,
+                r#"
+                SELECT report.id AS report_id, session.started_at,
+                       session.ended_at AS "ended_at!", report.staff_note
+                FROM business_urgent_work_reports AS report
+                INNER JOIN business_urgent_work_sessions AS session
+                    ON session.tenant_id = report.tenant_id AND session.report_id = report.id
+                WHERE report.tenant_id = $1 AND report.start_batch_id = $2
+                  AND report.employee_id = $3 AND report.submission_kind = 'manual'
+                "#,
+                tenant_id,
+                existing_batch.id,
+                employee_id,
+            )
+            .fetch_optional(transaction.connection())
+            .await
+            .map_err(|error: sqlx::Error| database_failure("load idempotent manual urgent work", tenant_id, error))?;
+            let existing: ExistingManualRow = existing.ok_or(UrgentWorkError::Conflict)?;
+            if existing.started_at != input.started_at
+                || existing.ended_at != input.ended_at
+                || existing.staff_note != input.note
+            {
+                return Err(UrgentWorkError::Conflict);
+            }
+            let row: WorkItemRow = load_work_item(&mut transaction, tenant_id, existing.report_id).await?;
+            transaction.commit().await.map_err(|error: sqlx::Error| {
+                tenant_failure("commit idempotent manual urgent work", tenant_id, error)
+            })?;
+            return UrgentWorkItem::try_from(row);
+        }
+
+        let customer_exists: ExistsRow = sqlx::query_as!(
+            ExistsRow,
+            r#"
+            SELECT EXISTS (
+                SELECT 1
+                FROM business_customers AS customer
+                INNER JOIN hr_employees AS employee
+                    ON employee.tenant_id = customer.tenant_id
+                   AND employee.branch_id = customer.branch_id
+                WHERE customer.tenant_id = $1 AND customer.id = $2
+                  AND customer.status = 'active' AND employee.id = $3
+            ) AS "exists!"
+            "#,
+            tenant_id,
+            input.customer_id,
+            employee_id,
+        )
+        .fetch_one(transaction.connection())
+        .await
+        .map_err(|error: sqlx::Error| database_failure("validate manual urgent-work customer", tenant_id, error))?;
+        if !customer_exists.exists {
+            return Err(UrgentWorkError::NotFound);
+        }
+
+        sqlx::query!(
+            r#"
+            INSERT INTO business_urgent_work_batches (
+                id, tenant_id, actor_account_id, claimed_customer_id, idempotency_key
+            ) VALUES ($1, $2, $3, $4, $5)
+            "#,
+            batch_id,
+            tenant_id,
+            actor_account_id,
+            input.customer_id,
+            input.idempotency_key,
+        )
+        .execute(transaction.connection())
+        .await
+        .map_err(|error: sqlx::Error| mutation_failure("insert manual urgent-work batch", tenant_id, error))?;
+        sqlx::query!(
+            r#"
+            INSERT INTO business_urgent_work_reports (
+                id, tenant_id, start_batch_id, employee_id, claimed_customer_id,
+                status, created_by_account_id, submission_kind, staff_note
+            ) VALUES ($1, $2, $3, $4, $5, 'completed', $6, 'manual', $7)
+            "#,
+            report_id,
+            tenant_id,
+            batch_id,
+            employee_id,
+            input.customer_id,
+            actor_account_id,
+            input.note,
+        )
+        .execute(transaction.connection())
+        .await
+        .map_err(|error: sqlx::Error| mutation_failure("insert manual urgent-work report", tenant_id, error))?;
+        sqlx::query!(
+            r#"
+            INSERT INTO business_urgent_work_sessions (
+                id, tenant_id, report_id, employee_id, started_at, ended_at,
+                end_idempotency_key, started_by_account_id, start_source,
+                ended_by_account_id, end_source
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'self', $8, 'self')
+            "#,
+            session_id,
+            tenant_id,
+            report_id,
+            employee_id,
+            input.started_at,
+            input.ended_at,
+            input.idempotency_key,
+            actor_account_id,
+        )
+        .execute(transaction.connection())
+        .await
+        .map_err(|error: sqlx::Error| mutation_failure("insert manual urgent-work session", tenant_id, error))?;
+        enqueue_notification(
+            &mut transaction,
+            tenant_id,
+            "staffing.urgent_work_manually_declared",
+            session_id,
+            report_id,
+        )
+        .await?;
+        let row: WorkItemRow = load_work_item(&mut transaction, tenant_id, report_id).await?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error: sqlx::Error| tenant_failure("commit manual urgent work", tenant_id, error))?;
+        info!(tenant_id = %tenant_id, actor_account_id = %actor_account_id, report_id = %report_id, "Manual urgent-work declaration committed");
+        UrgentWorkItem::try_from(row)
+    }
+
     async fn list_reconciliations(
         &self,
         tenant_id: Uuid,
@@ -1000,6 +1224,62 @@ impl UrgentWorkRepo for UrgentWorkDb {
     }
 }
 
+async fn load_own_work_items(
+    connection: &mut sqlx::PgConnection,
+    tenant_id: Uuid,
+    actor_account_id: Uuid,
+    cursor_active: Option<bool>,
+    cursor_started_at: Option<DateTime<Utc>>,
+    cursor_report_id: Option<Uuid>,
+    limit: i64,
+) -> Result<Vec<WorkItemRow>, sqlx::Error> {
+    sqlx::query_as!(
+        WorkItemRow,
+        r#"
+        SELECT report.id AS report_id, report.branch_id, branch.name AS branch_name,
+               report.employee_id, employee.employee_code,
+               employee.display_name AS employee_name,
+               report.claimed_customer_id, customer.name AS customer_name,
+               report.submission_kind, report.staff_note, report.status,
+               session.started_at, session.ended_at, session.worked_seconds,
+               session.started_by_account_id, started_actor.username AS started_by_username,
+               session.start_source, session.ended_by_account_id,
+               ended_actor.username AS "ended_by_username?", session.end_source,
+               assignment.id AS "reconciled_assignment_id?",
+               report.created_at, report.updated_at
+        FROM business_urgent_work_reports AS report
+        INNER JOIN business_urgent_work_sessions AS session
+            ON session.tenant_id = report.tenant_id AND session.report_id = report.id
+        INNER JOIN hr_employees AS employee
+            ON employee.tenant_id = report.tenant_id AND employee.id = report.employee_id
+        INNER JOIN business_customers AS customer
+            ON customer.tenant_id = report.tenant_id AND customer.id = report.claimed_customer_id
+        INNER JOIN branches AS branch
+            ON branch.tenant_id = report.tenant_id AND branch.id = report.branch_id
+        INNER JOIN accounts AS started_actor
+            ON started_actor.tenant_id = session.tenant_id AND started_actor.id = session.started_by_account_id
+        LEFT JOIN accounts AS ended_actor
+            ON ended_actor.tenant_id = session.tenant_id AND ended_actor.id = session.ended_by_account_id
+        LEFT JOIN business_shift_assignments AS assignment
+            ON assignment.tenant_id = report.tenant_id AND assignment.urgent_work_report_id = report.id
+        WHERE report.tenant_id = $1 AND employee.account_id = $2
+          AND ($3::BOOLEAN IS NULL
+               OR ((report.status = 'active'), session.started_at, report.id)
+                  < ($3, $4::TIMESTAMPTZ, $5::UUID))
+        ORDER BY (report.status = 'active') DESC, session.started_at DESC, report.id DESC
+        LIMIT $6
+        "#,
+        tenant_id,
+        actor_account_id,
+        cursor_active,
+        cursor_started_at,
+        cursor_report_id,
+        limit,
+    )
+    .fetch_all(connection)
+    .await
+}
+
 async fn load_work_items(
     connection: &mut sqlx::PgConnection,
     tenant_id: Uuid,
@@ -1012,7 +1292,8 @@ async fn load_work_items(
         SELECT report.id AS report_id, report.branch_id, branch.name AS branch_name,
                report.employee_id, employee.employee_code,
                employee.display_name AS employee_name,
-               report.claimed_customer_id, customer.name AS customer_name, report.status,
+               report.claimed_customer_id, customer.name AS customer_name,
+               report.submission_kind, report.staff_note, report.status,
                session.started_at, session.ended_at, session.worked_seconds,
                session.started_by_account_id, started_actor.username AS started_by_username,
                session.start_source, session.ended_by_account_id,
@@ -1069,7 +1350,8 @@ async fn load_batch_items(
         SELECT report.id AS report_id, report.branch_id, branch.name AS branch_name,
                report.employee_id, employee.employee_code,
                employee.display_name AS employee_name,
-               report.claimed_customer_id, customer.name AS customer_name, report.status,
+               report.claimed_customer_id, customer.name AS customer_name,
+               report.submission_kind, report.staff_note, report.status,
                session.started_at, session.ended_at, session.worked_seconds,
                session.started_by_account_id, started_actor.username AS started_by_username,
                session.start_source, session.ended_by_account_id,
@@ -1113,7 +1395,8 @@ async fn load_work_item(
         SELECT report.id AS report_id, report.branch_id, branch.name AS branch_name,
                report.employee_id, employee.employee_code,
                employee.display_name AS employee_name,
-               report.claimed_customer_id, customer.name AS customer_name, report.status,
+               report.claimed_customer_id, customer.name AS customer_name,
+               report.submission_kind, report.staff_note, report.status,
                session.started_at, session.ended_at, session.worked_seconds,
                session.started_by_account_id, started_actor.username AS started_by_username,
                session.start_source, session.ended_by_account_id,
@@ -1158,7 +1441,8 @@ async fn load_by_end_key(
         SELECT report.id AS report_id, report.branch_id, branch.name AS branch_name,
                report.employee_id, employee.employee_code,
                employee.display_name AS employee_name,
-               report.claimed_customer_id, customer.name AS customer_name, report.status,
+               report.claimed_customer_id, customer.name AS customer_name,
+               report.submission_kind, report.staff_note, report.status,
                session.started_at, session.ended_at, session.worked_seconds,
                session.started_by_account_id, started_actor.username AS started_by_username,
                session.start_source, session.ended_by_account_id,
@@ -1231,6 +1515,7 @@ async fn load_reconciliation_rows(
                report.employee_id, employee.employee_code,
                employee.display_name AS employee_name,
                report.claimed_customer_id, claimed_customer.name AS customer_name,
+               report.submission_kind, report.staff_note,
                report.status AS report_status,
                session.started_at, session.ended_at, session.worked_seconds,
                session.started_by_account_id, started_actor.username AS started_by_username,
@@ -1387,6 +1672,9 @@ fn reconciliation_from_row(row: ReconcileRow) -> Result<UrgentWorkReconcile, Urg
             employee_name: row.employee_name,
             claimed_customer_id: row.claimed_customer_id,
             customer_name: row.customer_name,
+            submission_kind: UrgentWorkSubmissionKind::from_code(&row.submission_kind)
+                .ok_or(UrgentWorkError::BackendUnavailable)?,
+            staff_note: row.staff_note,
             status: report_status,
             started_at: row.started_at,
             ended_at: row.ended_at,
