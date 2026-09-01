@@ -3,40 +3,39 @@ use std::sync::Arc;
 use infra_redis::RedisAdapter;
 
 use crate::ext_service::{
-    AccessTokenError, AuthenticatedUserCacheConfigError, OidcJwksVerifier, account_cache::AuthenticatedUserCache,
-    auth_admin::ExternalIdentityAdmin,
+    AccessTokenErr, AuthedCacheCfgErr, OidcJwksVerifier, account_cache::AuthedUserCache, auth_admin::ExtAuthAdmin,
 };
 
 #[derive(Debug, thiserror::Error)]
-pub enum AuthServiceError {
+pub enum AuthSvcErr {
     #[error("failed to configure access-token validation: {0}")]
-    AccessToken(#[from] AccessTokenError),
+    AccessToken(#[from] AccessTokenErr),
     #[error("failed to configure authenticated-user cache: {0}")]
-    AccountCache(#[from] AuthenticatedUserCacheConfigError),
+    AccountCache(#[from] AuthedCacheCfgErr),
 }
 
 /// Authentication capability exposed by the HTTP host.
 ///
 /// The external provider owns credentials and sessions. This service only
-/// exposes verified bearer-token identities to the host and applications.
+/// exposes verified bearer-token identities to the host and application.
 pub struct AuthService {
     pub db: Arc<infra_postgres::DatabaseAdapter>,
-    pub(crate) account_cache: Arc<AuthenticatedUserCache>,
+    pub(crate) acct_cache: Arc<AuthedUserCache>,
     pub token_verifier: Arc<OidcJwksVerifier>,
-    pub identity_admin: Arc<dyn ExternalIdentityAdmin>,
+    pub auth_admin: Arc<dyn ExtAuthAdmin>,
 }
 
 impl AuthService {
     pub async fn new(
         db: Arc<infra_postgres::DatabaseAdapter>,
         redis: Arc<RedisAdapter>,
-        identity_admin: Arc<dyn ExternalIdentityAdmin>,
-    ) -> Result<Arc<Self>, AuthServiceError> {
+        auth_admin: Arc<dyn ExtAuthAdmin>,
+    ) -> Result<Arc<Self>, AuthSvcErr> {
         Ok(Arc::new(Self {
             db,
-            account_cache: AuthenticatedUserCache::from_env(redis)?,
+            acct_cache: AuthedUserCache::from_env(redis)?,
             token_verifier: OidcJwksVerifier::from_env().await?,
-            identity_admin,
+            auth_admin,
         }))
     }
 }

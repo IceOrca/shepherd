@@ -5,7 +5,8 @@ use axum::{
     middleware::{from_fn, from_fn_with_state},
     routing::{get, post, put},
 };
-
+use crate::AppRoutes;
+use crate::ratelimiting::{RateLimitPolicy, RateLimiter};
 use crate::{LegacyAuthService, bruteforce, handler, jwks, middleware as auth_middleware};
 
 /// Complete standalone authentication router.
@@ -15,8 +16,42 @@ use crate::{LegacyAuthService, bruteforce, handler, jwks, middleware as auth_mid
 pub fn routes(state: &Arc<LegacyAuthService>) -> Router {
     Router::new()
         .merge(public_routes(state))
-        .merge(authenticated_routes(protected_routes(state), state))
+        .merge(authenticated_routes(protected_app_routes(state), state))
         .merge(authenticated_routes(admin_routes(state), state))
+}
+
+pub async fn init(
+    auth_admin: Arc<dyn infra_auth::ext_service::auth_admin::ExtAuthAdmin>,
+) -> (Arc<HostContext>, Router) {
+    info!("Starting infra host initialization");
+    let host_ctx: Arc<HostContext> = HostContext::new_arc(auth_admin).await;
+    debug!("Infra host context initialized; building host routes");
+    let host_router: Router = routes(Arc::clone(&host_ctx));
+    let host_router: Router = apply_layers(host_router, Arc::clone(&host_ctx));
+    info!("Infra host initialization completed");
+    (host_ctx, host_router)
+}
+
+pub fn mount_app_routes(router: Router, routes: AppRoutes, host: Arc<HostContext>) -> Router {
+    info!("Mounting public, protected, and admin application route groups");
+    let public: Router = RateLimiter::public_layer(routes.public);
+    let protected: Router = routes
+        .protected
+        .layer(RateLimiter::protected_route_layer(RateLimitPolicy::generic_protected()))
+        .route_layer(from_fn_with_state(
+            Arc::clone(&host.auth),
+            infra_auth::ext_service::middleware::require_authenticated,
+        ));
+    let admin: Router = routes
+        .admin
+        .layer(RateLimiter::protected_route_layer(RateLimitPolicy::generic_protected()))
+        .route_layer(from_fn_with_state(
+            Arc::clone(&host.auth),
+            infra_auth::ext_service::middleware::require_authenticated,
+        ));
+    let merged: Router = router.merge(public).merge(protected).merge(admin);
+    debug!("Mounted public, protected, and admin application route groups");
+    merged
 }
 
 pub fn public_routes(state: &Arc<LegacyAuthService>) -> Router {
@@ -41,7 +76,7 @@ pub fn public_routes(state: &Arc<LegacyAuthService>) -> Router {
 
 /// Routes that require a valid account but no host-level administrator role.
 /// Authentication middleware is applied by `routes` or by the composing host.
-pub fn protected_routes(state: &Arc<LegacyAuthService>) -> Router {
+pub fn protected_app_routes(state: &Arc<LegacyAuthService>) -> Router {
     Router::new()
         .route("/profile", get(handler::get_profile))
         .route("/logout", post(handler::logout))

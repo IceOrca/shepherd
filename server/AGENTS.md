@@ -3,7 +3,7 @@
 ## Project Structure & Module Organization
 
 - `server/crates/infra/`: reusable server capabilities. `kernel` contains neutral primitives; `infra/postgres` and `infra/redis` are thin adapters; `auth` is an independent vertical feature; and `host` owns shared Axum policies and composition types.
-- `server/crates/applications/hrm/`: HRM domain, persistence adapters, and Axum routes.
+- `server/crates/application/hrm/`: HRM domain, persistence adapters, and Axum routes.
 - `server/runtime/`: composition root and the `shepherd-srv`/`shepherd-typescript` binaries.
 - `server/migrations/`: SQL database migrations.
 - `server/security/`: local key material used by auth/client-token flows. Treat these files as sensitive.
@@ -28,7 +28,7 @@ Run client commands through the client container:
 
 ## Coding Style & Naming Conventions
 
-Rust uses edition 2024 with `unsafe_code = "forbid"`. Keep reusable capabilities in `infra`, HRM business code in `applications/hrm`, and process assembly in `runtime`. Use `snake_case` for Rust modules/functions and `PascalCase` for types. Avoid `unwrap()` and direct indexing; return or map errors explicitly.
+Rust uses edition 2024 with `unsafe_code = "forbid"`. Keep reusable capabilities in `infra`, HRM business code in `application/hrm`, and process assembly in `runtime`. Use `snake_case` for Rust modules/functions and `PascalCase` for types. Avoid `unwrap()` and direct indexing; return or map errors explicitly.
 
 Use appropriate structured log levels without recording credentials or tokens. Explain non-obvious lock or concurrency invariants in comments, and use explicit types where they make synchronization ownership clearer.
 
@@ -36,7 +36,7 @@ Frontend code is TypeScript/React. Use component names in `PascalCase`, function
 
 ## Infra Composition
 
-`infra-auth` may depend on `infra-kernel`, `infra-postgres`, and `infra-redis`, but never on `infra-host`. `infra-host` includes auth in its default Cargo features and may re-export it. `HostContext` contains shared adapters and services; applications return `AppRoutes` groups instead of putting application services into the infra. Keep logging, audit, rate limiting, trusted-IP extraction, and HTTP policy in `host`; keep debugging primitives in `kernel`.
+`infra-auth` may depend on `infra-kernel`, `infra-postgres`, and `infra-redis`, but never on `infra-host`. `infra-host` includes auth in its default Cargo features and may re-export it. `HostContext` contains shared adapters and services. Keep logging, audit, rate limiting, trusted-IP extraction, and HTTP policy in `host`; keep debugging primitives in `kernel`.
 
 ## Backend Auth Architecture SDD
 
@@ -104,7 +104,7 @@ Local app memory owns immediate access-token revocation:
 - verifies JWT signature locally with the configured public key
 - validates `exp`, `nbf`, `iat`, `iss`, `aud`, and algorithm
 - checks local revoked-JTI cache
-- injects `AuthenticatedUser`
+- injects `AuthedUser`
 - must not query Redis refresh-session state during normal protected-route validation
 
 `auth::session::AuthSessionHandle`:
@@ -151,7 +151,7 @@ Protected business request:
 1. Middleware extracts access JWT.
 2. Middleware verifies JWT locally.
 3. Middleware checks local revoked-JTI cache.
-4. If accepted, middleware injects `AuthenticatedUser`.
+4. If accepted, middleware injects `AuthedUser`.
 5. No Redis refresh-session lookup occurs.
 
 Refresh:
@@ -170,11 +170,11 @@ Refresh:
 Logout:
 
 1. Protected-route middleware has already validated the current access JWT.
-2. Read the current `sid` from `AuthenticatedUser`, which was built from the signed JWT.
+2. Read the current `sid` from `AuthedUser`, which was built from the signed JWT.
 3. Remove the current refresh session from Redis by user id and `sid`.
 4. Redis returns the current access `jti` and expiry for that session when available.
 5. Add returned `jti` to local revoked-JTI cache.
-6. Also add the current request `jti` from `AuthenticatedUser` until `user.exp`, even if Redis did not return it.
+6. Also add the current request `jti` from `AuthedUser` until `user.exp`, even if Redis did not return it.
 7. Clear refresh-token cookie.
 
 Logout-all:
@@ -183,7 +183,7 @@ Logout-all:
 2. Remove all Redis refresh sessions for the current user.
 3. Redis returns all known current access `jti` values and expiries from those sessions.
 4. Add every returned unexpired `jti` to local revoked-JTI cache.
-5. Also add the current request `jti` from `AuthenticatedUser` until `user.exp`.
+5. Also add the current request `jti` from `AuthedUser` until `user.exp`.
 6. Clear refresh-token cookie.
 
 Session-limit kickout:

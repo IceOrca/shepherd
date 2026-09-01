@@ -16,7 +16,7 @@ use crate::account::Role;
 #[cfg(feature = "password-auth")]
 use crate::account::UserAccount;
 
-use super::{AuthenticatedUser, LegacyAuthService, TenantContext, dto::AccessClaims, jwt::KID_MAIN};
+use super::{AuthedAcct, LegacyAuthService, TenantContext, dto::AccessClaims, jwt::KID_MAIN};
 
 fn build_jwt_validation() -> Validation {
     let mut validation = Validation::new(Algorithm::EdDSA);
@@ -76,7 +76,7 @@ pub async fn require_authenticated(
         return Err(StatusCode::UNAUTHORIZED);
     }
 
-    let user: AuthenticatedUser = AuthenticatedUser::from_claims(&token_data.claims).map_err(|_| {
+    let user: AuthedAcct = AuthedAcct::from_claims(&token_data.claims).map_err(|_| {
         info!("JWT contains an invalid tenant or account UUID");
         StatusCode::UNAUTHORIZED
     })?;
@@ -123,7 +123,7 @@ pub async fn require_authenticated(
 }
 
 pub async fn require_account_creator(
-    Extension(user): Extension<AuthenticatedUser>,
+    Extension(user): Extension<AuthedAcct>,
     request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
@@ -139,7 +139,7 @@ pub async fn require_account_creator(
 }
 
 pub async fn require_tenant_owner(
-    Extension(user): Extension<AuthenticatedUser>,
+    Extension(user): Extension<AuthedAcct>,
     request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {

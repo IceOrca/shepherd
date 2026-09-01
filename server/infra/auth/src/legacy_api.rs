@@ -18,6 +18,6 @@ pub mod session_revoke;
 pub mod typescript;
 
 pub use brute_force as bruteforce;
-pub use feature::{AuthFeature, AuthenticatedUser, LegacyAuthService, TenantContext};
+pub use feature::{AuthFeature, AuthedUser, LegacyAuthService, TenantContext};
 pub use password_auth::*;
 pub use session_revoke as access_revocation;

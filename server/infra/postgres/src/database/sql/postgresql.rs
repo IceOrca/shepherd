@@ -169,7 +169,7 @@ impl PostgresCli {
         }
 
         trace!(
-            operation = "postgres.begin_tenant_with_branch",
+            op = "postgres.begin_tenant_with_branch",
             tenant_id = %tenant_id,
             branch_id = ?branch_id,
             "PostgreSQL tenant and optional branch RLS context established"
@@ -181,54 +181,54 @@ impl PostgresCli {
         })
     }
 
-    /// Runs an SQLx-only operation with transaction-local RLS context and owns
+    /// Runs an SQLx-only op with transaction-local RLS context and owns
     /// the commit/rollback lifecycle. The callback must use the provided
     /// connection so it cannot accidentally escape the tenant transaction.
-    pub async fn run_with_tenant<T, F>(&self, tenant_id: Uuid, operation: F) -> Result<T, TenantDbErr>
+    pub async fn tran_with_tenant<T, F>(&self, tenant_id: Uuid, op: F) -> Result<T, TenantDbErr>
     where
         T: Send,
         F: for<'connection> AsyncFnOnce(&'connection mut PgConnection) -> Result<T, sqlx::Error>,
     {
         trace!(
-            operation = "postgres.run_with_tenant",
+            op = "postgres.tran_with_tenant",
             tenant_id = %tenant_id,
-            "Starting tenant-scoped SQL operation"
+            "Starting tenant-scoped SQL op"
         );
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
-        let operation_result: Result<T, sqlx::Error> = operation(transaction.connection()).await;
+        let operation_result: Result<T, sqlx::Error> = op(transaction.connection()).await;
 
         match operation_result {
             Ok(value) => {
                 transaction.commit().await.map_err(|commit_error: sqlx::Error| {
                     error!(
-                        operation = "postgres.run_with_tenant",
+                        op = "postgres.tran_with_tenant",
                         tenant_id = %tenant_id,
                         error = %commit_error,
-                        "Tenant-scoped SQL operation commit failed"
+                        "Tenant-scoped SQL op commit failed"
                     );
                     TenantDbErr::Sqlx(commit_error)
                 })?;
                 trace!(
-                    operation = "postgres.run_with_tenant",
+                    op = "postgres.tran_with_tenant",
                     tenant_id = %tenant_id,
-                    "Tenant-scoped SQL operation committed"
+                    "Tenant-scoped SQL op committed"
                 );
                 Ok(value)
             }
             Err(operation_error) => {
                 if let Err(rollback_error) = transaction.rollback().await {
                     error!(
-                        operation = "postgres.run_with_tenant",
+                        op = "postgres.tran_with_tenant",
                         tenant_id = %tenant_id,
                         error = %rollback_error,
-                        "Tenant-scoped SQL operation rollback failed"
+                        "Tenant-scoped SQL op rollback failed"
                     );
                 }
                 error!(
-                    operation = "postgres.run_with_tenant",
+                    op = "postgres.tran_with_tenant",
                     tenant_id = %tenant_id,
                     error = %operation_error,
-                    "Tenant-scoped SQL operation failed and was rolled back"
+                    "Tenant-scoped SQL op failed and was rolled back"
                 );
                 Err(TenantDbErr::Sqlx(operation_error))
             }
@@ -378,7 +378,7 @@ mod tests {
             .await?;
 
         let inserted_account_id: Uuid = client
-            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
                 let inserted: TestIdRow = sqlx::query_as!(
                     TestIdRow,
                     r#"
@@ -407,7 +407,7 @@ mod tests {
         assert_eq!(inserted_account_id, committed_account_id);
 
         let failed_operation: Result<(), TenantDbErr> = client
-            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
                 sqlx::query!(
                     r#"
                         INSERT INTO accounts (id, tenant_id, username, primary_role_code)
@@ -418,13 +418,13 @@ mod tests {
                 )
                 .execute(&mut *connection)
                 .await?;
-                Err(sqlx::Error::Protocol("force tenant operation rollback".to_owned()))
+                Err(sqlx::Error::Protocol("force tenant op rollback".to_owned()))
             })
             .await;
         assert!(failed_operation.is_err());
 
         let visible_account_rows: Vec<TestIdRow> = client
-            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
                 let account_rows: Vec<TestIdRow> = sqlx::query_as!(
                     TestIdRow,
                     r#"SELECT id FROM accounts WHERE id = ANY($1) ORDER BY id"#,
@@ -442,7 +442,7 @@ mod tests {
         assert_eq!(visible_account_ids, vec![committed_account_id]);
 
         client
-            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
                 sqlx::query!("DELETE FROM accounts WHERE tenant_id = $1", tenant_id)
                     .execute(connection)
                     .await?;

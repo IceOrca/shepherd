@@ -20,10 +20,10 @@ mod error;
 pub mod middleware;
 mod service;
 
-pub use claims::{AccessTokenClaims, Audience, AuthenticatedPrincipal};
-pub use account_cache::AuthenticatedUserCacheConfigError;
-pub use config::OidcJwksVerifierConfig;
-pub use error::AccessTokenError;
+pub use claims::{AccessTokenClaims, Audience, AuthedPrincipal};
+pub use account_cache::AuthedCacheCfgErr;
+pub use config::OidcJwksVerifierCfg;
+pub use error::AccessTokenErr;
 pub use service::OidcJwksVerifier;
 
 #[derive(Clone, Debug)]
@@ -61,22 +61,10 @@ pub fn identity_routes(auth: Arc<AuthService>) -> Router {
     account::identity_routes(auth)
 }
 
-pub fn routes(auth: Arc<AuthService>, policy: auth_admin::AuthAdminPolicy, pagination: ListPaginationPolicy) -> Router {
-    let provisioner: Arc<dyn auth_admin::AuthAccountProvisioner> = Arc::new(auth_admin::NoopAuthAccountProvisioner);
-    account::routes(Arc::clone(&auth))
-        .merge(auth_admin::routes_with_provisioner(
-            Arc::clone(&auth),
-            policy.clone(),
-            Arc::clone(&provisioner),
-            pagination.clone(),
-        ))
-        .merge(access_control::routes(auth, policy, provisioner, pagination))
-}
-
 pub fn routes_with_provisioner(
     auth: Arc<AuthService>,
     policy: auth_admin::AuthAdminPolicy,
-    provisioner: Arc<dyn auth_admin::AuthAccountProvisioner>,
+    provisioner: Arc<dyn auth_admin::AuthProvisioner>,
     pagination: ListPaginationPolicy,
 ) -> Router {
     account::routes(Arc::clone(&auth))

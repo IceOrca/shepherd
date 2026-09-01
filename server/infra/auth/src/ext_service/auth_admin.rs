@@ -20,7 +20,7 @@ use uuid::Uuid;
 use crate::{
     AuthCodeError, AuthService, PermissionCode, RoleCode,
     ext_service::ListPaginationPolicy,
-    ext_service::account::{AccountStatus, AuthenticatedUser},
+    ext_service::account::{AccountStatus, AuthedUser},
 };
 
 const IDEMPOTENCY_HEADER: &str = "idempotency-key";
@@ -62,7 +62,7 @@ impl AuthAdminPolicy {
 struct AuthAdminContext {
     auth: Arc<AuthService>,
     policy: AuthAdminPolicy,
-    provisioner: Arc<dyn AuthAccountProvisioner>,
+    provisioner: Arc<dyn AuthProvisioner>,
     pagination: ListPaginationPolicy,
 }
 
@@ -75,7 +75,7 @@ impl Deref for AuthAdminContext {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum ExternalIdentityAdminError {
+pub enum ExtAdminErr {
     #[error("external identity request is invalid: {0}")]
     Validation(String),
     #[error("external identity conflicts with existing provider state: {0}")]
@@ -154,25 +154,19 @@ pub struct CreateExternalIdentityRequest {
 }
 
 #[async_trait]
-pub trait ExternalIdentityAdmin: Send + Sync {
-    async fn get_identity(&self, subject: &str) -> Result<Option<ExternalIdentity>, ExternalIdentityAdminError>;
+pub trait ExtAuthAdmin: Send + Sync {
+    async fn get_identity(&self, subject: &str) -> Result<Option<ExternalIdentity>, ExtAdminErr>;
 
-    async fn find_identity_by_email(
-        &self,
-        normalized_email: &str,
-    ) -> Result<Option<ExternalIdentity>, ExternalIdentityAdminError>;
+    async fn find_identity_by_email(&self, normalized_email: &str) -> Result<Option<ExternalIdentity>, ExtAdminErr>;
 
     async fn find_provisioned_identity(
         &self,
         normalized_email: &str,
         tenant_id: Uuid,
         idempotency_key: Uuid,
-    ) -> Result<Option<ExternalIdentity>, ExternalIdentityAdminError>;
+    ) -> Result<Option<ExternalIdentity>, ExtAdminErr>;
 
-    async fn create_identity(
-        &self,
-        request: &CreateExternalIdentityRequest,
-    ) -> Result<ExternalIdentity, ExternalIdentityAdminError>;
+    async fn create_identity(&self, request: &CreateExternalIdentityRequest) -> Result<ExternalIdentity, ExtAdminErr>;
 }
 
 #[derive(Clone, Debug)]
@@ -244,7 +238,7 @@ struct BranchAssignmentRuleRow {
 }
 
 #[derive(Clone, Debug)]
-pub struct AuthAccountProvisioningContext {
+pub struct AcctProvisionContext {
     pub tenant_id: Uuid,
     pub actor_account_id: Uuid,
     pub account_id: Uuid,
@@ -256,11 +250,11 @@ pub struct AuthAccountProvisioningContext {
 
 #[derive(Debug, thiserror::Error)]
 #[error("application account provisioning failed: {code}")]
-pub struct AuthAccountProvisioningError {
+pub struct AcctProvisionErr {
     code: &'static str,
 }
 
-impl AuthAccountProvisioningError {
+impl AcctProvisionErr {
     pub const fn new(code: &'static str) -> Self {
         Self { code }
     }
@@ -282,18 +276,18 @@ pub struct AuthAccountAccessContext {
 }
 
 #[async_trait]
-pub trait AuthAccountProvisioner: Send + Sync {
+pub trait AuthProvisioner: Send + Sync {
     async fn provision(
         &self,
         connection: &mut PgConnection,
-        context: &AuthAccountProvisioningContext,
-    ) -> Result<(), AuthAccountProvisioningError>;
+        context: &AcctProvisionContext,
+    ) -> Result<(), AcctProvisionErr>;
 
     async fn update_access(
         &self,
         _connection: &mut PgConnection,
         _context: &AuthAccountAccessContext,
-    ) -> Result<(), AuthAccountProvisioningError> {
+    ) -> Result<(), AcctProvisionErr> {
         Ok(())
     }
 }
@@ -302,12 +296,12 @@ pub trait AuthAccountProvisioner: Send + Sync {
 pub(crate) struct NoopAuthAccountProvisioner;
 
 #[async_trait]
-impl AuthAccountProvisioner for NoopAuthAccountProvisioner {
+impl AuthProvisioner for NoopAuthAccountProvisioner {
     async fn provision(
         &self,
         _connection: &mut PgConnection,
-        _context: &AuthAccountProvisioningContext,
-    ) -> Result<(), AuthAccountProvisioningError> {
+        _context: &AcctProvisionContext,
+    ) -> Result<(), AcctProvisionErr> {
         Ok(())
     }
 }
@@ -395,7 +389,7 @@ pub fn routes(auth: Arc<AuthService>, policy: AuthAdminPolicy, pagination: ListP
 pub fn routes_with_provisioner(
     auth: Arc<AuthService>,
     policy: AuthAdminPolicy,
-    provisioner: Arc<dyn AuthAccountProvisioner>,
+    provisioner: Arc<dyn AuthProvisioner>,
     pagination: ListPaginationPolicy,
 ) -> Router {
     debug!(
@@ -422,7 +416,7 @@ pub fn routes_with_provisioner(
 
 async fn list_users(
     State(context): State<Arc<AuthAdminContext>>,
-    Extension(actor): Extension<AuthenticatedUser>,
+    Extension(actor): Extension<AuthedUser>,
 ) -> Result<Json<Vec<AuthUserSummary>>, AdminApiError> {
     info!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, "Auth user list request accepted");
     require_permission(&actor, &context.policy.read_permission)?;
@@ -430,10 +424,10 @@ async fn list_users(
     let mut users: Vec<AuthUserSummary> = Vec::with_capacity(accounts.len());
     for account in accounts {
         let provider_user: Option<ExternalIdentity> = context
-            .identity_admin
+            .auth_admin
             .get_identity(&account.subject)
             .await
-            .map_err(|error: ExternalIdentityAdminError| provider_failure("load Auth user", &actor, error))?;
+            .map_err(|error: ExtAdminErr| provider_failure("load Auth user", &actor, error))?;
         users.push(summary(account, provider_user));
     }
     info!(
@@ -447,7 +441,7 @@ async fn list_users(
 
 async fn create_user(
     State(context): State<Arc<AuthAdminContext>>,
-    Extension(actor): Extension<AuthenticatedUser>,
+    Extension(actor): Extension<AuthedUser>,
     headers: HeaderMap,
     Json(mut request): Json<CreateAuthUserRequest>,
 ) -> Result<(StatusCode, Json<AuthUserSummary>), AdminApiError> {
@@ -473,10 +467,10 @@ async fn create_user(
     {
         let account: MappedAccount = load_mapped_account_by_id(&context, &actor, account_id).await?;
         let provider_user: ExternalIdentity = context
-            .identity_admin
+            .auth_admin
             .get_identity(&auth_user_id)
             .await
-            .map_err(|error: ExternalIdentityAdminError| provider_failure("replay Auth user creation", &actor, error))?
+            .map_err(|error: ExtAdminErr| provider_failure("replay Auth user creation", &actor, error))?
             .ok_or_else(|| {
                 error!(
                     tenant_id = %actor.tenant_id,
@@ -506,7 +500,7 @@ async fn create_user(
         return Err(error);
     }
 
-    let provider_result: Result<ExternalIdentity, ExternalIdentityAdminError> =
+    let provider_result: Result<ExternalIdentity, ExtAdminErr> =
         resolve_or_create_provider_user(&context, &request, actor.tenant_id, idempotency_key, auth_user_id).await;
     let provider_user: ExternalIdentity = match provider_result {
         Ok(provider_user) => provider_user,
@@ -576,7 +570,7 @@ async fn create_user(
 
 async fn set_user_status(
     State(context): State<Arc<AuthAdminContext>>,
-    Extension(actor): Extension<AuthenticatedUser>,
+    Extension(actor): Extension<AuthedUser>,
     Path(auth_user_id): Path<String>,
     Json(request): Json<SetAuthUserStatusRequest>,
 ) -> Result<Json<AuthUserSummary>, AdminApiError> {
@@ -596,10 +590,12 @@ async fn set_user_status(
 
     invalidate_account_cache(&context, &actor, &auth_user_id, "before_status_change").await;
     let provider_user: ExternalIdentity = context
-        .identity_admin
+        .auth_admin
         .get_identity(&auth_user_id)
         .await
-        .map_err(|error| provider_failure("load Auth user before tenant account status change", &actor, error))?
+        .map_err(|error: ExtAdminErr| {
+            provider_failure("load Auth user before tenant account status change", &actor, error)
+        })?
         .ok_or_else(|| AdminApiError::NotFound("The identity-provider user was not found.".to_owned()))?;
     update_account_status(&context, &actor, account.account_id, request.disabled).await?;
     invalidate_account_cache(&context, &actor, &auth_user_id, "after_status_change").await;
@@ -627,10 +623,7 @@ async fn set_user_status(
     Ok(Json(summary(updated_account, Some(provider_user))))
 }
 
-async fn load_mapped_accounts(
-    context: &AuthService,
-    actor: &AuthenticatedUser,
-) -> Result<Vec<MappedAccount>, AdminApiError> {
+async fn load_mapped_accounts(context: &AuthService, actor: &AuthedUser) -> Result<Vec<MappedAccount>, AdminApiError> {
     let tenant_id: Uuid = actor.tenant_id;
     let actor_account_id: Uuid = actor.account_id;
     let actor_branch_ids: Vec<Uuid> = actor.branch_ids.clone();
@@ -642,7 +635,7 @@ async fn load_mapped_accounts(
     );
     let rows: Vec<MappedAccountRow> = context
         .db
-        .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+        .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
             sqlx::query_as!(
                 MappedAccountRow,
                 r#"
@@ -714,7 +707,7 @@ async fn load_mapped_accounts(
 
 async fn load_mapped_account(
     context: &AuthService,
-    actor: &AuthenticatedUser,
+    actor: &AuthedUser,
     subject: &str,
 ) -> Result<MappedAccount, AdminApiError> {
     load_mapped_accounts(context, actor)
@@ -726,7 +719,7 @@ async fn load_mapped_account(
 
 async fn load_mapped_account_by_id(
     context: &AuthService,
-    actor: &AuthenticatedUser,
+    actor: &AuthedUser,
     account_id: Uuid,
 ) -> Result<MappedAccount, AdminApiError> {
     let accounts: Vec<MappedAccount> = load_mapped_accounts(context, actor).await?;
@@ -780,7 +773,7 @@ fn update_fingerprint_field(hasher: &mut Sha256, value: &str) {
 
 async fn claim_provisioning_request(
     context: &AuthService,
-    actor: &AuthenticatedUser,
+    actor: &AuthedUser,
     idempotency_key: Uuid,
     request_fingerprint: &str,
 ) -> Result<ProvisioningClaim, AdminApiError> {
@@ -948,21 +941,21 @@ async fn resolve_or_create_provider_user(
     tenant_id: Uuid,
     idempotency_key: Uuid,
     known_auth_user_id: Option<String>,
-) -> Result<ExternalIdentity, ExternalIdentityAdminError> {
+) -> Result<ExternalIdentity, ExtAdminErr> {
     if let Some(auth_user_id) = known_auth_user_id
-        && let Some(user) = context.identity_admin.get_identity(&auth_user_id).await?
+        && let Some(user) = context.auth_admin.get_identity(&auth_user_id).await?
     {
         debug!(tenant_id = %tenant_id, auth_user_id = %auth_user_id, idempotency_key = %idempotency_key, "Recovered Auth user by persisted ID");
         return Ok(user);
     }
     if let Some(user) = context
-        .identity_admin
+        .auth_admin
         .find_provisioned_identity(&request.email, tenant_id, idempotency_key)
         .await?
     {
         return Ok(user);
     }
-    if let Some(user) = context.identity_admin.find_identity_by_email(&request.email).await? {
+    if let Some(user) = context.auth_admin.find_identity_by_email(&request.email).await? {
         info!(
             tenant_id = %tenant_id,
             auth_user_id = %user.subject,
@@ -978,18 +971,18 @@ async fn resolve_or_create_provider_user(
         tenant_id,
         idempotency_key,
     };
-    context.identity_admin.create_identity(&create_request).await
+    context.auth_admin.create_identity(&create_request).await
 }
 
 async fn record_provisioned_auth_user(
     context: &AuthService,
-    actor: &AuthenticatedUser,
+    actor: &AuthedUser,
     idempotency_key: Uuid,
     auth_user_id: &str,
 ) -> Result<(), AdminApiError> {
     let result: PgQueryResult = context
         .db
-        .run_with_tenant(actor.tenant_id, async move |connection: &mut PgConnection| {
+        .tran_with_tenant(actor.tenant_id, async move |connection: &mut PgConnection| {
             sqlx::query!(
                 r#"
                 UPDATE auth_account_provisioning_requests
@@ -1024,14 +1017,14 @@ async fn record_provisioned_auth_user(
 
 async fn mark_provisioning_failed(
     context: &AuthService,
-    actor: &AuthenticatedUser,
+    actor: &AuthedUser,
     idempotency_key: Uuid,
     error_code: &'static str,
     retained_auth_user_id: Option<String>,
 ) {
     let result: Result<PgQueryResult, infra_postgres::TenantDbErr> = context
         .db
-        .run_with_tenant(actor.tenant_id, async move |connection: &mut PgConnection| {
+        .tran_with_tenant(actor.tenant_id, async move |connection: &mut PgConnection| {
             sqlx::query!(
                 r#"
                 UPDATE auth_account_provisioning_requests
@@ -1068,7 +1061,7 @@ async fn mark_provisioning_failed(
 
 async fn retain_provider_user_after_failed_link(
     context: &AuthService,
-    actor: &AuthenticatedUser,
+    actor: &AuthedUser,
     idempotency_key: Uuid,
     auth_user_id: &str,
     error_code: &'static str,
@@ -1092,14 +1085,14 @@ async fn retain_provider_user_after_failed_link(
 
 async fn ensure_username_available(
     context: &AuthService,
-    actor: &AuthenticatedUser,
+    actor: &AuthedUser,
     username: &str,
 ) -> Result<(), AdminApiError> {
     trace!(tenant_id = %actor.tenant_id, "Checking Auth username availability");
     let tenant_id: Uuid = actor.tenant_id;
     let row: ExistsRow = context
         .db
-        .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+        .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
             sqlx::query_as!(
                 ExistsRow,
                 r#"SELECT EXISTS (
@@ -1127,7 +1120,7 @@ async fn ensure_username_available(
 
 async fn ensure_role_grantable(
     context: &AuthService,
-    actor: &AuthenticatedUser,
+    actor: &AuthedUser,
     role: &RoleCode,
 ) -> Result<(), AdminApiError> {
     trace!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, role = %role, "Checking Auth role assignment grant");
@@ -1135,7 +1128,7 @@ async fn ensure_role_grantable(
     let actor_account_id: Uuid = actor.account_id;
     let row: ExistsRow = context
         .db
-        .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+        .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
             sqlx::query_as!(
                 ExistsRow,
                 r#"SELECT EXISTS (
@@ -1174,7 +1167,7 @@ async fn ensure_role_grantable(
 
 async fn ensure_branch_assignments_valid(
     context: &AuthService,
-    actor: &AuthenticatedUser,
+    actor: &AuthedUser,
     role: &RoleCode,
     branch_ids: &[Uuid],
 ) -> Result<(), AdminApiError> {
@@ -1194,7 +1187,7 @@ async fn ensure_branch_assignments_valid(
     );
     let rule: Option<BranchAssignmentRuleRow> = context
         .db
-        .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+        .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
             sqlx::query_as!(
                 BranchAssignmentRuleRow,
                 r#"
@@ -1279,7 +1272,7 @@ async fn ensure_branch_assignments_valid(
 
 async fn link_created_user(
     context: &AuthAdminContext,
-    actor: &AuthenticatedUser,
+    actor: &AuthedUser,
     request: &CreateAuthUserRequest,
     auth_user_id: &str,
     idempotency_key: Uuid,
@@ -1370,7 +1363,7 @@ async fn link_created_user(
     .await
     .map_err(|error| account_create_error("link Auth identity", actor, error))?;
     trace!(rows_affected = identity_insert.rows_affected(), account_id = %account_id, "External Auth identity linked");
-    let provisioning_context: AuthAccountProvisioningContext = AuthAccountProvisioningContext {
+    let provisioning_context: AcctProvisionContext = AcctProvisionContext {
         tenant_id: actor.tenant_id,
         actor_account_id: actor.account_id,
         account_id,
@@ -1383,7 +1376,7 @@ async fn link_created_user(
         .provisioner
         .provision(transaction.connection(), &provisioning_context)
         .await
-        .map_err(|error: AuthAccountProvisioningError| {
+        .map_err(|error: AcctProvisionErr| {
             error!(
                 tenant_id = %actor.tenant_id,
                 actor_id = %actor.account_id,
@@ -1453,9 +1446,9 @@ async fn link_created_user(
     })
 }
 
-async fn invalidate_account_cache(context: &AuthService, actor: &AuthenticatedUser, subject: &str, phase: &str) {
-    let invalidation_result: Result<(), crate::ext_service::account_cache::AuthenticatedUserCacheError> = context
-        .account_cache
+async fn invalidate_account_cache(context: &AuthService, actor: &AuthedUser, subject: &str, phase: &str) {
+    let invalidation_result: Result<(), crate::ext_service::account_cache::AuthedCacheErr> = context
+        .acct_cache
         .invalidate(&context.token_verifier.config().issuer, subject, actor.tenant_id)
         .await;
     if let Err(cache_error) = invalidation_result {
@@ -1472,7 +1465,7 @@ async fn invalidate_account_cache(context: &AuthService, actor: &AuthenticatedUs
 
 async fn update_account_status(
     context: &AuthService,
-    actor: &AuthenticatedUser,
+    actor: &AuthedUser,
     account_id: Uuid,
     disabled: bool,
 ) -> Result<(), AdminApiError> {
@@ -1493,7 +1486,7 @@ async fn update_account_status(
     let actor_account_id: Uuid = actor.account_id;
     let result: PgQueryResult = context
         .db
-        .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+        .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
             sqlx::query!(
                 r#"
                 UPDATE accounts
@@ -1555,7 +1548,7 @@ fn normalize_create_request(request: &mut CreateAuthUserRequest) -> Result<(), A
     Ok(())
 }
 
-fn require_permission(actor: &AuthenticatedUser, permission: &PermissionCode) -> Result<(), AdminApiError> {
+fn require_permission(actor: &AuthedUser, permission: &PermissionCode) -> Result<(), AdminApiError> {
     if actor.has_permission(permission.as_str()) {
         trace!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, permission = %permission, "Auth administration permission accepted");
         Ok(())
@@ -1592,7 +1585,7 @@ fn summary(account: MappedAccount, provider_user: Option<ExternalIdentity>) -> A
     }
 }
 
-fn account_create_error(operation: &str, actor: &AuthenticatedUser, error: sqlx::Error) -> AdminApiError {
+fn account_create_error(operation: &str, actor: &AuthedUser, error: sqlx::Error) -> AdminApiError {
     error!(
         "Auth account create step failed: operation={} tenant_id={} actor_id={} error={}",
         operation, actor.tenant_id, actor.account_id, error
@@ -1607,7 +1600,7 @@ fn account_create_error(operation: &str, actor: &AuthenticatedUser, error: sqlx:
     }
 }
 
-fn provider_failure(operation: &str, actor: &AuthenticatedUser, error: ExternalIdentityAdminError) -> AdminApiError {
+fn provider_failure(operation: &str, actor: &AuthedUser, error: ExtAdminErr) -> AdminApiError {
     warn!(
         operation,
         tenant_id = %actor.tenant_id,
@@ -1616,10 +1609,10 @@ fn provider_failure(operation: &str, actor: &AuthenticatedUser, error: ExternalI
         "External identity administration failed"
     );
     match error {
-        ExternalIdentityAdminError::Validation(message) => AdminApiError::Validation(message),
-        ExternalIdentityAdminError::Conflict(message) => AdminApiError::Conflict(message),
-        ExternalIdentityAdminError::NotFound(message) => AdminApiError::NotFound(message),
-        ExternalIdentityAdminError::Unavailable(_message) => AdminApiError::ProviderUnavailable,
+        ExtAdminErr::Validation(message) => AdminApiError::Validation(message),
+        ExtAdminErr::Conflict(message) => AdminApiError::Conflict(message),
+        ExtAdminErr::NotFound(message) => AdminApiError::NotFound(message),
+        ExtAdminErr::Unavailable(_message) => AdminApiError::ProviderUnavailable,
     }
 }
 

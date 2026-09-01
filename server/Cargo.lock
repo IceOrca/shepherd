@@ -3346,6 +3346,7 @@ dependencies = [
  "sqlx 0.9.0",
  "supabase-auth",
  "tokio",
+ "tokio-util",
  "tracing",
  "uuid",
 ]

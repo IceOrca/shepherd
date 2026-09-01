@@ -1,0 +1,22 @@
+pub mod finance;
+pub mod staffing;
+
+use std::sync::Arc;
+
+use axum::Router;
+
+use crate::{AppContext, features};
+
+pub fn routes() -> Router<Arc<AppContext>> {
+    Router::new()
+        .merge(features::branch::host::routes())
+        .merge(finance::host::routes())
+        .merge(finance::reporting::host::routes())
+        .merge(staffing::host::routes())
+        .merge(staffing::urgent_work::host::routes())
+        .merge(staffing::work_session::host::routes())
+}
+
+pub fn export_routes() -> Router<Arc<AppContext>> {
+    finance::reporting::host::export_routes()
+}

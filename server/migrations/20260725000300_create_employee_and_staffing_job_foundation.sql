@@ -1,5 +1,5 @@
 -- Staffing jobs are branch-owned work categories used by both planned and
--- urgent staffing. They are not HR organization positions.
+-- urgent staffing. They are not HR branch positions.
 CREATE TABLE business_staffing_jobs (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,

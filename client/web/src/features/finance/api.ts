@@ -1,27 +1,27 @@
 import type {
   ExpenseCategory,
   ExpenseClaim,
-  ExpenseClaimCreateRequest,
+  ExpenseClaimCreateReq,
   ExpenseClaimRevision,
-  ExpensePageResponse,
-  ExpenseRevisionPageResponse,
-  ExpenseCorrectionRequest,
+  ExpensePageRsp,
+  ExpenseRevisionPageRsp,
+  ExpenseCorrectionReq,
   Employee,
-  EmployeeSalaryConfiguration,
-  EmployeeSalaryRateCreateRequest,
-  FinancialDecisionRequest,
+  EmployeeSalaryConfig,
+  EmployeeSalaryRateCreateReq,
+  FinancialDecisionReq,
   FinancialPeriodChangeRequest,
   FinancialPeriodState,
-  FinancialReportExportRequest,
+  FinancialReportExportReq,
   FinancialRejectionRequest,
-  FinancialSettlementRequest,
+  FinancialSettlementReq,
   OperatingFinancialReport,
   PayrollReport,
   SalaryAdvance,
-  SalaryAdvanceCorrectionRequest,
-  SalaryAdvanceCreateRequest,
-  SalaryAdvanceDisbursementRequest,
-  SalaryAdvanceRecoveryRequest,
+  SalaryAdvanceCorrectionReq,
+  SalaryAdvanceCreateReq,
+  SalaryAdvanceDisburseReq,
+  SalaryAdvanceRecoveryReq,
   SalaryAdvanceRevision,
   SalaryAdvancePageResponse,
   SalaryAdvanceRevisionPageResponse,
@@ -66,11 +66,11 @@ export function listExpenses(
   cursor: string | null,
   status?: string,
   search?: string,
-): Promise<ExpensePageResponse> {
-  return apiRequest<ExpensePageResponse>(`/api/business/finance/expenses${pageQuery(cursor, status, search)}`);
+): Promise<ExpensePageRsp> {
+  return apiRequest<ExpensePageRsp>(`/api/business/finance/expenses${pageQuery(cursor, status, search)}`);
 }
 
-export function createExpense(payload: ExpenseClaimCreateRequest): Promise<ExpenseClaim> {
+export function createExpense(payload: ExpenseClaimCreateReq): Promise<ExpenseClaim> {
   return apiRequest<ExpenseClaim>("/api/business/finance/expenses", {
     method: "POST",
     headers: mutationHeaders(),
@@ -78,7 +78,7 @@ export function createExpense(payload: ExpenseClaimCreateRequest): Promise<Expen
   });
 }
 
-export function correctExpense(expenseId: string, payload: ExpenseCorrectionRequest): Promise<ExpenseClaim> {
+export function correctExpense(expenseId: string, payload: ExpenseCorrectionReq): Promise<ExpenseClaim> {
   return apiRequest<ExpenseClaim>(`/api/business/finance/expenses/${expenseId}/correct`, {
     method: "POST",
     headers: mutationHeaders(),
@@ -89,13 +89,13 @@ export function correctExpense(expenseId: string, payload: ExpenseCorrectionRequ
 export function listExpenseRevisions(
   expenseId: string,
   cursor: string | null,
-): Promise<ExpenseRevisionPageResponse> {
-  return apiRequest<ExpenseRevisionPageResponse>(
+): Promise<ExpenseRevisionPageRsp> {
+  return apiRequest<ExpenseRevisionPageRsp>(
     `/api/business/finance/expenses/${expenseId}/revisions${pageQuery(cursor)}`,
   );
 }
 
-export function approveExpense(expenseId: string, payload: FinancialDecisionRequest): Promise<ExpenseClaim> {
+export function approveExpense(expenseId: string, payload: FinancialDecisionReq): Promise<ExpenseClaim> {
   return apiRequest<ExpenseClaim>(`/api/business/finance/expenses/${expenseId}/approve`, {
     method: "POST",
     headers: mutationHeaders(),
@@ -111,7 +111,7 @@ export function rejectExpense(expenseId: string, payload: FinancialRejectionRequ
   });
 }
 
-export function reimburseExpense(expenseId: string, payload: FinancialSettlementRequest): Promise<ExpenseClaim> {
+export function reimburseExpense(expenseId: string, payload: FinancialSettlementReq): Promise<ExpenseClaim> {
   return apiRequest<ExpenseClaim>(`/api/business/finance/expenses/${expenseId}/reimburse`, {
     method: "POST",
     headers: mutationHeaders(),
@@ -129,7 +129,7 @@ export function listSalaryAdvances(
   );
 }
 
-export function createSalaryAdvance(payload: SalaryAdvanceCreateRequest): Promise<SalaryAdvance> {
+export function createSalaryAdvance(payload: SalaryAdvanceCreateReq): Promise<SalaryAdvance> {
   return apiRequest<SalaryAdvance>("/api/business/finance/salary-advances", {
     method: "POST",
     headers: mutationHeaders(),
@@ -139,7 +139,7 @@ export function createSalaryAdvance(payload: SalaryAdvanceCreateRequest): Promis
 
 export function correctSalaryAdvance(
   advanceId: string,
-  payload: SalaryAdvanceCorrectionRequest,
+  payload: SalaryAdvanceCorrectionReq,
 ): Promise<SalaryAdvance> {
   return apiRequest<SalaryAdvance>(`/api/business/finance/salary-advances/${advanceId}/correct`, {
     method: "POST",
@@ -159,7 +159,7 @@ export function listSalaryAdvanceRevisions(
 
 export function approveSalaryAdvance(
   advanceId: string,
-  payload: FinancialDecisionRequest,
+  payload: FinancialDecisionReq,
 ): Promise<SalaryAdvance> {
   return apiRequest<SalaryAdvance>(`/api/business/finance/salary-advances/${advanceId}/approve`, {
     method: "POST",
@@ -181,7 +181,7 @@ export function rejectSalaryAdvance(
 
 export function disburseSalaryAdvance(
   advanceId: string,
-  payload: SalaryAdvanceDisbursementRequest,
+  payload: SalaryAdvanceDisburseReq,
 ): Promise<SalaryAdvance> {
   return apiRequest<SalaryAdvance>(`/api/business/finance/salary-advances/${advanceId}/disburse`, {
     method: "POST",
@@ -192,7 +192,7 @@ export function disburseSalaryAdvance(
 
 export function recoverSalaryAdvance(
   advanceId: string,
-  payload: SalaryAdvanceRecoveryRequest,
+  payload: SalaryAdvanceRecoveryReq,
 ): Promise<SalaryAdvance> {
   return apiRequest<SalaryAdvance>(`/api/business/finance/salary-advances/${advanceId}/recover`, {
     method: "POST",
@@ -201,14 +201,14 @@ export function recoverSalaryAdvance(
   });
 }
 
-export function listSalaryConfigurations(): Promise<EmployeeSalaryConfiguration[]> {
-  return apiRequest<EmployeeSalaryConfiguration[]>("/api/business/finance/salary-configurations");
+export function listSalaryConfigurations(): Promise<EmployeeSalaryConfig[]> {
+  return apiRequest<EmployeeSalaryConfig[]>("/api/business/finance/salary-configurations");
 }
 
 export function createEmployeeSalaryRate(
-  payload: EmployeeSalaryRateCreateRequest,
-): Promise<EmployeeSalaryConfiguration> {
-  return apiRequest<EmployeeSalaryConfiguration>("/api/business/finance/salary-configurations", {
+  payload: EmployeeSalaryRateCreateReq,
+): Promise<EmployeeSalaryConfig> {
+  return apiRequest<EmployeeSalaryConfig>("/api/business/finance/salary-configurations", {
     method: "POST",
     headers: mutationHeaders(),
     body: JSON.stringify(payload),
@@ -264,7 +264,7 @@ export function getPayrollReportForBranch(
   );
 }
 
-export function downloadFinancialReport(payload: FinancialReportExportRequest): Promise<DownloadedFile> {
+export function downloadFinancialReport(payload: FinancialReportExportReq): Promise<DownloadedFile> {
   return apiFileRequest("/api/business/finance/report-exports/xlsx", {
     method: "POST",
     body: JSON.stringify(payload),

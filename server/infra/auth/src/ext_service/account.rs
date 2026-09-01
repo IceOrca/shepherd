@@ -3,7 +3,7 @@ use std::{collections::BTreeSet, sync::Arc};
 use axum::{
     Extension, Json, Router,
     extract::{Request, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode},
     middleware::Next,
     response::Response,
     routing::get,
@@ -15,10 +15,11 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, trace, warn};
 use ts_rs::TS;
 use uuid::Uuid;
+use crate::ext_service::middleware::require_authenticated;
 
 use crate::{
     AuthCodeError, AuthService, PermissionCode, RoleCode,
-    ext_service::{AuthenticatedPrincipal, account_cache::AuthenticatedUserCacheError},
+    ext_service::{AuthedPrincipal, account_cache::AuthedCacheErr},
 };
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
@@ -62,7 +63,7 @@ impl PermissionEffect {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct AuthenticatedUser {
+pub struct AuthedUser {
     pub tenant_id: Uuid,
     pub account_id: Uuid,
     pub username: String,
@@ -73,12 +74,12 @@ pub struct AuthenticatedUser {
     pub branch_ids: Vec<Uuid>,
     pub active_branch_id: Option<Uuid>,
     #[serde(default)]
-    pub authorization_roles: Vec<ScopedRoleGrant>,
+    pub authz_roles: Vec<ScopedRoleGrant>,
     #[serde(default)]
-    pub authorization_permissions: Vec<ScopedPermissionGrant>,
+    pub authz_perms: Vec<ScopedPermissionGrant>,
 }
 
-impl AuthenticatedUser {
+impl AuthedUser {
     pub fn has_permission(&self, permission: &str) -> bool {
         self.permissions
             .iter()
@@ -93,7 +94,7 @@ impl AuthenticatedUser {
             return false;
         }
         let mut allowed: bool = false;
-        for grant in &self.authorization_permissions {
+        for grant in &self.authz_perms {
             if grant.permission_code.as_str() != permission
                 || (grant.branch_id.is_some() && grant.branch_id != Some(branch_id))
             {
@@ -134,7 +135,7 @@ impl AuthenticatedUser {
         }
 
         let mut role_set: BTreeSet<RoleCode> = BTreeSet::new();
-        for role_grant in &self.authorization_roles {
+        for role_grant in &self.authz_roles {
             if role_grant.branch_id.is_none() || role_grant.branch_id == Some(branch_id) {
                 role_set.insert(role_grant.role_code.clone());
             }
@@ -142,7 +143,7 @@ impl AuthenticatedUser {
 
         let mut allowed_permissions: BTreeSet<PermissionCode> = BTreeSet::new();
         let mut denied_permissions: BTreeSet<PermissionCode> = BTreeSet::new();
-        for permission_grant in &self.authorization_permissions {
+        for permission_grant in &self.authz_perms {
             if permission_grant.branch_id.is_some() && permission_grant.branch_id != Some(branch_id) {
                 continue;
             }
@@ -230,7 +231,7 @@ pub fn identity_routes(auth: Arc<AuthService>) -> Router {
         .with_state(auth)
 }
 
-async fn current_user(Extension(user): Extension<AuthenticatedUser>) -> Json<CurrentUserProfile> {
+async fn current_user(Extension(user): Extension<AuthedUser>) -> Json<CurrentUserProfile> {
     let profile: CurrentUserProfile = user.profile();
     debug!(
         operation = "current_user_profile",
@@ -290,11 +291,11 @@ struct AccountBranch {
 
 const ACTIVE_BRANCH_HEADER: &str = "x-branch-id";
 const ACTIVE_TENANT_HEADER: &str = "x-tenant-id";
-const MAX_TENANT_MEMBERSHIPS: i64 = 100;
+const MAX_TENANT_MEMBERSHIPS: i64 = 1024;
 
 async fn list_tenant_memberships(
     State(ctx): State<Arc<AuthService>>,
-    Extension(principal): Extension<AuthenticatedPrincipal>,
+    Extension(principal): Extension<AuthedPrincipal>,
 ) -> Result<Json<Vec<TenantMembershipSummary>>, StatusCode> {
     let memberships: Vec<TenantMembershipSummary> = load_tenant_memberships(&ctx.db, &principal).await?;
     info!(
@@ -307,9 +308,9 @@ async fn list_tenant_memberships(
     Ok(Json(memberships))
 }
 
-pub async fn resolve_application_account(
+pub async fn resolve_app_acct(
     State(ctx): State<Arc<AuthService>>,
-    Extension(principal): Extension<AuthenticatedPrincipal>,
+    Extension(principal): Extension<AuthedPrincipal>,
     mut request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
@@ -318,44 +319,45 @@ pub async fn resolve_application_account(
     let issuer: String = principal.issuer.clone();
     let subject: String = principal.subject.clone();
     trace!(
-        operation = "resolve_application_account",
+        operation = "resolve_app_acct",
         method = %method,
         path = %path,
         issuer = %issuer,
         subject = %subject,
         "Resolving application account for authenticated external identity"
     );
-    let selected_tenant_id: Uuid = resolve_active_tenant(&ctx.db, request.headers(), &principal).await?;
+    let selected_tid: Uuid = resolve_active_tenant(&ctx.db, request.headers(), &principal).await?;
     if principal
         .tenant_id
-        .is_some_and(|claimed_tenant_id: Uuid| claimed_tenant_id != selected_tenant_id)
+        .is_some_and(|claimed_tid: Uuid| claimed_tid != selected_tid)
     {
         info!(
-            operation = "resolve_application_account",
-            claimed_tenant_id = ?principal.tenant_id,
-            selected_tenant_id = %selected_tenant_id,
+            operation = "resolve_app_acct",
+            claimed_tid = ?principal.tenant_id,
+            selected_tid = %selected_tid,
             "Explicit validated tenant selection differs from the signed default tenant hint"
         );
     }
-    let cache_result: Result<Option<AuthenticatedUser>, AuthenticatedUserCacheError> =
-        ctx.account_cache.get(&principal, selected_tenant_id).await;
-    let cached_user: Option<AuthenticatedUser> = match cache_result {
+
+    let cache_result: Result<Option<AuthedUser>, AuthedCacheErr> = ctx.acct_cache.get(&principal, selected_tid).await;
+    let cached_user: Option<AuthedUser> = match cache_result {
         Ok(user) => user,
         Err(cache_error) => {
             warn!(
-                operation = "resolve_application_account",
+                operation = "resolve_app_acct",
                 issuer = %issuer,
                 subject = %subject,
                 reason = %cache_error,
-                "Authenticated-user cache unavailable; resolving from PostgreSQL"
+                "Authed-user cache unavailable; resolving from PostgreSQL"
             );
             None
         }
     };
-    let mut user: AuthenticatedUser = match cached_user {
-        Some(cached_user) if cached_user.tenant_id == selected_tenant_id => {
+
+    let mut user: AuthedUser = match cached_user {
+        Some(cached_user) if cached_user.tenant_id == selected_tid => {
             trace!(
-                operation = "resolve_application_account",
+                operation = "resolve_app_acct",
                 tenant_id = %cached_user.tenant_id,
                 account_id = %cached_user.account_id,
                 "Resolved selected tenant membership from authenticated-user cache"
@@ -365,40 +367,40 @@ pub async fn resolve_application_account(
         cached_user => {
             if let Some(cached_user) = cached_user {
                 warn!(
-                    operation = "resolve_application_account",
-                    selected_tenant_id = %selected_tenant_id,
+                    operation = "resolve_app_acct",
+                    selected_tid = %selected_tid,
                     cached_tenant_id = %cached_user.tenant_id,
                     account_id = %cached_user.account_id,
                     "Cached account tenant does not match selection; reloading PostgreSQL authority"
                 );
             } else {
                 debug!(
-                    operation = "resolve_application_account",
-                    selected_tenant_id = %selected_tenant_id,
-                    "Authenticated-user cache missed; loading PostgreSQL authority"
+                    operation = "resolve_app_acct",
+                    selected_tid = %selected_tid,
+                    "Authed-user cache missed; loading PostgreSQL authority"
                 );
             }
-            let loaded_user: AuthenticatedUser = load_account(&ctx.db, &principal, selected_tenant_id).await?;
-            let cache_write_result: Result<(), AuthenticatedUserCacheError> =
-                ctx.account_cache.put(&principal, &loaded_user).await;
+            let loaded_user: AuthedUser = load_app_acct(&ctx.db, &principal, selected_tid).await?;
+            let cache_write_result: Result<(), AuthedCacheErr> = ctx.acct_cache.put(&principal, &loaded_user).await;
             if let Err(cache_error) = cache_write_result {
                 warn!(
-                    operation = "resolve_application_account",
+                    operation = "resolve_app_acct",
                     tenant_id = %loaded_user.tenant_id,
                     account_id = %loaded_user.account_id,
                     reason = %cache_error,
-                    "Authenticated-user cache write failed; request will continue"
+                    "Authed-user cache write failed; request will continue"
                 );
             }
             loaded_user
         }
     };
+
     let active_branch_id: Uuid = resolve_active_branch(request.headers(), &user)?;
     user.activate_branch(active_branch_id)?;
     let tenant_id: Uuid = user.tenant_id;
     let account_id: Uuid = user.account_id;
     debug!(
-        operation = "resolve_application_account",
+        operation = "resolve_app_acct",
         tenant_id = %tenant_id,
         account_id = %account_id,
         role_count = user.roles.len(),
@@ -413,7 +415,7 @@ pub async fn resolve_application_account(
     request.extensions_mut().insert(user);
     let response: Response = with_active_branch(active_branch_id, next.run(request)).await;
     info!(
-        operation = "resolve_application_account",
+        operation = "resolve_app_acct",
         method = %method,
         path = %path,
         tenant_id = %tenant_id,
@@ -427,11 +429,11 @@ pub async fn resolve_application_account(
 async fn resolve_active_tenant(
     db: &DatabaseAdapter,
     headers: &HeaderMap,
-    principal: &AuthenticatedPrincipal,
+    principal: &AuthedPrincipal,
 ) -> Result<Uuid, StatusCode> {
     let requested_tenant_id: Option<Uuid> = headers
         .get(ACTIVE_TENANT_HEADER)
-        .map(|value| value.to_str().map_err(|_| StatusCode::BAD_REQUEST))
+        .map(|value: &HeaderValue| value.to_str().map_err(|_| StatusCode::BAD_REQUEST))
         .transpose()?
         .map(|value: &str| Uuid::parse_str(value).map_err(|_| StatusCode::BAD_REQUEST))
         .transpose()?;
@@ -470,7 +472,7 @@ async fn resolve_active_tenant(
                 operation = "resolve_active_tenant",
                 issuer = %principal.issuer,
                 subject = %principal.subject,
-                "Authenticated identity has no active application tenant membership"
+                "Authed identity has no active application tenant membership"
             );
             Err(StatusCode::FORBIDDEN)
         }
@@ -487,7 +489,7 @@ async fn resolve_active_tenant(
     }
 }
 
-fn resolve_active_branch(headers: &HeaderMap, user: &AuthenticatedUser) -> Result<Uuid, StatusCode> {
+fn resolve_active_branch(headers: &HeaderMap, user: &AuthedUser) -> Result<Uuid, StatusCode> {
     let requested_branch_id: Option<Uuid> = headers
         .get(ACTIVE_BRANCH_HEADER)
         .map(|value| value.to_str().map_err(|_| StatusCode::BAD_REQUEST))
@@ -530,7 +532,7 @@ fn resolve_active_branch(headers: &HeaderMap, user: &AuthenticatedUser) -> Resul
 
 async fn load_tenant_memberships(
     db: &DatabaseAdapter,
-    principal: &AuthenticatedPrincipal,
+    principal: &AuthedPrincipal,
 ) -> Result<Vec<TenantMembershipSummary>, StatusCode> {
     let identity_rows: Vec<TenantMembershipRow> = sqlx::query_as!(
         TenantMembershipRow,
@@ -550,16 +552,17 @@ async fn load_tenant_memberships(
     )
     .fetch_all(db.global_pool())
     .await
-    .map_err(|database_error: sqlx::Error| {
+    .map_err(|err: sqlx::Error| {
         error!(
             operation = "load_tenant_memberships",
             issuer = %principal.issuer,
             subject = %principal.subject,
-            reason = %database_error,
+            reason = %err,
             "Tenant membership registry lookup failed"
         );
         StatusCode::SERVICE_UNAVAILABLE
     })?;
+
     if i64::try_from(identity_rows.len()).unwrap_or(i64::MAX) > MAX_TENANT_MEMBERSHIPS {
         error!(
             operation = "load_tenant_memberships",
@@ -567,7 +570,7 @@ async fn load_tenant_memberships(
             subject = %principal.subject,
             membership_count = identity_rows.len(),
             max_membership_count = MAX_TENANT_MEMBERSHIPS,
-            "Authenticated identity exceeds the supported active tenant membership bound"
+            "Authed identity exceeds the supported active tenant membership bound"
         );
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
@@ -577,7 +580,7 @@ async fn load_tenant_memberships(
         let tenant_id: Uuid = identity.tenant_id;
         let account_id: Uuid = identity.account_id;
         let active_row: Option<ActiveTenantMembershipRow> = db
-            .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            .tran_with_tenant(tenant_id, async move |conn: &mut PgConnection| {
                 sqlx::query_as!(
                     ActiveTenantMembershipRow,
                     r#"
@@ -585,8 +588,8 @@ async fn load_tenant_memberships(
                            tenant.slug AS tenant_slug, tenant.display_name AS tenant_display_name,
                            account.username, account.email,
                            account.primary_role_code
-                    FROM tenants AS tenant
-                    INNER JOIN accounts AS account
+                    FROM accounts AS account
+                    INNER JOIN tenants AS tenant
                         ON account.tenant_id = tenant.id
                     WHERE tenant.id = $1
                       AND tenant.status = 'active'
@@ -596,20 +599,21 @@ async fn load_tenant_memberships(
                     tenant_id,
                     account_id,
                 )
-                .fetch_optional(connection)
+                .fetch_optional(conn)
                 .await
             })
             .await
-            .map_err(|database_error: TenantDbErr| {
+            .map_err(|err: TenantDbErr| {
                 error!(
                     operation = "load_tenant_memberships",
                     tenant_id = %tenant_id,
                     account_id = %account_id,
-                    reason = %database_error,
+                    reason = %err,
                     "Tenant membership account validation failed"
                 );
                 StatusCode::SERVICE_UNAVAILABLE
             })?;
+
         let Some(row) = active_row else {
             debug!(
                 operation = "load_tenant_memberships",
@@ -619,16 +623,19 @@ async fn load_tenant_memberships(
             );
             continue;
         };
-        let primary_role: RoleCode = RoleCode::try_from(row.primary_role_code).map_err(|code_error| {
-            error!(
-                operation = "load_tenant_memberships",
-                tenant_id = %row.tenant_id,
-                account_id = %row.account_id,
-                reason = %code_error,
-                "Tenant membership has an invalid primary role code"
-            );
-            StatusCode::SERVICE_UNAVAILABLE
-        })?;
+
+        let primary_role: RoleCode =
+            RoleCode::try_from(row.primary_role_code).map_err(|code_error: AuthCodeError| {
+                error!(
+                    operation = "load_tenant_memberships",
+                    tenant_id = %row.tenant_id,
+                    account_id = %row.account_id,
+                    reason = %code_error,
+                    "Tenant membership has an invalid primary role code"
+                );
+                StatusCode::SERVICE_UNAVAILABLE
+            })?;
+
         memberships.push(TenantMembershipSummary {
             tenant_id: row.tenant_id,
             account_id: row.account_id,
@@ -655,11 +662,11 @@ async fn load_tenant_memberships(
     Ok(memberships)
 }
 
-async fn load_account(
+async fn load_app_acct(
     db: &DatabaseAdapter,
-    principal: &AuthenticatedPrincipal,
-    selected_tenant_id: Uuid,
-) -> Result<AuthenticatedUser, StatusCode> {
+    principal: &AuthedPrincipal,
+    selected_tid: Uuid,
+) -> Result<AuthedUser, StatusCode> {
     let identity: AccountIdentity = sqlx::query_as!(
         AccountIdentity,
         r#"
@@ -669,17 +676,17 @@ async fn load_account(
         "#,
         principal.issuer,
         principal.subject,
-        selected_tenant_id,
+        selected_tid,
     )
     // The selected tenant has not entered RLS context yet, so validate the
     // global identity-to-membership registry before loading tenant data.
     .fetch_optional(db.global_pool())
     .await
-    .map_err(|database_error: sqlx::Error| {
+    .map_err(|err: sqlx::Error| {
         error!(
             issuer = %principal.issuer,
             subject = %principal.subject,
-            reason = %database_error,
+            reason = %err,
             "Application account identity lookup failed"
         );
         StatusCode::SERVICE_UNAVAILABLE
@@ -688,7 +695,7 @@ async fn load_account(
         warn!(
             issuer = %principal.issuer,
             subject = %principal.subject,
-            "Authenticated external identity has no active application account mapping"
+            "Authed external identity has no active application account mapping"
         );
         StatusCode::FORBIDDEN
     })?;
@@ -707,7 +714,7 @@ async fn load_account(
         Vec<AccountPermission>,
         Vec<AccountBranch>,
     ) = db
-        .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+        .tran_with_tenant(tenant_id, async move |conn: &mut PgConnection| {
             let account: Option<UserAccount> = sqlx::query_as!(
                 UserAccount,
                 r#"
@@ -718,8 +725,9 @@ async fn load_account(
                 tenant_id,
                 account_id,
             )
-            .fetch_optional(&mut *connection)
+            .fetch_optional(&mut *conn)
             .await?;
+
             let role_rows: Vec<AccountRole> = sqlx::query_as!(
                 AccountRole,
                 r#"
@@ -735,8 +743,9 @@ async fn load_account(
                 tenant_id,
                 account_id,
             )
-            .fetch_all(&mut *connection)
+            .fetch_all(&mut *conn)
             .await?;
+
             let permission_rows: Vec<AccountPermission> = sqlx::query_as!(
                 AccountPermission,
                 r#"
@@ -766,8 +775,9 @@ async fn load_account(
                 tenant_id,
                 account_id,
             )
-            .fetch_all(&mut *connection)
+            .fetch_all(&mut *conn)
             .await?;
+
             let branch_rows: Vec<AccountBranch> = sqlx::query_as!(
                 AccountBranch,
                 r#"
@@ -796,20 +806,21 @@ async fn load_account(
                 tenant_id,
                 account_id,
             )
-            .fetch_all(&mut *connection)
+            .fetch_all(&mut *conn)
             .await?;
             Ok((account, role_rows, permission_rows, branch_rows))
         })
         .await
-        .map_err(|database_error: TenantDbErr| {
+        .map_err(|err: TenantDbErr| {
             error!(
                 tenant_id = %tenant_id,
                 account_id = %account_id,
-                reason = %database_error,
+                reason = %err,
                 "Application account authorization tenant operation failed"
             );
             StatusCode::SERVICE_UNAVAILABLE
         })?;
+
     let (account, role_rows, permission_rows, branch_rows): (
         Option<UserAccount>,
         Vec<AccountRole>,
@@ -851,24 +862,18 @@ async fn load_account(
         "Application account is active"
     );
 
-    debug!(
-        operation = "load_application_account",
-        tenant_id = %account.tenant_id,
-        account_id = %account.id,
-        role_row_count = role_rows.len(),
-        permission_grant_row_count = permission_rows.len(),
-        "Loaded application role and permission grants"
-    );
-    let primary_role: RoleCode = RoleCode::try_from(account.primary_role_code).map_err(|code_error| {
-        error!(
-            tenant_id = %account.tenant_id,
-            account_id = %account.id,
-            reason = %code_error,
-            "Application account primary role code is invalid"
-        );
-        StatusCode::SERVICE_UNAVAILABLE
-    })?;
-    let authorization_roles: Vec<ScopedRoleGrant> = role_rows
+    // Loaded application role and permission grants
+    let primary_role: RoleCode =
+        RoleCode::try_from(account.primary_role_code).map_err(|code_error: AuthCodeError| {
+            error!(
+                tenant_id = %account.tenant_id,
+                account_id = %account.id,
+                reason = %code_error,
+                "Application account primary role code is invalid"
+            );
+            StatusCode::SERVICE_UNAVAILABLE
+        })?;
+    let authz_roles: Vec<ScopedRoleGrant> = role_rows
         .into_iter()
         .map(|row: AccountRole| -> Result<ScopedRoleGrant, AuthCodeError> {
             Ok(ScopedRoleGrant {
@@ -877,7 +882,7 @@ async fn load_account(
             })
         })
         .collect::<Result<Vec<ScopedRoleGrant>, _>>()
-        .map_err(|code_error| {
+        .map_err(|code_error: AuthCodeError| {
             error!(
                 tenant_id = %account.tenant_id,
                 account_id = %account.id,
@@ -886,32 +891,34 @@ async fn load_account(
             );
             StatusCode::SERVICE_UNAVAILABLE
         })?;
-    let mut authorization_permissions: Vec<ScopedPermissionGrant> = Vec::with_capacity(permission_rows.len());
+    let mut authz_perms: Vec<ScopedPermissionGrant> = Vec::with_capacity(permission_rows.len());
     for row in permission_rows {
-        let permission_code: PermissionCode = PermissionCode::try_from(row.permission_code).map_err(|code_error| {
+        let permission_code: PermissionCode =
+            PermissionCode::try_from(row.permission_code).map_err(|code_error: AuthCodeError| {
+                error!(
+                    tenant_id = %account.tenant_id,
+                    account_id = %account.id,
+                    reason = %code_error,
+                    "Application account permission code is invalid"
+                );
+                StatusCode::SERVICE_UNAVAILABLE
+            })?;
+        let perm_effect: PermissionEffect = PermissionEffect::from_code(&row.effect).ok_or_else(|| {
             error!(
                 tenant_id = %account.tenant_id,
                 account_id = %account.id,
-                reason = %code_error,
-                "Application account permission code is invalid"
-            );
-            StatusCode::SERVICE_UNAVAILABLE
-        })?;
-        let permission_effect: PermissionEffect = PermissionEffect::from_code(&row.effect).ok_or_else(|| {
-            error!(
-                tenant_id = %account.tenant_id,
-                account_id = %account.id,
-                permission_effect = %row.effect,
+                perm_effect = %row.effect,
                 "Application account permission grant has an unsupported effect"
             );
             StatusCode::SERVICE_UNAVAILABLE
         })?;
-        authorization_permissions.push(ScopedPermissionGrant {
+        authz_perms.push(ScopedPermissionGrant {
             branch_id: row.branch_id,
             permission_code,
-            effect: permission_effect,
+            effect: perm_effect,
         });
     }
+
     let roles: Vec<RoleCode> = Vec::new();
     let permissions: Vec<PermissionCode> = Vec::new();
     let branch_ids: Vec<Uuid> = branch_rows
@@ -922,13 +929,13 @@ async fn load_account(
         operation = "load_application_account",
         tenant_id = %account.tenant_id,
         account_id = %account.id,
-        scoped_role_count = authorization_roles.len(),
-        scoped_permission_count = authorization_permissions.len(),
+        scoped_role_count = authz_roles.len(),
+        scoped_permission_count = authz_perms.len(),
         accessible_branch_count = branch_ids.len(),
         "Resolved effective application authorization"
     );
 
-    Ok(AuthenticatedUser {
+    Ok(AuthedUser {
         tenant_id: account.tenant_id,
         account_id: account.id,
         username: account.username,
@@ -938,9 +945,21 @@ async fn load_account(
         permissions,
         branch_ids,
         active_branch_id: None,
-        authorization_roles,
-        authorization_permissions,
+        authz_roles,
+        authz_perms,
     })
+}
+
+pub fn protected_layer(auth: Arc<AuthService>, routes: Router) -> Router {
+    routes
+        .route_layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&auth),
+            resolve_app_acct,
+        ))
+        .route_layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&auth),
+            require_authenticated,
+        ))
 }
 
 #[cfg(test)]
@@ -955,8 +974,8 @@ mod tests {
         PermissionCode::try_from(code).expect("test permission code must be valid")
     }
 
-    fn scoped_user(first_branch_id: Uuid, second_branch_id: Uuid) -> AuthenticatedUser {
-        AuthenticatedUser {
+    fn scoped_user(first_branch_id: Uuid, second_branch_id: Uuid) -> AuthedUser {
+        AuthedUser {
             tenant_id: Uuid::from_u128(1),
             account_id: Uuid::from_u128(2),
             username: "scoped-user".to_owned(),
@@ -966,7 +985,7 @@ mod tests {
             permissions: Vec::new(),
             branch_ids: vec![first_branch_id, second_branch_id],
             active_branch_id: None,
-            authorization_roles: vec![
+            authz_roles: vec![
                 ScopedRoleGrant {
                     branch_id: None,
                     role_code: role("tenant_auditor"),
@@ -980,7 +999,7 @@ mod tests {
                     role_code: role("second_branch_dispatcher"),
                 },
             ],
-            authorization_permissions: vec![
+            authz_perms: vec![
                 ScopedPermissionGrant {
                     branch_id: None,
                     permission_code: permission("business.shared.read"),
@@ -1004,7 +1023,7 @@ mod tests {
     fn active_branch_excludes_other_branch_roles_and_permissions() {
         let first_branch_id: Uuid = Uuid::from_u128(10);
         let second_branch_id: Uuid = Uuid::from_u128(11);
-        let mut user: AuthenticatedUser = scoped_user(first_branch_id, second_branch_id);
+        let mut user: AuthedUser = scoped_user(first_branch_id, second_branch_id);
 
         user.activate_branch(first_branch_id)
             .expect("authorized branch must activate");
@@ -1022,8 +1041,8 @@ mod tests {
     fn applicable_deny_override_wins_without_leaking_to_another_branch() {
         let first_branch_id: Uuid = Uuid::from_u128(20);
         let second_branch_id: Uuid = Uuid::from_u128(21);
-        let mut user: AuthenticatedUser = scoped_user(first_branch_id, second_branch_id);
-        user.authorization_permissions.push(ScopedPermissionGrant {
+        let mut user: AuthedUser = scoped_user(first_branch_id, second_branch_id);
+        user.authz_perms.push(ScopedPermissionGrant {
             branch_id: Some(first_branch_id),
             permission_code: permission("business.shared.read"),
             effect: PermissionEffect::Deny,

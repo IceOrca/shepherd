@@ -18,60 +18,14 @@ use tracing::{error, warn, info, debug, trace};
 use crate::HostContext;
 use crate::ip_extract;
 use crate::logging;
-#[cfg(feature = "auth")]
-use crate::AppRoutes;
-#[cfg(feature = "auth")]
-use crate::ratelimiting::{RateLimitPolicy, RateLimiter};
 
 const DEFAULT_CORS_ALLOWED_ORIGINS: &str = "http://localhost:5173,http://localhost:5174";
 const DEFAULT_HTTP_REQUEST_TIMEOUT_SECS: u64 = 20;
-
-#[cfg(feature = "auth")]
-pub async fn init(
-    identity_admin: Arc<dyn infra_auth::ext_service::auth_admin::ExternalIdentityAdmin>,
-) -> (Arc<HostContext>, Router) {
-    info!("Starting infra host initialization");
-    let host_ctx: Arc<HostContext> = HostContext::new_arc(identity_admin).await;
-    debug!("Infra host context initialized; building host routes");
-    let host_router: Router = routes(Arc::clone(&host_ctx));
-    let host_router: Router = apply_layers(host_router, Arc::clone(&host_ctx));
-    info!("Infra host initialization completed");
-    (host_ctx, host_router)
-}
 
 pub fn routes(host_ctx: Arc<HostContext>) -> Router {
     let host_router: Router = make_route_with_state("/", get(get_root), Arc::clone(&host_ctx));
     info!("Infra host routes initialized");
     host_router
-}
-
-/// Mount finalized application route groups under the host's shared policy.
-///
-/// This API is available when the host's default `auth` feature is enabled.
-/// Applications keep ownership of handlers and state; the host owns common
-/// authentication and rate-limit layers. Application authorization remains
-/// owned by the application because the external provider only establishes identity here.
-#[cfg(feature = "auth")]
-pub fn mount_app_routes(router: Router, routes: AppRoutes, host: Arc<HostContext>) -> Router {
-    info!("Mounting public, protected, and admin application route groups");
-    let public: Router = RateLimiter::public_layer(routes.public);
-    let protected: Router = routes
-        .protected
-        .layer(RateLimiter::protected_route_layer(RateLimitPolicy::generic_protected()))
-        .route_layer(from_fn_with_state(
-            Arc::clone(&host.auth),
-            infra_auth::ext_service::middleware::require_authenticated,
-        ));
-    let admin: Router = routes
-        .admin
-        .layer(RateLimiter::protected_route_layer(RateLimitPolicy::generic_protected()))
-        .route_layer(from_fn_with_state(
-            Arc::clone(&host.auth),
-            infra_auth::ext_service::middleware::require_authenticated,
-        ));
-    let merged: Router = router.merge(public).merge(protected).merge(admin);
-    debug!("Mounted public, protected, and admin application route groups");
-    merged
 }
 
 pub fn apply_layers(router: Router, host_ctx: Arc<HostContext>) -> Router {

@@ -16,7 +16,7 @@ export interface ReconciliationScopeCursor<T> {
   limit: number | null;
 }
 
-export interface ReconciliationScopePage<T> {
+export interface ReconcileScopePage<T> {
   items: T[];
   nextCursor: ReconciliationScopeCursor<T> | null;
   limit: number;
@@ -36,7 +36,7 @@ export function createReconciliationScopeCursor<T>(
   };
 }
 
-export async function loadReconciliationScopePage<T>({
+export async function loadReconcileScopePage<T>({
   cursor,
   fetchBranchPage,
   compare,
@@ -49,7 +49,7 @@ export async function loadReconciliationScopePage<T>({
   ) => Promise<ReconciliationApiPage<T>>;
   compare: (left: T, right: T) => number;
   itemKey: (item: T) => string;
-}): Promise<ReconciliationScopePage<T>> {
+}): Promise<ReconcileScopePage<T>> {
   const branches: Record<string, BranchCursorState<T>> = Object.fromEntries(
     Object.entries(cursor.branches).map(
       ([branchId, state]: [string, BranchCursorState<T>]): [string, BranchCursorState<T>] => [

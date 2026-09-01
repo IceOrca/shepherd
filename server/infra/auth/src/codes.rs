@@ -154,15 +154,14 @@ fn is_valid_role_code(value: &str) -> bool {
     let Some(first_character) = characters.next() else {
         return false;
     };
-    value.len() <= 63
+    value.len() <= 255
         && first_character.is_ascii_lowercase()
         && characters.clone().next().is_some()
-        && characters
-            .all(|character: char| character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_')
+        && characters.all(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
 fn is_valid_permission_code(value: &str) -> bool {
-    if value.len() > 160 {
+    if value.len() > 255 {
         return false;
     }
     let segments: Vec<&str> = value.split('.').collect();
@@ -175,8 +174,7 @@ fn is_valid_permission_segment(segment: &str) -> bool {
         return false;
     };
     first_character.is_ascii_lowercase()
-        && characters
-            .all(|character: char| character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_')
+        && characters.all(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
 #[cfg(test)]

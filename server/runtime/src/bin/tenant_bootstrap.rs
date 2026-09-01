@@ -3,15 +3,15 @@
 use std::{error::Error, fmt::Write as _, fs, io, path::Path};
 
 use infra_auth::ext_service::auth_admin::{
-    CreateExternalIdentityRequest, ExternalIdentity, ExternalIdentityAdmin, ExternalIdentityStatus,
+    CreateExternalIdentityRequest, ExternalIdentity, ExtAuthAdmin, ExternalIdentityStatus,
 };
 use infra_kernel::debug::Debugging;
 use infra_postgres::DatabaseAdapter;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Transaction};
-use supabase_auth::SupabaseAuthIdentityAdmin;
-use tracing::{debug, error, info, warn};
+use supabase_auth::SupabaseAuthAdmin;
+use tracing::{error, warn, info, debug, trace};
 use uuid::Uuid;
 
 #[derive(Debug)]
@@ -98,9 +98,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    let identity_admin: std::sync::Arc<SupabaseAuthIdentityAdmin> = SupabaseAuthIdentityAdmin::from_env()?;
+    let auth_admin: std::sync::Arc<SupabaseAuthAdmin> = SupabaseAuthAdmin::from_env()?;
     let resolved_owners: Vec<ResolvedOwner> =
-        match resolve_owner_identities(db.global_pool(), identity_admin.as_ref(), &args, &owners, &auth_issuer).await {
+        match resolve_owner_identities(db.global_pool(), auth_admin.as_ref(), &args, &owners, &auth_issuer).await {
             Ok(resolved) => resolved,
             Err(resolve_error) => {
                 mark_failed(db.global_pool(), args.idempotency_key, "external_identity_resolution").await;
@@ -344,22 +344,22 @@ async fn claim_bootstrap(
 
 async fn resolve_owner_identities(
     pool: &PgPool,
-    identity_admin: &dyn ExternalIdentityAdmin,
+    auth_admin: &dyn ExtAuthAdmin,
     args: &BootstrapArgs,
     owners: &[OwnerInput],
     auth_issuer: &str,
 ) -> Result<Vec<ResolvedOwner>, Box<dyn Error>> {
     let mut resolved: Vec<ResolvedOwner> = Vec::with_capacity(owners.len());
     for owner in owners {
-        let identity: ExternalIdentity = if let Some(recovered) = identity_admin
+        let identity: ExternalIdentity = if let Some(recovered) = auth_admin
             .find_provisioned_identity(&owner.email, args.tenant_id, args.idempotency_key)
             .await?
         {
             recovered
-        } else if let Some(existing) = identity_admin.find_identity_by_email(&owner.email).await? {
+        } else if let Some(existing) = auth_admin.find_identity_by_email(&owner.email).await? {
             existing
         } else {
-            identity_admin
+            auth_admin
                 .create_identity(&CreateExternalIdentityRequest {
                     username: owner.username.clone(),
                     email: owner.email.clone(),

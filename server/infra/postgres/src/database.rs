@@ -40,8 +40,7 @@ impl DatabaseAdapter {
         debug!("DATABASE_URL is configured; credentials and URL are intentionally not logged");
         info!("Opening PostgreSQL shared-table connection pool");
         Self::connect(&database_url).await.unwrap_or_else(|error: TenantDbErr| {
-            error!("Failed to connect to PostgreSQL: {}", error);
-            panic!("Failed to connect to PostgreSQL");
+            panic!("Failed to connect to PostgreSQL: {}", error);
         })
     }
 
@@ -57,7 +56,7 @@ impl DatabaseAdapter {
 
     /// Exposes the unscoped connection pool only for tables that intentionally
     /// exist outside tenant RLS, such as tenant discovery and identity lookup.
-    /// Tenant-owned application data must use `run_with_tenant` or
+    /// Tenant-owned application data must use `tran_with_tenant` or
     /// `begin_tenant`.
     pub fn global_pool(&self) -> &sqlx::PgPool {
         self.client.pool()
@@ -77,7 +76,7 @@ impl DatabaseAdapter {
     /// Runs one SQLx operation inside an automatically committed tenant-scoped
     /// transaction. Multi-step domain workflows that coordinate locks or map
     /// business errors should continue to use `begin_tenant` explicitly.
-    pub async fn run_with_tenant<T, F>(&self, tenant_id: Uuid, operation: F) -> Result<T, TenantDbErr>
+    pub async fn tran_with_tenant<T, F>(&self, tenant_id: Uuid, operation: F) -> Result<T, TenantDbErr>
     where
         T: Send,
         F: for<'connection> AsyncFnOnce(&'connection mut PgConnection) -> Result<T, sqlx::Error>,
@@ -92,7 +91,7 @@ impl DatabaseAdapter {
             Err(error) => {
                 if let Err(rollback_error) = transaction.rollback().await {
                     error!(
-                        operation = "database_adapter.run_with_tenant",
+                        operation = "database_adapter.tran_with_tenant",
                         tenant_id = %tenant_id,
                         reason = %rollback_error,
                         "Tenant/branch transaction rollback failed"

@@ -1,6 +1,6 @@
 -- Every customer belongs to exactly one staffing-company branch and represents
 -- the actual workplace where staff are supplied. Shepherd deliberately does
--- not model the customer's own organization or a second facility hierarchy.
+-- not model the customer's own branch or a second facility hierarchy.
 -- Commercial and worker rates are resolved when an employee is assigned, then
 -- copied to the assignment so later rate changes cannot rewrite history.
 CREATE TABLE business_customers (

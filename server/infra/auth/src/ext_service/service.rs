@@ -4,10 +4,12 @@ use jsonwebtoken::{
     Algorithm, DecodingKey, Validation, decode, decode_header,
     jwk::{Jwk, JwkSet, KeyOperations, PublicKeyUse},
 };
+use tokio::sync::{RwLockReadGuard, MutexGuard};
 use tokio::sync::{Mutex, RwLock};
+use reqwest::Client;
 use tracing::{debug, error, info, trace, warn};
 
-use super::{AccessTokenClaims, AccessTokenError, AuthenticatedPrincipal, OidcJwksVerifierConfig};
+use super::{AccessTokenClaims, AccessTokenErr, AuthedPrincipal, OidcJwksVerifierCfg};
 
 const UNKNOWN_KID_REFRESH_COOLDOWN_SECS: u64 = 10;
 
@@ -20,23 +22,23 @@ struct CachedJwks {
 /// Validates access tokens locally and refreshes provider signing keys on a
 /// bounded interval or immediately when the provider rotates to an unknown KID.
 pub struct OidcJwksVerifier {
-    config: OidcJwksVerifierConfig,
+    config: OidcJwksVerifierCfg,
     client: reqwest::Client,
     jwks: RwLock<CachedJwks>,
     refresh_guard: Mutex<()>,
 }
 
 impl OidcJwksVerifier {
-    pub async fn from_env() -> Result<Arc<Self>, AccessTokenError> {
+    pub async fn from_env() -> Result<Arc<Self>, AccessTokenErr> {
         debug!("Loading external identity provider configuration");
-        Self::from_config(OidcJwksVerifierConfig::from_env()?).await
+        Self::from_config(OidcJwksVerifierCfg::from_env()?).await
     }
 
-    pub async fn from_config(config: OidcJwksVerifierConfig) -> Result<Arc<Self>, AccessTokenError> {
+    pub async fn from_config(config: OidcJwksVerifierCfg) -> Result<Arc<Self>, AccessTokenErr> {
         info!(
             issuer = %config.issuer,
             audience = %config.audience,
-            algorithm_count = config.allowed_algorithms.len(),
+            algorithm_count = config.allowed_algs.len(),
             "Initializing external identity provider"
         );
         let client: reqwest::Client = reqwest::Client::builder()
@@ -44,7 +46,7 @@ impl OidcJwksVerifier {
             .build()
             .map_err(|error: reqwest::Error| {
                 error!(error = %error, "External identity provider HTTP client initialization failed");
-                AccessTokenError::JwksUnavailable(error)
+                AccessTokenErr::JwksUnavailable(error)
             })?;
         let service: Arc<OidcJwksVerifier> = Arc::new(Self {
             config,
@@ -57,26 +59,26 @@ impl OidcJwksVerifier {
         Ok(service)
     }
 
-    pub fn config(&self) -> &OidcJwksVerifierConfig {
+    pub fn config(&self) -> &OidcJwksVerifierCfg {
         &self.config
     }
 
-    pub async fn validate_access_token(&self, token: &str) -> Result<AuthenticatedPrincipal, AccessTokenError> {
+    pub async fn validate_access_token(&self, token: &str) -> Result<AuthedPrincipal, AccessTokenErr> {
         trace!("External access-token validation accepted");
         let header: jsonwebtoken::Header =
             jsonwebtoken::decode_header(token).map_err(|error: jsonwebtoken::errors::Error| {
                 warn!(error = %error, "External access token header is invalid");
-                AccessTokenError::InvalidToken(error)
+                AccessTokenErr::InvalidToken(error)
             })?;
-        if !self.config.allowed_algorithms.contains(&header.alg) {
-            warn!(algorithm = ?header.alg, "External access token uses a disallowed signing algorithm");
-            return Err(AccessTokenError::DisallowedAlgorithm);
+        if !self.config.allowed_algs.contains(&header.alg) {
+            warn!(alg = ?header.alg, "External access token uses a disallowed signing alg");
+            return Err(AccessTokenErr::DisallowedAlgorithm);
         }
         let kid: &str = header.kid.as_deref().ok_or_else(|| {
             warn!("External access token is missing its signing key identifier");
-            AccessTokenError::MissingKeyId
+            AccessTokenErr::MissingKeyId
         })?;
-        debug!(kid, algorithm = ?header.alg, "Resolving external access-token signing key");
+        debug!(kid, alg = ?header.alg, "Resolving external access-token signing key");
         let key: DecodingKey = self.decoding_key(kid, header.alg).await?;
 
         let mut validation: Validation = Validation::new(header.alg);
@@ -88,18 +90,20 @@ impl OidcJwksVerifier {
         validation.validate_aud = true;
         validation.leeway = self.config.clock_skew.as_secs();
 
-        let token: jsonwebtoken::TokenData<AccessTokenClaims> = decode::<AccessTokenClaims>(token, &key, &validation)
-            .map_err(|error: jsonwebtoken::errors::Error| {
-            warn!(kid, error = %error, "External access token signature or claims are invalid");
-            AccessTokenError::InvalidToken(error)
-        })?;
-        let principal: AuthenticatedPrincipal = AuthenticatedPrincipal::try_from(token.claims)?;
+        let token: jsonwebtoken::TokenData<AccessTokenClaims> =
+            jsonwebtoken::decode::<AccessTokenClaims>(token, &key, &validation).map_err(
+                |err: jsonwebtoken::errors::Error| {
+                    warn!(kid, err = %err, "External access token signature or claims are invalid");
+                    AccessTokenErr::InvalidToken(err)
+                },
+            )?;
+        let principal: AuthedPrincipal = AuthedPrincipal::try_from(token.claims)?;
         if principal
             .issued_at
-            .is_some_and(|issued_at| issued_at > jsonwebtoken::get_current_timestamp() + validation.leeway)
+            .is_some_and(|issued_at: u64| issued_at > jsonwebtoken::get_current_timestamp() + validation.leeway)
         {
             warn!(subject = %principal.subject, "External access token issued-at claim is in the future");
-            return Err(AccessTokenError::InvalidClaims(
+            return Err(AccessTokenErr::InvalidClaims(
                 "issued-at is unreasonably far in the future".to_owned(),
             ));
         }
@@ -107,25 +111,25 @@ impl OidcJwksVerifier {
         Ok(principal)
     }
 
-    async fn decoding_key(&self, kid: &str, algorithm: Algorithm) -> Result<DecodingKey, AccessTokenError> {
-        let (cached_key, cache_is_fresh): (Option<Jwk>, bool) = {
-            let cache: tokio::sync::RwLockReadGuard<'_, CachedJwks> = self.jwks.read().await;
+    async fn decoding_key(&self, kid: &str, alg: Algorithm) -> Result<DecodingKey, AccessTokenErr> {
+        let (cached_jwk, cache_is_fresh): (Option<Jwk>, bool) = {
+            let cache: RwLockReadGuard<CachedJwks> = self.jwks.read().await;
             let is_fresh: bool = cache
                 .fetched_at
-                .is_some_and(|fetched_at| fetched_at.elapsed() < self.config.jwks_refresh_interval);
+                .is_some_and(|fetched_at: Instant| fetched_at.elapsed() < self.config.jwks_refresh_interval);
             (cache.set.find(kid).cloned(), is_fresh)
         };
-        if cache_is_fresh && let Some(jwk) = cached_key.as_ref() {
+        if cache_is_fresh && let Some(jwk) = &cached_jwk {
             trace!(kid, "Using fresh cached external signing key");
-            return decoding_key_from_jwk(jwk, algorithm);
+            return decoding_key_from_jwk(jwk, alg);
         }
-
         debug!(
             kid,
-            key_was_cached = cached_key.is_some(),
+            key_was_cached = cached_jwk.is_some(),
             "Refreshing external signing keys"
         );
-        match self.refresh_jwks(cached_key.is_none()).await {
+
+        match self.refresh_jwks(cached_jwk.is_none()).await {
             Ok(()) => self
                 .jwks
                 .read()
@@ -133,12 +137,12 @@ impl OidcJwksVerifier {
                 .set
                 .find(kid)
                 .cloned()
-                .ok_or(AccessTokenError::UnknownKey)
-                .and_then(|jwk| decoding_key_from_jwk(&jwk, algorithm)),
+                .ok_or(AccessTokenErr::UnknownKey)
+                .and_then(|jwk: Jwk| decoding_key_from_jwk(&jwk, alg)),
             Err(error) => {
-                if let Some(jwk) = cached_key {
+                if let Some(jwk) = cached_jwk {
                     warn!(error = %error, kid, "Using stale provider signing key after JWKS refresh failed");
-                    decoding_key_from_jwk(&jwk, algorithm)
+                    decoding_key_from_jwk(&jwk, alg)
                 } else {
                     error!(error = %error, kid, "No provider signing key is available after JWKS refresh failed");
                     Err(error)
@@ -147,18 +151,17 @@ impl OidcJwksVerifier {
         }
     }
 
-    async fn refresh_jwks(&self, force: bool) -> Result<(), AccessTokenError> {
-        let _refresh_guard: tokio::sync::MutexGuard<'_, ()> = self.refresh_guard.lock().await;
-        let cache_age: Option<std::time::Duration> = self
+    async fn refresh_jwks(&self, force: bool) -> Result<(), AccessTokenErr> {
+        let _refresh_guard: MutexGuard<()> = self.refresh_guard.lock().await;
+        let cache_age: Option<Duration> = self
             .jwks
             .read()
             .await
             .fetched_at
             .map(|fetched_at: Instant| fetched_at.elapsed());
-        let cache_is_fresh: bool =
-            cache_age.is_some_and(|age: std::time::Duration| age < self.config.jwks_refresh_interval);
-        let unknown_kid_refresh_is_throttled: bool = force
-            && cache_age.is_some_and(|age: std::time::Duration| age.as_secs() < UNKNOWN_KID_REFRESH_COOLDOWN_SECS);
+        let cache_is_fresh: bool = cache_age.is_some_and(|age: Duration| age < self.config.jwks_refresh_interval);
+        let unknown_kid_refresh_is_throttled: bool =
+            force && cache_age.is_some_and(|age: Duration| age.as_secs() < UNKNOWN_KID_REFRESH_COOLDOWN_SECS);
         if (cache_is_fresh && !force) || unknown_kid_refresh_is_throttled {
             trace!(
                 force,
@@ -168,19 +171,19 @@ impl OidcJwksVerifier {
         }
 
         debug!(force, "Fetching external signing keys");
-        let set: jsonwebtoken::jwk::JwkSet = self
+        let set: JwkSet = self
             .client
             .get(&self.config.jwks_url)
             .send()
             .await
             .and_then(reqwest::Response::error_for_status)
-            .map_err(AccessTokenError::JwksUnavailable)?
-            .json::<jsonwebtoken::jwk::JwkSet>()
+            .map_err(AccessTokenErr::JwksUnavailable)?
+            .json::<JwkSet>()
             .await
-            .map_err(AccessTokenError::JwksUnavailable)?;
+            .map_err(AccessTokenErr::JwksUnavailable)?;
         if set.keys.is_empty() {
             error!("External identity provider returned an empty signing-key set");
-            return Err(AccessTokenError::EmptyJwks);
+            return Err(AccessTokenErr::EmptyJwks);
         }
         let key_count: usize = set.keys.len();
 
@@ -195,7 +198,7 @@ impl OidcJwksVerifier {
 
 #[cfg(test)]
 impl OidcJwksVerifier {
-    fn with_jwks(config: OidcJwksVerifierConfig, set: JwkSet) -> Self {
+    fn with_jwks(config: OidcJwksVerifierCfg, set: JwkSet) -> Self {
         let client: reqwest::Client = reqwest::Client::builder()
             .timeout(config.http_timeout)
             .build()
@@ -212,27 +215,33 @@ impl OidcJwksVerifier {
     }
 }
 
-fn decoding_key_from_jwk(jwk: &Jwk, algorithm: Algorithm) -> Result<DecodingKey, AccessTokenError> {
+fn decoding_key_from_jwk(jwk: &Jwk, alg: Algorithm) -> Result<DecodingKey, AccessTokenErr> {
     if jwk
         .common
         .public_key_use
         .as_ref()
-        .is_some_and(|key_use| !matches!(key_use, PublicKeyUse::Signature))
-        || jwk.common.key_operations.as_ref().is_some_and(|operations| {
-            !operations
-                .iter()
-                .any(|operation| matches!(operation, KeyOperations::Verify))
-        })
+        .is_some_and(|key_use: &PublicKeyUse| !matches!(key_use, PublicKeyUse::Signature))
+        || jwk
+            .common
+            .key_operations
+            .as_ref()
+            .is_some_and(|operations: &Vec<KeyOperations>| {
+                !operations
+                    .iter()
+                    .any(|operation: &KeyOperations| matches!(operation, KeyOperations::Verify))
+            })
     {
-        return Err(AccessTokenError::DisallowedAlgorithm);
+        return Err(AccessTokenErr::DisallowedAlgorithm);
     }
+
     if let Some(key_algorithm) = jwk.common.key_algorithm {
-        let key_algorithm = Algorithm::try_from(key_algorithm).map_err(AccessTokenError::InvalidSigningKey)?;
-        if key_algorithm != algorithm {
-            return Err(AccessTokenError::DisallowedAlgorithm);
+        let key_algorithm: Algorithm = Algorithm::try_from(key_algorithm).map_err(AccessTokenErr::InvalidSigningKey)?;
+        if key_algorithm != alg {
+            return Err(AccessTokenErr::DisallowedAlgorithm);
         }
     }
-    DecodingKey::from_jwk(jwk).map_err(AccessTokenError::InvalidSigningKey)
+
+    DecodingKey::from_jwk(jwk).map_err(AccessTokenErr::InvalidSigningKey)
 }
 
 #[cfg(test)]
@@ -243,7 +252,7 @@ mod tests {
     use serde::Serialize;
 
     use super::OidcJwksVerifier;
-    use crate::ext_service::OidcJwksVerifierConfig;
+    use crate::ext_service::OidcJwksVerifierCfg;
 
     const ISSUER: &str = "https://identity.example/auth/v1";
     const AUDIENCE: &str = "authenticated";
@@ -260,8 +269,8 @@ mod tests {
         tid: Option<uuid::Uuid>,
     }
 
-    fn config() -> OidcJwksVerifierConfig {
-        OidcJwksVerifierConfig::new(
+    fn config() -> OidcJwksVerifierCfg {
+        OidcJwksVerifierCfg::new(
             ISSUER.to_owned(),
             AUDIENCE.to_owned(),
             "https://identity.example/auth/v1/.well-known/jwks.json".to_owned(),

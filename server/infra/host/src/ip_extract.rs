@@ -13,6 +13,7 @@ use axum::{
 use std::net::{IpAddr, SocketAddr};
 use axum::http::header::{HeaderValue, InvalidHeaderValue};
 pub use infra_kernel::request::OriginatorIp;
+use tracing::{error, warn, info, debug, trace};
 
 use crate::HostContext;
 const DEFAULT_TRUSTED_PROXY_CIDRS: &str = "127.0.0.1/32,::1/128";

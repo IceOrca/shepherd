@@ -121,13 +121,29 @@ This separation of evidence and mandatory human conclusion is the heart of the
 product. Scheduling, employee profiles, authentication, and administration
 support that workflow; they are not the product's primary purpose.
 
+The reconciliation UI separates **Cần đối soát** from **Đã xác nhận / đối
+soát**. Pending work remains an all-time bounded keyset stream so old unfinished
+records cannot disappear. Confirmed work requires a selected date interval and
+uses the same branch and customer/all-customer filters. PostgreSQL applies the
+collection, customer, period, and cursor predicates before fetching `limit + 1`.
+
+Every finalized planned or urgent assignment automatically creates revision 1
+in `business_assignment_reconciliation_revisions`. Managers and owners can
+repair the final duration through
+`POST /api/business/staffing/assignments/{assignment_id}/reconciliation-corrections`
+with the latest revision ID and a reason. The command appends a complete new
+financial conclusion; it never updates the original approval or an earlier
+revision. Payroll and operating reports synchronously read the latest revision.
+
 ### “Xác nhận giờ nhân viên” exact-match shortcut
 
 The reconciliation pages provide **Xác nhận giờ nhân viên** as a convenience
-for supervisors. It does not copy a staff record into the customer record and
-does not turn staff evidence into customer evidence. The supervisor must first
-enter the independent customer confirmation, bill, or time record through the
-normal customer-evidence form.
+for supervisors. If customer evidence is absent, the browser prepares an
+unsaved draft from the staff customer and exact staff start/end values, with
+`00000000` as the initial bill/reference code. The UI says that this is only a
+draft: it is never sent automatically. The manager must review it and press
+**Lưu bằng chứng khách hàng**, which records that manager as the actor. Only
+then is it independent customer evidence and eligible for exact-match review.
 
 The button appears only when Shepherd derives `matched`, meaning customer,
 exact start, exact end, and duration all agree. Pressing it is still the
@@ -172,8 +188,10 @@ Urgent conversion does insert the new formal assignment's linked customer
 record, as ordinary urgent reconciliation already does; that row is a new
 formal snapshot rather than a modification of the urgent source evidence.
 Normal evidence-save operations lock the assignment or urgent report before an
-insert/update, preventing a concurrent save from racing past terminal
-reconciliation.
+insert/update. A manager/owner with `business.reconciliation.correct` may also
+repair terminal customer evidence; the current projection changes while the
+database appends the complete superseded snapshot, recorder, and superseding
+actor. Both affected customer-local months must be open.
 
 If evidence is absent or different, staff time is open or invalid, the job or
 configured urgent rate is unavailable, or the work is already terminal, the
@@ -215,15 +233,42 @@ Shepherd does not currently add employer tax, insurance, overhead allocation,
 a salary-rule engine, or generic ERP accounting. Those are out of scope unless
 the client's real staffing contract changes.
 
-Customer evidence remains independently editable only until reconciliation.
-Every replacement archives the superseded customer, exact interval, notes,
-original recorder, and superseding actor. Planned and urgent records are
+Customer evidence is editable before reconciliation and, with the dedicated
+manager/owner correction permission, after reconciliation in an open financial
+period. Every replacement archives the superseded customer, exact interval,
+notes, original recorder, and superseding actor. Planned and urgent records are
 classified as matched only when customer, exact start, exact end, and duration
 all agree; human reconciliation remains mandatory.
 
 Payroll consumes only locked worker-pay snapshots, dates staffing earnings from
 the customer-confirmed local work interval, and rejects overlap with internal
 HR attendance so the same work cannot be paid from two sources.
+
+Expense claims and salary advances each record **Ngày chi** (`paid_on`) and
+**Tính vào kỳ lương** (`payroll_inclusion_on`); both default to the day of
+entry, and the payroll date cannot precede the payment date. The default
+expense workflow is **Nhân viên chi hộ**. Its approved remaining balance adds
+to that employee's selected payroll period, while a disbursed salary advance's
+remaining balance subtracts from the employee's selected payroll period:
+
+```text
+final pay = gross staffing/monthly pay
+          + employee-paid expense balance due in the period
+          - salary-advance balance due in the period
+```
+
+The payroll screen separates amounts already settled by a previous lock from
+amounts that will settle when the manager presses **Khóa kỳ lương**. Closing a
+branch-local month is one database transaction: it rejects staffing/attendance
+overlaps, appends the close decision, creates immutable payroll-linked expense
+reimbursements and advance deductions for all eligible remaining balances, and
+therefore leaves expenses fully reimbursed and advances fully recovered. The
+manual **Hoàn trả** and **Thu hồi** actions remain available as direct settlement
+workflows. Reopening records a new decision but never silently reverses a cash
+or payroll settlement; a later close processes only newly eligible balances.
+Each automatic settlement snapshots the exact payroll-inclusion date as well as
+the month, so a user-selected partial-month report remains identical before and
+after the lock.
 
 ### Payroll and financial Excel exports
 
@@ -268,19 +313,22 @@ The correction mechanism depends on the kind of data:
 | Data | Correction model |
 | --- | --- |
 | Staff clock-in/out and actor provenance | Immutable evidence; no edit control |
-| Customer evidence before reconciliation | Current record plus superseded-history rows |
-| Reconciled assignment money and configured rates | Locked assignment snapshot; new effective-dated rate versions affect future work only |
+| Customer evidence | Current record plus superseded-history rows; terminal replacement requires manager/owner correction permission and open periods |
+| Reconciled result | Revision 1 at approval plus append-only complete successor revisions; stale or closed-period corrections fail |
+| Configured rates | New effective-dated versions affect future work only; prior assignment/reconciliation snapshots stay unchanged |
 | Expense claims and salary advances | Current projection plus append-only full snapshot revisions |
 | Reimbursements and advance recoveries | Immutable settlement facts; monetary mistakes require a compensating entry, never source rewriting |
 | Monthly financial availability | Append-only open/closed period decisions |
 
-The accounting page exposes branch-local monthly periods. Closing a month
-stabilizes its financial source values; reopening requires permission and a
-recorded reason and creates another period revision instead of deleting the
-close event. Expense corrections check both the original and proposed month in
-PostgreSQL. Reports are calculated synchronously from committed transactional
-data, so an accepted open-period correction is visible atomically and there is
-no asynchronous report cache to repair.
+The accounting page exposes branch-local monthly payroll/financial periods.
+Closing a month stabilizes its source values and atomically settles payroll-due
+employee-paid expenses and salary advances. Reopening requires permission and
+a recorded reason and creates another period revision instead of deleting the
+close event or its settlements. Expense and salary-advance corrections check
+the old and proposed **Ngày chi** and **Tính vào kỳ lương** months in PostgreSQL.
+Reports are calculated synchronously from committed transactional data, so an
+accepted open-period correction is visible atomically and there is no
+asynchronous report cache to repair.
 
 PostgreSQL triggers reject updates/deletes on revision and period-event tables
 and reject deletion of the financial projections. `REVOKE` from `PUBLIC` is

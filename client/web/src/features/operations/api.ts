@@ -4,7 +4,9 @@ import type {
   CustomerPageResponse,
   CustomerUpsertRequest,
   CustomerWorkRecord,
-  CustomerWorkRecordUpsertRequest,
+  CustomerWorkRecordUpsertReq,
+  ReconciliationCorrectionReq,
+  ReconciliationRevision,
   Employee,
   EmployeePageResponse,
   StaffingJob,
@@ -21,22 +23,22 @@ import type {
   StaffingPriceSetRequest,
   StaffingRate,
   StaffingRatePageResponse,
-  StaffingReconciliationPageResponse,
+  StaffingReconcilePageRsp,
   StaffingShift,
   StaffingShiftCreateRequest,
   StaffingStaff,
   StaffingStaffPageResponse,
   UrgentCustomerWorkRecord,
-  UrgentCustomerWorkRecordUpsertRequest,
-  UrgentWorkAcceptStaffRecordRequest,
+  UrgentCustomerWorkRecordUpsertReq as UrgentCustomerWorkRecordUpsertRequest,
+  UrgentWorkAcceptStaffRecordReq as UrgentWorkAcceptStaffRecordRequest,
   UrgentWorkEmployee,
-  UrgentWorkEndRequest,
+  UrgentWorkEndReq as UrgentWorkEndRequest,
   UrgentWorkCustomer,
   UrgentWorkItem,
-  UrgentWorkReconcileRequest,
-  UrgentWorkReconciliation,
-  UrgentReconciliationPageResponse,
-  UrgentWorkStartRequest,
+  UrgentWorkReconcileReq as UrgentWorkReconcileRequest,
+  UrgentWorkReconcile,
+  UrgentReconcileRsp as UrgentReconcilePageRsp,
+  UrgentWorkStartReq as UrgentWorkStartRequest,
 } from "../../api/generated/contracts";
 import { apiRequest, apiRequestForBranch } from "../../shared/api/client";
 import { collectCursorPages } from "../../shared/api/pagination";
@@ -235,6 +237,9 @@ function reconciliationPagePath(
   path: string,
   cursor: string | null,
   customerId: string | null,
+  collection: "pending" | "confirmed" = "pending",
+  periodStart: string | null = null,
+  periodEnd: string | null = null,
 ): string {
   const parameters: URLSearchParams = new URLSearchParams();
   if (cursor !== null) {
@@ -243,6 +248,9 @@ function reconciliationPagePath(
   if (customerId !== null) {
     parameters.set("customer_id", customerId);
   }
+  parameters.set("collection", collection);
+  if (periodStart !== null) parameters.set("period_start", periodStart);
+  if (periodEnd !== null) parameters.set("period_end", periodEnd);
   const query: string = parameters.toString();
   return query.length === 0 ? path : `${path}?${query}`;
 }
@@ -250,8 +258,8 @@ function reconciliationPagePath(
 export function listReconciliations(
   cursor: string | null = null,
   customerId: string | null = null,
-): Promise<StaffingReconciliationPageResponse> {
-  return apiRequest<StaffingReconciliationPageResponse>(
+): Promise<StaffingReconcilePageRsp> {
+  return apiRequest<StaffingReconcilePageRsp>(
     reconciliationPagePath("/api/business/staffing/reconciliations", cursor, customerId),
   );
 }
@@ -260,16 +268,19 @@ export function listReconciliationsForBranch(
   branchId: string,
   cursor: string | null = null,
   customerId: string | null = null,
-): Promise<StaffingReconciliationPageResponse> {
-  return apiRequestForBranch<StaffingReconciliationPageResponse>(
-    reconciliationPagePath("/api/business/staffing/reconciliations", cursor, customerId),
+  collection: "pending" | "confirmed" = "pending",
+  periodStart: string | null = null,
+  periodEnd: string | null = null,
+): Promise<StaffingReconcilePageRsp> {
+  return apiRequestForBranch<StaffingReconcilePageRsp>(
+    reconciliationPagePath("/api/business/staffing/reconciliations", cursor, customerId, collection, periodStart, periodEnd),
     branchId,
   );
 }
 
 export function saveCustomerWorkRecord(
   assignmentId: string,
-  payload: CustomerWorkRecordUpsertRequest,
+  payload: CustomerWorkRecordUpsertReq,
 ): Promise<CustomerWorkRecord> {
   return apiRequest<CustomerWorkRecord>(
     `/api/business/staffing/assignments/${assignmentId}/customer-record`,
@@ -280,7 +291,7 @@ export function saveCustomerWorkRecord(
 export function saveCustomerWorkRecordForBranch(
   branchId: string,
   assignmentId: string,
-  payload: CustomerWorkRecordUpsertRequest,
+  payload: CustomerWorkRecordUpsertReq,
 ): Promise<CustomerWorkRecord> {
   return apiRequestForBranch<CustomerWorkRecord>(
     `/api/business/staffing/assignments/${assignmentId}/customer-record`,
@@ -319,6 +330,18 @@ export function acceptAssignmentStaffRecordForBranch(
     `/api/business/staffing/assignments/${assignmentId}/accept-staff-record`,
     branchId,
     { method: "POST" },
+  );
+}
+
+export function correctReconciliationForBranch(
+  branchId: string,
+  assignmentId: string,
+  payload: ReconciliationCorrectionReq,
+): Promise<ReconciliationRevision> {
+  return apiRequestForBranch<ReconciliationRevision>(
+    `/api/business/staffing/assignments/${assignmentId}/reconciliation-corrections`,
+    branchId,
+    { method: "POST", body: JSON.stringify(payload) },
   );
 }
 
@@ -376,8 +399,8 @@ export function endUrgentWork(input: UrgentEndActionInput): Promise<UrgentWorkIt
 export function listUrgentReconciliations(
   cursor: string | null = null,
   customerId: string | null = null,
-): Promise<UrgentReconciliationPageResponse> {
-  return apiRequest<UrgentReconciliationPageResponse>(
+): Promise<UrgentReconcilePageRsp> {
+  return apiRequest<UrgentReconcilePageRsp>(
     reconciliationPagePath("/api/business/staffing/urgent-work/reconciliations", cursor, customerId),
   );
 }
@@ -386,9 +409,12 @@ export function listUrgentReconciliationsForBranch(
   branchId: string,
   cursor: string | null = null,
   customerId: string | null = null,
-): Promise<UrgentReconciliationPageResponse> {
-  return apiRequestForBranch<UrgentReconciliationPageResponse>(
-    reconciliationPagePath("/api/business/staffing/urgent-work/reconciliations", cursor, customerId),
+  collection: "pending" | "confirmed" = "pending",
+  periodStart: string | null = null,
+  periodEnd: string | null = null,
+): Promise<UrgentReconcilePageRsp> {
+  return apiRequestForBranch<UrgentReconcilePageRsp>(
+    reconciliationPagePath("/api/business/staffing/urgent-work/reconciliations", cursor, customerId, collection, periodStart, periodEnd),
     branchId,
   );
 }
@@ -418,8 +444,8 @@ export function saveUrgentCustomerWorkRecordForBranch(
 export function reconcileUrgentWork(
   reportId: string,
   payload: UrgentWorkReconcileRequest,
-): Promise<UrgentWorkReconciliation> {
-  return apiRequest<UrgentWorkReconciliation>(`/api/business/staffing/urgent-work/${reportId}/reconcile`, {
+): Promise<UrgentWorkReconcile> {
+  return apiRequest<UrgentWorkReconcile>(`/api/business/staffing/urgent-work/${reportId}/reconcile`, {
     method: "POST",
     body: JSON.stringify(payload),
   });
@@ -429,8 +455,8 @@ export function reconcileUrgentWorkForBranch(
   branchId: string,
   reportId: string,
   payload: UrgentWorkReconcileRequest,
-): Promise<UrgentWorkReconciliation> {
-  return apiRequestForBranch<UrgentWorkReconciliation>(
+): Promise<UrgentWorkReconcile> {
+  return apiRequestForBranch<UrgentWorkReconcile>(
     `/api/business/staffing/urgent-work/${reportId}/reconcile`,
     branchId,
     { method: "POST", body: JSON.stringify(payload) },
@@ -441,8 +467,8 @@ export function acceptUrgentStaffRecordForBranch(
   branchId: string,
   reportId: string,
   payload: UrgentWorkAcceptStaffRecordRequest,
-): Promise<UrgentWorkReconciliation> {
-  return apiRequestForBranch<UrgentWorkReconciliation>(
+): Promise<UrgentWorkReconcile> {
+  return apiRequestForBranch<UrgentWorkReconcile>(
     `/api/business/staffing/urgent-work/${reportId}/accept-staff-record`,
     branchId,
     { method: "POST", body: JSON.stringify(payload) },

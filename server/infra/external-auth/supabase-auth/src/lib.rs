@@ -1,7 +1,7 @@
 //! Supabase Auth-specific external identity administration adapter.
 //!
 //! Reusable authentication infrastructure depends only on the
-//! `ExternalIdentityAdmin` contract. All Supabase Auth URLs, payloads, metadata,
+//! `ExtAuthAdmin` contract. All Supabase Auth URLs, payloads, metadata,
 //! identifiers, and HTTP error interpretation stay in this adapter.
 
 use std::{sync::Arc, time::Duration};
@@ -10,8 +10,7 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::{DateTime, Utc};
 use infra_auth::ext_service::auth_admin::{
-    CreateExternalIdentityRequest, ExternalIdentity, ExternalIdentityAdmin, ExternalIdentityAdminError,
-    ExternalIdentityStatus,
+    CreateExternalIdentityRequest, ExternalIdentity, ExtAuthAdmin, ExtAdminErr, ExternalIdentityStatus,
 };
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use reqwest::Url;
@@ -26,7 +25,7 @@ const LEGACY_GOTRUE_MANAGED_BY: &str = "shepherd-gotrue-adapter";
 const LEGACY_INFRA_MANAGED_BY: &str = "infra-auth";
 
 #[derive(Clone)]
-pub struct SupabaseAuthIdentityAdmin {
+pub struct SupabaseAuthAdmin {
     client: reqwest::Client,
     base_url: String,
     admin_token_signer: AdminTokenSigner,
@@ -52,7 +51,7 @@ struct AdminTokenClaims<'a> {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum SupabaseAuthIdentityAdminConfigError {
+pub enum ConfigError {
     #[error("AUTH_ADMIN_URL is required")]
     MissingUrl,
     #[error("{0} is required")]
@@ -119,15 +118,14 @@ impl SupabaseAuthUserList {
     }
 }
 
-impl SupabaseAuthIdentityAdmin {
-    pub fn from_env() -> Result<Arc<Self>, SupabaseAuthIdentityAdminConfigError> {
+impl SupabaseAuthAdmin {
+    pub fn from_env() -> Result<Arc<Self>, ConfigError> {
         debug!("Loading Supabase Auth identity administration configuration");
-        let raw_url: String = required_env("AUTH_ADMIN_URL").ok_or(SupabaseAuthIdentityAdminConfigError::MissingUrl)?;
-        let parsed_url: Url = Url::parse(&raw_url).map_err(|configuration_error: url::ParseError| {
-            SupabaseAuthIdentityAdminConfigError::InvalidUrl(configuration_error.to_string())
-        })?;
+        let raw_url: String = required_env("AUTH_ADMIN_URL").ok_or(ConfigError::MissingUrl)?;
+        let parsed_url: Url = Url::parse(&raw_url)
+            .map_err(|configuration_error: url::ParseError| ConfigError::InvalidUrl(configuration_error.to_string()))?;
         if !matches!(parsed_url.scheme(), "http" | "https") || parsed_url.host_str().is_none() {
-            return Err(SupabaseAuthIdentityAdminConfigError::UnsupportedUrl);
+            return Err(ConfigError::UnsupportedUrl);
         }
         let timeout_secs: u64 =
             std::env::var("AUTH_ADMIN_HTTP_TIMEOUT_SECS").map_or(Ok(DEFAULT_HTTP_TIMEOUT_SECS), |value: String| {
@@ -135,12 +133,12 @@ impl SupabaseAuthIdentityAdmin {
                     .parse::<u64>()
                     .ok()
                     .filter(|parsed_value: &u64| *parsed_value > 0)
-                    .ok_or(SupabaseAuthIdentityAdminConfigError::InvalidTimeout)
+                    .ok_or(ConfigError::InvalidTimeout)
             })?;
         let client: reqwest::Client = reqwest::Client::builder()
             .timeout(Duration::from_secs(timeout_secs))
             .build()
-            .map_err(SupabaseAuthIdentityAdminConfigError::Client)?;
+            .map_err(ConfigError::Client)?;
         let admin_token_signer: AdminTokenSigner = AdminTokenSigner::from_env()?;
         let service: Arc<Self> = Arc::new(Self {
             client,
@@ -196,18 +194,15 @@ impl SupabaseAuthIdentityAdmin {
 }
 
 #[async_trait]
-impl ExternalIdentityAdmin for SupabaseAuthIdentityAdmin {
-    async fn get_identity(&self, subject: &str) -> Result<Option<ExternalIdentity>, ExternalIdentityAdminError> {
+impl ExtAuthAdmin for SupabaseAuthAdmin {
+    async fn get_identity(&self, subject: &str) -> Result<Option<ExternalIdentity>, ExtAdminErr> {
         self.get_user(subject)
             .await
             .map(|user: Option<SupabaseAuthUser>| user.map(ExternalIdentity::from))
             .map_err(map_supabase_auth_error)
     }
 
-    async fn find_identity_by_email(
-        &self,
-        normalized_email: &str,
-    ) -> Result<Option<ExternalIdentity>, ExternalIdentityAdminError> {
+    async fn find_identity_by_email(&self, normalized_email: &str) -> Result<Option<ExternalIdentity>, ExtAdminErr> {
         let identity: Option<ExternalIdentity> = self
             .find_users(normalized_email)
             .await
@@ -231,7 +226,7 @@ impl ExternalIdentityAdmin for SupabaseAuthIdentityAdmin {
         normalized_email: &str,
         tenant_id: Uuid,
         idempotency_key: Uuid,
-    ) -> Result<Option<ExternalIdentity>, ExternalIdentityAdminError> {
+    ) -> Result<Option<ExternalIdentity>, ExtAdminErr> {
         let tenant_id_text: String = tenant_id.to_string();
         let idempotency_key_text: String = idempotency_key.to_string();
         let identity: Option<ExternalIdentity> = self
@@ -266,10 +261,7 @@ impl ExternalIdentityAdmin for SupabaseAuthIdentityAdmin {
         Ok(identity)
     }
 
-    async fn create_identity(
-        &self,
-        request: &CreateExternalIdentityRequest,
-    ) -> Result<ExternalIdentity, ExternalIdentityAdminError> {
+    async fn create_identity(&self, request: &CreateExternalIdentityRequest) -> Result<ExternalIdentity, ExtAdminErr> {
         trace!(
             tenant_id = %request.tenant_id,
             idempotency_key = %request.idempotency_key,
@@ -311,22 +303,22 @@ impl ExternalIdentityAdmin for SupabaseAuthIdentityAdmin {
 }
 
 impl AdminTokenSigner {
-    fn from_env() -> Result<Self, SupabaseAuthIdentityAdminConfigError> {
+    fn from_env() -> Result<Self, ConfigError> {
         let algorithm: String = required_admin_env("AUTH_ADMIN_JWT_ALGORITHM")?;
         if algorithm != "ES256" {
-            return Err(SupabaseAuthIdentityAdminConfigError::InvalidAdminAlgorithm);
+            return Err(ConfigError::InvalidAdminAlgorithm);
         }
         let expiry_secs: i64 = required_admin_env("AUTH_ADMIN_JWT_EXPIRY_SECS")?
             .parse::<i64>()
             .ok()
             .filter(|value: &i64| (1..=3600).contains(value))
-            .ok_or(SupabaseAuthIdentityAdminConfigError::InvalidAdminTokenExpiry)?;
+            .ok_or(ConfigError::InvalidAdminTokenExpiry)?;
         let private_key_base64: String = required_admin_env("AUTH_ADMIN_JWT_PRIVATE_KEY_BASE64")?;
         let private_key_pem: Vec<u8> = STANDARD
             .decode(private_key_base64)
-            .map_err(SupabaseAuthIdentityAdminConfigError::InvalidAdminPrivateKeyEncoding)?;
-        let encoding_key: EncodingKey = EncodingKey::from_ec_pem(&private_key_pem)
-            .map_err(SupabaseAuthIdentityAdminConfigError::InvalidAdminPrivateKey)?;
+            .map_err(ConfigError::InvalidAdminPrivateKeyEncoding)?;
+        let encoding_key: EncodingKey =
+            EncodingKey::from_ec_pem(&private_key_pem).map_err(ConfigError::InvalidAdminPrivateKey)?;
         Ok(Self {
             encoding_key,
             key_id: required_admin_env("AUTH_ADMIN_JWT_KEY_ID")?,
@@ -380,14 +372,14 @@ fn user_is_banned(user: &SupabaseAuthUser) -> bool {
         .is_some_and(|until: DateTime<chrono::FixedOffset>| until.with_timezone(&Utc) > Utc::now())
 }
 
-fn map_supabase_auth_error(error: SupabaseAuthError) -> ExternalIdentityAdminError {
+fn map_supabase_auth_error(error: SupabaseAuthError) -> ExtAdminErr {
     match error {
         SupabaseAuthError::Response {
             status: 400 | 422,
             message,
-        } => ExternalIdentityAdminError::Validation(message),
-        SupabaseAuthError::Response { status: 409, message } => ExternalIdentityAdminError::Conflict(message),
-        SupabaseAuthError::Response { status: 404, message } => ExternalIdentityAdminError::NotFound(message),
+        } => ExtAdminErr::Validation(message),
+        SupabaseAuthError::Response { status: 409, message } => ExtAdminErr::Conflict(message),
+        SupabaseAuthError::Response { status: 404, message } => ExtAdminErr::NotFound(message),
         SupabaseAuthError::Transport(transport_error) => {
             error!(
                 timeout = transport_error.is_timeout(),
@@ -395,19 +387,19 @@ fn map_supabase_auth_error(error: SupabaseAuthError) -> ExternalIdentityAdminErr
                 reason = %transport_error,
                 "Supabase Auth administration transport failed"
             );
-            ExternalIdentityAdminError::Unavailable("Supabase Auth transport failed".to_owned())
+            ExtAdminErr::Unavailable("Supabase Auth transport failed".to_owned())
         }
         SupabaseAuthError::AdminToken(signing_error) => {
             error!(reason = %signing_error, "Supabase Auth administration token signing failed");
-            ExternalIdentityAdminError::Unavailable("Supabase Auth administration credential is unavailable".to_owned())
+            ExtAdminErr::Unavailable("Supabase Auth administration credential is unavailable".to_owned())
         }
         SupabaseAuthError::InvalidResponse(response_error) => {
             error!(reason = %response_error, "Supabase Auth administration returned malformed JSON");
-            ExternalIdentityAdminError::Unavailable("Supabase Auth returned malformed JSON".to_owned())
+            ExtAdminErr::Unavailable("Supabase Auth returned malformed JSON".to_owned())
         }
         SupabaseAuthError::Response { status, message } => {
             warn!(status, "Supabase Auth administration request was rejected");
-            ExternalIdentityAdminError::Unavailable(message)
+            ExtAdminErr::Unavailable(message)
         }
     }
 }
@@ -452,8 +444,8 @@ fn required_env(name: &str) -> Option<String> {
         .filter(|value: &String| !value.is_empty())
 }
 
-fn required_admin_env(name: &'static str) -> Result<String, SupabaseAuthIdentityAdminConfigError> {
-    required_env(name).ok_or(SupabaseAuthIdentityAdminConfigError::MissingSetting(name))
+fn required_admin_env(name: &'static str) -> Result<String, ConfigError> {
+    required_env(name).ok_or(ConfigError::MissingSetting(name))
 }
 
 #[cfg(test)]

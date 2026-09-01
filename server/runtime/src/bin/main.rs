@@ -13,11 +13,7 @@ async fn main() {
     load_environment();
     Debugging::init();
 
-    let shepherd_runtime::RuntimeParts {
-        context,
-        router,
-        worker,
-    } = shepherd_runtime::build().await;
+    let shepherd_runtime::RuntimeParts { host, router, worker } = shepherd_runtime::build().await;
     let worker_shutdown_timeout: Duration = Duration::from_secs(positive_env_u64(
         "WORKER_SHUTDOWN_TIMEOUT_SECS",
         DEFAULT_WORKER_SHUTDOWN_TIMEOUT_SECS,
@@ -26,13 +22,13 @@ async fn main() {
         worker_shutdown_timeout_secs = worker_shutdown_timeout.as_secs(),
         "Resolved background worker shutdown timeout"
     );
-    info!("Starting server on {}:{}", context.ip, context.port);
+    info!("Starting server on {}:{}", host.ip, host.port);
 
-    let address: String = format!("{}:{}", context.ip, context.port);
-    let result = axum::serve(
+    let address: String = format!("{}:{}", host.ip, host.port);
+    let result: Result<(), std::io::Error> = axum::serve(
         tokio::net::TcpListener::bind(&address)
             .await
-            .unwrap_or_else(|error| panic!("failed to bind server to {address}: {error}")),
+            .unwrap_or_else(|error: std::io::Error| panic!("failed to bind server to {address}: {error}")),
         router.into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown_signal())
@@ -46,7 +42,7 @@ async fn main() {
     } else {
         info!("Background worker shutdown completed");
     }
-    result.unwrap_or_else(|error| panic!("server failed: {error}"));
+    result.unwrap_or_else(|error: std::io::Error| panic!("server failed: {error}"));
 }
 
 fn positive_env_u64(name: &str, default: u64) -> u64 {
@@ -83,7 +79,7 @@ fn positive_env_u64(name: &str, default: u64) -> u64 {
 }
 
 fn load_environment() {
-    if std::env::var("APP_ENV").as_deref() == Ok("development") {
+    if std::env::var("APP_ENV") == Ok("development".to_owned()) {
         dotenvy::dotenv().ok();
     } else {
         dotenvy::from_path(Path::new("/run/secrets/server_prod_env"))

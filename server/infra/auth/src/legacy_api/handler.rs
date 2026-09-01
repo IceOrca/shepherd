@@ -22,7 +22,7 @@ use uuid::Uuid;
 use validator::Validate;
 
 use super::{
-    LegacyAuthService, AuthenticatedUser,
+    LegacyAuthService, AuthedAcct,
     access_revocation::AccessRevocationCache,
     bruteforce::{BruteForceReason, BruteForceStatus, LoginAttemptContext, tenant_login_key},
     dto::{
@@ -185,7 +185,7 @@ async fn issue_login_response(
 
 pub async fn logout(
     State(ctx): State<Arc<LegacyAuthService>>,
-    Extension(user): Extension<AuthenticatedUser>,
+    Extension(user): Extension<AuthedAcct>,
 ) -> Result<Response, StatusCode> {
     info!(
         "Logout requested: tenant_id={} account_id={} sid={} jti={}",
@@ -212,7 +212,7 @@ pub async fn logout(
 
 pub async fn logout_all(
     State(ctx): State<Arc<LegacyAuthService>>,
-    Extension(user): Extension<AuthenticatedUser>,
+    Extension(user): Extension<AuthedAcct>,
 ) -> Result<Response, StatusCode> {
     info!(
         "Logout-all requested: tenant_id={} account_id={} current_sid={}",
@@ -403,7 +403,7 @@ async fn refresh_session_inner(
         .into_response())
 }
 
-pub async fn get_profile(Extension(user): Extension<AuthenticatedUser>) -> impl IntoResponse {
+pub async fn get_profile(Extension(user): Extension<AuthedAcct>) -> impl IntoResponse {
     (
         sensitive_headers(None),
         Json(AuthProfileResponse {
@@ -420,7 +420,7 @@ pub async fn get_profile(Extension(user): Extension<AuthenticatedUser>) -> impl 
 
 pub async fn list_accounts(
     State(ctx): State<Arc<LegacyAuthService>>,
-    Extension(user): Extension<AuthenticatedUser>,
+    Extension(user): Extension<AuthedAcct>,
 ) -> Result<impl IntoResponse, StatusCode> {
     require_permission(&user, "auth.accounts.read")?;
     let accounts: Vec<AccountSummary> = ctx.core_entity.list_accounts(user.tenant_id).await.map_err(|error| {
@@ -435,7 +435,7 @@ pub async fn list_accounts(
 
 pub async fn get_authorization_catalog(
     State(ctx): State<Arc<LegacyAuthService>>,
-    Extension(user): Extension<AuthenticatedUser>,
+    Extension(user): Extension<AuthedAcct>,
 ) -> Result<impl IntoResponse, StatusCode> {
     require_permission(&user, "auth.roles.read")?;
     let catalog: AuthorizationCatalog = ctx
@@ -454,7 +454,7 @@ pub async fn get_authorization_catalog(
 
 pub async fn change_own_password(
     State(ctx): State<Arc<LegacyAuthService>>,
-    Extension(user): Extension<AuthenticatedUser>,
+    Extension(user): Extension<AuthedAcct>,
     Json(payload): Json<ChangePasswordRequest>,
 ) -> Result<Response, StatusCode> {
     payload.validate().map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -481,7 +481,7 @@ pub async fn change_own_password(
 
 pub async fn reset_account_password(
     State(ctx): State<Arc<LegacyAuthService>>,
-    Extension(user): Extension<AuthenticatedUser>,
+    Extension(user): Extension<AuthedAcct>,
     Path(account_id): Path<Uuid>,
     Json(payload): Json<ResetPasswordRequest>,
 ) -> Result<impl IntoResponse, StatusCode> {
@@ -502,7 +502,7 @@ pub async fn reset_account_password(
 
 pub async fn update_account_status(
     State(ctx): State<Arc<LegacyAuthService>>,
-    Extension(user): Extension<AuthenticatedUser>,
+    Extension(user): Extension<AuthedAcct>,
     Path(account_id): Path<Uuid>,
     Json(payload): Json<UpdateAccountStatusRequest>,
 ) -> Result<impl IntoResponse, StatusCode> {
@@ -525,7 +525,7 @@ pub async fn update_account_status(
 
 pub async fn update_account_roles(
     State(ctx): State<Arc<LegacyAuthService>>,
-    Extension(user): Extension<AuthenticatedUser>,
+    Extension(user): Extension<AuthedAcct>,
     Path(account_id): Path<Uuid>,
     Json(payload): Json<UpdateAccountRolesRequest>,
 ) -> Result<impl IntoResponse, StatusCode> {
@@ -551,7 +551,7 @@ pub async fn update_account_roles(
 
 pub async fn update_account_permissions(
     State(ctx): State<Arc<LegacyAuthService>>,
-    Extension(user): Extension<AuthenticatedUser>,
+    Extension(user): Extension<AuthedAcct>,
     Path(account_id): Path<Uuid>,
     Json(payload): Json<UpdateAccountPermissionsRequest>,
 ) -> Result<impl IntoResponse, StatusCode> {
@@ -571,7 +571,7 @@ pub async fn update_account_permissions(
 
 pub async fn register_new_user(
     State(ctx): State<Arc<LegacyAuthService>>,
-    Extension(user): Extension<AuthenticatedUser>,
+    Extension(user): Extension<AuthedAcct>,
     Json(payload): Json<RegisterUserRequest>,
 ) -> Result<impl IntoResponse, StatusCode> {
     payload.validate().map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -751,7 +751,7 @@ async fn revoke_all_account_sessions(
     Ok(())
 }
 
-fn require_permission(user: &AuthenticatedUser, permission: &str) -> Result<(), StatusCode> {
+fn require_permission(user: &AuthedAcct, permission: &str) -> Result<(), StatusCode> {
     if user.has_permission(permission) {
         Ok(())
     } else {

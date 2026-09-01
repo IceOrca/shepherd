@@ -84,15 +84,19 @@ export type StaffingCandidate = { employee_id: string, employee_code: string, di
 
 export type StaffingEligibility = { id: string, employee_id: string, job_id: string, effective_from: string, effective_to: string | null, notes: string | null, created_at: string, };
 
-export type ReconciliationStatus = "pending_staff" | "pending_customer" | "matched" | "discrepancy" | "reconciled";
+export type ReconcileStatus = "pending_staff" | "pending_customer" | "matched" | "discrepancy" | "reconciled";
 
 export type CustomerWorkRecord = { id: string, assignment_id: string, confirmed_customer_id: string, confirmed_started_at: string, confirmed_ended_at: string, confirmed_worked_seconds: number, customer_reference: string | null, notes: string | null, updated_at: string, };
 
-export type StaffingReconciliation = { assignment_id: string, shift_id: string, customer_id: string, employee_id: string, employee_code: string, employee_name: string, customer_name: string, scheduled_starts_at: string, scheduled_ends_at: string, assignment_status: ShiftAssignmentStatus, staff_started_at: string | null, staff_ended_at: string | null, staff_worked_seconds: number, customer_record: CustomerWorkRecord | null, final_worked_seconds: number | null, adjustment_reason: string | null, reconciliation_status: ReconciliationStatus, };
+export type StaffingReconcile = { assignment_id: string, shift_id: string, customer_id: string, employee_id: string, employee_code: string, employee_name: string, customer_name: string, confirmed_customer_name: string | null, scheduled_starts_at: string, scheduled_ends_at: string, assignment_status: ShiftAssignmentStatus, staff_started_at: string | null, staff_ended_at: string | null, staff_worked_seconds: number, customer_record: CustomerWorkRecord | null, final_worked_seconds: number | null, adjustment_reason: string | null, reconciliation_status: ReconcileStatus, result_revision_id: string | null, result_revision_number: number | null, };
 
-export type StaffingReconciliationPageResponse = { items: Array<StaffingReconciliation>, next_cursor: string | null, has_more: boolean, limit: number, };
+export type StaffingReconcilePageRsp = { items: Array<StaffingReconcile>, next_cursor: string | null, has_more: boolean, limit: number, };
 
-export type CustomerWorkRecordUpsertRequest = { confirmed_customer_id: string, confirmed_started_at: string, confirmed_ended_at: string, customer_reference?: string | null, notes?: string | null, };
+export type CustomerWorkRecordUpsertReq = { confirmed_customer_id: string, confirmed_started_at: string, confirmed_ended_at: string, customer_reference?: string | null, notes?: string | null, };
+
+export type ReconciliationCorrectionReq = { expected_revision_id: string, worked_seconds: number, correction_reason: string, };
+
+export type ReconciliationRevision = { revision_id: string, assignment_id: string, revision_number: number, worked_seconds: number, correction_reason: string | null, recorded_at: string, };
 
 export type CustomerUpsertRequest = { code: string, name: string, address?: string | null, time_zone: string, billing_email?: string | null, status: BusinessRecordStatus, };
 
@@ -118,49 +122,49 @@ export type ExpenseFundingSource = "company_funds" | "employee_personal";
 
 export type ExpenseClaimStatus = "submitted" | "approved" | "rejected" | "cancelled";
 
-export type SalaryAdvanceRecoverySource = "manual_repayment" | "payroll_deduction";
+export type SalaryAdvanceRecoverySource = "manual_repayment";
 
 export type SalaryAdvanceStatus = "requested" | "approved" | "disbursed" | "recovered" | "rejected" | "cancelled";
 
 export type ExpenseCategory = { id: string, code: string, display_name: string, };
 
-export type ExpenseClaim = { id: string, branch_id: string, category_id: string, category_name: string, funding_source: ExpenseFundingSource, paid_by_employee_id: string | null, paid_by_employee_name: string | null, customer_id: string | null, urgent_work_report_id: string | null, staffing_assignment_id: string | null, incurred_on: string, description: string, evidence_reference: string | null, claimed_amount: string, approved_amount: string | null, reimbursed_amount: string, outstanding_reimbursement: string, currency: string, status: ExpenseClaimStatus, decision_reason: string | null, submitted_by_account_id: string, submitted_by_username: string, approved_by_username: string | null, approved_at: string | null, revision_id: string, revision_number: number, revision_kind: string, correction_reason: string | null, revised_by_username: string, revised_at: string, financial_period_open: boolean, created_at: string, updated_at: string, };
+export type ExpenseClaim = { id: string, branch_id: string, category_id: string, category_name: string, funding_source: ExpenseFundingSource, paid_by_employee_id: string | null, paid_by_employee_name: string | null, customer_id: string | null, urgent_work_report_id: string | null, staffing_assignment_id: string | null, paid_on: string, payroll_inclusion_on: string, description: string, evidence_reference: string | null, claimed_amount: string, approved_amount: string | null, reimbursed_amount: string, outstanding_reimbursement: string, currency: string, status: ExpenseClaimStatus, decision_reason: string | null, submitted_by_account_id: string, submitted_by_username: string, approved_by_username: string | null, approved_at: string | null, revision_id: string, revision_number: number, revision_kind: string, correction_reason: string | null, revised_by_username: string, revised_at: string, financial_period_open: boolean, created_at: string, updated_at: string, };
 
-export type ExpensePageResponse = { items: Array<ExpenseClaim>, next_cursor: string | null, has_more: boolean, limit: number, };
+export type ExpensePageRsp = { items: Array<ExpenseClaim>, next_cursor: string | null, has_more: boolean, limit: number, };
 
-export type ExpenseClaimRevision = { revision_id: string, revision_number: number, revision_kind: string, correction_reason: string | null, revised_by_username: string, revised_at: string, category_name: string, incurred_on: string, description: string, claimed_amount: string, approved_amount: string | null, currency: string, status: ExpenseClaimStatus, };
+export type ExpenseClaimRevision = { revision_id: string, revision_number: number, revision_kind: string, correction_reason: string | null, revised_by_username: string, revised_at: string, category_name: string, paid_on: string, payroll_inclusion_on: string, description: string, claimed_amount: string, approved_amount: string | null, currency: string, status: ExpenseClaimStatus, };
 
-export type ExpenseRevisionPageResponse = { items: Array<ExpenseClaimRevision>, next_cursor: string | null, has_more: boolean, limit: number, };
+export type ExpenseRevisionPageRsp = { items: Array<ExpenseClaimRevision>, next_cursor: string | null, has_more: boolean, limit: number, };
 
-export type SalaryAdvance = { id: string, branch_id: string, employee_id: string, employee_code: string, employee_name: string, requested_amount: string, approved_amount: string | null, recovered_amount: string, outstanding_amount: string, currency: string, reason: string, recovery_due_on: string | null, status: SalaryAdvanceStatus, decision_reason: string | null, requested_by_username: string, approved_by_username: string | null, disbursed_by_username: string | null, disbursement_reference: string | null, requested_at: string, approved_at: string | null, disbursed_at: string | null, revision_id: string, revision_number: number, revision_kind: string, correction_reason: string | null, revised_by_username: string, revised_at: string, updated_at: string, };
+export type SalaryAdvance = { id: string, branch_id: string, employee_id: string, employee_code: string, employee_name: string, requested_amount: string, approved_amount: string | null, recovered_amount: string, outstanding_amount: string, currency: string, reason: string, paid_on: string, payroll_inclusion_on: string, status: SalaryAdvanceStatus, decision_reason: string | null, requested_by_username: string, approved_by_username: string | null, disbursed_by_username: string | null, disbursement_reference: string | null, requested_at: string, approved_at: string | null, disbursed_at: string | null, revision_id: string, revision_number: number, revision_kind: string, correction_reason: string | null, revised_by_username: string, revised_at: string, financial_period_open: boolean, updated_at: string, };
 
 export type SalaryAdvancePageResponse = { items: Array<SalaryAdvance>, next_cursor: string | null, has_more: boolean, limit: number, };
 
-export type SalaryAdvanceRevision = { revision_id: string, revision_number: number, revision_kind: string, correction_reason: string | null, revised_by_username: string, revised_at: string, employee_name: string, requested_amount: string, approved_amount: string | null, currency: string, reason: string, recovery_due_on: string | null, status: SalaryAdvanceStatus, };
+export type SalaryAdvanceRevision = { revision_id: string, revision_number: number, revision_kind: string, correction_reason: string | null, revised_by_username: string, revised_at: string, employee_name: string, requested_amount: string, approved_amount: string | null, currency: string, reason: string, paid_on: string, payroll_inclusion_on: string, status: SalaryAdvanceStatus, };
 
 export type SalaryAdvanceRevisionPageResponse = { items: Array<SalaryAdvanceRevision>, next_cursor: string | null, has_more: boolean, limit: number, };
 
-export type ExpenseClaimCreateRequest = { category_id: string, funding_source: ExpenseFundingSource, paid_by_employee_id?: string | null, customer_id?: string | null, urgent_work_report_id?: string | null, staffing_assignment_id?: string | null, incurred_on: string, description: string, evidence_reference?: string | null, claimed_amount: string, currency: string, };
+export type ExpenseClaimCreateReq = { category_id: string, funding_source: ExpenseFundingSource, paid_by_employee_id?: string | null, customer_id?: string | null, urgent_work_report_id?: string | null, staffing_assignment_id?: string | null, paid_on: string, payroll_inclusion_on: string, description: string, evidence_reference?: string | null, claimed_amount: string, currency: string, };
 
-export type ExpenseCorrectionRequest = { expected_revision_id: string, correction_reason: string, category_id: string, funding_source: ExpenseFundingSource, paid_by_employee_id?: string | null, customer_id?: string | null, urgent_work_report_id?: string | null, staffing_assignment_id?: string | null, incurred_on: string, description: string, evidence_reference?: string | null, claimed_amount: string, approved_amount?: string | null, currency: string, };
+export type ExpenseCorrectionReq = { expected_revision_id: string, correction_reason: string, category_id: string, funding_source: ExpenseFundingSource, paid_by_employee_id?: string | null, customer_id?: string | null, urgent_work_report_id?: string | null, staffing_assignment_id?: string | null, paid_on: string, payroll_inclusion_on: string, description: string, evidence_reference?: string | null, claimed_amount: string, approved_amount?: string | null, currency: string, };
 
-export type FinancialDecisionRequest = { approved_amount: string, reason?: string | null, };
+export type FinancialDecisionReq = { approved_amount: string, reason?: string | null, };
 
 export type FinancialRejectionRequest = { reason: string, };
 
-export type FinancialSettlementRequest = { amount: string, reference: string, };
+export type FinancialSettlementReq = { amount: string, reference: string, };
 
-export type SalaryAdvanceCreateRequest = { employee_id: string, requested_amount: string, currency: string, reason: string, recovery_due_on?: string | null, };
+export type SalaryAdvanceCreateReq = { employee_id: string, requested_amount: string, currency: string, reason: string, paid_on: string, payroll_inclusion_on: string, };
 
-export type SalaryAdvanceCorrectionRequest = { expected_revision_id: string, correction_reason: string, employee_id: string, requested_amount: string, approved_amount?: string | null, currency: string, reason: string, recovery_due_on?: string | null, };
+export type SalaryAdvanceCorrectionReq = { expected_revision_id: string, correction_reason: string, employee_id: string, requested_amount: string, approved_amount?: string | null, currency: string, reason: string, paid_on: string, payroll_inclusion_on: string, };
 
-export type SalaryAdvanceDisbursementRequest = { reference: string, };
+export type SalaryAdvanceDisburseReq = { reference: string, };
 
-export type SalaryAdvanceRecoveryRequest = { amount: string, source: SalaryAdvanceRecoverySource, reference: string, };
+export type SalaryAdvanceRecoveryReq = { amount: string, source: SalaryAdvanceRecoverySource, reference: string, };
 
-export type EmployeeSalaryConfiguration = { employee_id: string, branch_id: string, employee_code: string, employee_name: string, role: RoleCode, rate_id: string | null, monthly_amount: string | null, currency: string | null, effective_from: string | null, effective_to: string | null, };
+export type EmployeeSalaryConfig = { employee_id: string, branch_id: string, employee_code: string, employee_name: string, role: RoleCode, rate_id: string | null, monthly_amount: string | null, currency: string | null, effective_from: string | null, effective_to: string | null, };
 
-export type EmployeeSalaryRateCreateRequest = { employee_id: string, monthly_amount: string, currency: string, effective_from: string, };
+export type EmployeeSalaryRateCreateReq = { employee_id: string, monthly_amount: string, currency: string, effective_from: string, };
 
 export type FinancialPeriodStatus = "open" | "closed";
 
@@ -172,13 +176,13 @@ export type OperatingFinancialLine = { currency: string, staffing_revenue: strin
 
 export type OperatingFinancialReport = { branch_id: string, branch_name: string, start_date: string, end_date: string, lines: Array<OperatingFinancialLine>, };
 
-export type PayrollLine = { employee_id: string, branch_id: string, employee_code: string, employee_name: string, role: RoleCode, currency: string, staffing_worked_seconds: number, staffing_earnings: string, prorated_monthly_salary: string, gross_pay: string, recorded_advance_deduction: string, outstanding_advance_due: string, suggested_advance_deduction: string, estimated_net_pay: string, attendance_overlap_count: number, };
+export type PayrollLine = { employee_id: string, branch_id: string, employee_code: string, employee_name: string, role: RoleCode, currency: string, staffing_worked_seconds: number, staffing_earnings: string, prorated_monthly_salary: string, gross_pay: string, recorded_expense_reimbursement: string, suggested_expense_reimbursement: string, recorded_advance_deduction: string, outstanding_advance_due: string, suggested_advance_deduction: string, estimated_net_pay: string, attendance_overlap_count: number, };
 
 export type PayrollReport = { branch_id: string, branch_name: string, start_date: string, end_date: string, lines: Array<PayrollLine>, };
 
 export type ReportExportKind = "operating_financial" | "payroll";
 
-export type FinancialReportExportRequest = { report_kind: ReportExportKind, start_date: string, end_date: string, branch_ids: Array<string>, };
+export type FinancialReportExportReq = { report_kind: ReportExportKind, start_date: string, end_date: string, branch_ids: Array<string>, };
 
 export type UrgentWorkStatus = "active" | "completed" | "reconciled" | "cancelled";
 
@@ -192,19 +196,19 @@ export type UrgentWorkItem = { report_id: string, branch_id: string, branch_name
 
 export type UrgentCustomerWorkRecord = { id: string, report_id: string, confirmed_customer_id: string, confirmed_customer_name: string, confirmed_started_at: string, confirmed_ended_at: string, confirmed_worked_seconds: number, customer_reference: string | null, notes: string | null, updated_at: string, };
 
-export type UrgentWorkReconciliation = { work: UrgentWorkItem, customer_record: UrgentCustomerWorkRecord | null, reconciliation_status: ReconciliationStatus, final_customer_id: string | null, final_job_id: string | null, final_worked_seconds: number | null, adjustment_reason: string | null, eligibility_exception_reason: string | null, };
+export type UrgentWorkReconcile = { work: UrgentWorkItem, customer_record: UrgentCustomerWorkRecord | null, reconciliation_status: ReconcileStatus, final_customer_id: string | null, final_job_id: string | null, final_worked_seconds: number | null, adjustment_reason: string | null, eligibility_exception_reason: string | null, result_revision_id: string | null, result_revision_number: number | null, };
 
-export type UrgentReconciliationPageResponse = { items: Array<UrgentWorkReconciliation>, next_cursor: string | null, has_more: boolean, limit: number, };
+export type UrgentReconcileRsp = { items: Array<UrgentWorkReconcile>, next_cursor: string | null, has_more: boolean, limit: number, };
 
-export type UrgentWorkStartRequest = { customer_id: string, employee_ids: Array<string>, latitude: number | null, longitude: number | null, accuracy_meters: number | null, };
+export type UrgentWorkStartReq = { customer_id: string, employee_ids: Array<string>, latitude: number | null, longitude: number | null, accuracy_meters: number | null, };
 
-export type UrgentWorkEndRequest = { latitude: number | null, longitude: number | null, accuracy_meters: number | null, };
+export type UrgentWorkEndReq = { latitude: number | null, longitude: number | null, accuracy_meters: number | null, };
 
-export type UrgentCustomerWorkRecordUpsertRequest = { confirmed_customer_id: string, confirmed_started_at: string, confirmed_ended_at: string, customer_reference?: string | null, notes?: string | null, };
+export type UrgentCustomerWorkRecordUpsertReq = { confirmed_customer_id: string, confirmed_started_at: string, confirmed_ended_at: string, customer_reference?: string | null, notes?: string | null, };
 
-export type UrgentWorkReconcileRequest = { final_customer_id: string, job_id: string, worked_seconds: number, adjustment_reason?: string | null, manual_rate?: ManualRateOverrideRequest | null, };
+export type UrgentWorkReconcileReq = { final_customer_id: string, job_id: string, worked_seconds: number, adjustment_reason?: string | null, manual_rate?: ManualRateOverrideRequest | null, };
 
-export type UrgentWorkAcceptStaffRecordRequest = { job_id: string, };
+export type UrgentWorkAcceptStaffRecordReq = { job_id: string, };
 
 export type EmployeeStatus = "active" | "on_leave" | "terminated";
 

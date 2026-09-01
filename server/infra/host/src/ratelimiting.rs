@@ -187,10 +187,6 @@ impl RateLimiter {
         GovernorLayer::new(Self::public_route_config()).error_handler(Self::response_error_handler)
     }
 
-    pub fn public_layer(router: Router) -> Router {
-        router.layer(Self::public_route_layer())
-    }
-
     fn protected_route_config(
         policy: RateLimitPolicy,
     ) -> Arc<GovernorConfig<PrincipalKeyExtractor, StateInformationMiddleware>> {
@@ -209,10 +205,6 @@ impl RateLimiter {
         policy: RateLimitPolicy,
     ) -> GovernorLayer<PrincipalKeyExtractor, StateInformationMiddleware, Body> {
         GovernorLayer::new(Self::protected_route_config(policy)).error_handler(Self::response_error_handler)
-    }
-
-    pub fn protected_layer(router: Router, policy: RateLimitPolicy) -> Router {
-        router.layer(Self::protected_route_layer(policy))
     }
 
     fn public_route_strict_config() -> Arc<GovernorConfig<OriginatorIpExtractor, StateInformationMiddleware>> {

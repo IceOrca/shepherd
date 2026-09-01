@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum AccessTokenError {
+pub enum AccessTokenErr {
     #[error("invalid access-token configuration: {0}")]
     Configuration(String),
     #[error("access token is missing a key identifier")]
@@ -22,7 +22,7 @@ pub enum AccessTokenError {
     EmptyJwks,
 }
 
-impl AccessTokenError {
+impl AccessTokenErr {
     pub fn is_temporary(&self) -> bool {
         matches!(self, Self::JwksUnavailable(_) | Self::EmptyJwks)
     }

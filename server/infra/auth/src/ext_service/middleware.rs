@@ -8,10 +8,11 @@ use axum::{
 };
 use infra_kernel::request::PrincipalRateLimitKey;
 use tracing::{debug, error, info, trace, warn};
+use super::AccessTokenErr;
 
 use crate::AuthService;
 
-use super::AuthenticatedPrincipal;
+use super::AuthedPrincipal;
 
 /// Accepts a standard bearer token from browser or mobile clients.
 pub async fn require_authenticated(
@@ -26,27 +27,29 @@ pub async fn require_authenticated(
         warn!(method = %method, path = %path, "Protected request rejected because bearer token is missing or malformed");
         StatusCode::UNAUTHORIZED
     })?;
-    let principal: AuthenticatedPrincipal = auth.token_verifier.validate_access_token(token).await.map_err(
-        |validation_error: super::AccessTokenError| {
-            if validation_error.is_temporary() {
-                error!(
-                    method = %method,
-                    path = %path,
-                    reason = %validation_error,
-                    "Protected request could not validate bearer token because the auth provider is unavailable"
-                );
-                StatusCode::SERVICE_UNAVAILABLE
-            } else {
-                warn!(
-                    method = %method,
-                    path = %path,
-                    reason = %validation_error,
-                    "Protected request rejected because bearer token validation failed"
-                );
-                StatusCode::UNAUTHORIZED
-            }
-        },
-    )?;
+    let principal: AuthedPrincipal =
+        auth.token_verifier
+            .validate_access_token(token)
+            .await
+            .map_err(|err: AccessTokenErr| {
+                if err.is_temporary() {
+                    error!(
+                        method = %method,
+                        path = %path,
+                        reason = %err,
+                        "Protected request could not validate bearer token because the auth provider is unavailable"
+                    );
+                    StatusCode::SERVICE_UNAVAILABLE
+                } else {
+                    warn!(
+                        method = %method,
+                        path = %path,
+                        reason = %err,
+                        "Protected request rejected because bearer token validation failed"
+                    );
+                    StatusCode::UNAUTHORIZED
+                }
+            })?;
     let issuer: String = principal.issuer.clone();
     let subject: String = principal.subject.clone();
     debug!(

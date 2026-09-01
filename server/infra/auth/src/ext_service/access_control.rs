@@ -20,16 +20,16 @@ use uuid::Uuid;
 use crate::{AuthCodeError, AuthService, PermissionCode, RoleCode, ext_service::ListPaginationPolicy};
 
 use super::{
-    account::{AccountStatus, AuthenticatedUser},
-    account_cache::AuthenticatedUserCacheError,
-    auth_admin::{AuthAccountAccessContext, AuthAccountProvisioner, AuthAccountProvisioningError, AuthAdminPolicy},
+    account::{AccountStatus, AuthedUser},
+    account_cache::AuthedCacheErr,
+    auth_admin::{AuthAccountAccessContext, AuthProvisioner, AcctProvisionErr, AuthAdminPolicy},
 };
 
 #[derive(Clone)]
 struct AccessControlContext {
     auth: Arc<AuthService>,
     policy: AuthAdminPolicy,
-    provisioner: Arc<dyn AuthAccountProvisioner>,
+    provisioner: Arc<dyn AuthProvisioner>,
     pagination: ListPaginationPolicy,
 }
 
@@ -447,7 +447,7 @@ struct RoleRuleRow {
 pub fn routes(
     auth: Arc<AuthService>,
     policy: AuthAdminPolicy,
-    provisioner: Arc<dyn AuthAccountProvisioner>,
+    provisioner: Arc<dyn AuthProvisioner>,
     pagination: ListPaginationPolicy,
 ) -> Router {
     let context: Arc<AccessControlContext> = Arc::new(AccessControlContext {
@@ -472,7 +472,7 @@ pub fn routes(
 
 async fn snapshot(
     State(context): State<Arc<AccessControlContext>>,
-    Extension(actor): Extension<AuthenticatedUser>,
+    Extension(actor): Extension<AuthedUser>,
     Query(query): Query<AccessControlPageQuery>,
 ) -> Result<Json<AccessControlSnapshot>, AccessControlError> {
     require_permission(&actor, &context.policy.role_manage_permission)?;
@@ -508,7 +508,7 @@ async fn snapshot(
 
 async fn create_branch(
     State(context): State<Arc<AccessControlContext>>,
-    Extension(actor): Extension<AuthenticatedUser>,
+    Extension(actor): Extension<AuthedUser>,
     Json(mut request): Json<CreateAccessControlBranchRequest>,
 ) -> Result<(StatusCode, Json<AccessControlBranch>), AccessControlError> {
     require_permission(&actor, &context.policy.branch_manage_permission)?;
@@ -519,7 +519,7 @@ async fn create_branch(
     let branch: AccessControlBranch = context
         .auth
         .db
-        .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+        .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
             let inserted: BranchRow = sqlx::query_as!(
                 BranchRow,
                 r#"
@@ -574,7 +574,7 @@ async fn create_branch(
 
 async fn update_branch(
     State(context): State<Arc<AccessControlContext>>,
-    Extension(actor): Extension<AuthenticatedUser>,
+    Extension(actor): Extension<AuthedUser>,
     Path(branch_id): Path<Uuid>,
     Json(mut request): Json<UpdateAccessControlBranchRequest>,
 ) -> Result<Json<AccessControlBranch>, AccessControlError> {
@@ -585,7 +585,7 @@ async fn update_branch(
     let result: Option<BranchRow> = context
         .auth
         .db
-        .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+        .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
             let before: Option<BranchRow> = sqlx::query_as!(
                 BranchRow,
                 "SELECT id, code, name, time_zone, status, version FROM branches WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
@@ -654,7 +654,7 @@ async fn update_branch(
 
 async fn create_role(
     State(context): State<Arc<AccessControlContext>>,
-    Extension(actor): Extension<AuthenticatedUser>,
+    Extension(actor): Extension<AuthedUser>,
     Json(mut request): Json<CreateAccessControlRoleRequest>,
 ) -> Result<(StatusCode, Json<AccessControlRole>), AccessControlError> {
     require_permission(&actor, &context.policy.role_manage_permission)?;
@@ -665,7 +665,7 @@ async fn create_role(
     context
         .auth
         .db
-        .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+        .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
             sqlx::query!(
                 r#"
                 INSERT INTO tenant_roles (
@@ -725,7 +725,7 @@ async fn create_role(
 
 async fn update_role(
     State(context): State<Arc<AccessControlContext>>,
-    Extension(actor): Extension<AuthenticatedUser>,
+    Extension(actor): Extension<AuthedUser>,
     Path(role_code_raw): Path<String>,
     Json(mut request): Json<UpdateAccessControlRoleRequest>,
 ) -> Result<Json<AccessControlRole>, AccessControlError> {
@@ -739,7 +739,7 @@ async fn update_role(
     let update_result: bool = context
         .auth
         .db
-        .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+        .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
             let before: Option<RoleRow> =
                 load_role_row(connection, tenant_id, role_code_for_update.as_str(), true).await?;
             let Some(before) = before else {
@@ -818,7 +818,7 @@ async fn update_role(
 
 async fn update_user_access(
     State(context): State<Arc<AccessControlContext>>,
-    Extension(actor): Extension<AuthenticatedUser>,
+    Extension(actor): Extension<AuthedUser>,
     Path(account_id): Path<Uuid>,
     Json(mut request): Json<UpdateAccountAccessRequest>,
 ) -> Result<Json<AccessControlUser>, AccessControlError> {
@@ -827,11 +827,11 @@ async fn update_user_access(
     normalize_user_access_request(&mut request)?;
     let tenant_id: Uuid = actor.tenant_id;
     let actor_id: Uuid = actor.account_id;
-    let provisioner: Arc<dyn AuthAccountProvisioner> = Arc::clone(&context.provisioner);
+    let provisioner: Arc<dyn AuthProvisioner> = Arc::clone(&context.provisioner);
     let updated: bool = context
         .auth
         .db
-        .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+        .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
             let before: Option<UserRow> = load_user_row(connection, tenant_id, account_id, true).await?;
             let Some(before) = before else {
                 return Ok(false);
@@ -964,7 +964,7 @@ async fn update_user_access(
             provisioner
                 .update_access(connection, &access_context)
                 .await
-                .map_err(|provisioning_error: AuthAccountProvisioningError| {
+                .map_err(|provisioning_error: AcctProvisionErr| {
                     error!(
                         operation = "access_control.account.application_hook",
                         tenant_id = %tenant_id,
@@ -1025,7 +1025,7 @@ async fn load_snapshot(
     let fetch_limit: i64 = i64::from(limit) + 1;
     let rows: PagedAccessControlSnapshotRows = auth
         .db
-        .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+        .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
             let branches: Vec<BranchRow> = sqlx::query_as!(BranchRow, "SELECT id, code, name, time_zone, status, version FROM branches WHERE tenant_id = $1 ORDER BY lower(name), id", tenant_id)
                 .fetch_all(&mut *connection).await?;
             let permissions: Vec<PermissionRow> = sqlx::query_as!(PermissionRow, "SELECT code, display_name, description FROM permissions ORDER BY lower(display_name), code")
@@ -1255,7 +1255,7 @@ async fn load_role(
     let role_code_value: String = role_code.to_string();
     let rows: (Option<RoleRow>, Vec<RolePermissionRow>) = auth
         .db
-        .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+        .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
             let role: Option<RoleRow> = sqlx::query_as!(RoleRow, r#"SELECT role.code, role.display_name, role.description, role.scope_type, role.is_system, role.is_active, role.version, COUNT(DISTINCT assignment.account_id)::BIGINT AS "assigned_account_count!" FROM tenant_roles AS role LEFT JOIN account_role_assignments AS assignment ON assignment.tenant_id = role.tenant_id AND assignment.role_code = role.code WHERE role.tenant_id = $1 AND role.code = $2 GROUP BY role.tenant_id, role.code"#, tenant_id, role_code_value)
                 .fetch_optional(&mut *connection).await?;
             let permissions: Vec<RolePermissionRow> = sqlx::query_as!(RolePermissionRow, "SELECT role_code, permission_code FROM tenant_role_permissions WHERE tenant_id = $1 AND role_code = $2 ORDER BY permission_code", tenant_id, role_code_value)
@@ -1283,7 +1283,7 @@ async fn load_user(
 ) -> Result<AccessControlUser, AccessControlError> {
     let rows: (Option<UserRow>, Vec<AssignmentRow>, Vec<OverrideRow>) = auth
         .db
-        .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+        .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
             let user: Option<UserRow> = sqlx::query_as!(UserRow, "SELECT id AS account_id, username, email, status, primary_role_code, authorization_version FROM accounts WHERE tenant_id = $1 AND id = $2", tenant_id, account_id)
                 .fetch_optional(&mut *connection).await?;
             let assignments: Vec<AssignmentRow> = sqlx::query_as!(AssignmentRow, "SELECT account_id, role_code, branch_id FROM account_role_assignments WHERE tenant_id = $1 AND account_id = $2 ORDER BY branch_id NULLS FIRST, role_code", tenant_id, account_id)
@@ -1520,7 +1520,7 @@ async fn invalidate_tenant_accounts(auth: &AuthService, tenant_id: Uuid) {
 async fn invalidate_role_accounts(auth: &AuthService, tenant_id: Uuid, role_code: &RoleCode) {
     let account_ids: Result<Vec<Uuid>, TenantDbErr> = auth
         .db
-        .run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+        .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
             sqlx::query_scalar!(
                 "SELECT DISTINCT account_id FROM account_role_assignments WHERE tenant_id = $1 AND role_code = $2",
                 tenant_id,
@@ -1543,7 +1543,7 @@ async fn invalidate_role_accounts(auth: &AuthService, tenant_id: Uuid, role_code
 }
 
 async fn invalidate_accounts(auth: &AuthService, tenant_id: Uuid, account_id: Option<Uuid>) {
-    let identities: Result<Vec<IdentityRow>, TenantDbErr> = auth.db.run_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+    let identities: Result<Vec<IdentityRow>, TenantDbErr> = auth.db.tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
         sqlx::query_as!(IdentityRow, "SELECT issuer, subject FROM account_identities WHERE tenant_id = $1 AND ($2::UUID IS NULL OR account_id = $2)", tenant_id, account_id)
             .fetch_all(connection).await
     }).await;
@@ -1555,17 +1555,17 @@ async fn invalidate_accounts(auth: &AuthService, tenant_id: Uuid, account_id: Op
         }
     };
     for identity in identities {
-        let result: Result<(), AuthenticatedUserCacheError> = auth
-            .account_cache
+        let result: Result<(), AuthedCacheErr> = auth
+            .acct_cache
             .invalidate(&identity.issuer, &identity.subject, tenant_id)
             .await;
         if let Err(cache_error) = result {
-            warn!(operation = "access_control.invalidate_account", tenant_id = %tenant_id, account_id = ?account_id, reason = %cache_error, "Authenticated-user cache invalidation failed; bounded TTL remains in force");
+            warn!(operation = "access_control.invalidate_account", tenant_id = %tenant_id, account_id = ?account_id, reason = %cache_error, "Authed-user cache invalidation failed; bounded TTL remains in force");
         }
     }
 }
 
-fn require_permission(actor: &AuthenticatedUser, permission: &PermissionCode) -> Result<(), AccessControlError> {
+fn require_permission(actor: &AuthedUser, permission: &PermissionCode) -> Result<(), AccessControlError> {
     if actor.has_permission(permission.as_str()) {
         Ok(())
     } else {

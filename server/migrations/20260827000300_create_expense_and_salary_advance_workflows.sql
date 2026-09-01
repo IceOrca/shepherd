@@ -94,7 +94,8 @@ CREATE TABLE business_expense_claims (
     customer_id UUID,
     urgent_work_report_id UUID,
     staffing_assignment_id UUID,
-    incurred_on DATE NOT NULL,
+    paid_on DATE NOT NULL,
+    payroll_inclusion_on DATE NOT NULL,
     description TEXT NOT NULL,
     evidence_reference TEXT,
     claimed_amount NUMERIC(19, 4) NOT NULL,
@@ -141,6 +142,9 @@ CREATE TABLE business_expense_claims (
     CONSTRAINT business_expense_claims_context_valid CHECK (
         num_nonnulls(urgent_work_report_id, staffing_assignment_id) <= 1
     ),
+    CONSTRAINT business_expense_claims_payroll_date_valid CHECK (
+        payroll_inclusion_on >= paid_on
+    ),
     CONSTRAINT business_expense_claims_description_valid CHECK (
         description = btrim(description) AND char_length(description) BETWEEN 3 AND 1000
     ),
@@ -184,7 +188,12 @@ CREATE TABLE business_expense_claims (
 );
 
 CREATE INDEX business_expense_claims_branch_status_date_idx
-    ON business_expense_claims (tenant_id, branch_id, status, incurred_on DESC);
+ON business_expense_claims (tenant_id, branch_id, status, paid_on DESC);
+CREATE INDEX business_expense_claims_payroll_inclusion_idx
+ON business_expense_claims (
+    tenant_id, branch_id, payroll_inclusion_on, paid_by_employee_id
+)
+WHERE funding_source = 'employee_personal' AND status = 'approved';
 CREATE INDEX business_expense_claims_payer_idx
     ON business_expense_claims (tenant_id, branch_id, paid_by_employee_id, status)
     WHERE paid_by_employee_id IS NOT NULL;
@@ -225,6 +234,9 @@ CREATE TABLE business_expense_reimbursements (
     employee_id UUID NOT NULL,
     amount NUMERIC(19, 4) NOT NULL,
     currency TEXT NOT NULL,
+    settlement_source TEXT NOT NULL DEFAULT 'manual_reimbursement',
+    payroll_period_start DATE,
+    payroll_inclusion_on DATE,
     payment_reference TEXT NOT NULL,
     recorded_by_account_id UUID NOT NULL,
     idempotency_key UUID NOT NULL,
@@ -242,6 +254,19 @@ CREATE TABLE business_expense_reimbursements (
     CONSTRAINT business_expense_reimbursements_money_valid CHECK (
         amount > 0 AND currency = upper(currency) AND currency ~ '^[A-Z]{3}$'
     ),
+    CONSTRAINT business_expense_reimbursements_source_valid CHECK (
+        (
+            settlement_source = 'manual_reimbursement'
+            AND payroll_period_start IS NULL
+            AND payroll_inclusion_on IS NULL
+        )
+        OR (
+            settlement_source = 'payroll_settlement'
+            AND payroll_period_start = date_trunc('month', payroll_period_start)::DATE
+            AND payroll_inclusion_on >= payroll_period_start
+            AND payroll_inclusion_on < (payroll_period_start + INTERVAL '1 month')::DATE
+        )
+    ),
     CONSTRAINT business_expense_reimbursements_reference_valid CHECK (
         payment_reference = btrim(payment_reference)
         AND char_length(payment_reference) BETWEEN 3 AND 500
@@ -251,6 +276,9 @@ CREATE TABLE business_expense_reimbursements (
 
 CREATE INDEX business_expense_reimbursements_claim_idx
     ON business_expense_reimbursements (tenant_id, branch_id, expense_claim_id, reimbursed_at);
+CREATE INDEX business_expense_reimbursements_payroll_idx
+    ON business_expense_reimbursements (tenant_id, branch_id, payroll_inclusion_on, employee_id)
+    WHERE settlement_source = 'payroll_settlement';
 
 CREATE TABLE hr_salary_advances (
     id UUID PRIMARY KEY,
@@ -261,7 +289,8 @@ CREATE TABLE hr_salary_advances (
     approved_amount NUMERIC(19, 4),
     currency TEXT NOT NULL,
     reason TEXT NOT NULL,
-    recovery_due_on DATE,
+    paid_on DATE NOT NULL,
+    payroll_inclusion_on DATE NOT NULL,
     status TEXT NOT NULL DEFAULT 'requested',
     decision_reason TEXT,
     requested_by_account_id UUID NOT NULL,
@@ -296,6 +325,9 @@ CREATE TABLE hr_salary_advances (
     ),
     CONSTRAINT hr_salary_advances_reason_valid CHECK (
         reason = btrim(reason) AND char_length(reason) BETWEEN 3 AND 500
+    ),
+    CONSTRAINT hr_salary_advances_payroll_date_valid CHECK (
+        payroll_inclusion_on >= paid_on
     ),
     CONSTRAINT hr_salary_advances_decision_reason_valid CHECK (
         decision_reason IS NULL
@@ -347,6 +379,9 @@ CREATE INDEX hr_salary_advances_branch_status_idx
     ON hr_salary_advances (tenant_id, branch_id, status, requested_at DESC);
 CREATE INDEX hr_salary_advances_employee_status_idx
     ON hr_salary_advances (tenant_id, branch_id, employee_id, status);
+CREATE INDEX hr_salary_advances_payroll_inclusion_idx
+    ON hr_salary_advances (tenant_id, branch_id, payroll_inclusion_on, employee_id)
+    WHERE status = 'disbursed';
 
 CREATE TABLE hr_salary_advance_events (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -385,6 +420,8 @@ CREATE TABLE hr_salary_advance_recoveries (
     amount NUMERIC(19, 4) NOT NULL,
     currency TEXT NOT NULL,
     recovery_source TEXT NOT NULL,
+    payroll_period_start DATE,
+    payroll_inclusion_on DATE,
     settlement_reference TEXT NOT NULL,
     recorded_by_account_id UUID NOT NULL,
     idempotency_key UUID NOT NULL,
@@ -403,7 +440,17 @@ CREATE TABLE hr_salary_advance_recoveries (
         amount > 0 AND currency = upper(currency) AND currency ~ '^[A-Z]{3}$'
     ),
     CONSTRAINT hr_salary_advance_recoveries_source_valid CHECK (
-        recovery_source IN ('manual_repayment', 'payroll_deduction')
+        (
+            recovery_source = 'manual_repayment'
+            AND payroll_period_start IS NULL
+            AND payroll_inclusion_on IS NULL
+        )
+        OR (
+            recovery_source = 'payroll_deduction'
+            AND payroll_period_start = date_trunc('month', payroll_period_start)::DATE
+            AND payroll_inclusion_on >= payroll_period_start
+            AND payroll_inclusion_on < (payroll_period_start + INTERVAL '1 month')::DATE
+        )
     ),
     CONSTRAINT hr_salary_advance_recoveries_reference_valid CHECK (
         settlement_reference = btrim(settlement_reference)
@@ -414,6 +461,9 @@ CREATE TABLE hr_salary_advance_recoveries (
 
 CREATE INDEX hr_salary_advance_recoveries_advance_idx
     ON hr_salary_advance_recoveries (tenant_id, branch_id, salary_advance_id, recovered_at);
+CREATE INDEX hr_salary_advance_recoveries_payroll_idx
+    ON hr_salary_advance_recoveries (tenant_id, branch_id, payroll_inclusion_on, employee_id)
+    WHERE recovery_source = 'payroll_deduction';
 
 CREATE FUNCTION shepherd_guard_expense_decision()
 RETURNS TRIGGER

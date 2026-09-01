@@ -2,36 +2,43 @@
 
 use std::sync::Arc;
 
+use tokio_util::sync::CancellationToken;
 use axum::Router;
 use infra_host::HostContext as HostInfa;
 use infra_worker::Worker;
+use tracing::{error, warn, info, debug, trace};
 
 pub struct RuntimeParts {
-    pub context: Arc<HostInfa>,
+    pub host: Arc<HostInfa>,
     pub router: Router,
     pub worker: Worker,
 }
 
 pub async fn build() -> RuntimeParts {
-    let identity_admin: Arc<supabase_auth::SupabaseAuthIdentityAdmin> =
-        supabase_auth::SupabaseAuthIdentityAdmin::from_env()
-            .unwrap_or_else(|error| panic!("failed to initialize Supabase Auth identity administration: {error}"));
-    let infra: Arc<HostInfa> = HostInfa::new_arc(identity_admin).await;
+    let auth_admin: Arc<supabase_auth::SupabaseAuthAdmin> = supabase_auth::SupabaseAuthAdmin::from_env()
+        .unwrap_or_else(|error: supabase_auth::ConfigError| {
+            panic!("failed to initialize Supabase Auth identity administration: {error}")
+        });
+    let infra: Arc<HostInfa> = HostInfa::new_arc(auth_admin).await;
     let app: Arc<shepherd::AppContext> =
         shepherd::AppContext::new_arc(Arc::clone(&infra.auth), Arc::clone(&infra.database));
-    let dispatcher: Arc<shepherd::notifications::NotificationDispatcher> = Arc::clone(&app.notifications);
+    let dispatcher: Arc<shepherd::notification::NotifyDispatcher> = Arc::clone(&app.notifications);
     let worker: Worker = Worker::new();
     worker
         .asynchronous()
-        .spawn("notification-outbox", move |cancellation| async move {
-            dispatcher.run(cancellation).await;
-        })
-        .unwrap_or_else(|error| panic!("failed to start notification dispatcher: {error}"));
+        .spawn(
+            "notification-outbox",
+            move |cancellation: CancellationToken| async move {
+                dispatcher.run(cancellation).await;
+            },
+        )
+        .unwrap_or_else(|error: infra_worker::WorkerClosed| panic!("failed to start notification dispatcher: {error}"));
 
-    let router: Router = infra_host::route::routes(Arc::clone(&infra)).merge(shepherd::routes(app));
+    let router: Router = infra_host::route::routes(Arc::clone(&infra)) // generic host routes
+        .merge(shepherd::routes(app));
     let router: Router = infra_host::route::apply_layers(router, Arc::clone(&infra));
     RuntimeParts {
-        context: infra,
+        host: infra,
         router,
         worker,
     }

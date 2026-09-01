@@ -8,4 +8,4 @@ pub mod ext_service;
 #[cfg(feature = "ext-service")]
 mod service;
 #[cfg(feature = "ext-service")]
-pub use service::{AuthService, AuthServiceError};
+pub use service::{AuthService, AuthSvcErr};

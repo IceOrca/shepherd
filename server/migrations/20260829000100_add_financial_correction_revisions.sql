@@ -27,11 +27,71 @@ CREATE TABLE business_financial_period_events (
         reason = btrim(reason) AND char_length(reason) BETWEEN 3 AND 500
     ),
     UNIQUE (tenant_id, branch_id, period_start, revision_number),
+    UNIQUE (tenant_id, branch_id, id),
     UNIQUE (tenant_id, branch_id, actor_account_id, idempotency_key)
 );
 
 CREATE INDEX business_financial_period_events_current_idx
     ON business_financial_period_events (tenant_id, branch_id, period_start, revision_number DESC);
+
+ALTER TABLE business_expense_reimbursements
+    ADD COLUMN financial_period_event_id UUID,
+    ADD CONSTRAINT business_expense_reimbursements_period_event_fk
+        FOREIGN KEY (tenant_id, branch_id, financial_period_event_id)
+        REFERENCES business_financial_period_events (tenant_id, branch_id, id)
+        ON DELETE RESTRICT,
+    ADD CONSTRAINT business_expense_reimbursements_period_event_valid CHECK (
+        (settlement_source = 'manual_reimbursement' AND financial_period_event_id IS NULL)
+        OR (settlement_source = 'payroll_settlement' AND financial_period_event_id IS NOT NULL)
+    );
+
+ALTER TABLE hr_salary_advance_recoveries
+    ADD COLUMN financial_period_event_id UUID,
+    ADD CONSTRAINT hr_salary_advance_recoveries_period_event_fk
+        FOREIGN KEY (tenant_id, branch_id, financial_period_event_id)
+        REFERENCES business_financial_period_events (tenant_id, branch_id, id)
+        ON DELETE RESTRICT,
+    ADD CONSTRAINT hr_salary_advance_recoveries_period_event_valid CHECK (
+        (recovery_source = 'manual_repayment' AND financial_period_event_id IS NULL)
+        OR (recovery_source = 'payroll_deduction' AND financial_period_event_id IS NOT NULL)
+    );
+
+CREATE FUNCTION shepherd_validate_payroll_settlement_event()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    linked_status TEXT;
+    linked_period_start DATE;
+BEGIN
+    IF NEW.financial_period_event_id IS NULL THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT event.status, event.period_start
+    INTO linked_status, linked_period_start
+    FROM business_financial_period_events AS event
+    WHERE event.tenant_id = NEW.tenant_id
+      AND event.branch_id = NEW.branch_id
+      AND event.id = NEW.financial_period_event_id;
+
+    IF linked_status IS DISTINCT FROM 'closed'
+        OR linked_period_start IS DISTINCT FROM NEW.payroll_period_start
+    THEN
+        RAISE EXCEPTION 'payroll settlement must reference its matching closed financial period event'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER business_expense_reimbursements_validate_payroll_event
+BEFORE INSERT OR UPDATE ON business_expense_reimbursements
+FOR EACH ROW EXECUTE FUNCTION shepherd_validate_payroll_settlement_event();
+
+CREATE TRIGGER hr_salary_advance_recoveries_validate_payroll_event
+BEFORE INSERT OR UPDATE ON hr_salary_advance_recoveries
+FOR EACH ROW EXECUTE FUNCTION shepherd_validate_payroll_settlement_event();
 
 CREATE FUNCTION shepherd_financial_date_is_open(
     checked_tenant_id UUID,
@@ -53,6 +113,31 @@ AS $$
     ), TRUE)
 $$;
 
+CREATE FUNCTION shepherd_guard_financial_projection_insert_period()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NOT shepherd_financial_date_is_open(NEW.tenant_id, NEW.branch_id, NEW.paid_on)
+        OR NOT shepherd_financial_date_is_open(
+            NEW.tenant_id, NEW.branch_id, NEW.payroll_inclusion_on
+        )
+    THEN
+        RAISE EXCEPTION 'financial record belongs to a closed financial or payroll period'
+            USING ERRCODE = '55000';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER business_expense_claims_guard_insert_period
+BEFORE INSERT ON business_expense_claims
+FOR EACH ROW EXECUTE FUNCTION shepherd_guard_financial_projection_insert_period();
+
+CREATE TRIGGER hr_salary_advances_guard_insert_period
+BEFORE INSERT ON hr_salary_advances
+FOR EACH ROW EXECUTE FUNCTION shepherd_guard_financial_projection_insert_period();
+
 CREATE TABLE business_expense_claim_revisions (
     revision_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants (id) ON DELETE RESTRICT,
@@ -70,7 +155,8 @@ CREATE TABLE business_expense_claim_revisions (
     customer_id UUID,
     urgent_work_report_id UUID,
     staffing_assignment_id UUID,
-    incurred_on DATE NOT NULL,
+    paid_on DATE NOT NULL,
+    payroll_inclusion_on DATE NOT NULL,
     description TEXT NOT NULL,
     evidence_reference TEXT,
     claimed_amount NUMERIC(19, 4) NOT NULL,
@@ -123,7 +209,8 @@ CREATE TABLE hr_salary_advance_revisions (
     approved_amount NUMERIC(19, 4),
     currency TEXT NOT NULL,
     reason TEXT NOT NULL,
-    recovery_due_on DATE,
+    paid_on DATE NOT NULL,
+    payroll_inclusion_on DATE NOT NULL,
     status TEXT NOT NULL,
     decision_reason TEXT,
     requested_by_account_id UUID NOT NULL,
@@ -193,7 +280,7 @@ BEGIN
         tenant_id, branch_id, expense_claim_id, revision_number,
         supersedes_revision_id, revision_kind, correction_reason, revised_by_account_id, idempotency_key,
         category_id, funding_source, paid_by_employee_id, customer_id,
-        urgent_work_report_id, staffing_assignment_id, incurred_on, description,
+        urgent_work_report_id, staffing_assignment_id, paid_on, payroll_inclusion_on, description,
         evidence_reference, claimed_amount, approved_amount, currency, status,
         decision_reason, submitted_by_account_id, approved_by_account_id, approved_at,
         source_created_at
@@ -201,7 +288,8 @@ BEGIN
         NEW.tenant_id, NEW.branch_id, NEW.id, NEW.version,
         previous_revision_id, revision_kind_value, revision_reason, revision_actor_id, revision_idempotency_key,
         NEW.category_id, NEW.funding_source, NEW.paid_by_employee_id, NEW.customer_id,
-        NEW.urgent_work_report_id, NEW.staffing_assignment_id, NEW.incurred_on, NEW.description,
+        NEW.urgent_work_report_id, NEW.staffing_assignment_id, NEW.paid_on,
+        NEW.payroll_inclusion_on, NEW.description,
         NEW.evidence_reference, NEW.claimed_amount, NEW.approved_amount, NEW.currency, NEW.status,
         NEW.decision_reason, NEW.submitted_by_account_id, NEW.approved_by_account_id, NEW.approved_at,
         NEW.created_at
@@ -245,14 +333,16 @@ BEGIN
     INSERT INTO hr_salary_advance_revisions (
         tenant_id, branch_id, salary_advance_id, revision_number,
         supersedes_revision_id, revision_kind, correction_reason, revised_by_account_id, idempotency_key,
-        employee_id, requested_amount, approved_amount, currency, reason, recovery_due_on,
+        employee_id, requested_amount, approved_amount, currency, reason, paid_on,
+        payroll_inclusion_on,
         status, decision_reason, requested_by_account_id, approved_by_account_id,
         disbursed_by_account_id, disbursement_reference, requested_at, approved_at, disbursed_at
     ) VALUES (
         NEW.tenant_id, NEW.branch_id, NEW.id, NEW.version,
         previous_revision_id, revision_kind_value, revision_reason, revision_actor_id, revision_idempotency_key,
         NEW.employee_id, NEW.requested_amount, NEW.approved_amount, NEW.currency, NEW.reason,
-        NEW.recovery_due_on, NEW.status, NEW.decision_reason, NEW.requested_by_account_id,
+        NEW.paid_on, NEW.payroll_inclusion_on, NEW.status, NEW.decision_reason,
+        NEW.requested_by_account_id,
         NEW.approved_by_account_id, NEW.disbursed_by_account_id, NEW.disbursement_reference,
         NEW.requested_at, NEW.approved_at, NEW.disbursed_at
     );
@@ -263,7 +353,8 @@ $$;
 INSERT INTO business_expense_claim_revisions (
     tenant_id, branch_id, expense_claim_id, revision_number, revision_kind,
     revised_by_account_id, category_id, funding_source, paid_by_employee_id,
-    customer_id, urgent_work_report_id, staffing_assignment_id, incurred_on,
+    customer_id, urgent_work_report_id, staffing_assignment_id, paid_on,
+    payroll_inclusion_on,
     description, evidence_reference, claimed_amount, approved_amount, currency,
     status, decision_reason, submitted_by_account_id, approved_by_account_id,
     approved_at, source_created_at, revised_at
@@ -272,7 +363,7 @@ SELECT claim.tenant_id, claim.branch_id, claim.id, claim.version, 'workflow',
        COALESCE(claim.approved_by_account_id, claim.submitted_by_account_id),
        claim.category_id, claim.funding_source, claim.paid_by_employee_id,
        claim.customer_id, claim.urgent_work_report_id, claim.staffing_assignment_id,
-       claim.incurred_on, claim.description, claim.evidence_reference,
+       claim.paid_on, claim.payroll_inclusion_on, claim.description, claim.evidence_reference,
        claim.claimed_amount, claim.approved_amount, claim.currency, claim.status,
        claim.decision_reason, claim.submitted_by_account_id, claim.approved_by_account_id,
        claim.approved_at, claim.created_at, claim.updated_at
@@ -281,7 +372,7 @@ FROM business_expense_claims AS claim;
 INSERT INTO hr_salary_advance_revisions (
     tenant_id, branch_id, salary_advance_id, revision_number, revision_kind,
     revised_by_account_id, employee_id, requested_amount, approved_amount, currency,
-    reason, recovery_due_on, status, decision_reason, requested_by_account_id,
+    reason, paid_on, payroll_inclusion_on, status, decision_reason, requested_by_account_id,
     approved_by_account_id, disbursed_by_account_id, disbursement_reference,
     requested_at, approved_at, disbursed_at, revised_at
 )
@@ -289,7 +380,8 @@ SELECT advance.tenant_id, advance.branch_id, advance.id, advance.version, 'workf
        COALESCE(advance.disbursed_by_account_id, advance.approved_by_account_id,
            advance.requested_by_account_id),
        advance.employee_id, advance.requested_amount, advance.approved_amount,
-       advance.currency, advance.reason, advance.recovery_due_on, advance.status,
+       advance.currency, advance.reason, advance.paid_on, advance.payroll_inclusion_on,
+       advance.status,
        advance.decision_reason, advance.requested_by_account_id,
        advance.approved_by_account_id, advance.disbursed_by_account_id,
        advance.disbursement_reference, advance.requested_at, advance.approved_at,
@@ -358,8 +450,14 @@ BEGIN
         IF correction_actor_id IS NULL OR correction_reason IS NULL THEN
             RAISE EXCEPTION 'correction actor and reason are required' USING ERRCODE = '23514';
         END IF;
-        IF NOT shepherd_financial_date_is_open(OLD.tenant_id, OLD.branch_id, OLD.incurred_on)
-            OR NOT shepherd_financial_date_is_open(NEW.tenant_id, NEW.branch_id, NEW.incurred_on)
+        IF NOT shepherd_financial_date_is_open(OLD.tenant_id, OLD.branch_id, OLD.paid_on)
+            OR NOT shepherd_financial_date_is_open(NEW.tenant_id, NEW.branch_id, NEW.paid_on)
+            OR NOT shepherd_financial_date_is_open(
+                OLD.tenant_id, OLD.branch_id, OLD.payroll_inclusion_on
+            )
+            OR NOT shepherd_financial_date_is_open(
+                NEW.tenant_id, NEW.branch_id, NEW.payroll_inclusion_on
+            )
         THEN
             RAISE EXCEPTION 'expense correction belongs to a closed financial period'
                 USING ERRCODE = '55000';
@@ -389,6 +487,8 @@ BEGIN
         IF reimbursement_exists AND (
             OLD.funding_source IS DISTINCT FROM NEW.funding_source
             OR OLD.paid_by_employee_id IS DISTINCT FROM NEW.paid_by_employee_id
+            OR OLD.claimed_amount IS DISTINCT FROM NEW.claimed_amount
+            OR OLD.approved_amount IS DISTINCT FROM NEW.approved_amount
             OR OLD.currency IS DISTINCT FROM NEW.currency
         ) THEN
             RAISE EXCEPTION 'paid expense settlement identity requires a compensating entry, not source rewriting'
@@ -401,6 +501,14 @@ BEGIN
         RAISE EXCEPTION 'final expense decision requires a correction revision' USING ERRCODE = '55000';
     END IF;
     IF OLD.status = 'submitted' AND NEW.status IN ('approved', 'rejected', 'cancelled') THEN
+        IF NOT shepherd_financial_date_is_open(OLD.tenant_id, OLD.branch_id, OLD.paid_on)
+            OR NOT shepherd_financial_date_is_open(
+                OLD.tenant_id, OLD.branch_id, OLD.payroll_inclusion_on
+            )
+        THEN
+            RAISE EXCEPTION 'expense decision belongs to a closed financial or payroll period'
+                USING ERRCODE = '55000';
+        END IF;
         IF OLD.funding_source = 'employee_personal' THEN
             SELECT employee.account_id INTO subject_account_id
             FROM hr_employees AS employee
@@ -435,6 +543,18 @@ BEGIN
     IF correction_kind = 'correction' THEN
         IF correction_actor_id IS NULL OR correction_reason IS NULL THEN
             RAISE EXCEPTION 'correction actor and reason are required' USING ERRCODE = '23514';
+        END IF;
+        IF NOT shepherd_financial_date_is_open(OLD.tenant_id, OLD.branch_id, OLD.paid_on)
+            OR NOT shepherd_financial_date_is_open(NEW.tenant_id, NEW.branch_id, NEW.paid_on)
+            OR NOT shepherd_financial_date_is_open(
+                OLD.tenant_id, OLD.branch_id, OLD.payroll_inclusion_on
+            )
+            OR NOT shepherd_financial_date_is_open(
+                NEW.tenant_id, NEW.branch_id, NEW.payroll_inclusion_on
+            )
+        THEN
+            RAISE EXCEPTION 'salary advance correction belongs to a closed financial or payroll period'
+                USING ERRCODE = '55000';
         END IF;
         SELECT employee.account_id INTO subject_account_id
         FROM hr_employees AS employee
@@ -471,6 +591,14 @@ BEGIN
         RAISE EXCEPTION 'salary advance request evidence requires a correction revision' USING ERRCODE = '55000';
     END IF;
     IF OLD.status = 'requested' AND NEW.status IN ('approved', 'rejected', 'cancelled') THEN
+        IF NOT shepherd_financial_date_is_open(OLD.tenant_id, OLD.branch_id, OLD.paid_on)
+            OR NOT shepherd_financial_date_is_open(
+                OLD.tenant_id, OLD.branch_id, OLD.payroll_inclusion_on
+            )
+        THEN
+            RAISE EXCEPTION 'salary advance decision belongs to a closed financial or payroll period'
+                USING ERRCODE = '55000';
+        END IF;
         SELECT employee.account_id INTO subject_account_id
         FROM hr_employees AS employee
         WHERE employee.tenant_id = OLD.tenant_id
@@ -483,6 +611,14 @@ BEGIN
             RAISE EXCEPTION 'salary advance decision requires a different higher organizational role'
                 USING ERRCODE = '42501';
         END IF;
+    END IF;
+    IF OLD.status = 'approved' AND NEW.status = 'disbursed'
+        AND NOT shepherd_financial_date_is_open(
+            OLD.tenant_id, OLD.branch_id, OLD.payroll_inclusion_on
+        )
+    THEN
+        RAISE EXCEPTION 'salary advance disbursement belongs to a closed payroll period'
+            USING ERRCODE = '55000';
     END IF;
     RETURN NEW;
 END;

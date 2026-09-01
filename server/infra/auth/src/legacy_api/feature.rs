@@ -26,7 +26,7 @@ pub struct TenantContext {
 }
 
 #[derive(Clone, Debug)]
-pub struct AuthenticatedUser {
+pub struct AuthedAcct {
     pub tenant_id: Uuid,
     pub account_id: Uuid,
     pub username: String,
@@ -39,7 +39,7 @@ pub struct AuthenticatedUser {
     pub exp: u64,
 }
 
-impl AuthenticatedUser {
+impl AuthedAcct {
     pub fn from_claims(claims: &AccessClaims) -> Result<Self, ()> {
         let tenant_id: Uuid = Uuid::parse_str(&claims.tid).map_err(|_| ())?;
         let account_id: Uuid = Uuid::parse_str(&claims.sub).map_err(|_| ())?;
@@ -165,7 +165,7 @@ mod tests {
     use crate::account::Role;
     use uuid::Uuid;
 
-    use super::AuthenticatedUser;
+    use super::AuthedAcct;
     use crate::dto::AccessClaims;
 
     fn valid_claims() -> AccessClaims {
@@ -189,24 +189,24 @@ mod tests {
 
     #[test]
     fn accepts_complete_access_claim_identity() {
-        assert!(AuthenticatedUser::from_claims(&valid_claims()).is_ok());
+        assert!(AuthedAcct::from_claims(&valid_claims()).is_ok());
     }
 
     #[test]
     fn rejects_empty_or_malformed_access_claim_identifiers() {
         let mut missing_sid: AccessClaims = valid_claims();
         missing_sid.sid.clear();
-        assert!(AuthenticatedUser::from_claims(&missing_sid).is_err());
+        assert!(AuthedAcct::from_claims(&missing_sid).is_err());
 
         let mut malformed_jti: AccessClaims = valid_claims();
         malformed_jti.jti = "not-a-jti".to_owned();
-        assert!(AuthenticatedUser::from_claims(&malformed_jti).is_err());
+        assert!(AuthedAcct::from_claims(&malformed_jti).is_err());
     }
 
     #[test]
     fn rejects_invalid_access_claim_time_ordering() {
         let mut claims: AccessClaims = valid_claims();
         claims.exp = claims.iat;
-        assert!(AuthenticatedUser::from_claims(&claims).is_err());
+        assert!(AuthedAcct::from_claims(&claims).is_err());
     }
 }

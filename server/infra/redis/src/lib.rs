@@ -50,7 +50,7 @@ impl RedisAdapter {
 
     pub async fn connection(&self) -> RedisResult<MultiplexedConnection> {
         trace!("Opening multiplexed Redis connection");
-        let connection: MultiplexedConnection =
+        let conn: MultiplexedConnection =
             self.cache
                 .client
                 .get_multiplexed_async_connection()
@@ -60,7 +60,7 @@ impl RedisAdapter {
                     error
                 })?;
         debug!("Multiplexed Redis connection opened");
-        Ok(connection)
+        Ok(conn)
     }
 
     pub fn url(&self) -> &str {

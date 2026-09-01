@@ -2,7 +2,6 @@
 resolver = "2"
 members = [
     "infra/kernel",
-    # "infra/ntree",
     "infra/auth",
     "infra/authz",
     "infra/postgres",
@@ -13,7 +12,7 @@ members = [
     "infra/notifier",
     "infra/worker",
     "infra/external-auth/supabase-auth",
-    "applications/shepherd",
+    "application/shepherd",
     "runtime",
 ]
 
@@ -68,7 +67,6 @@ calamine = { version = "*" }
 rust_xlsxwriter = { version = "*", features = ["chrono"] }
 # reusable infra crates
 infra-kernel = { path = "infra/kernel" }
-# infra-ntree = { path = "infra/ntree" }
 infra-auth = { path = "infra/auth" }
 infra-authz = { path = "infra/authz" }
 infra-postgres = { path = "infra/postgres" }
@@ -79,8 +77,8 @@ infra-jobs = { path = "infra/jobs" }
 infra-notifier = { path = "infra/notifier" }
 infra-worker = { path = "infra/worker" }
 supabase-auth = { path = "infra/external-auth/supabase-auth" }
-# installed applications
-shepherd = { path = "applications/shepherd" }
+# installed application
+shepherd = { path = "application/shepherd" }
 
 [workspace.lints.clippy]
 unwrap_used = "deny"

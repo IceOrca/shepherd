@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use super::AccessTokenError;
+use super::AccessTokenErr;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(untagged)]
@@ -52,7 +52,7 @@ pub struct AccessTokenClaims {
 /// A signature-verified external identity. It is not an application account or
 /// tenant authorization decision.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AuthenticatedPrincipal {
+pub struct AuthedPrincipal {
     pub issuer: String,
     pub subject: String,
     pub audience: Vec<String>,
@@ -69,8 +69,8 @@ pub struct AuthenticatedPrincipal {
     pub tenant_id: Option<Uuid>,
 }
 
-impl TryFrom<AccessTokenClaims> for AuthenticatedPrincipal {
-    type Error = AccessTokenError;
+impl TryFrom<AccessTokenClaims> for AuthedPrincipal {
+    type Error = AccessTokenErr;
 
     fn try_from(claims: AccessTokenClaims) -> Result<Self, Self::Error> {
         validate_identifier("issuer", &claims.iss, 2_048)?;
@@ -81,13 +81,13 @@ impl TryFrom<AccessTokenClaims> for AuthenticatedPrincipal {
         validate_optional_claim("token id", claims.jti.as_deref(), 255)?;
 
         if claims.iat.is_some_and(|issued_at: u64| issued_at >= claims.exp) {
-            return Err(AccessTokenError::InvalidClaims(
+            return Err(AccessTokenErr::InvalidClaims(
                 "issued-at must be earlier than expiry".to_owned(),
             ));
         }
         let audience: Vec<String> = claims.aud.into_vec();
         if audience.is_empty() || audience.iter().any(|value: &String| value.trim().is_empty()) {
-            return Err(AccessTokenError::InvalidClaims("audience must not be empty".to_owned()));
+            return Err(AccessTokenErr::InvalidClaims("audience must not be empty".to_owned()));
         }
 
         let scopes: Vec<String> = deduplicate_words(claims.scope.as_deref().unwrap_or_default().split_whitespace());
@@ -108,14 +108,14 @@ impl TryFrom<AccessTokenClaims> for AuthenticatedPrincipal {
     }
 }
 
-fn validate_identifier(name: &str, value: &str, maximum_length: usize) -> Result<(), AccessTokenError> {
+fn validate_identifier(name: &str, value: &str, maximum_length: usize) -> Result<(), AccessTokenErr> {
     if value.trim() != value || value.is_empty() || value.len() > maximum_length {
-        return Err(AccessTokenError::InvalidClaims(format!("{name} is malformed")));
+        return Err(AccessTokenErr::InvalidClaims(format!("{name} is malformed")));
     }
     Ok(())
 }
 
-fn validate_optional_claim(name: &str, value: Option<&str>, maximum_length: usize) -> Result<(), AccessTokenError> {
+fn validate_optional_claim(name: &str, value: Option<&str>, maximum_length: usize) -> Result<(), AccessTokenErr> {
     value.map_or(Ok(()), |value: &str| validate_identifier(name, value, maximum_length))
 }
 
@@ -123,14 +123,14 @@ fn deduplicate_words<'a>(values: impl Iterator<Item = &'a str>) -> Vec<String> {
     values
         .filter(|v: &&'a str| !v.is_empty() && v.len() <= 255)
         .map(str::to_owned)
-        .collect::<BTreeSet<_>>()
+        .collect::<BTreeSet<String>>()
         .into_iter()
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{AccessTokenClaims, Audience, AuthenticatedPrincipal};
+    use super::{AccessTokenClaims, Audience, AuthedPrincipal};
 
     fn claims() -> AccessTokenClaims {
         AccessTokenClaims {
@@ -152,7 +152,7 @@ mod tests {
 
     #[test]
     fn creates_external_principal_and_deduplicates_claims() {
-        let principal = AuthenticatedPrincipal::try_from(claims()).expect("valid principal");
+        let principal = AuthedPrincipal::try_from(claims()).expect("valid principal");
 
         assert_eq!(principal.subject, "external-user-id");
         assert_eq!(principal.scopes, vec!["email", "openid", "profile"]);
@@ -168,6 +168,6 @@ mod tests {
         let mut invalid = claims();
         invalid.iat = Some(invalid.exp);
 
-        assert!(AuthenticatedPrincipal::try_from(invalid).is_err());
+        assert!(AuthedPrincipal::try_from(invalid).is_err());
     }
 }
