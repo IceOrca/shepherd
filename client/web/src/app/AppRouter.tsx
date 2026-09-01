@@ -58,6 +58,21 @@ function SessionGate() {
   return <Outlet />;
 }
 
+function PermissionGate({
+  children,
+  anyPermission,
+}: {
+  children: ReactNode;
+  anyPermission: string[];
+}) {
+  const auth = useAuth();
+  const permissions: string[] = auth.profile?.permissions ?? [];
+
+  return anyPermission.some((permission: string): boolean => permissions.includes(permission))
+    ? children
+    : <Navigate to="/dashboard" replace />;
+}
+
 function NotFoundPage() {
   return (
     <section className="panel mx-auto max-w-2xl p-8 text-center">
@@ -78,14 +93,14 @@ export function AppRouter() {
           <Route path="/dashboard" element={<OperationsOverviewPage />} />
           <Route path="/operations/work" element={<UrgentWorkPage />} />
           <Route path="/operations/my-shifts" element={<MyAssignmentsPage />} />
-          <Route path="/operations/shifts" element={<ShiftCoordinationPage />} />
-          <Route path="/operations/customers" element={<CustomersPage />} />
-          <Route path="/operations/employees" element={<EmployeesPage />} />
-          <Route path="/operations/staffing-configuration" element={<StaffingConfigurationPage />} />
+          <Route path="/operations/shifts" element={<PermissionGate anyPermission={["business.shifts.read"]}><ShiftCoordinationPage /></PermissionGate>} />
+          <Route path="/operations/customers" element={<PermissionGate anyPermission={["business.customers.read"]}><CustomersPage /></PermissionGate>} />
+          <Route path="/operations/employees" element={<PermissionGate anyPermission={["hr.employees.read"]}><EmployeesPage /></PermissionGate>} />
+          <Route path="/operations/staffing-configuration" element={<PermissionGate anyPermission={["business.staffing_rates.read"]}><StaffingConfigurationPage /></PermissionGate>} />
           <Route path="/operations/finance" element={<DeferredPage><FinancialOperationsPage /></DeferredPage>} />
-          <Route path="/operations/payroll-accounting" element={<DeferredPage><PayrollAccountingPage /></DeferredPage>} />
-          <Route path="/operations/reconciliation" element={<UrgentReconciliationPage />} />
-          <Route path="/operations/reconciliation/planned" element={<ReconciliationPage />} />
+          <Route path="/operations/payroll-accounting" element={<PermissionGate anyPermission={["finance.operating_reports.read", "hr.payroll.read", "hr.salary_rates.read"]}><DeferredPage><PayrollAccountingPage /></DeferredPage></PermissionGate>} />
+          <Route path="/operations/reconciliation" element={<PermissionGate anyPermission={["business.reconciliation.read"]}><UrgentReconciliationPage /></PermissionGate>} />
+          <Route path="/operations/reconciliation/planned" element={<PermissionGate anyPermission={["business.reconciliation.read"]}><ReconciliationPage /></PermissionGate>} />
           <Route path="/admin/auth-users" element={<AuthUsersPage />} />
           <Route path="/admin/access-control" element={<AccessControlPage />} />
           <Route path="/admin/*" element={<Navigate to="/admin/access-control" replace />} />

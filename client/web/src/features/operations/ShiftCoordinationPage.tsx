@@ -166,13 +166,9 @@ export function ShiftCoordinationPage(): React.JSX.Element {
     createMutation.mutate(payload);
   };
 
-  if (!canManage) {
-    return <section className="panel p-8 text-center text-sm text-slate-500">Bạn chưa có quyền điều phối ca.</section>;
-  }
-
   return (
-    <div className="grid gap-5 xl:grid-cols-[minmax(320px,0.8fr)_minmax(0,1.2fr)]">
-      <section className="panel p-5 sm:p-6">
+    <div className={`grid gap-5 ${canManage ? "xl:grid-cols-[minmax(320px,0.8fr)_minmax(0,1.2fr)]" : "grid-cols-1"}`}>
+      {canManage ? <section className="panel p-5 sm:p-6">
         <div className="flex items-center gap-3">
           <div className="grid size-10 place-items-center rounded-xl bg-blue-50 text-blue-700"><CalendarPlus2 className="size-5" /></div>
           <div><h2 className="font-bold text-slate-950">Tạo ca theo yêu cầu khách hàng</h2><p className="text-sm text-slate-500">Địa điểm và công việc được khóa theo ca.</p></div>
@@ -196,12 +192,12 @@ export function ShiftCoordinationPage(): React.JSX.Element {
           <label className="block text-sm font-semibold text-slate-700">Ghi chú<textarea className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5" rows={3} value={draft.notes} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} /></label>
           <button className="action-primary w-full" disabled={createMutation.isPending} type="submit">{createMutation.isPending ? <RefreshCw className="size-4 animate-spin" /> : <CalendarPlus2 className="size-4" />}Tạo ca</button>
         </form>
-      </section>
+      </section> : null}
 
       <div className="space-y-5">
         {message ? <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-medium text-blue-800">{message}</div> : null}
         <section className="panel overflow-hidden">
-          <div className="border-b border-slate-200 px-5 py-4"><h2 className="font-bold text-slate-950">Chọn ca để phân công</h2><p className="mt-1 text-sm text-slate-500">Hệ thống tự loại nhân viên sai vị trí hoặc trùng lịch.</p></div>
+          <div className="border-b border-slate-200 px-5 py-4"><h2 className="font-bold text-slate-950">{canManage ? "Chọn ca để phân công" : "Danh sách ca đã điều phối"}</h2><p className="mt-1 text-sm text-slate-500">{canManage ? "Hệ thống tự loại nhân viên sai vị trí hoặc trùng lịch." : "Chế độ chỉ xem; chủ doanh nghiệp chịu trách nhiệm tạo ca và phân công."}</p></div>
           {shiftsQuery.error ? <p className="p-5 text-sm text-red-600"><CircleAlert className="mr-2 inline size-4" />{friendlyApiError(shiftsQuery.error, "Không tải được danh sách ca.")}</p> : (
           <div className="max-h-72 divide-y divide-slate-100 overflow-y-auto">{shifts.map((shift: ScopedStaffingShift): React.JSX.Element => <button className={`grid w-full gap-1 px-5 py-3 text-left hover:bg-slate-50 ${selectedShiftId === shift.id ? "bg-blue-50" : ""}`} key={shift.id} onClick={(): void => setSelectedShiftId(shift.id)} type="button"><span className="font-bold text-slate-900">{customerNames.get(shift.customer_id) ?? "Khách hàng"} · {formatDateTime(shift.starts_at)}</span><span className="text-xs text-slate-500">{scope.branches.find((branch): boolean => branch.id === shift.branch_id)?.name ?? "Chi nhánh"} · Cần {shift.required_workers} người · {shiftStatusLabel(shift.status)}</span></button>)}</div>
           )}
@@ -211,7 +207,7 @@ export function ShiftCoordinationPage(): React.JSX.Element {
           <div className="flex items-center gap-3 border-b border-slate-200 px-5 py-4"><UsersRound className="size-5 text-blue-600" /><div><h2 className="font-bold text-slate-950">Nhân viên có thể phân công</h2><p className="text-sm text-slate-500">Phù hợp dựa trên vị trí chính có hiệu lực tại ngày làm.</p></div></div>
           <div className="divide-y divide-slate-100">{candidatesQuery.data?.map((candidate: StaffingCandidate): React.JSX.Element => {
             const eligible: boolean = candidate.suitable && candidate.available && !candidate.already_assigned;
-            return <div className="flex items-center justify-between gap-3 px-5 py-4" key={candidate.employee_id}><div><p className="font-bold text-slate-900">{candidate.display_name}</p><p className="text-xs text-slate-500">{candidate.employee_code} · {!candidate.suitable ? "Không đúng vị trí" : !candidate.available ? "Trùng lịch" : candidate.already_assigned ? "Đã phân công" : "Sẵn sàng"}</p></div><button className="action-secondary min-h-9 px-3" disabled={!eligible || assignMutation.isPending || selectedShift === null} onClick={(): void => assignMutation.mutate({ branchId: selectedShift?.branch_id ?? "", shiftId: selectedShiftId, employeeId: candidate.employee_id })} type="button"><UserPlus className="size-4" />Phân công</button></div>;
+            return <div className="flex items-center justify-between gap-3 px-5 py-4" key={candidate.employee_id}><div><p className="font-bold text-slate-900">{candidate.display_name}</p><p className="text-xs text-slate-500">{candidate.employee_code} · {!candidate.suitable ? "Không đúng vị trí" : !candidate.available ? "Trùng lịch" : candidate.already_assigned ? "Đã phân công" : "Sẵn sàng"}</p></div>{canManage ? <button className="action-secondary min-h-9 px-3" disabled={!eligible || assignMutation.isPending || selectedShift === null} onClick={(): void => assignMutation.mutate({ branchId: selectedShift?.branch_id ?? "", shiftId: selectedShiftId, employeeId: candidate.employee_id })} type="button"><UserPlus className="size-4" />Phân công</button> : null}</div>;
           })}{candidatesQuery.data?.length === 0 ? <p className="p-6 text-center text-sm text-slate-500">Chưa có nhân viên hoạt động.</p> : null}</div>
         </section> : null}
       </div>
