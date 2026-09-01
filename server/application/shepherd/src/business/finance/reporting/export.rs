@@ -68,6 +68,7 @@ struct FinancialAmounts {
     staffing_worker_cost: i128,
     coordination_salary_cost: i128,
     approved_business_expense: i128,
+    profit_share_cost: i128,
     operating_cost: i128,
     operating_profit: i128,
     reimbursed_cash: i128,
@@ -83,6 +84,7 @@ impl FinancialAmounts {
         self.staffing_worker_cost = add_decimal(self.staffing_worker_cost, &line.staffing_worker_cost)?;
         self.coordination_salary_cost = add_decimal(self.coordination_salary_cost, &line.coordination_salary_cost)?;
         self.approved_business_expense = add_decimal(self.approved_business_expense, &line.approved_business_expense)?;
+        self.profit_share_cost = add_decimal(self.profit_share_cost, &line.profit_share_cost)?;
         self.operating_cost = add_decimal(self.operating_cost, &line.operating_cost)?;
         self.operating_profit = add_decimal(self.operating_profit, &line.operating_profit)?;
         self.reimbursed_cash = add_decimal(self.reimbursed_cash, &line.reimbursed_cash)?;
@@ -102,6 +104,7 @@ impl FinancialAmounts {
 struct PayrollAmounts {
     staffing_earnings: i128,
     prorated_monthly_salary: i128,
+    profit_share_payment: i128,
     gross_pay: i128,
     recorded_expense_reimbursement: i128,
     suggested_expense_reimbursement: i128,
@@ -114,6 +117,7 @@ impl PayrollAmounts {
     fn add_line(&mut self, line: &PayrollLine) -> Result<(), XlsxError> {
         self.staffing_earnings = add_decimal(self.staffing_earnings, &line.staffing_earnings)?;
         self.prorated_monthly_salary = add_decimal(self.prorated_monthly_salary, &line.prorated_monthly_salary)?;
+        self.profit_share_payment = add_decimal(self.profit_share_payment, &line.profit_share_payment)?;
         self.gross_pay = add_decimal(self.gross_pay, &line.gross_pay)?;
         self.recorded_expense_reimbursement = add_decimal(
             self.recorded_expense_reimbursement,
@@ -291,9 +295,9 @@ fn write_financial_summary_sheet(
         worksheet.write_string(row, 0, currency)?;
         write_financial_amounts(worksheet, row, amount)?;
     }
-    configure_money_columns(worksheet, 0, 11)?;
+    configure_money_columns(worksheet, 0, 12)?;
     if !totals.is_empty() {
-        worksheet.autofilter(0, 0, checked_row(totals.len() - 1, 1)?, 11)?;
+        worksheet.autofilter(0, 0, checked_row(totals.len() - 1, 1)?, 12)?;
     }
     Ok(())
 }
@@ -316,9 +320,9 @@ fn write_financial_branch_sheet(
         }
     }
     worksheet.set_column_width(0, 28.0)?;
-    configure_money_columns(worksheet, 1, 12)?;
+    configure_money_columns(worksheet, 1, 13)?;
     if row > 1 {
-        worksheet.autofilter(0, 0, row - 1, 12)?;
+        worksheet.autofilter(0, 0, row - 1, 13)?;
     }
     Ok(())
 }
@@ -337,6 +341,7 @@ fn write_payroll_summary_sheet(workbook: &mut Workbook, reports: &[PayrollReport
             "Tiền tệ",
             "Tiền công",
             "Lương tháng phân bổ",
+            "Thưởng theo lợi nhuận",
             "Lương gộp",
             "Hoàn chi hộ đã tính",
             "Hoàn chi hộ khi khóa",
@@ -350,16 +355,17 @@ fn write_payroll_summary_sheet(workbook: &mut Workbook, reports: &[PayrollReport
         worksheet.write_string(row, 0, currency)?;
         write_money_scaled(worksheet, row, 1, amount.staffing_earnings)?;
         write_money_scaled(worksheet, row, 2, amount.prorated_monthly_salary)?;
-        write_money_scaled(worksheet, row, 3, amount.gross_pay)?;
-        write_money_scaled(worksheet, row, 4, amount.recorded_expense_reimbursement)?;
-        write_money_scaled(worksheet, row, 5, amount.suggested_expense_reimbursement)?;
-        write_money_scaled(worksheet, row, 6, amount.recorded_advance_deduction)?;
-        write_money_scaled(worksheet, row, 7, amount.suggested_advance_deduction)?;
-        write_money_scaled(worksheet, row, 8, amount.estimated_net_pay)?;
+        write_money_scaled(worksheet, row, 3, amount.profit_share_payment)?;
+        write_money_scaled(worksheet, row, 4, amount.gross_pay)?;
+        write_money_scaled(worksheet, row, 5, amount.recorded_expense_reimbursement)?;
+        write_money_scaled(worksheet, row, 6, amount.suggested_expense_reimbursement)?;
+        write_money_scaled(worksheet, row, 7, amount.recorded_advance_deduction)?;
+        write_money_scaled(worksheet, row, 8, amount.suggested_advance_deduction)?;
+        write_money_scaled(worksheet, row, 9, amount.estimated_net_pay)?;
     }
-    configure_money_columns(worksheet, 0, 8)?;
+    configure_money_columns(worksheet, 0, 9)?;
     if !totals.is_empty() {
-        worksheet.autofilter(0, 0, checked_row(totals.len() - 1, 1)?, 8)?;
+        worksheet.autofilter(0, 0, checked_row(totals.len() - 1, 1)?, 9)?;
     }
     Ok(())
 }
@@ -379,6 +385,10 @@ fn write_payroll_detail_sheet(workbook: &mut Workbook, reports: &[PayrollReport]
             "Giờ làm Staff",
             "Tiền công",
             "Lương tháng phân bổ",
+            "Lợi nhuận làm căn cứ",
+            "Tỷ lệ thưởng (%)",
+            "Thưởng theo lợi nhuận",
+            "Trạng thái thưởng",
             "Lương gộp",
             "Hoàn chi hộ đã tính",
             "Hoàn chi hộ khi khóa",
@@ -403,24 +413,36 @@ fn write_payroll_detail_sheet(workbook: &mut Workbook, reports: &[PayrollReport]
             for (column, value) in [
                 (6, &line.staffing_earnings),
                 (7, &line.prorated_monthly_salary),
-                (8, &line.gross_pay),
-                (9, &line.recorded_expense_reimbursement),
-                (10, &line.suggested_expense_reimbursement),
-                (11, &line.recorded_advance_deduction),
-                (12, &line.suggested_advance_deduction),
-                (13, &line.estimated_net_pay),
+                (8, &line.profit_share_base),
+                (10, &line.profit_share_payment),
+                (12, &line.gross_pay),
+                (13, &line.recorded_expense_reimbursement),
+                (14, &line.suggested_expense_reimbursement),
+                (15, &line.recorded_advance_deduction),
+                (16, &line.suggested_advance_deduction),
+                (17, &line.estimated_net_pay),
             ] {
                 worksheet.write_number_with_format(row, column, excel_number(value)?, &money)?;
             }
+            worksheet.write_number(row, 9, excel_number(&line.profit_share_percent)?)?;
+            worksheet.write_string(
+                row,
+                11,
+                if line.profit_share_locked {
+                    "Đã khóa"
+                } else {
+                    "Tạm tính"
+                },
+            )?;
             if line.attendance_overlap_count > 0 {
                 worksheet.write_number_with_format(
                     row,
-                    14,
+                    18,
                     integer_number(line.attendance_overlap_count)?,
                     &warning,
                 )?;
             } else {
-                worksheet.write_number(row, 14, 0.0)?;
+                worksheet.write_number(row, 18, 0.0)?;
             }
             row = next_row(row)?;
         }
@@ -431,12 +453,12 @@ fn write_payroll_detail_sheet(workbook: &mut Workbook, reports: &[PayrollReport]
     worksheet.set_column_width(3, 18.0)?;
     worksheet.set_column_width(4, 11.0)?;
     worksheet.set_column_width(5, 16.0)?;
-    for column in 6..=13 {
+    for column in 6..=17 {
         worksheet.set_column_width(column, 21.0)?;
     }
-    worksheet.set_column_width(14, 23.0)?;
+    worksheet.set_column_width(18, 23.0)?;
     if row > 1 {
-        worksheet.autofilter(0, 0, row - 1, 14)?;
+        worksheet.autofilter(0, 0, row - 1, 18)?;
     }
     Ok(())
 }
@@ -488,7 +510,7 @@ fn write_payroll_warning_sheet(workbook: &mut Workbook, reports: &[PayrollReport
 }
 
 fn financial_headings(with_branch: bool) -> Vec<&'static str> {
-    let mut headings: Vec<&str> = Vec::with_capacity(if with_branch { 13 } else { 12 });
+    let mut headings: Vec<&str> = Vec::with_capacity(if with_branch { 14 } else { 13 });
     if with_branch {
         headings.push("Chi nhánh");
     }
@@ -498,8 +520,9 @@ fn financial_headings(with_branch: bool) -> Vec<&'static str> {
         "Tiền công Staff",
         "Lương quản lý",
         "Chi phí khác",
-        "Tổng chi phí",
-        "Lợi nhuận",
+        "Thưởng theo lợi nhuận (tách riêng)",
+        "Tổng chi phí vận hành (không gồm thưởng)",
+        "Lợi nhuận vận hành (căn cứ thưởng)",
         "Đã hoàn chi hộ",
         "Đã chi tạm ứng",
         "Đã thu tạm ứng",
@@ -527,13 +550,14 @@ fn write_financial_amounts(worksheet: &mut Worksheet, row: u32, amount: &Financi
         (2, amount.staffing_worker_cost),
         (3, amount.coordination_salary_cost),
         (4, amount.approved_business_expense),
-        (5, amount.operating_cost),
-        (6, amount.operating_profit),
-        (7, amount.reimbursed_cash),
-        (8, amount.salary_advance_disbursed),
-        (9, amount.salary_advance_recovered),
-        (10, amount.outstanding_expense_reimbursement),
-        (11, amount.outstanding_salary_advance),
+        (5, amount.profit_share_cost),
+        (6, amount.operating_cost),
+        (7, amount.operating_profit),
+        (8, amount.reimbursed_cash),
+        (9, amount.salary_advance_disbursed),
+        (10, amount.salary_advance_recovered),
+        (11, amount.outstanding_expense_reimbursement),
+        (12, amount.outstanding_salary_advance),
     ] {
         write_money_scaled(worksheet, row, column, value)?;
     }
@@ -546,11 +570,12 @@ fn write_financial_line(
     line: &OperatingFinancialLine,
     first_column: u16,
 ) -> Result<(), XlsxError> {
-    let values: [&str; 11] = [
+    let values: [&str; 12] = [
         &line.staffing_revenue,
         &line.staffing_worker_cost,
         &line.coordination_salary_cost,
         &line.approved_business_expense,
+        &line.profit_share_cost,
         &line.operating_cost,
         &line.operating_profit,
         &line.reimbursed_cash,

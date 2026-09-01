@@ -89,7 +89,7 @@ function FinancialPeriodDialog({
             </h2>
             <p className="mt-1 text-sm text-slate-500">
               {targetStatus === "closed"
-                ? "Hệ thống sẽ chốt lương, tự động hoàn toàn bộ chi hộ và thu hồi toàn bộ tạm ứng còn lại có ngày tính lương trong tháng. Các khoản thanh toán được lưu bất biến."
+                ? "Hệ thống sẽ chốt thưởng theo lợi nhuận, chốt lương, tự động hoàn toàn bộ chi hộ và thu hồi toàn bộ tạm ứng còn lại có ngày tính lương trong tháng. Các khoản đã chốt được lưu bất biến."
                 : "Mở lại cho phép ghi nhận điều chỉnh mới nhưng không xóa hoặc đảo các khoản đã thanh toán khi khóa trước đó."}
             </p>
           </div>
@@ -122,6 +122,24 @@ function currentMonthRange(): { start: string; end: string } {
     start: localDate(new Date(now.getFullYear(), now.getMonth(), 1)),
     end: localDate(new Date(now.getFullYear(), now.getMonth() + 1, 0)),
   };
+}
+
+function monthRange(month: string): { start: string; end: string } | null {
+  if (!/^\d{4}-\d{2}$/.test(month)) return null;
+  const [yearText, monthText] = month.split("-");
+  const year: number = Number(yearText);
+  const monthIndex: number = Number(monthText) - 1;
+  if (!Number.isInteger(year) || monthIndex < 0 || monthIndex > 11) return null;
+  return {
+    start: localDate(new Date(year, monthIndex, 1)),
+    end: localDate(new Date(year, monthIndex + 1, 0)),
+  };
+}
+
+function selectedMonthForRange(start: string, end: string): string {
+  const month: string = start.slice(0, 7);
+  const range: { start: string; end: string } | null = monthRange(month);
+  return range?.start === start && range.end === end ? month : "";
 }
 
 function scaledAmount(value: string): bigint {
@@ -167,6 +185,7 @@ function aggregateFinancialLines(reports: OperatingFinancialReport[]): Operating
     "staffing_worker_cost",
     "coordination_salary_cost",
     "approved_business_expense",
+    "profit_share_cost",
     "operating_cost",
     "operating_profit",
     "reimbursed_cash",
@@ -189,6 +208,7 @@ function aggregateFinancialLines(reports: OperatingFinancialReport[]): Operating
     staffing_worker_cost: decimalAmount(values.staffing_worker_cost ?? 0n),
     coordination_salary_cost: decimalAmount(values.coordination_salary_cost ?? 0n),
     approved_business_expense: decimalAmount(values.approved_business_expense ?? 0n),
+    profit_share_cost: decimalAmount(values.profit_share_cost ?? 0n),
     operating_cost: decimalAmount(values.operating_cost ?? 0n),
     operating_profit: decimalAmount(values.operating_profit ?? 0n),
     reimbursed_cash: decimalAmount(values.reimbursed_cash ?? 0n),
@@ -199,8 +219,46 @@ function aggregateFinancialLines(reports: OperatingFinancialReport[]): Operating
   }));
 }
 
+function aggregatePayrollLines(reports: PayrollReport[]): PayrollLine[] {
+  const totals = new Map<string, PayrollLine>();
+  for (const line of reports.flatMap((report): PayrollLine[] => report.lines)) {
+    const key: string = `${line.employee_id}:${line.currency}`;
+    const current: PayrollLine | undefined = totals.get(key);
+    if (!current) {
+      totals.set(key, { ...line });
+      continue;
+    }
+    totals.set(key, {
+      ...current,
+      staffing_worked_seconds: current.staffing_worked_seconds + line.staffing_worked_seconds,
+      staffing_earnings: decimalAmount(scaledAmount(current.staffing_earnings) + scaledAmount(line.staffing_earnings)),
+      prorated_monthly_salary: decimalAmount(scaledAmount(current.prorated_monthly_salary) + scaledAmount(line.prorated_monthly_salary)),
+      profit_share_base: decimalAmount(scaledAmount(current.profit_share_base) + scaledAmount(line.profit_share_base)),
+      profit_share_percent: scaledAmount(current.profit_share_percent) >= scaledAmount(line.profit_share_percent)
+        ? current.profit_share_percent
+        : line.profit_share_percent,
+      profit_share_payment: decimalAmount(scaledAmount(current.profit_share_payment) + scaledAmount(line.profit_share_payment)),
+      profit_share_locked: current.profit_share_locked && line.profit_share_locked,
+      gross_pay: decimalAmount(scaledAmount(current.gross_pay) + scaledAmount(line.gross_pay)),
+      recorded_expense_reimbursement: decimalAmount(scaledAmount(current.recorded_expense_reimbursement) + scaledAmount(line.recorded_expense_reimbursement)),
+      suggested_expense_reimbursement: decimalAmount(scaledAmount(current.suggested_expense_reimbursement) + scaledAmount(line.suggested_expense_reimbursement)),
+      recorded_advance_deduction: decimalAmount(scaledAmount(current.recorded_advance_deduction) + scaledAmount(line.recorded_advance_deduction)),
+      outstanding_advance_due: decimalAmount(scaledAmount(current.outstanding_advance_due) + scaledAmount(line.outstanding_advance_due)),
+      suggested_advance_deduction: decimalAmount(scaledAmount(current.suggested_advance_deduction) + scaledAmount(line.suggested_advance_deduction)),
+      estimated_net_pay: decimalAmount(scaledAmount(current.estimated_net_pay) + scaledAmount(line.estimated_net_pay)),
+      attendance_overlap_count: current.attendance_overlap_count + line.attendance_overlap_count,
+    });
+  }
+  return [...totals.values()].sort((left: PayrollLine, right: PayrollLine): number =>
+    left.employee_name.localeCompare(right.employee_name, "vi"));
+}
+
 function hours(seconds: number): string {
   return `${(seconds / 3_600).toLocaleString("vi-VN", { maximumFractionDigits: 2 })} giờ`;
+}
+
+function formatPercent(value: string): string {
+  return `${Number(value).toLocaleString("vi-VN", { maximumFractionDigits: 4 })}%`;
 }
 
 function saveDownloadedFile(file: DownloadedFile): void {
@@ -229,6 +287,7 @@ export function PayrollAccountingPage(): React.JSX.Element {
   const initialRange = useMemo(currentMonthRange, []);
   const [startDate, setStartDate] = useState<string>(initialRange.start);
   const [endDate, setEndDate] = useState<string>(initialRange.end);
+  const [selectedMonth, setSelectedMonth] = useState<string>(initialRange.start.slice(0, 7));
   const [scopeMode, setScopeMode] = useState<ScopeMode>("active_branch");
   const [tab, setTab] = useState<ReportTab>(canReadFinancial ? "financial" : "payroll");
   const [salaryDraft, setSalaryDraft] = useState<EmployeeSalaryRateCreateReq>({
@@ -325,7 +384,7 @@ export function PayrollAccountingPage(): React.JSX.Element {
   });
 
   const financialLines: OperatingFinancialLine[] = aggregateFinancialLines(financialQuery.data ?? []);
-  const payrollLines: PayrollLine[] = (payrollQuery.data ?? []).flatMap((report): PayrollLine[] => report.lines);
+  const payrollLines: PayrollLine[] = aggregatePayrollLines(payrollQuery.data ?? []);
   const overlapCount: number = payrollLines.reduce(
     (total: number, line: PayrollLine): number => total + line.attendance_overlap_count,
     0,
@@ -337,14 +396,31 @@ export function PayrollAccountingPage(): React.JSX.Element {
 
   return (
     <section className="space-y-5">
-      <div className="panel grid gap-4 p-5 lg:grid-cols-[1fr_1fr_1.2fr]">
+      <div className="panel grid gap-4 p-5 sm:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_1.2fr]">
+        <label className="text-sm font-semibold text-slate-700">
+          Chọn nhanh theo tháng
+          <input
+            className="mt-2 min-h-11 w-full rounded-xl border-slate-300"
+            onChange={(event): void => {
+              const month: string = event.target.value;
+              setSelectedMonth(month);
+              const range: { start: string; end: string } | null = monthRange(month);
+              if (range) {
+                setStartDate(range.start);
+                setEndDate(range.end);
+              }
+            }}
+            type="month"
+            value={selectedMonth}
+          />
+        </label>
         <label className="text-sm font-semibold text-slate-700">
           Từ ngày
-          <input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" onChange={(event): void => setStartDate(event.target.value)} type="date" value={startDate} />
+          <input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" onChange={(event): void => { const value: string = event.target.value; setStartDate(value); setSelectedMonth(selectedMonthForRange(value, endDate)); }} type="date" value={startDate} />
         </label>
         <label className="text-sm font-semibold text-slate-700">
           Đến ngày
-          <input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" onChange={(event): void => setEndDate(event.target.value)} type="date" value={endDate} />
+          <input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" onChange={(event): void => { const value: string = event.target.value; setEndDate(value); setSelectedMonth(selectedMonthForRange(startDate, value)); }} type="date" value={endDate} />
         </label>
         <label className="text-sm font-semibold text-slate-700">
           Phạm vi báo cáo
@@ -353,9 +429,9 @@ export function PayrollAccountingPage(): React.JSX.Element {
             <option value="tenant">Toàn doanh nghiệp</option>
           </select>
         </label>
-        {!validRange ? <p className="text-sm font-semibold text-red-600 lg:col-span-3">Khoảng ngày báo cáo không hợp lệ.</p> : null}
+        {!validRange ? <p className="text-sm font-semibold text-red-600 sm:col-span-2 xl:col-span-4">Khoảng ngày báo cáo không hợp lệ.</p> : null}
         {activeTab !== "salary" && ((activeTab === "financial" && canExportFinancial) || (activeTab === "payroll" && canExportPayroll)) ? (
-          <div className="flex flex-col gap-2 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between lg:col-span-3">
+          <div className="flex flex-col gap-2 border-t border-slate-200 pt-4 sm:col-span-2 sm:flex-row sm:items-center sm:justify-between xl:col-span-4">
             <p className="text-sm text-slate-500">File Excel dùng đúng khoảng ngày và phạm vi chi nhánh đang chọn. Trạng thái kỳ và các cảnh báo được ghi trong file.</p>
             <button
               className="action-primary min-h-11 w-full shrink-0 sm:w-auto"
@@ -377,7 +453,7 @@ export function PayrollAccountingPage(): React.JSX.Element {
             </button>
           </div>
         ) : null}
-        {exportMutation.error ? <p className="text-sm font-semibold text-red-700 lg:col-span-3">{friendlyApiError(exportMutation.error, "Không thể tạo file Excel. Vui lòng thu hẹp khoảng ngày hoặc phạm vi chi nhánh rồi thử lại.")}</p> : null}
+        {exportMutation.error ? <p className="text-sm font-semibold text-red-700 sm:col-span-2 xl:col-span-4">{friendlyApiError(exportMutation.error, "Không thể tạo file Excel. Vui lòng thu hẹp khoảng ngày hoặc phạm vi chi nhánh rồi thử lại.")}</p> : null}
       </div>
 
       <div className="panel flex flex-wrap gap-2 p-2">
@@ -391,7 +467,7 @@ export function PayrollAccountingPage(): React.JSX.Element {
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <h2 className="font-black text-slate-950">Kỳ lương và tài chính · {scope.branches.find((branch): boolean => branch.id === activeBranchId)?.name ?? "Chi nhánh đang chọn"}</h2>
-              <p className="mt-1 text-sm text-slate-500">Khi khóa kỳ, hệ thống chốt số tiền thực trả và tự động xử lý số dư chi hộ, tạm ứng có ngày tính lương trong tháng. Mở lại không xóa các khoản đã thanh toán.</p>
+              <p className="mt-1 text-sm text-slate-500">Khi khóa kỳ, hệ thống chốt thưởng theo lợi nhuận và số tiền thực trả, đồng thời xử lý số dư chi hộ, tạm ứng có ngày tính lương trong tháng. Mở lại không xóa các khoản đã chốt.</p>
             </div>
             {scopeMode === "tenant" ? <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-bold text-amber-800">Chỉ áp dụng cho chi nhánh đang chọn</span> : null}
           </div>
@@ -409,12 +485,12 @@ export function PayrollAccountingPage(): React.JSX.Element {
             : <>
               <div className="grid gap-4 lg:grid-cols-3">
                 <div className="panel flex items-center gap-4 p-5"><div className="grid size-12 place-items-center rounded-2xl bg-blue-50 text-blue-700"><TrendingUp className="size-6" /></div><div><p className="text-sm font-semibold text-slate-500">Doanh thu đã đối soát</p><p className="mt-1 text-xl font-black text-slate-950">{sumByCurrency(financialLines, (line): string => line.staffing_revenue, (line): string => line.currency)}</p></div></div>
-                <div className="panel flex items-center gap-4 p-5"><div className="grid size-12 place-items-center rounded-2xl bg-amber-50 text-amber-700"><TrendingDown className="size-6" /></div><div><p className="text-sm font-semibold text-slate-500">Tổng chi phí vận hành</p><p className="mt-1 text-xl font-black text-slate-950">{sumByCurrency(financialLines, (line): string => line.operating_cost, (line): string => line.currency)}</p></div></div>
-                <div className="panel flex items-center gap-4 p-5"><div className="grid size-12 place-items-center rounded-2xl bg-emerald-50 text-emerald-700"><CircleDollarSign className="size-6" /></div><div><p className="text-sm font-semibold text-slate-500">Lợi nhuận vận hành</p><p className="mt-1 text-xl font-black text-slate-950">{sumByCurrency(financialLines, (line): string => line.operating_profit, (line): string => line.currency)}</p></div></div>
+                <div className="panel flex items-center gap-4 p-5"><div className="grid size-12 place-items-center rounded-2xl bg-amber-50 text-amber-700"><TrendingDown className="size-6" /></div><div><p className="text-sm font-semibold text-slate-500">Chi phí vận hành (không gồm thưởng)</p><p className="mt-1 text-xl font-black text-slate-950">{sumByCurrency(financialLines, (line): string => line.operating_cost, (line): string => line.currency)}</p></div></div>
+                <div className="panel flex items-center gap-4 p-5"><div className="grid size-12 place-items-center rounded-2xl bg-emerald-50 text-emerald-700"><CircleDollarSign className="size-6" /></div><div><p className="text-sm font-semibold text-slate-500">Lợi nhuận vận hành (căn cứ thưởng)</p><p className="mt-1 text-xl font-black text-slate-950">{sumByCurrency(financialLines, (line): string => line.operating_profit, (line): string => line.currency)}</p></div></div>
               </div>
               <div className="panel overflow-x-auto">
-                <table className="min-w-full text-sm"><thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-5 py-4">Chi nhánh</th><th className="px-5 py-4">Doanh thu</th><th className="px-5 py-4">Tiền công Staff</th><th className="px-5 py-4">Lương quản lý</th><th className="px-5 py-4">Chi phí khác</th><th className="px-5 py-4">Lợi nhuận</th></tr></thead>
-                  <tbody className="divide-y divide-slate-100">{(financialQuery.data ?? []).flatMap((report: OperatingFinancialReport): React.JSX.Element[] => report.lines.map((line: OperatingFinancialLine): React.JSX.Element => <tr key={`${report.branch_id}:${line.currency}`}><td className="px-5 py-4 font-bold text-slate-900">{report.branch_name}</td><td className="px-5 py-4">{formatMoney(line.staffing_revenue, line.currency)}</td><td className="px-5 py-4">{formatMoney(line.staffing_worker_cost, line.currency)}</td><td className="px-5 py-4">{formatMoney(line.coordination_salary_cost, line.currency)}</td><td className="px-5 py-4">{formatMoney(line.approved_business_expense, line.currency)}</td><td className={`px-5 py-4 font-black ${scaledAmount(line.operating_profit) < 0n ? "text-red-700" : "text-emerald-700"}`}>{formatMoney(line.operating_profit, line.currency)}</td></tr>))}</tbody>
+                <table className="min-w-full text-sm"><thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-5 py-4">Chi nhánh</th><th className="px-5 py-4">Doanh thu</th><th className="px-5 py-4">Tiền công Staff</th><th className="px-5 py-4">Lương quản lý</th><th className="px-5 py-4">Chi phí khác</th><th className="px-5 py-4">Thưởng theo lợi nhuận (tách riêng)</th><th className="px-5 py-4">Lợi nhuận vận hành</th></tr></thead>
+                  <tbody className="divide-y divide-slate-100">{(financialQuery.data ?? []).flatMap((report: OperatingFinancialReport): React.JSX.Element[] => report.lines.map((line: OperatingFinancialLine): React.JSX.Element => <tr key={`${report.branch_id}:${line.currency}`}><td className="px-5 py-4 font-bold text-slate-900">{report.branch_name}</td><td className="px-5 py-4">{formatMoney(line.staffing_revenue, line.currency)}</td><td className="px-5 py-4">{formatMoney(line.staffing_worker_cost, line.currency)}</td><td className="px-5 py-4">{formatMoney(line.coordination_salary_cost, line.currency)}</td><td className="px-5 py-4">{formatMoney(line.approved_business_expense, line.currency)}</td><td className="px-5 py-4 font-bold text-violet-700">{formatMoney(line.profit_share_cost, line.currency)}</td><td className={`px-5 py-4 font-black ${scaledAmount(line.operating_profit) < 0n ? "text-red-700" : "text-emerald-700"}`}>{formatMoney(line.operating_profit, line.currency)}</td></tr>))}</tbody>
                 </table>
               </div>
               <div className="grid gap-4 lg:grid-cols-2">{financialLines.map((line: OperatingFinancialLine): React.JSX.Element => <div className="panel p-5" key={line.currency}><h3 className="font-black text-slate-950">Dòng tiền và số dư · {line.currency}</h3><dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2"><div><dt className="text-slate-500">Đã hoàn chi hộ trong kỳ</dt><dd className="font-bold">{formatMoney(line.reimbursed_cash, line.currency)}</dd></div><div><dt className="text-slate-500">Còn phải hoàn cuối kỳ</dt><dd className="font-bold text-amber-700">{formatMoney(line.outstanding_expense_reimbursement, line.currency)}</dd></div><div><dt className="text-slate-500">Đã chi tạm ứng trong kỳ</dt><dd className="font-bold">{formatMoney(line.salary_advance_disbursed, line.currency)}</dd></div><div><dt className="text-slate-500">Tạm ứng còn phải thu cuối kỳ</dt><dd className="font-bold text-violet-700">{formatMoney(line.outstanding_salary_advance, line.currency)}</dd></div></dl><p className="mt-4 text-xs text-slate-500">Hoàn chi hộ và tạm ứng là dòng tiền hoặc thanh toán công nợ, không được tính lại thành chi phí.</p></div>)}</div>
@@ -427,7 +503,34 @@ export function PayrollAccountingPage(): React.JSX.Element {
             : <>
               {overlapCount > 0 ? <div className="flex gap-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-800"><AlertTriangle className="mt-0.5 size-5 shrink-0" /><div><p className="font-black">Có {overlapCount} khoảng làm việc bị trùng nguồn</p><p className="mt-1">Cần xử lý phần giao nhau giữa công việc khách hàng và chấm công nội bộ trước khi dùng bảng này để trả lương.</p></div></div> : null}
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><div className="panel p-5"><p className="text-sm font-semibold text-slate-500">Tổng lương gộp</p><p className="mt-1 text-xl font-black">{sumByCurrency(payrollLines, (line): string => line.gross_pay, (line): string => line.currency)}</p></div><div className="panel p-5"><p className="text-sm font-semibold text-slate-500">Hoàn chi hộ</p><p className="mt-1 text-xl font-black text-blue-700">{sumByCurrency(payrollLines, (line): string => decimalAmount(scaledAmount(line.recorded_expense_reimbursement) + scaledAmount(line.suggested_expense_reimbursement)), (line): string => line.currency)}</p></div><div className="panel p-5"><p className="text-sm font-semibold text-slate-500">Khấu trừ tạm ứng</p><p className="mt-1 text-xl font-black text-violet-700">{sumByCurrency(payrollLines, (line): string => decimalAmount(scaledAmount(line.recorded_advance_deduction) + scaledAmount(line.suggested_advance_deduction)), (line): string => line.currency)}</p></div><div className="panel p-5"><p className="text-sm font-semibold text-slate-500">Thực trả</p><p className="mt-1 text-xl font-black text-emerald-700">{sumByCurrency(payrollLines, (line): string => line.estimated_net_pay, (line): string => line.currency)}</p></div></div>
-              <div className="panel overflow-x-auto"><table className="min-w-full text-sm"><thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-5 py-4">Nhân viên</th><th className="px-5 py-4">Nguồn lương</th><th className="px-5 py-4">Lương gộp</th><th className="px-5 py-4">Hoàn chi hộ</th><th className="px-5 py-4">Khấu trừ tạm ứng</th><th className="px-5 py-4">Thực trả</th></tr></thead><tbody className="divide-y divide-slate-100">{payrollLines.map((line: PayrollLine): React.JSX.Element => <tr className={line.attendance_overlap_count > 0 ? "bg-red-50/60" : ""} key={`${line.branch_id}:${line.employee_id}:${line.currency}`}><td className="px-5 py-4"><p className="font-bold text-slate-950">{line.employee_name}</p><p className="mt-1 text-xs text-slate-500">{line.employee_code} · {roleLabel(line.role)} · {scope.branches.find((branch): boolean => branch.id === line.branch_id)?.name ?? "Chi nhánh"}</p>{line.attendance_overlap_count > 0 ? <p className="mt-1 text-xs font-bold text-red-700">Trùng {line.attendance_overlap_count} khoảng chấm công</p> : null}</td><td className="px-5 py-4"><p>Tiền công: {formatMoney(line.staffing_earnings, line.currency)} · {hours(line.staffing_worked_seconds)}</p><p className="mt-1">Lương tháng phân bổ: {formatMoney(line.prorated_monthly_salary, line.currency)}</p></td><td className="px-5 py-4 font-bold">{formatMoney(line.gross_pay, line.currency)}</td><td className="px-5 py-4"><p>Đã tính: {formatMoney(line.recorded_expense_reimbursement, line.currency)}</p><p className="mt-1 font-bold text-blue-700">Khi khóa: {formatMoney(line.suggested_expense_reimbursement, line.currency)}</p></td><td className="px-5 py-4"><p>Đã tính: {formatMoney(line.recorded_advance_deduction, line.currency)}</p><p className="mt-1 font-bold text-violet-700">Khi khóa: {formatMoney(line.suggested_advance_deduction, line.currency)}</p></td><td className="px-5 py-4 font-black text-emerald-700">{formatMoney(line.estimated_net_pay, line.currency)}</td></tr>)}</tbody></table></div>
+              <div className="panel overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                    <tr><th className="px-5 py-4">Nhân viên</th><th className="px-5 py-4">Nguồn lương</th><th className="px-5 py-4">Thưởng theo lợi nhuận</th><th className="px-5 py-4">Lương gộp</th><th className="px-5 py-4">Hoàn chi hộ</th><th className="px-5 py-4">Khấu trừ tạm ứng</th><th className="px-5 py-4">Thực trả</th></tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {payrollLines.map((line: PayrollLine): React.JSX.Element => (
+                      <tr className={line.attendance_overlap_count > 0 ? "bg-red-50/60" : ""} key={`${line.employee_id}:${line.currency}`}>
+                        <td className="px-5 py-4">
+                          <p className="font-bold text-slate-950">{line.employee_name}</p>
+                          <p className="mt-1 text-xs text-slate-500">{line.employee_code} · {roleLabel(line.role)} · {scopeMode === "tenant" ? "Toàn doanh nghiệp" : scope.branches.find((branch): boolean => branch.id === line.branch_id)?.name ?? "Chi nhánh"}</p>
+                          {line.attendance_overlap_count > 0 ? <p className="mt-1 text-xs font-bold text-red-700">Trùng {line.attendance_overlap_count} khoảng chấm công</p> : null}
+                        </td>
+                        <td className="px-5 py-4"><p>Tiền công: {formatMoney(line.staffing_earnings, line.currency)} · {hours(line.staffing_worked_seconds)}</p><p className="mt-1">Lương tháng phân bổ: {formatMoney(line.prorated_monthly_salary, line.currency)}</p></td>
+                        <td className="px-5 py-4">
+                          <p className="font-black text-violet-700">{formatMoney(line.profit_share_payment, line.currency)}</p>
+                          <p className="mt-1 text-xs text-slate-500">{formatPercent(line.profit_share_percent)} của {formatMoney(line.profit_share_base, line.currency)}</p>
+                          {scaledAmount(line.profit_share_percent) > 0n ? <span className={`mt-2 inline-flex rounded-full px-2 py-1 text-[11px] font-bold ${line.profit_share_locked ? "bg-slate-200 text-slate-700" : "bg-amber-50 text-amber-800"}`}>{line.profit_share_locked ? "Đã khóa" : "Tạm tính"}</span> : null}
+                        </td>
+                        <td className="px-5 py-4 font-bold">{formatMoney(line.gross_pay, line.currency)}</td>
+                        <td className="px-5 py-4"><p>Đã tính: {formatMoney(line.recorded_expense_reimbursement, line.currency)}</p><p className="mt-1 font-bold text-blue-700">Khi khóa: {formatMoney(line.suggested_expense_reimbursement, line.currency)}</p></td>
+                        <td className="px-5 py-4"><p>Đã tính: {formatMoney(line.recorded_advance_deduction, line.currency)}</p><p className="mt-1 font-bold text-violet-700">Khi khóa: {formatMoney(line.suggested_advance_deduction, line.currency)}</p></td>
+                        <td className="px-5 py-4 font-black text-emerald-700">{formatMoney(line.estimated_net_pay, line.currency)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </>
       ) : null}
 

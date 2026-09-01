@@ -113,6 +113,7 @@ struct OperatingLineRow {
     staffing_worker_cost: String,
     coordination_salary_cost: String,
     approved_business_expense: String,
+    profit_share_cost: String,
     operating_cost: String,
     operating_profit: String,
     reimbursed_cash: String,
@@ -130,6 +131,7 @@ impl From<OperatingLineRow> for OperatingFinancialLine {
             staffing_worker_cost: row.staffing_worker_cost,
             coordination_salary_cost: row.coordination_salary_cost,
             approved_business_expense: row.approved_business_expense,
+            profit_share_cost: row.profit_share_cost,
             operating_cost: row.operating_cost,
             operating_profit: row.operating_profit,
             reimbursed_cash: row.reimbursed_cash,
@@ -152,6 +154,10 @@ struct PayrollLineRow {
     staffing_worked_seconds: i64,
     staffing_earnings: String,
     prorated_monthly_salary: String,
+    profit_share_base: String,
+    profit_share_percent: String,
+    profit_share_payment: String,
+    profit_share_locked: bool,
     gross_pay: String,
     recorded_expense_reimbursement: String,
     suggested_expense_reimbursement: String,
@@ -176,6 +182,10 @@ impl TryFrom<PayrollLineRow> for PayrollLine {
             staffing_worked_seconds: row.staffing_worked_seconds,
             staffing_earnings: row.staffing_earnings,
             prorated_monthly_salary: row.prorated_monthly_salary,
+            profit_share_base: row.profit_share_base,
+            profit_share_percent: row.profit_share_percent,
+            profit_share_payment: row.profit_share_payment,
+            profit_share_locked: row.profit_share_locked,
             gross_pay: row.gross_pay,
             recorded_expense_reimbursement: row.recorded_expense_reimbursement,
             suggested_expense_reimbursement: row.suggested_expense_reimbursement,
@@ -247,6 +257,12 @@ WITH staffing AS (
     FROM business_expense_claims
     WHERE tenant_id = $1 AND status = 'approved' AND paid_on BETWEEN $2 AND $3
     GROUP BY currency
+), profit_share AS (
+    SELECT payment.currency, SUM(payment.payment_amount) AS amount
+    FROM shepherd_branch_profit_share_payroll(
+        $1, shepherd_current_branch_id(), $2, $3
+    ) AS payment
+    GROUP BY payment.currency
 ), reimbursement AS (
     SELECT payment.currency, SUM(payment.amount) AS amount
     FROM business_expense_reimbursements AS payment
@@ -312,6 +328,7 @@ WITH staffing AS (
 ), currencies AS (
     SELECT 'VND'::TEXT AS currency UNION SELECT currency FROM staffing
     UNION SELECT currency FROM salary UNION SELECT currency FROM expense
+    UNION SELECT currency FROM profit_share
     UNION SELECT currency FROM reimbursement UNION SELECT currency FROM advance_disbursed
     UNION SELECT currency FROM advance_recovered UNION SELECT currency FROM reimbursement_balance
     UNION SELECT currency FROM advance_balance
@@ -321,8 +338,15 @@ SELECT currencies.currency,
        COALESCE(staffing.worker_cost, 0)::TEXT AS staffing_worker_cost,
        COALESCE(salary.amount, 0)::TEXT AS coordination_salary_cost,
        COALESCE(expense.amount, 0)::TEXT AS approved_business_expense,
-       (COALESCE(staffing.worker_cost, 0) + COALESCE(salary.amount, 0) + COALESCE(expense.amount, 0))::TEXT AS operating_cost,
-       (COALESCE(staffing.revenue, 0) - COALESCE(staffing.worker_cost, 0) - COALESCE(salary.amount, 0) - COALESCE(expense.amount, 0))::TEXT AS operating_profit,
+       COALESCE(profit_share.amount, 0)::TEXT AS profit_share_cost,
+       (
+           COALESCE(staffing.worker_cost, 0) + COALESCE(salary.amount, 0)
+           + COALESCE(expense.amount, 0)
+       )::TEXT AS operating_cost,
+       (
+           COALESCE(staffing.revenue, 0) - COALESCE(staffing.worker_cost, 0)
+           - COALESCE(salary.amount, 0) - COALESCE(expense.amount, 0)
+       )::TEXT AS operating_profit,
        COALESCE(reimbursement.amount, 0)::TEXT AS reimbursed_cash,
        COALESCE(advance_disbursed.amount, 0)::TEXT AS salary_advance_disbursed,
        COALESCE(advance_recovered.amount, 0)::TEXT AS salary_advance_recovered,
@@ -330,20 +354,31 @@ SELECT currencies.currency,
        COALESCE(advance_balance.amount, 0)::TEXT AS outstanding_salary_advance
 FROM currencies
 LEFT JOIN staffing USING (currency) LEFT JOIN salary USING (currency)
-LEFT JOIN expense USING (currency) LEFT JOIN reimbursement USING (currency)
+LEFT JOIN expense USING (currency) LEFT JOIN profit_share USING (currency)
+LEFT JOIN reimbursement USING (currency)
 LEFT JOIN advance_disbursed USING (currency) LEFT JOIN advance_recovered USING (currency)
 LEFT JOIN reimbursement_balance USING (currency) LEFT JOIN advance_balance USING (currency)
 ORDER BY currencies.currency
 "#;
 
 const PAYROLL_REPORT_QUERY: &str = r#"
-WITH employees AS (
+WITH profit_share AS (
+    SELECT employee_id, employee_home_branch_id, employee_code, employee_name,
+           role_code, currency, profit_base, percentage, payment_amount, is_locked
+    FROM shepherd_branch_profit_share_payroll(
+        $1, shepherd_current_branch_id(), $2, $3
+    )
+), employees AS (
     SELECT employee.id, employee.branch_id, employee.employee_code,
            employee.display_name AS employee_name, account.primary_role_code AS role_code
     FROM hr_employees AS employee
     JOIN accounts AS account
       ON account.tenant_id = employee.tenant_id AND account.id = employee.account_id
     WHERE employee.tenant_id = $1 AND employee.status <> 'terminated' AND account.status = 'active'
+    UNION
+    SELECT payment.employee_id, shepherd_current_branch_id(), payment.employee_code,
+           payment.employee_name, payment.role_code
+    FROM profit_share AS payment
 ), assignment_evidence AS (
     SELECT assignment.employee_id, result.currency, result.worked_seconds,
            result.worker_amount,
@@ -436,11 +471,16 @@ WITH employees AS (
     UNION SELECT employee_id, currency FROM expense_due
     UNION SELECT employee_id, currency FROM recorded_deduction
     UNION SELECT employee_id, currency FROM outstanding_due
+    UNION SELECT employee_id, currency FROM profit_share
 ), amounts AS (
     SELECT employee_currency.employee_id, employee_currency.currency,
            COALESCE(staffing.worked_seconds, 0)::BIGINT AS staffing_worked_seconds,
            COALESCE(staffing.amount, 0) AS staffing_earnings,
            COALESCE(salary.amount, 0) AS base_salary,
+           COALESCE(profit_share.profit_base, 0) AS profit_share_base,
+           COALESCE(profit_share.percentage, 0) AS profit_share_percent,
+           COALESCE(profit_share.payment_amount, 0) AS profit_share_payment,
+           COALESCE(profit_share.is_locked, FALSE) AS profit_share_locked,
            COALESCE(recorded_expense.amount, 0) AS recorded_expense,
            COALESCE(expense_due.amount, 0) AS expense_due,
            COALESCE(recorded_deduction.amount, 0) AS recorded_deduction,
@@ -448,6 +488,7 @@ WITH employees AS (
     FROM employee_currencies AS employee_currency
     LEFT JOIN staffing USING (employee_id, currency)
     LEFT JOIN salary USING (employee_id, currency)
+    LEFT JOIN profit_share USING (employee_id, currency)
     LEFT JOIN recorded_expense USING (employee_id, currency)
     LEFT JOIN expense_due USING (employee_id, currency)
     LEFT JOIN recorded_deduction USING (employee_id, currency)
@@ -458,14 +499,21 @@ SELECT employee.id AS employee_id, employee.branch_id, employee.employee_code,
        amounts.staffing_worked_seconds,
        amounts.staffing_earnings::TEXT AS staffing_earnings,
        amounts.base_salary::TEXT AS prorated_monthly_salary,
-       (amounts.staffing_earnings + amounts.base_salary)::TEXT AS gross_pay,
+       amounts.profit_share_base::TEXT AS profit_share_base,
+       amounts.profit_share_percent::TEXT AS profit_share_percent,
+       amounts.profit_share_payment::TEXT AS profit_share_payment,
+       amounts.profit_share_locked,
+       (
+           amounts.staffing_earnings + amounts.base_salary
+           + amounts.profit_share_payment
+       )::TEXT AS gross_pay,
        amounts.recorded_expense::TEXT AS recorded_expense_reimbursement,
        amounts.expense_due::TEXT AS suggested_expense_reimbursement,
        amounts.recorded_deduction::TEXT AS recorded_advance_deduction,
        amounts.outstanding_due::TEXT AS outstanding_advance_due,
        amounts.outstanding_due::TEXT AS suggested_advance_deduction,
        (
-           amounts.staffing_earnings + amounts.base_salary
+           amounts.staffing_earnings + amounts.base_salary + amounts.profit_share_payment
            + amounts.recorded_expense + amounts.expense_due
            - amounts.recorded_deduction - amounts.outstanding_due
        )::TEXT AS estimated_net_pay,
@@ -713,6 +761,38 @@ impl FinancialReportingRepo for FinancialReportingDb {
                 .fetch_one(&mut *connection)
                 .await
                 .map_err(map_sqlx)?;
+
+            sqlx::query(
+                r#"
+                INSERT INTO hr_employee_profit_share_payments (
+                    tenant_id, branch_id, payroll_period_start,
+                    employee_id, employee_home_branch_id, employee_code,
+                    employee_name, role_code, currency, profit_base,
+                    percentage, payment_amount, financial_period_event_id
+                )
+                SELECT $1, $2, $3,
+                       recipient.employee_id, recipient.employee_home_branch_id,
+                       recipient.employee_code, recipient.employee_name,
+                       recipient.role_code, base.currency, base.profit_base,
+                       recipient.percentage,
+                       ROUND(base.profit_base * recipient.percentage / 100, 4),
+                       $4
+                FROM shepherd_branch_profit_share_recipients(
+                    $1, $2, ($3::DATE + INTERVAL '1 month - 1 day')::DATE
+                ) AS recipient
+                CROSS JOIN shepherd_branch_profit_before_share(
+                    $1, $2, $3, ($3::DATE + INTERVAL '1 month - 1 day')::DATE
+                ) AS base
+                WHERE recipient.percentage > 0
+                "#,
+            )
+            .bind(tenant_id)
+            .bind(branch_row.id)
+            .bind(input.period_start)
+            .bind(period_event_id)
+            .execute(&mut *connection)
+            .await
+            .map_err(map_sqlx)?;
 
             sqlx::query(
                 r#"

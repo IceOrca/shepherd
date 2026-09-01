@@ -261,6 +261,17 @@ Payroll consumes only locked worker-pay snapshots, dates staffing earnings from
 the customer-confirmed local work interval, and rejects overlap with internal
 HR attendance so the same work cannot be paid from two sources.
 
+Payroll also shows **Thưởng theo lợi nhuận** as its own amount, calculation
+basis, and percentage. PostgreSQL calculates operating profit independently as
+staffing revenue minus Staff pay, prorated coordination salary, and approved
+business expenses. A negative result produces a zero bonus basis. Profit-share
+payments are disclosed separately in the financial report and never subtract
+from that operating-profit figure, avoiding a circular recalculation. Current
+role defaults are 8% for an executive manager across every branch they manage,
+7% for a branch manager in their branch, and 0% for supervisors and Staff.
+Whole-business payroll combines the executive manager's authorized per-branch
+amounts into one employee total.
+
 Expense claims and salary advances each record **Ngày chi** (`paid_on`) and
 **Tính vào kỳ lương** (`payroll_inclusion_on`); both default to the day of
 entry, and the payroll date cannot precede the payment date. The default
@@ -269,7 +280,7 @@ to that employee's selected payroll period, while a disbursed salary advance's
 remaining balance subtracts from the employee's selected payroll period:
 
 ```text
-final pay = gross staffing/monthly pay
+final pay = gross staffing/monthly pay + profit-share payment
           + employee-paid expense balance due in the period
           - salary-advance balance due in the period
 ```
@@ -285,7 +296,12 @@ workflows. Reopening records a new decision but never silently reverses a cash
 or payroll settlement; a later close processes only newly eligible balances.
 Each automatic settlement snapshots the exact payroll-inclusion date as well as
 the month, so a user-selected partial-month report remains identical before and
-after the lock.
+after the lock. Closing a full calendar month also stores an immutable
+profit-share snapshot with its branch profit basis, percentage, amount, and
+close event. Reopening retains that snapshot for audit; a later close appends a
+new snapshot. The page provides a month picker that fills the first and last
+calendar day, while keeping the manual date range for partial-month or custom
+financial reports.
 
 ### Payroll and financial Excel exports
 
