@@ -232,7 +232,8 @@ struct ExistsRow {
 }
 
 struct BranchAssignmentRuleRow {
-    min_assignments: i16,
+    is_system: bool,
+    min_assignments: Option<i16>,
     max_assignments: Option<i16>,
     valid_branch_count: i64,
 }
@@ -649,32 +650,22 @@ async fn load_mapped_accounts(context: &AuthService, actor: &AuthedUser) -> Resu
                 FROM account_identities AS identity
                 INNER JOIN accounts AS account
                     ON account.tenant_id = identity.tenant_id AND account.id = identity.account_id
-                LEFT JOIN account_branch_assignments AS assignment
+                LEFT JOIN account_role_assignments AS assignment
                     ON assignment.tenant_id = account.tenant_id
                    AND assignment.account_id = account.id
+                   AND assignment.role_code = account.primary_role_code
                 WHERE identity.tenant_id = $1
-                  AND EXISTS (
-                      SELECT 1
-                      FROM account_roles AS actor_role
-                      INNER JOIN auth_role_assignment_grants AS role_grant
-                          ON role_grant.grantor_role_code = actor_role.role_code
-                      WHERE actor_role.tenant_id = $1
-                        AND actor_role.account_id = $2
-                        AND role_grant.target_role_code = account.primary_role_code
-                  )
                   AND (
                       EXISTS (
                           SELECT 1
-                          FROM account_roles AS tenant_wide_actor_role
-                          INNER JOIN auth_role_branch_assignment_rules AS tenant_wide_rule
-                              ON tenant_wide_rule.role_code = tenant_wide_actor_role.role_code
+                          FROM account_role_assignments AS tenant_wide_actor_role
                           WHERE tenant_wide_actor_role.tenant_id = $1
                             AND tenant_wide_actor_role.account_id = $2
-                            AND tenant_wide_rule.max_assignments = 0
+                            AND tenant_wide_actor_role.branch_id IS NULL
                       )
                       OR EXISTS (
                           SELECT 1
-                          FROM account_branch_assignments AS visible_assignment
+                          FROM account_role_assignments AS visible_assignment
                           WHERE visible_assignment.tenant_id = account.tenant_id
                             AND visible_assignment.account_id = account.id
                             AND visible_assignment.branch_id = ANY($3)
@@ -1119,7 +1110,7 @@ async fn ensure_username_available(
 }
 
 async fn ensure_role_grantable(
-    context: &AuthService,
+    context: &AuthAdminContext,
     actor: &AuthedUser,
     role: &RoleCode,
 ) -> Result<(), AdminApiError> {
@@ -1133,19 +1124,38 @@ async fn ensure_role_grantable(
                 ExistsRow,
                 r#"SELECT EXISTS (
                     SELECT 1
-                    FROM account_roles AS actor_role
-                    INNER JOIN auth_role_assignment_grants AS role_grant
-                        ON role_grant.grantor_role_code = actor_role.role_code
-                    INNER JOIN roles AS target_role
-                        ON target_role.code = role_grant.target_role_code
-                       AND target_role.is_active
-                    WHERE actor_role.tenant_id = $1
-                      AND actor_role.account_id = $2
-                      AND role_grant.target_role_code = $3
+                    FROM tenant_roles AS target_role
+                    WHERE target_role.tenant_id = $1
+                      AND target_role.code = $3
+                      AND target_role.is_active
+                      AND (
+                          (
+                              target_role.is_system
+                              AND EXISTS (
+                                  SELECT 1
+                                  FROM account_roles AS actor_role
+                                  INNER JOIN auth_role_assignment_grants AS role_grant
+                                      ON role_grant.grantor_role_code = actor_role.role_code
+                                  WHERE actor_role.tenant_id = $1
+                                    AND actor_role.account_id = $2
+                                    AND role_grant.target_role_code = target_role.code
+                              )
+                          )
+                          OR (
+                              NOT target_role.is_system
+                              AND shepherd_account_has_permission(
+                                  $1,
+                                  $2,
+                                  shepherd_current_branch_id(),
+                                  $4
+                              )
+                          )
+                      )
                 ) AS "exists!""#,
                 tenant_id,
                 actor_account_id,
                 role.as_str(),
+                context.policy.role_manage_permission.as_str(),
             )
             .fetch_one(connection)
             .await
@@ -1191,17 +1201,23 @@ async fn ensure_branch_assignments_valid(
             sqlx::query_as!(
                 BranchAssignmentRuleRow,
                 r#"
-                SELECT rule.min_assignments,
+                SELECT tenant_role.is_system,
+                       rule.min_assignments,
                        rule.max_assignments,
                        COUNT(branch.id)::BIGINT AS "valid_branch_count!"
-                FROM auth_role_branch_assignment_rules AS rule
+                FROM tenant_roles AS tenant_role
+                LEFT JOIN auth_role_branch_assignment_rules AS rule
+                    ON rule.role_code = tenant_role.code
                 LEFT JOIN branches AS branch
                     ON branch.tenant_id = $1
                    AND branch.id = ANY($2)
                    AND branch.status = 'active'
                    AND branch.id = ANY($3)
-                WHERE rule.role_code = $4
-                GROUP BY rule.role_code, rule.min_assignments, rule.max_assignments
+                WHERE tenant_role.tenant_id = $1
+                  AND tenant_role.code = $4
+                  AND tenant_role.is_active
+                GROUP BY tenant_role.code, tenant_role.is_system,
+                         rule.min_assignments, rule.max_assignments
                 "#,
                 tenant_id,
                 &requested_branch_ids,
@@ -1231,18 +1247,24 @@ async fn ensure_branch_assignments_valid(
         );
         AdminApiError::Validation("The selected role has no branch-assignment policy.".to_owned())
     })?;
-    if requested_count < rule.min_assignments
-        || rule
-            .max_assignments
-            .is_some_and(|maximum_assignments: i16| requested_count > maximum_assignments)
+    let minimum_assignments: i16 = if rule.is_system {
+        rule.min_assignments.ok_or_else(|| {
+            AdminApiError::Validation("The selected system role has no branch-assignment policy.".to_owned())
+        })?
+    } else {
+        1
+    };
+    let maximum_assignments: Option<i16> = if rule.is_system { rule.max_assignments } else { Some(1) };
+    if requested_count < minimum_assignments
+        || maximum_assignments.is_some_and(|maximum: i16| requested_count > maximum)
     {
         warn!(
             tenant_id = %actor.tenant_id,
             actor_id = %actor.account_id,
             role = %role,
             requested_branch_count = requested_count,
-            minimum_branch_count = rule.min_assignments,
-            maximum_branch_count = ?rule.max_assignments,
+            minimum_branch_count = minimum_assignments,
+            maximum_branch_count = ?maximum_assignments,
             "Auth branch-assignment cardinality rejected"
         );
         return Err(AdminApiError::Validation(
@@ -1293,6 +1315,20 @@ async fn link_created_user(
         );
         AdminApiError::Internal
     })?;
+    let tenant_role = sqlx::query!(
+        r#"
+        SELECT scope_type, is_system
+        FROM tenant_roles
+        WHERE tenant_id = $1 AND code = $2 AND is_active
+        FOR SHARE
+        "#,
+        actor.tenant_id,
+        request.primary_role.as_str(),
+    )
+    .fetch_optional(transaction.connection())
+    .await
+    .map_err(|error: sqlx::Error| account_create_error("lock tenant role", actor, error))?
+    .ok_or_else(|| AdminApiError::Validation("The selected role is no longer active.".to_owned()))?;
     let account_insert: PgQueryResult = sqlx::query!(
         r#"
         INSERT INTO accounts (
@@ -1312,21 +1348,63 @@ async fn link_created_user(
     .await
     .map_err(|error| account_create_error("insert account", actor, error))?;
     trace!(rows_affected = account_insert.rows_affected(), account_id = %account_id, "Application account inserted");
-    let role_insert: PgQueryResult = sqlx::query!(
-        r#"
-        INSERT INTO account_roles (tenant_id, account_id, role_code, assigned_by_account_id)
-        VALUES ($1, $2, $3, $4)
-        "#,
-        actor.tenant_id,
-        account_id,
-        request.primary_role.as_str(),
-        actor.account_id,
-    )
-    .execute(transaction.connection())
-    .await
-    .map_err(|error: sqlx::Error| account_create_error("assign primary role", actor, error))?;
-    trace!(rows_affected = role_insert.rows_affected(), account_id = %account_id, "Primary Auth role assigned");
+    if tenant_role.scope_type == "tenant" {
+        sqlx::query!(
+            r#"
+            INSERT INTO account_role_assignments (
+                tenant_id, account_id, role_code, branch_id, assigned_by_account_id
+            )
+            VALUES ($1, $2, $3, NULL, $4)
+            "#,
+            actor.tenant_id,
+            account_id,
+            request.primary_role.as_str(),
+            actor.account_id,
+        )
+        .execute(transaction.connection())
+        .await
+        .map_err(|error: sqlx::Error| account_create_error("assign tenant primary role", actor, error))?;
+    } else {
+        for branch_id in &request.branch_ids {
+            sqlx::query!(
+                r#"
+                INSERT INTO account_role_assignments (
+                    tenant_id, account_id, role_code, branch_id, assigned_by_account_id
+                )
+                VALUES ($1, $2, $3, $4, $5)
+                "#,
+                actor.tenant_id,
+                account_id,
+                request.primary_role.as_str(),
+                branch_id,
+                actor.account_id,
+            )
+            .execute(transaction.connection())
+            .await
+            .map_err(|error: sqlx::Error| account_create_error("assign branch primary role", actor, error))?;
+        }
+    }
+    trace!(account_id = %account_id, role = %request.primary_role, "Tenant primary Auth role assigned");
+    if tenant_role.is_system {
+        let role_insert: PgQueryResult = sqlx::query!(
+            r#"
+            INSERT INTO account_roles (tenant_id, account_id, role_code, assigned_by_account_id)
+            VALUES ($1, $2, $3, $4)
+            "#,
+            actor.tenant_id,
+            account_id,
+            request.primary_role.as_str(),
+            actor.account_id,
+        )
+        .execute(transaction.connection())
+        .await
+        .map_err(|error: sqlx::Error| account_create_error("assign legacy primary role", actor, error))?;
+        trace!(rows_affected = role_insert.rows_affected(), account_id = %account_id, "Legacy primary Auth role assigned");
+    }
     for branch_id in &request.branch_ids {
+        if !tenant_role.is_system {
+            continue;
+        }
         let assignment_insert: PgQueryResult = sqlx::query!(
             r#"
             INSERT INTO account_branch_assignments (

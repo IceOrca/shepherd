@@ -440,7 +440,9 @@ struct IdentityRow {
 }
 
 struct RoleRuleRow {
-    min_assignments: i16,
+    scope_type: String,
+    is_system: bool,
+    min_assignments: Option<i16>,
     max_assignments: Option<i16>,
 }
 
@@ -911,39 +913,47 @@ async fn update_user_access(
                 .await?;
             }
 
-            // Keep the isolated legacy compatibility tables aligned with the
-            // protected organizational primary role while runtime reads use
-            // the scoped assignment tables above.
-            sqlx::query!(
-                "INSERT INTO account_roles (tenant_id, account_id, role_code, assigned_by_account_id) VALUES ($1, $2, $3, $4)",
-                tenant_id,
-                account_id,
+            // Keep the isolated legacy compatibility tables aligned for
+            // built-in roles. Tenant-created roles intentionally exist only
+            // in the tenant-owned authorization tables used at runtime.
+            let is_legacy_role: bool = sqlx::query_scalar!(
+                r#"SELECT EXISTS (SELECT 1 FROM roles WHERE code = $1) AS "exists!""#,
                 request.primary_role.as_str(),
-                actor_id,
             )
-            .execute(&mut *connection)
+            .fetch_one(&mut *connection)
             .await?;
-            let primary_branch_ids: BTreeSet<Uuid> = request
-                .assignments
-                .iter()
-                .filter(|assignment: &&AccountRoleAssignmentContract| assignment.role_code == request.primary_role)
-                .filter_map(|assignment: &AccountRoleAssignmentContract| assignment.branch_id)
-                .collect();
-            for branch_id in primary_branch_ids {
+            if is_legacy_role {
                 sqlx::query!(
-                    r#"
-                    INSERT INTO account_branch_assignments (
-                        tenant_id, account_id, branch_id, assigned_by_account_id
-                    )
-                    VALUES ($1, $2, $3, $4)
-                    "#,
+                    "INSERT INTO account_roles (tenant_id, account_id, role_code, assigned_by_account_id) VALUES ($1, $2, $3, $4)",
                     tenant_id,
                     account_id,
-                    branch_id,
+                    request.primary_role.as_str(),
                     actor_id,
                 )
                 .execute(&mut *connection)
                 .await?;
+                let primary_branch_ids: BTreeSet<Uuid> = request
+                    .assignments
+                    .iter()
+                    .filter(|assignment: &&AccountRoleAssignmentContract| assignment.role_code == request.primary_role)
+                    .filter_map(|assignment: &AccountRoleAssignmentContract| assignment.branch_id)
+                    .collect();
+                for branch_id in primary_branch_ids {
+                    sqlx::query!(
+                        r#"
+                        INSERT INTO account_branch_assignments (
+                            tenant_id, account_id, branch_id, assigned_by_account_id
+                        )
+                        VALUES ($1, $2, $3, $4)
+                        "#,
+                        tenant_id,
+                        account_id,
+                        branch_id,
+                        actor_id,
+                    )
+                    .execute(&mut *connection)
+                    .await?;
+                }
             }
 
             let primary_branch_ids: Vec<Uuid> = request
@@ -1385,14 +1395,24 @@ async fn validate_primary_role_assignments(
 ) -> Result<(), sqlx::Error> {
     let rule: Option<RoleRuleRow> = sqlx::query_as!(
         RoleRuleRow,
-        "SELECT min_assignments, max_assignments FROM auth_role_branch_assignment_rules WHERE role_code = $1",
-        request.primary_role.as_str()
+        r#"
+        SELECT tenant_role.scope_type, tenant_role.is_system,
+               rule.min_assignments, rule.max_assignments
+        FROM tenant_roles AS tenant_role
+        LEFT JOIN auth_role_branch_assignment_rules AS rule
+            ON rule.role_code = tenant_role.code
+        WHERE tenant_role.tenant_id = $1
+          AND tenant_role.code = $2
+          AND tenant_role.is_active
+        "#,
+        tenant_id,
+        request.primary_role.as_str(),
     )
     .fetch_optional(&mut *connection)
     .await?;
     let Some(rule) = rule else {
         return Err(sqlx::Error::Protocol(
-            "Primary organizational role has no branch-assignment rule".to_owned(),
+            "Primary role is inactive or does not exist".to_owned(),
         ));
     };
     let primary_assignments: Vec<&AccountRoleAssignmentContract> = request
@@ -1407,10 +1427,15 @@ async fn validate_primary_role_assignments(
     let has_tenant_assignment: bool = primary_assignments
         .iter()
         .any(|assignment: &&AccountRoleAssignmentContract| assignment.branch_id.is_none());
-    let minimum: i64 = i64::from(rule.min_assignments);
-    let maximum: Option<i64> = rule.max_assignments.map(i64::from);
-    let valid_tenant_role: bool = maximum == Some(0) && branch_count == 0 && has_tenant_assignment;
-    let valid_branch_role: bool = maximum != Some(0)
+    let minimum: i64 = rule.min_assignments.map(i64::from).unwrap_or(1);
+    let maximum: Option<i64> = if rule.is_system {
+        rule.max_assignments.map(i64::from)
+    } else {
+        None
+    };
+    let valid_tenant_role: bool =
+        rule.scope_type == "tenant" && primary_assignments.len() == 1 && branch_count == 0 && has_tenant_assignment;
+    let valid_branch_role: bool = rule.scope_type == "branch"
         && !has_tenant_assignment
         && branch_count >= minimum
         && maximum.is_none_or(|value: i64| branch_count <= value);

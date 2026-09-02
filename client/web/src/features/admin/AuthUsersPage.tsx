@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CheckCircle2,
   CircleAlert,
@@ -14,10 +14,12 @@ import {
   UserRoundX,
   X,
 } from "lucide-react";
-import { useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import type {
   AuthUserSummary,
+  AccessControlRole,
+  AccessControlSnapshot,
   BranchSummary,
   CreateAuthUserRequest,
   RoleCode,
@@ -32,6 +34,7 @@ import {
 import {
   authAdminQueryKeys,
   createAuthUser,
+  getAccessControlSnapshot,
   listAuthUsers,
   setAuthUserStatus,
 } from "./api";
@@ -44,17 +47,24 @@ const emptyCreateRequest: CreateAuthUserRequest = {
   branch_ids: [],
 };
 
-const roleOptions: ReadonlyArray<{ code: RoleCode; label: string }> = [
-  { code: "tenant_owner", label: "Chủ doanh nghiệp" },
-  { code: "executive_manager", label: "Quản lý điều hành" },
-  { code: "branch_manager", label: "Quản lý chi nhánh" },
-  { code: "supervisor", label: "Giám sát" },
-  { code: "staff", label: "Nhân viên" },
+type CreateRoleOption = {
+  code: RoleCode;
+  label: string;
+  scope: "tenant" | "branch";
+  isSystem: boolean;
+};
+
+const systemRoleOptions: ReadonlyArray<CreateRoleOption> = [
+  { code: "tenant_owner", label: "Chủ doanh nghiệp", scope: "tenant", isSystem: true },
+  { code: "executive_manager", label: "Quản lý điều hành", scope: "branch", isSystem: true },
+  { code: "branch_manager", label: "Quản lý chi nhánh", scope: "branch", isSystem: true },
+  { code: "supervisor", label: "Giám sát", scope: "branch", isSystem: true },
+  { code: "staff", label: "Nhân viên", scope: "branch", isSystem: true },
 ];
 
-function grantableRoleCodes(roles: RoleCode[]): RoleCode[] {
+function grantableSystemRoleCodes(roles: RoleCode[]): RoleCode[] {
   if (roles.includes("tenant_owner")) {
-    return roleOptions.map((role): RoleCode => role.code);
+    return systemRoleOptions.map((role): RoleCode => role.code);
   }
   if (roles.includes("executive_manager")) {
     return ["branch_manager", "supervisor", "staff"];
@@ -104,7 +114,8 @@ export function AuthUsersPage() {
   const canRead = permissions.includes("auth.accounts.read");
   const canCreate = permissions.includes("auth.accounts.create");
   const canDisable = permissions.includes("auth.accounts.disable");
-  const grantableRoles: RoleCode[] = grantableRoleCodes(profile?.roles ?? []);
+  const canReadRoles = permissions.includes("auth.roles.read");
+  const canManageRoles = permissions.includes("auth.roles.manage");
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -129,6 +140,56 @@ export function AuthUsersPage() {
     staleTime: 60_000,
   });
   const branches: BranchSummary[] = branchesQuery.data ?? [];
+  const roleCatalogQuery = useInfiniteQuery({
+    queryKey: [...authAdminQueryKeys.accessControl, "account-create-roles"],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }: { pageParam: string | null }): Promise<AccessControlSnapshot> =>
+      getAccessControlSnapshot({ roleCursor: pageParam }),
+    getNextPageParam: (lastPage: AccessControlSnapshot): string | undefined =>
+      lastPage.role_next_cursor ?? undefined,
+    enabled: canCreate && canReadRoles,
+  });
+
+  useEffect((): void => {
+    if (roleCatalogQuery.hasNextPage && !roleCatalogQuery.isFetchingNextPage) {
+      void roleCatalogQuery.fetchNextPage();
+    }
+  }, [
+    roleCatalogQuery.hasNextPage,
+    roleCatalogQuery.isFetchingNextPage,
+    roleCatalogQuery.fetchNextPage,
+  ]);
+
+  const roleOptions: CreateRoleOption[] = useMemo((): CreateRoleOption[] => {
+    const catalogRoles: AccessControlRole[] =
+      roleCatalogQuery.data?.pages.flatMap(
+        (page: AccessControlSnapshot): AccessControlRole[] => page.roles,
+      ) ?? [];
+    if (catalogRoles.length === 0) {
+      return [...systemRoleOptions];
+    }
+    return catalogRoles
+      .filter((role: AccessControlRole): boolean => role.is_active)
+      .map((role: AccessControlRole): CreateRoleOption => ({
+        code: role.code,
+        label: role.display_name,
+        scope: role.scope,
+        isSystem: role.is_system,
+      }));
+  }, [roleCatalogQuery.data]);
+  const grantableSystemRoles: RoleCode[] = grantableSystemRoleCodes(profile?.roles ?? []);
+  const grantableRoles: CreateRoleOption[] = roleOptions.filter(
+    (role: CreateRoleOption): boolean =>
+      role.isSystem ? grantableSystemRoles.includes(role.code) : canManageRoles,
+  );
+  const selectedRole: CreateRoleOption | undefined = roleOptions.find(
+    (role: CreateRoleOption): boolean => role.code === createRequest.primary_role,
+  );
+  const displayRole = useCallback(
+    (roleCode: RoleCode): string =>
+      roleOptions.find((role: CreateRoleOption): boolean => role.code === roleCode)?.label ?? roleLabel(roleCode),
+    [roleOptions],
+  );
 
   const createMutation = useMutation({
     mutationFn: (variables: CreateAuthUserVariables): Promise<AuthUserSummary> =>
@@ -198,12 +259,12 @@ export function AuthUsersPage() {
       return usersQuery.data ?? [];
     }
     return (usersQuery.data ?? []).filter((user) =>
-      [user.username, user.email ?? "", roleLabel(user.primary_role)]
+      [user.username, user.email ?? "", displayRole(user.primary_role)]
         .join(" ")
         .toLocaleLowerCase("vi")
         .includes(term),
     );
-  }, [search, usersQuery.data]);
+  }, [displayRole, search, usersQuery.data]);
 
   if (!canRead) {
     return (
@@ -277,10 +338,17 @@ export function AuthUsersPage() {
             <button
               className="action-primary"
               onClick={() => {
+                const initialRole: CreateRoleOption | undefined =
+                  grantableRoles.find((role: CreateRoleOption): boolean => role.code === "staff") ??
+                  grantableRoles[0];
                 setFeedback(null);
                 setCreateRequest({
                   ...emptyCreateRequest,
-                  branch_ids: profile?.active_branch_id ? [profile.active_branch_id] : [],
+                  primary_role: initialRole?.code ?? "staff",
+                  branch_ids:
+                    initialRole?.code === "tenant_owner" || !profile?.active_branch_id
+                      ? []
+                      : [profile.active_branch_id],
                 });
                 setShowCreate(true);
               }}
@@ -425,7 +493,7 @@ export function AuthUsersPage() {
                         </div>
                       </td>
                       <td className="px-5 py-4 font-medium text-slate-700">
-                        <p>{roleLabel(user.primary_role)}</p>
+                        <p>{displayRole(user.primary_role)}</p>
                         <p className="mt-1 text-xs font-normal text-slate-500">
                           {assignedBranchNames.length > 0
                             ? assignedBranchNames.join(", ")
@@ -511,7 +579,7 @@ export function AuthUsersPage() {
           <section
             aria-labelledby="create-auth-user-title"
             aria-modal="true"
-            className="relative my-6 w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl sm:p-8"
+            className="relative my-6 w-full max-w-2xl rounded-3xl bg-white p-6 shadow-2xl sm:p-8"
             role="dialog"
           >
             <div className="flex items-start justify-between gap-4">
@@ -538,52 +606,55 @@ export function AuthUsersPage() {
               </button>
             </div>
 
-            <form className="mt-6 space-y-4" onSubmit={submitCreate}>
-              <label className="block">
-                <span className="text-sm font-semibold text-slate-700">
-                  Tên hiển thị / đăng nhập
-                </span>
-                <input
-                  autoFocus
-                  className="mt-2 min-h-11 rounded-xl border-slate-300"
-                  maxLength={128}
-                  minLength={3}
-                  onChange={(event) =>
-                    setCreateRequest((current) => ({
-                      ...current,
-                      username: event.target.value,
-                    }))
-                  }
-                  required
-                  value={createRequest.username}
-                />
-              </label>
-              <label className="block">
-                <span className="text-sm font-semibold text-slate-700">
-                  Email
-                </span>
-                <input
-                  autoComplete="off"
-                  className="mt-2 min-h-11 rounded-xl border-slate-300"
-                  onChange={(event) =>
-                    setCreateRequest((current) => ({
-                      ...current,
-                      email: event.target.value,
-                    }))
-                  }
-                  required
-                  type="email"
-                  value={createRequest.email}
-                />
-              </label>
-              <label className="block">
+            <form className="mt-8 space-y-6" onSubmit={submitCreate}>
+              <div className="grid gap-6 sm:grid-cols-2">
+                <label className="block">
+                  <span className="block text-sm font-semibold text-slate-700">
+                    Tên hiển thị / đăng nhập
+                  </span>
+                  <input
+                    autoFocus
+                    className="mt-3 min-h-12 w-full rounded-xl border-slate-300 px-4"
+                    maxLength={128}
+                    minLength={3}
+                    onChange={(event) =>
+                      setCreateRequest((current) => ({
+                        ...current,
+                        username: event.target.value,
+                      }))
+                    }
+                    required
+                    value={createRequest.username}
+                  />
+                </label>
+                <label className="block">
+                  <span className="block text-sm font-semibold text-slate-700">
+                    Email
+                  </span>
+                  <input
+                    autoComplete="off"
+                    className="mt-3 min-h-12 w-full rounded-xl border-slate-300 px-4"
+                    onChange={(event) =>
+                      setCreateRequest((current) => ({
+                        ...current,
+                        email: event.target.value,
+                      }))
+                    }
+                    required
+                    type="email"
+                    value={createRequest.email}
+                  />
+                </label>
+              </div>
+
+              <label className="block rounded-2xl border border-slate-200 bg-slate-50/70 p-4 sm:p-5">
                 <span className="text-sm font-semibold text-slate-700">
                   Mật khẩu ban đầu <span className="font-normal text-slate-400">(không bắt buộc)</span>
                 </span>
-                <span className="relative mt-2 block">
+                <span className="relative mt-3 block">
                   <input
                     autoComplete="new-password"
-                    className="min-h-11 rounded-xl border-slate-300 pr-12"
+                    className="min-h-12 w-full rounded-xl border-slate-300 bg-white px-4 pr-12"
                     minLength={8}
                     onChange={(event) =>
                       setCreateRequest((current) => ({
@@ -611,51 +682,52 @@ export function AuthUsersPage() {
                   Nhập khi tạo tài khoản mới. Nếu email đã tồn tại, tài khoản hiện có sẽ được liên kết với doanh nghiệp này. Có thể để trống khi người dùng đăng nhập bằng Google hoặc Facebook.
                 </span>
               </label>
-              <label className="block">
-                <span className="text-sm font-semibold text-slate-700">
-                  Vai trò chính
-                </span>
-                <select
-                  className="mt-2 min-h-11 rounded-xl border-slate-300"
-                  onChange={(event): void => {
-                    const primaryRole: RoleCode = event.target.value;
-                    setCreateRequest((current: CreateAuthUserRequest): CreateAuthUserRequest => ({
-                      ...current,
-                      primary_role: primaryRole,
-                      branch_ids:
-                        primaryRole === "tenant_owner"
-                          ? []
-                          : primaryRole === "executive_manager"
-                            ? current.branch_ids.length > 0
-                              ? current.branch_ids
-                              : profile?.active_branch_id
-                                ? [profile.active_branch_id]
-                                : []
-                            : [current.branch_ids[0] ?? profile?.active_branch_id ?? branches[0]?.id].filter(
-                                (branchId: string | undefined): branchId is string => branchId !== undefined,
-                              ),
-                    }));
-                  }}
-                  value={createRequest.primary_role}
-                >
-                  {roleOptions
-                    .filter((role): boolean => grantableRoles.includes(role.code))
-                    .map((role) => (
-                      <option key={role.code} value={role.code}>
-                        {role.label}
-                      </option>
-                    ))}
-                </select>
-              </label>
+              <div className="rounded-2xl border border-slate-200 p-4 sm:p-5">
+                <div className="grid gap-6 sm:grid-cols-2">
+                  <label className="block">
+                    <span className="block text-sm font-semibold text-slate-700">
+                      Vai trò chính
+                    </span>
+                    <select
+                      className="mt-3 min-h-12 w-full rounded-xl border-slate-300 px-4"
+                      disabled={grantableRoles.length === 0}
+                      onChange={(event): void => {
+                        const primaryRole: RoleCode = event.target.value;
+                        setCreateRequest((current: CreateAuthUserRequest): CreateAuthUserRequest => ({
+                          ...current,
+                          primary_role: primaryRole,
+                          branch_ids:
+                            primaryRole === "tenant_owner"
+                              ? []
+                              : primaryRole === "executive_manager"
+                                ? current.branch_ids.length > 0
+                                  ? current.branch_ids
+                                  : profile?.active_branch_id
+                                    ? [profile.active_branch_id]
+                                    : []
+                                : [current.branch_ids[0] ?? profile?.active_branch_id ?? branches[0]?.id].filter(
+                                    (branchId: string | undefined): branchId is string => branchId !== undefined,
+                                  ),
+                        }));
+                      }}
+                      value={createRequest.primary_role}
+                    >
+                      {grantableRoles.map((role: CreateRoleOption) => (
+                        <option key={role.code} value={role.code}>
+                          {role.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
 
               {createRequest.primary_role === "tenant_owner" ? (
-                <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm leading-6 text-blue-800">
+                <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm leading-6 text-blue-800 sm:col-span-1">
                   Chủ doanh nghiệp có quyền toàn tenant, nên không gán trực tiếp vào chi nhánh.
                 </div>
               ) : createRequest.primary_role === "executive_manager" ? (
-                <fieldset>
+                <fieldset className="sm:col-span-2">
                   <legend className="text-sm font-semibold text-slate-700">Các chi nhánh phụ trách</legend>
-                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     {branches.map((branch: BranchSummary) => (
                       <label
                         className="flex min-h-11 items-center gap-3 rounded-xl border border-slate-200 px-3 text-sm font-medium text-slate-700"
@@ -680,9 +752,11 @@ export function AuthUsersPage() {
                 </fieldset>
               ) : (
                 <label className="block">
-                  <span className="text-sm font-semibold text-slate-700">Chi nhánh</span>
+                  <span className="block text-sm font-semibold text-slate-700">
+                    {selectedRole?.scope === "tenant" ? "Chi nhánh hồ sơ nhân sự" : "Chi nhánh"}
+                  </span>
                   <select
-                    className="mt-2 min-h-11 rounded-xl border-slate-300"
+                    className="mt-3 min-h-12 w-full rounded-xl border-slate-300 px-4"
                     onChange={(event): void => {
                       setCreateRequest((current: CreateAuthUserRequest): CreateAuthUserRequest => ({
                         ...current,
@@ -701,8 +775,18 @@ export function AuthUsersPage() {
                   </select>
                 </label>
               )}
+                </div>
+                {selectedRole && !selectedRole.isSystem ? (
+                  <p className="mt-4 border-t border-slate-100 pt-4 text-xs leading-5 text-slate-500">
+                    Vai trò tùy chỉnh “{selectedRole.label}” sẽ được gán ngay khi tạo tài khoản.
+                    {selectedRole.scope === "tenant"
+                      ? " Quyền của vai trò áp dụng toàn doanh nghiệp; chi nhánh trên dùng cho hồ sơ nhân sự."
+                      : " Quyền của vai trò áp dụng tại chi nhánh đã chọn."}
+                  </p>
+                ) : null}
+              </div>
 
-              <div className="flex flex-col-reverse gap-3 pt-3 sm:flex-row sm:justify-end">
+              <div className="flex flex-col-reverse gap-3 border-t border-slate-200 pt-5 sm:flex-row sm:justify-end">
                 <button
                   className="action-secondary"
                   disabled={createMutation.isPending}

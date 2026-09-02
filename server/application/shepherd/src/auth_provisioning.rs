@@ -194,7 +194,7 @@ fn employee_branch(
     current_branch_id: Option<Uuid>,
 ) -> Result<Uuid, AcctProvisionErr> {
     let branch_id: Uuid = current_branch_id
-        .filter(|branch_id: &Uuid| branch_ids.contains(branch_id))
+        .filter(|branch_id: &Uuid| branch_ids.is_empty() || branch_ids.contains(branch_id))
         .or_else(|| infra_postgres::active_branch_id().filter(|branch_id: &Uuid| branch_ids.contains(branch_id)))
         .or_else(|| branch_ids.first().copied())
         .ok_or_else(|| {
@@ -269,6 +269,20 @@ mod tests {
             Some(current_branch),
         )
         .unwrap_or_else(|error| panic!("employee branch must resolve: {error}"));
+        assert_eq!(selected, current_branch);
+    }
+
+    #[test]
+    fn employee_branch_preserves_home_branch_for_tenant_scoped_custom_role() {
+        let current_branch: Uuid = Uuid::new_v4();
+        let selected: Uuid = employee_branch(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            &[],
+            Some(current_branch),
+        )
+        .unwrap_or_else(|error| panic!("tenant-scoped role must retain its employee home branch: {error}"));
         assert_eq!(selected, current_branch);
     }
 }
