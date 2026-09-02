@@ -78,6 +78,7 @@ pub struct OperatingFinancialLine {
     pub profit_share_cost: String,
     pub operating_cost: String,
     pub operating_profit: String,
+    pub business_profit_after_profit_share: String,
     pub reimbursed_cash: String,
     pub salary_advance_disbursed: String,
     pub salary_advance_recovered: String,

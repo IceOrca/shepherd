@@ -172,7 +172,7 @@ export type FinancialPeriodState = { branch_id: string, period_start: string, st
 
 export type FinancialPeriodChangeRequest = { period_start: string, status: FinancialPeriodStatus, expected_revision_number: number, reason: string, };
 
-export type OperatingFinancialLine = { currency: string, staffing_revenue: string, staffing_worker_cost: string, coordination_salary_cost: string, approved_business_expense: string, profit_share_cost: string, operating_cost: string, operating_profit: string, reimbursed_cash: string, salary_advance_disbursed: string, salary_advance_recovered: string, outstanding_expense_reimbursement: string, outstanding_salary_advance: string, };
+export type OperatingFinancialLine = { currency: string, staffing_revenue: string, staffing_worker_cost: string, coordination_salary_cost: string, approved_business_expense: string, profit_share_cost: string, operating_cost: string, operating_profit: string, business_profit_after_profit_share: string, reimbursed_cash: string, salary_advance_disbursed: string, salary_advance_recovered: string, outstanding_expense_reimbursement: string, outstanding_salary_advance: string, };
 
 export type OperatingFinancialReport = { branch_id: string, branch_name: string, start_date: string, end_date: string, lines: Array<OperatingFinancialLine>, };
 

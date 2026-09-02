@@ -71,6 +71,7 @@ struct FinancialAmounts {
     profit_share_cost: i128,
     operating_cost: i128,
     operating_profit: i128,
+    business_profit_after_profit_share: i128,
     reimbursed_cash: i128,
     salary_advance_disbursed: i128,
     salary_advance_recovered: i128,
@@ -87,6 +88,10 @@ impl FinancialAmounts {
         self.profit_share_cost = add_decimal(self.profit_share_cost, &line.profit_share_cost)?;
         self.operating_cost = add_decimal(self.operating_cost, &line.operating_cost)?;
         self.operating_profit = add_decimal(self.operating_profit, &line.operating_profit)?;
+        self.business_profit_after_profit_share = add_decimal(
+            self.business_profit_after_profit_share,
+            &line.business_profit_after_profit_share,
+        )?;
         self.reimbursed_cash = add_decimal(self.reimbursed_cash, &line.reimbursed_cash)?;
         self.salary_advance_disbursed = add_decimal(self.salary_advance_disbursed, &line.salary_advance_disbursed)?;
         self.salary_advance_recovered = add_decimal(self.salary_advance_recovered, &line.salary_advance_recovered)?;
@@ -295,9 +300,9 @@ fn write_financial_summary_sheet(
         worksheet.write_string(row, 0, currency)?;
         write_financial_amounts(worksheet, row, amount)?;
     }
-    configure_money_columns(worksheet, 0, 12)?;
+    configure_money_columns(worksheet, 0, 13)?;
     if !totals.is_empty() {
-        worksheet.autofilter(0, 0, checked_row(totals.len() - 1, 1)?, 12)?;
+        worksheet.autofilter(0, 0, checked_row(totals.len() - 1, 1)?, 13)?;
     }
     Ok(())
 }
@@ -320,9 +325,9 @@ fn write_financial_branch_sheet(
         }
     }
     worksheet.set_column_width(0, 28.0)?;
-    configure_money_columns(worksheet, 1, 13)?;
+    configure_money_columns(worksheet, 1, 14)?;
     if row > 1 {
-        worksheet.autofilter(0, 0, row - 1, 13)?;
+        worksheet.autofilter(0, 0, row - 1, 14)?;
     }
     Ok(())
 }
@@ -510,7 +515,7 @@ fn write_payroll_warning_sheet(workbook: &mut Workbook, reports: &[PayrollReport
 }
 
 fn financial_headings(with_branch: bool) -> Vec<&'static str> {
-    let mut headings: Vec<&str> = Vec::with_capacity(if with_branch { 14 } else { 13 });
+    let mut headings: Vec<&str> = Vec::with_capacity(if with_branch { 15 } else { 14 });
     if with_branch {
         headings.push("Chi nhánh");
     }
@@ -523,6 +528,7 @@ fn financial_headings(with_branch: bool) -> Vec<&'static str> {
         "Thưởng theo lợi nhuận (tách riêng)",
         "Tổng chi phí vận hành (không gồm thưởng)",
         "Lợi nhuận vận hành (căn cứ thưởng)",
+        "Lợi nhuận doanh nghiệp sau chia lợi nhuận nhân viên",
         "Đã hoàn chi hộ",
         "Đã chi tạm ứng",
         "Đã thu tạm ứng",
@@ -553,11 +559,12 @@ fn write_financial_amounts(worksheet: &mut Worksheet, row: u32, amount: &Financi
         (5, amount.profit_share_cost),
         (6, amount.operating_cost),
         (7, amount.operating_profit),
-        (8, amount.reimbursed_cash),
-        (9, amount.salary_advance_disbursed),
-        (10, amount.salary_advance_recovered),
-        (11, amount.outstanding_expense_reimbursement),
-        (12, amount.outstanding_salary_advance),
+        (8, amount.business_profit_after_profit_share),
+        (9, amount.reimbursed_cash),
+        (10, amount.salary_advance_disbursed),
+        (11, amount.salary_advance_recovered),
+        (12, amount.outstanding_expense_reimbursement),
+        (13, amount.outstanding_salary_advance),
     ] {
         write_money_scaled(worksheet, row, column, value)?;
     }
@@ -570,7 +577,7 @@ fn write_financial_line(
     line: &OperatingFinancialLine,
     first_column: u16,
 ) -> Result<(), XlsxError> {
-    let values: [&str; 12] = [
+    let values: [&str; 13] = [
         &line.staffing_revenue,
         &line.staffing_worker_cost,
         &line.coordination_salary_cost,
@@ -578,6 +585,7 @@ fn write_financial_line(
         &line.profit_share_cost,
         &line.operating_cost,
         &line.operating_profit,
+        &line.business_profit_after_profit_share,
         &line.reimbursed_cash,
         &line.salary_advance_disbursed,
         &line.salary_advance_recovered,

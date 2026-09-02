@@ -116,6 +116,7 @@ struct OperatingLineRow {
     profit_share_cost: String,
     operating_cost: String,
     operating_profit: String,
+    business_profit_after_profit_share: String,
     reimbursed_cash: String,
     salary_advance_disbursed: String,
     salary_advance_recovered: String,
@@ -134,6 +135,7 @@ impl From<OperatingLineRow> for OperatingFinancialLine {
             profit_share_cost: row.profit_share_cost,
             operating_cost: row.operating_cost,
             operating_profit: row.operating_profit,
+            business_profit_after_profit_share: row.business_profit_after_profit_share,
             reimbursed_cash: row.reimbursed_cash,
             salary_advance_disbursed: row.salary_advance_disbursed,
             salary_advance_recovered: row.salary_advance_recovered,
@@ -347,6 +349,11 @@ SELECT currencies.currency,
            COALESCE(staffing.revenue, 0) - COALESCE(staffing.worker_cost, 0)
            - COALESCE(salary.amount, 0) - COALESCE(expense.amount, 0)
        )::TEXT AS operating_profit,
+       (
+           COALESCE(staffing.revenue, 0) - COALESCE(staffing.worker_cost, 0)
+           - COALESCE(salary.amount, 0) - COALESCE(expense.amount, 0)
+           - COALESCE(profit_share.amount, 0)
+       )::TEXT AS business_profit_after_profit_share,
        COALESCE(reimbursement.amount, 0)::TEXT AS reimbursed_cash,
        COALESCE(advance_disbursed.amount, 0)::TEXT AS salary_advance_disbursed,
        COALESCE(advance_recovered.amount, 0)::TEXT AS salary_advance_recovered,

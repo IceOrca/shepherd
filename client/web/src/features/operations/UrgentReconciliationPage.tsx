@@ -286,14 +286,16 @@ export function UrgentReconciliationPage(): React.JSX.Element {
   }, [selected]);
 
   useEffect((): void => {
-    const jobs: StaffingJob[] = jobsQuery.data ?? [];
-    if (!selectedId || jobs.length !== 1) {
+    const activeJobs: StaffingJob[] = (jobsQuery.data ?? []).filter(
+      (job: StaffingJob): boolean => job.status === "active",
+    );
+    if (!selected || activeJobs.length !== 1) {
       return;
     }
     setFinalDraft((current: FinalDraft): FinalDraft =>
-      current.jobId ? current : { ...current, jobId: jobs[0].id },
+      current.jobId ? current : { ...current, jobId: activeJobs[0].id },
     );
-  }, [jobsQuery.data, selectedId]);
+  }, [jobsQuery.data, selected]);
 
   const refresh = (): Promise<void> =>
     queryClient.invalidateQueries({ queryKey: operationsQueryKeys.urgentReconciliations });
@@ -722,7 +724,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                     value={finalDraft.jobId}
                   >
                     <option value="">Chọn công việc</option>
-                    {(jobsQuery.data ?? []).map((job: StaffingJob): React.JSX.Element => (
+                    {(jobsQuery.data ?? []).filter((job: StaffingJob): boolean => job.status === "active").map((job: StaffingJob): React.JSX.Element => (
                       <option key={job.id} value={job.id}>{job.name}</option>
                     ))}
                   </select>
