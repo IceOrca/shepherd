@@ -24,6 +24,19 @@ pub struct EmployeeSalaryConfig {
     pub effective_to: Option<NaiveDate>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct EmployeeSalaryConfigCursor {
+    pub role: String,
+    pub employee_name: String,
+    pub employee_id: Uuid,
+}
+
+#[derive(Clone, Debug)]
+pub struct EmployeeSalaryConfigPage {
+    pub items: Vec<EmployeeSalaryConfig>,
+    pub next_cursor: Option<EmployeeSalaryConfigCursor>,
+}
+
 #[derive(Clone, Debug)]
 pub struct EmployeeSalaryRateInput {
     pub employee_id: Uuid,
@@ -146,7 +159,13 @@ pub trait FinancialReportingRepo: Send + Sync {
         input: &FinancialPeriodChangeInput,
     ) -> Result<FinancialPeriodState, FinanceError>;
 
-    async fn list_salary_configurations(&self, tenant_id: Uuid) -> Result<Vec<EmployeeSalaryConfig>, FinanceError>;
+    async fn list_salary_configurations(
+        &self,
+        tenant_id: Uuid,
+        search: Option<&str>,
+        limit: i64,
+        cursor: Option<&EmployeeSalaryConfigCursor>,
+    ) -> Result<EmployeeSalaryConfigPage, FinanceError>;
 
     async fn create_salary_rate(
         &self,
@@ -180,8 +199,21 @@ impl FinancialReportingService {
         Arc::new(Self { repo })
     }
 
-    pub async fn list_salary_configurations(&self, tenant_id: Uuid) -> Result<Vec<EmployeeSalaryConfig>, FinanceError> {
-        self.repo.list_salary_configurations(tenant_id).await
+    pub async fn list_salary_configurations(
+        &self,
+        tenant_id: Uuid,
+        search: Option<String>,
+        limit: i64,
+        cursor: Option<EmployeeSalaryConfigCursor>,
+    ) -> Result<EmployeeSalaryConfigPage, FinanceError> {
+        if limit <= 0 {
+            return Err(FinanceError::InvalidInput(
+                "salary configuration page size must be positive",
+            ));
+        }
+        self.repo
+            .list_salary_configurations(tenant_id, search.as_deref(), limit, cursor.as_ref())
+            .await
     }
 
     pub async fn list_financial_periods(

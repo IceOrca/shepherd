@@ -3,11 +3,12 @@ use std::{ops::Deref, sync::Arc};
 use async_trait::async_trait;
 use axum::{
     Extension, Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, put},
 };
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use infra_postgres::{TenantDbErr, TenantTransaction};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -358,6 +359,28 @@ pub struct AuthUserSummary {
     pub last_sign_in_at: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct AuthUserPageQuery {
+    limit: Option<u16>,
+    cursor: Option<String>,
+    search: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct AuthUserCursor {
+    username: String,
+    account_id: Uuid,
+}
+
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct AuthUserPage {
+    pub items: Vec<AuthUserSummary>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+    pub limit: u16,
+}
+
 #[derive(Clone, Debug, Deserialize, TS)]
 #[ts(export)]
 pub struct CreateAuthUserRequest {
@@ -418,10 +441,39 @@ pub fn routes_with_provisioner(
 async fn list_users(
     State(context): State<Arc<AuthAdminContext>>,
     Extension(actor): Extension<AuthedUser>,
-) -> Result<Json<Vec<AuthUserSummary>>, AdminApiError> {
+    Query(query): Query<AuthUserPageQuery>,
+) -> Result<Json<AuthUserPage>, AdminApiError> {
     info!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, "Auth user list request accepted");
     require_permission(&actor, &context.policy.read_permission)?;
-    let accounts: Vec<MappedAccount> = load_mapped_accounts(&context, &actor).await?;
+    let limit = context
+        .pagination
+        .resolve(query.limit)
+        .map_err(AdminApiError::Validation)?;
+    let cursor: Option<AuthUserCursor> = query.cursor.as_deref().map(decode_auth_user_cursor).transpose()?;
+    let search: Option<String> = query.search.map(|value| value.trim().to_lowercase()).filter(|value| !value.is_empty());
+    let mut accounts: Vec<MappedAccount> = load_mapped_accounts_page(
+        &context,
+        &actor,
+        i64::from(limit) + 1,
+        cursor.as_ref(),
+        search.as_deref(),
+    )
+    .await?;
+    let has_more = accounts.len() > usize::from(limit);
+    accounts.truncate(usize::from(limit));
+    let next_cursor = if has_more {
+        accounts
+            .last()
+            .map(|account| {
+                encode_auth_user_cursor(&AuthUserCursor {
+                    username: account.username.to_lowercase(),
+                    account_id: account.account_id,
+                })
+            })
+            .transpose()?
+    } else {
+        None
+    };
     let mut users: Vec<AuthUserSummary> = Vec::with_capacity(accounts.len());
     for account in accounts {
         let provider_user: Option<ExternalIdentity> = context
@@ -437,7 +489,102 @@ async fn list_users(
         user_count = users.len(),
         "Auth user list request completed"
     );
-    Ok(Json(users))
+    Ok(Json(AuthUserPage {
+        items: users,
+        next_cursor,
+        has_more,
+        limit,
+    }))
+}
+
+fn decode_auth_user_cursor(value: &str) -> Result<AuthUserCursor, AdminApiError> {
+    let bytes = URL_SAFE_NO_PAD
+        .decode(value)
+        .map_err(|_| AdminApiError::Validation("The Auth user cursor is invalid.".to_owned()))?;
+    serde_json::from_slice(&bytes).map_err(|_| AdminApiError::Validation("The Auth user cursor is invalid.".to_owned()))
+}
+
+fn encode_auth_user_cursor(cursor: &AuthUserCursor) -> Result<String, AdminApiError> {
+    let bytes = serde_json::to_vec(cursor).map_err(|_| AdminApiError::Internal)?;
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
+}
+
+async fn load_mapped_accounts_page(
+    context: &AuthService,
+    actor: &AuthedUser,
+    limit: i64,
+    cursor: Option<&AuthUserCursor>,
+    search: Option<&str>,
+) -> Result<Vec<MappedAccount>, AdminApiError> {
+    let tenant_id = actor.tenant_id;
+    let actor_account_id = actor.account_id;
+    let actor_branch_ids = actor.branch_ids.clone();
+    let cursor_username = cursor.map(|value| value.username.clone());
+    let cursor_account_id = cursor.map(|value| value.account_id);
+    let search = search.map(str::to_owned);
+    let rows: Vec<MappedAccountRow> = context
+        .db
+        .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            sqlx::query_as!(
+                MappedAccountRow,
+                r#"
+                SELECT identity.subject, account.id AS account_id, account.username, account.email,
+                       account.status AS account_status, account.primary_role_code AS primary_role,
+                       COALESCE(
+                           array_agg(DISTINCT assignment.branch_id ORDER BY assignment.branch_id)
+                               FILTER (WHERE assignment.branch_id IS NOT NULL),
+                           ARRAY[]::UUID[]
+                       ) AS "branch_ids!"
+                FROM account_identities AS identity
+                JOIN accounts AS account
+                  ON account.tenant_id = identity.tenant_id AND account.id = identity.account_id
+                LEFT JOIN account_role_assignments AS assignment
+                  ON assignment.tenant_id = account.tenant_id
+                 AND assignment.account_id = account.id
+                 AND assignment.role_code = account.primary_role_code
+                WHERE identity.tenant_id = $1
+                  AND (
+                      EXISTS (
+                          SELECT 1 FROM account_role_assignments AS tenant_actor
+                          WHERE tenant_actor.tenant_id = $1
+                            AND tenant_actor.account_id = $2
+                            AND tenant_actor.branch_id IS NULL
+                      )
+                      OR EXISTS (
+                          SELECT 1 FROM account_role_assignments AS visible
+                          WHERE visible.tenant_id = account.tenant_id
+                            AND visible.account_id = account.id
+                            AND visible.branch_id = ANY($3)
+                      )
+                  )
+                  AND ($4::TEXT IS NULL
+                       OR lower(account.username) LIKE '%' || $4 || '%'
+                       OR lower(COALESCE(account.email, '')) LIKE '%' || $4 || '%')
+                  AND ($5::TEXT IS NULL OR (lower(account.username), account.id) > ($5, $6::UUID))
+                GROUP BY identity.subject, account.id, account.username, account.email,
+                         account.status, account.primary_role_code
+                ORDER BY lower(account.username), account.id
+                LIMIT $7
+                "#,
+                tenant_id,
+                actor_account_id,
+                &actor_branch_ids,
+                search,
+                cursor_username,
+                cursor_account_id,
+                limit,
+            )
+            .fetch_all(connection)
+            .await
+        })
+        .await
+        .map_err(|error| {
+            error!(tenant_id = %tenant_id, reason = %error, "Paginated Auth account query failed");
+            AdminApiError::Internal
+        })?;
+    rows.into_iter()
+        .map(MappedAccount::try_from)
+        .collect::<Result<Vec<_>, _>>()
 }
 
 async fn create_user(
@@ -456,7 +603,7 @@ async fn create_user(
     );
     require_permission(&actor, &context.policy.create_permission)?;
     normalize_create_request(&mut request)?;
-    ensure_role_grantable(&context, &actor, &request.primary_role).await?;
+    ensure_role_grantable(&context, &actor, &request.primary_role, &request.branch_ids).await?;
     ensure_branch_assignments_valid(&context, &actor, &request.primary_role, &request.branch_ids).await?;
     let request_fingerprint: String = provisioning_fingerprint(&request);
     let claim: ProvisioningClaim =
@@ -624,17 +771,23 @@ async fn set_user_status(
     Ok(Json(summary(updated_account, Some(provider_user))))
 }
 
-async fn load_mapped_accounts(context: &AuthService, actor: &AuthedUser) -> Result<Vec<MappedAccount>, AdminApiError> {
+async fn load_mapped_account_record(
+    context: &AuthService,
+    actor: &AuthedUser,
+    subject: Option<&str>,
+    account_id: Option<Uuid>,
+) -> Result<Option<MappedAccount>, AdminApiError> {
     let tenant_id: Uuid = actor.tenant_id;
     let actor_account_id: Uuid = actor.account_id;
     let actor_branch_ids: Vec<Uuid> = actor.branch_ids.clone();
+    let subject: Option<String> = subject.map(str::to_owned);
     trace!(
         tenant_id = %tenant_id,
         actor_id = %actor_account_id,
         accessible_branch_count = actor_branch_ids.len(),
-        "Loading branch-authorized mapped Auth accounts"
+        "Loading one branch-authorized mapped Auth account"
     );
-    let rows: Vec<MappedAccountRow> = context
+    let row: Option<MappedAccountRow> = context
         .db
         .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
             sqlx::query_as!(
@@ -671,29 +824,28 @@ async fn load_mapped_accounts(context: &AuthService, actor: &AuthedUser) -> Resu
                             AND visible_assignment.branch_id = ANY($3)
                       )
                   )
+                  AND ($4::TEXT IS NULL OR identity.subject = $4)
+                  AND ($5::UUID IS NULL OR account.id = $5)
                 GROUP BY identity.subject, account.id, account.username, account.email,
                          account.status, account.primary_role_code
-                ORDER BY lower(account.username), account.id
+                ORDER BY identity.subject
+                LIMIT 1
                 "#,
                 tenant_id,
                 actor_account_id,
                 &actor_branch_ids,
+                subject,
+                account_id,
             )
-            .fetch_all(connection)
+            .fetch_optional(connection)
             .await
         })
         .await
         .map_err(|error: TenantDbErr| {
-            error!(tenant_id = %tenant_id, error = %error, "Auth account list tenant operation failed");
+            error!(tenant_id = %tenant_id, error = %error, "Auth account lookup tenant operation failed");
             AdminApiError::Internal
         })?;
-
-    let accounts: Vec<MappedAccount> = rows
-        .into_iter()
-        .map(MappedAccount::try_from)
-        .collect::<Result<Vec<MappedAccount>, AdminApiError>>()?;
-    debug!(tenant_id = %tenant_id, account_count = accounts.len(), "Mapped Auth accounts loaded");
-    Ok(accounts)
+    row.map(MappedAccount::try_from).transpose()
 }
 
 async fn load_mapped_account(
@@ -701,10 +853,8 @@ async fn load_mapped_account(
     actor: &AuthedUser,
     subject: &str,
 ) -> Result<MappedAccount, AdminApiError> {
-    load_mapped_accounts(context, actor)
+    load_mapped_account_record(context, actor, Some(subject), None)
         .await?
-        .into_iter()
-        .find(|account| account.subject == subject)
         .ok_or_else(|| AdminApiError::NotFound("The user was not found in this tenant.".to_owned()))
 }
 
@@ -713,10 +863,8 @@ async fn load_mapped_account_by_id(
     actor: &AuthedUser,
     account_id: Uuid,
 ) -> Result<MappedAccount, AdminApiError> {
-    let accounts: Vec<MappedAccount> = load_mapped_accounts(context, actor).await?;
-    accounts
-        .into_iter()
-        .find(|account: &MappedAccount| account.account_id == account_id)
+    load_mapped_account_record(context, actor, None, Some(account_id))
+        .await?
         .ok_or_else(|| AdminApiError::NotFound("The provisioned account was not found in this tenant.".to_owned()))
 }
 
@@ -1113,10 +1261,12 @@ async fn ensure_role_grantable(
     context: &AuthAdminContext,
     actor: &AuthedUser,
     role: &RoleCode,
+    branch_ids: &[Uuid],
 ) -> Result<(), AdminApiError> {
     trace!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, role = %role, "Checking Auth role assignment grant");
     let tenant_id: Uuid = actor.tenant_id;
     let actor_account_id: Uuid = actor.account_id;
+    let requested_branch_ids: Vec<Uuid> = branch_ids.to_vec();
     let row: ExistsRow = context
         .db
         .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
@@ -1143,11 +1293,25 @@ async fn ensure_role_grantable(
                           )
                           OR (
                               NOT target_role.is_system
-                              AND shepherd_account_has_permission(
-                                  $1,
-                                  $2,
-                                  shepherd_current_branch_id(),
-                                  $4
+                              AND (
+                                  (
+                                      target_role.scope_type = 'tenant'
+                                      AND shepherd_account_has_tenant_permission($1, $2, $4)
+                                  )
+                                  OR (
+                                      target_role.scope_type = 'branch'
+                                      AND cardinality($5::UUID[]) > 0
+                                      AND NOT EXISTS (
+                                          SELECT 1
+                                          FROM unnest($5::UUID[]) AS requested(branch_id)
+                                          WHERE NOT shepherd_account_has_permission(
+                                              $1,
+                                              $2,
+                                              requested.branch_id,
+                                              $4
+                                          )
+                                      )
+                                  )
                               )
                           )
                       )
@@ -1156,6 +1320,7 @@ async fn ensure_role_grantable(
                 actor_account_id,
                 role.as_str(),
                 context.policy.role_manage_permission.as_str(),
+                &requested_branch_ids,
             )
             .fetch_one(connection)
             .await

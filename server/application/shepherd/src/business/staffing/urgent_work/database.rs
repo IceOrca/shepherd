@@ -9,10 +9,11 @@ use uuid::Uuid;
 
 use super::super::core::{ManualRateOverride, ReconcileCollection, ReconcileStatus};
 use super::core::{
-    UrgentCustomerWorkRecord, UrgentCustomerWorkRecordInput, UrgentWorkActionSource, UrgentWorkEmployee,
-    UrgentOwnWorkCursor, UrgentOwnWorkPage, UrgentReconcileCursor, UrgentReconcilePage, UrgentWorkCustomer,
-    UrgentWorkEndInput, UrgentWorkError, UrgentWorkItem, UrgentWorkManualInput, UrgentWorkReconcileInput,
-    UrgentWorkReconcile, UrgentWorkRepo, UrgentWorkStartInput, UrgentWorkStatus, UrgentWorkSubmissionKind,
+    UrgentCustomerCursor, UrgentCustomerPage, UrgentCustomerWorkRecord, UrgentCustomerWorkRecordInput,
+    UrgentEmployeeCursor, UrgentEmployeePage, UrgentOwnWorkCursor, UrgentOwnWorkPage, UrgentReconcileCursor,
+    UrgentReconcilePage, UrgentTeamWorkPage, UrgentWorkActionSource, UrgentWorkCustomer, UrgentWorkEmployee,
+    UrgentWorkEndInput, UrgentWorkError, UrgentWorkItem, UrgentWorkManualInput, UrgentWorkReconcile,
+    UrgentWorkReconcileInput, UrgentWorkRepo, UrgentWorkStartInput, UrgentWorkStatus, UrgentWorkSubmissionKind,
 };
 
 pub struct UrgentWorkDb {
@@ -288,7 +289,16 @@ struct ResolvedRateRow {
 
 #[async_trait]
 impl UrgentWorkRepo for UrgentWorkDb {
-    async fn list_customers(&self, tenant_id: Uuid) -> Result<Vec<UrgentWorkCustomer>, UrgentWorkError> {
+    async fn list_customers(
+        &self,
+        tenant_id: Uuid,
+        search: Option<&str>,
+        limit: i64,
+        cursor: Option<&UrgentCustomerCursor>,
+    ) -> Result<UrgentCustomerPage, UrgentWorkError> {
+        let search: Option<String> = search.map(str::to_owned);
+        let cursor_name: Option<String> = cursor.map(|value| value.name.clone());
+        let cursor_id: Option<Uuid> = cursor.map(|value| value.customer_id);
         let rows: Vec<CustomerRow> = self
             .db
             .tran_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
@@ -299,24 +309,49 @@ impl UrgentWorkRepo for UrgentWorkDb {
                            customer.address, customer.time_zone
                     FROM business_customers AS customer
                     WHERE customer.tenant_id = $1 AND customer.status = 'active'
+                      AND ($2::TEXT IS NULL OR customer.name ILIKE '%' || $2 || '%')
+                      AND ($3::TEXT IS NULL OR (lower(customer.name), customer.id) > ($3, $4))
                     ORDER BY lower(customer.name), customer.id
+                    LIMIT $5
                     "#,
                     tenant_id,
+                    search,
+                    cursor_name,
+                    cursor_id,
+                    limit + 1,
                 )
                 .fetch_all(connection)
                 .await
             })
             .await
             .map_err(|error: TenantDbErr| tenant_runner_failure("list urgent customers", tenant_id, error))?;
-        debug!(tenant_id = %tenant_id, customer_count = rows.len(), "Urgent-work customers loaded");
-        Ok(rows.into_iter().map(UrgentWorkCustomer::from).collect())
+        let mut items: Vec<UrgentWorkCustomer> = rows.into_iter().map(UrgentWorkCustomer::from).collect();
+        let has_more: bool = items.len() > limit as usize;
+        items.truncate(limit as usize);
+        let next_cursor: Option<UrgentCustomerCursor> =
+            has_more
+                .then(|| items.last())
+                .flatten()
+                .map(|item| UrgentCustomerCursor {
+                    name: item.customer_name.to_lowercase(),
+                    customer_id: item.customer_id,
+                });
+        debug!(tenant_id = %tenant_id, customer_count = items.len(), "Urgent-work customers loaded");
+        Ok(UrgentCustomerPage { items, next_cursor })
     }
 
     async fn list_employees(
         &self,
         tenant_id: Uuid,
         actor_account_id: Uuid,
-    ) -> Result<Vec<UrgentWorkEmployee>, UrgentWorkError> {
+        search: Option<&str>,
+        limit: i64,
+        cursor: Option<&UrgentEmployeeCursor>,
+    ) -> Result<UrgentEmployeePage, UrgentWorkError> {
+        let search: Option<String> = search.map(str::to_owned);
+        let cursor_self: Option<bool> = cursor.map(|value| value.is_self);
+        let cursor_name: Option<String> = cursor.map(|value| value.name.clone());
+        let cursor_id: Option<Uuid> = cursor.map(|value| value.employee_id);
         let rows: Vec<EmployeeRow> = self
             .db
             .tran_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
@@ -349,17 +384,41 @@ impl UrgentWorkRepo for UrgentWorkDb {
                           employee.branch_id,
                           'business.urgent_work.start'
                       )
+                      AND ($3::TEXT IS NULL OR employee.display_name ILIKE '%' || $3 || '%'
+                           OR employee.employee_code ILIKE '%' || $3 || '%')
+                      AND ($4::BOOLEAN IS NULL
+                           OR (employee.account_id = $2) < $4
+                           OR ((employee.account_id = $2) = $4
+                               AND (lower(employee.display_name), employee.id) > ($5, $6)))
                     ORDER BY (employee.account_id = $2) DESC, lower(employee.display_name), employee.id
+                    LIMIT $7
                     "#,
                     tenant_id,
                     actor_account_id,
+                    search,
+                    cursor_self,
+                    cursor_name,
+                    cursor_id,
+                    limit + 1,
                 )
                 .fetch_all(connection)
                 .await
             })
             .await
             .map_err(|error: TenantDbErr| tenant_runner_failure("list urgent employees", tenant_id, error))?;
-        Ok(rows.into_iter().map(UrgentWorkEmployee::from).collect())
+        let mut items: Vec<UrgentWorkEmployee> = rows.into_iter().map(UrgentWorkEmployee::from).collect();
+        let has_more: bool = items.len() > limit as usize;
+        items.truncate(limit as usize);
+        let next_cursor: Option<UrgentEmployeeCursor> =
+            has_more
+                .then(|| items.last())
+                .flatten()
+                .map(|item| UrgentEmployeeCursor {
+                    is_self: item.is_self,
+                    name: item.display_name.to_lowercase(),
+                    employee_id: item.employee_id,
+                });
+        Ok(UrgentEmployeePage { items, next_cursor })
     }
 
     async fn list_own_work(
@@ -411,15 +470,41 @@ impl UrgentWorkRepo for UrgentWorkDb {
         &self,
         tenant_id: Uuid,
         actor_account_id: Uuid,
-    ) -> Result<Vec<UrgentWorkItem>, UrgentWorkError> {
-        let rows: Vec<WorkItemRow> = self
+        limit: i64,
+        cursor: Option<&UrgentOwnWorkCursor>,
+    ) -> Result<UrgentTeamWorkPage, UrgentWorkError> {
+        let cursor_active: Option<bool> = cursor.map(|value| value.active);
+        let cursor_started_at: Option<DateTime<Utc>> = cursor.map(|value| value.started_at);
+        let cursor_report_id: Option<Uuid> = cursor.map(|value| value.report_id);
+        let mut rows: Vec<WorkItemRow> = self
             .db
             .tran_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
-                load_work_items(connection, tenant_id, actor_account_id, true).await
+                load_work_items(
+                    connection,
+                    tenant_id,
+                    actor_account_id,
+                    cursor_active,
+                    cursor_started_at,
+                    cursor_report_id,
+                    limit + 1,
+                )
+                .await
             })
             .await
             .map_err(|error: TenantDbErr| tenant_runner_failure("list team urgent work", tenant_id, error))?;
-        rows.into_iter().map(UrgentWorkItem::try_from).collect()
+        let has_more: bool = rows.len() > limit as usize;
+        rows.truncate(limit as usize);
+        let next_cursor: Option<UrgentOwnWorkCursor> =
+            has_more.then(|| rows.last()).flatten().map(|row| UrgentOwnWorkCursor {
+                active: row.status == "active",
+                started_at: row.started_at,
+                report_id: row.report_id,
+            });
+        let items: Vec<UrgentWorkItem> = rows
+            .into_iter()
+            .map(UrgentWorkItem::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(UrgentTeamWorkPage { items, next_cursor })
     }
 
     async fn start(
@@ -1284,7 +1369,10 @@ async fn load_work_items(
     connection: &mut sqlx::PgConnection,
     tenant_id: Uuid,
     actor_account_id: Uuid,
-    team_scope: bool,
+    cursor_active: Option<bool>,
+    cursor_started_at: Option<DateTime<Utc>>,
+    cursor_report_id: Option<Uuid>,
+    limit: i64,
 ) -> Result<Vec<WorkItemRow>, sqlx::Error> {
     sqlx::query_as!(
         WorkItemRow,
@@ -1316,9 +1404,7 @@ async fn load_work_items(
         LEFT JOIN business_shift_assignments AS assignment
             ON assignment.tenant_id = report.tenant_id AND assignment.urgent_work_report_id = report.id
         WHERE report.tenant_id = $1
-          AND (
-              (NOT $3 AND employee.account_id = $2)
-              OR ($3 AND report.claimed_customer_id IN (
+          AND report.claimed_customer_id IN (
                   SELECT actor_report.claimed_customer_id
                   FROM business_urgent_work_reports AS actor_report
                   INNER JOIN hr_employees AS actor_employee
@@ -1327,13 +1413,19 @@ async fn load_work_items(
                   WHERE actor_report.tenant_id = $1 AND actor_employee.account_id = $2
                     AND actor_report.status <> 'cancelled'
                     AND actor_report.created_at >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
-              ))
-          )
-        ORDER BY (report.status = 'active') DESC, session.started_at DESC, employee.display_name, report.id
+              )
+          AND ($3::BOOLEAN IS NULL
+               OR ((report.status = 'active'), session.started_at, report.id)
+                  < ($3, $4::TIMESTAMPTZ, $5::UUID))
+        ORDER BY (report.status = 'active') DESC, session.started_at DESC, report.id DESC
+        LIMIT $6
         "#,
         tenant_id,
         actor_account_id,
-        team_scope,
+        cursor_active,
+        cursor_started_at,
+        cursor_report_id,
+        limit,
     )
     .fetch_all(connection)
     .await
@@ -1844,6 +1936,16 @@ async fn reconcile_report_in_transaction(
     .await
     .map_err(|error: sqlx::Error| database_failure("derive urgent local work date", tenant_id, error))?;
     let work_date: NaiveDate = work_date_row.work_date;
+    let financial_period_open: bool =
+        sqlx::query_scalar("SELECT shepherd_financial_date_is_open($1, shepherd_current_branch_id(), $2)")
+            .bind(tenant_id)
+            .bind(work_date)
+            .fetch_one(transaction.connection())
+            .await
+            .map_err(|error| database_failure("validate urgent reconciliation period", tenant_id, error))?;
+    if !financial_period_open {
+        return Err(UrgentWorkError::Conflict);
+    }
 
     // This client treats every authorized staff member as staffing-eligible. Keep
     // the immutable snapshot column for compatibility, but do not require a
@@ -1993,7 +2095,8 @@ async fn reconcile_report_in_transaction(
             $13, 'approved', $14::BIGINT, $15::BIGINT, $16,
             ROUND($11::TEXT::NUMERIC * $14::BIGINT::NUMERIC / 3600, 4),
             ROUND($12::TEXT::NUMERIC * $14::BIGINT::NUMERIC / 3600, 4),
-            ROUND(($11::TEXT::NUMERIC - $12::TEXT::NUMERIC) * $14::BIGINT::NUMERIC / 3600, 4),
+            ROUND($11::TEXT::NUMERIC * $14::BIGINT::NUMERIC / 3600, 4)
+                - ROUND($12::TEXT::NUMERIC * $14::BIGINT::NUMERIC / 3600, 4),
             CURRENT_TIMESTAMP, $17, $17
         )
         "#,

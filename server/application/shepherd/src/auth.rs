@@ -11,7 +11,8 @@ pub use infra_auth::ext_service::access_control::{
     UpdateAccessControlBranchRequest, UpdateAccessControlRoleRequest, UpdateAccountAccessRequest,
 };
 pub use infra_auth::ext_service::auth_admin::{
-    AuthAdminPolicy, AuthProviderUserStatus, AuthUserSummary, CreateAuthUserRequest, SetAuthUserStatusRequest,
+    AuthAdminPolicy, AuthProviderUserStatus, AuthUserPage, AuthUserSummary, CreateAuthUserRequest,
+    SetAuthUserStatusRequest,
 };
 pub use infra_auth::ext_service::{
     account::{resolve_app_acct, protected_layer},

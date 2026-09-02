@@ -8,7 +8,10 @@ use uuid::Uuid;
 
 use super::{
     super::core::{ShiftAssignmentStatus, StaffingError, StaffingShiftStatus},
-    core::{OwnStaffingAssignment, ShiftWorkActionInput, ShiftWorkSession, StaffingWorkRepo},
+    core::{
+        OwnStaffingAssignment, OwnStaffingAssignmentCursor, OwnStaffingAssignmentPage, ShiftWorkActionInput,
+        ShiftWorkSession, StaffingWorkRepo,
+    },
 };
 
 pub struct StaffingWorkDb {
@@ -168,8 +171,12 @@ impl StaffingWorkRepo for StaffingWorkDb {
         &self,
         tenant_id: Uuid,
         account_id: Uuid,
-    ) -> Result<Vec<OwnStaffingAssignment>, StaffingError> {
+        limit: i64,
+        cursor: Option<&OwnStaffingAssignmentCursor>,
+    ) -> Result<OwnStaffingAssignmentPage, StaffingError> {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        let cursor_starts_at: Option<DateTime<Utc>> = cursor.map(|value| value.starts_at);
+        let cursor_assignment_id: Option<Uuid> = cursor.map(|value| value.assignment_id);
         let rows: Vec<OwnAssignmentRow> = sqlx::query_as!(
             OwnAssignmentRow,
             r#"
@@ -215,10 +222,15 @@ impl StaffingWorkRepo for StaffingWorkDb {
             WHERE assignment.tenant_id = $1
               AND employee.account_id = $2
               AND assignment.status <> 'cancelled'
-            ORDER BY shift.starts_at DESC, assignment.id
+              AND ($3::TIMESTAMPTZ IS NULL OR (shift.starts_at, assignment.id) < ($3, $4))
+            ORDER BY shift.starts_at DESC, assignment.id DESC
+            LIMIT $5
             "#,
             tenant_id,
             account_id,
+            cursor_starts_at,
+            cursor_assignment_id,
+            limit + 1,
         )
         .fetch_all(transaction.connection())
         .await
@@ -227,7 +239,21 @@ impl StaffingWorkRepo for StaffingWorkDb {
             .commit()
             .await
             .map_err(|error| database_failure("commit own staffing assignment list", tenant_id, error))?;
-        rows.into_iter().map(OwnStaffingAssignment::try_from).collect()
+        let mut items: Vec<OwnStaffingAssignment> = rows
+            .into_iter()
+            .map(OwnStaffingAssignment::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
+        let has_more: bool = items.len() > limit as usize;
+        items.truncate(limit as usize);
+        let next_cursor: Option<OwnStaffingAssignmentCursor> =
+            has_more
+                .then(|| items.last())
+                .flatten()
+                .map(|item| OwnStaffingAssignmentCursor {
+                    starts_at: item.starts_at,
+                    assignment_id: item.assignment_id,
+                });
+        Ok(OwnStaffingAssignmentPage { items, next_cursor })
     }
 
     async fn start(
@@ -741,19 +767,7 @@ mod database_tests {
                 .await;
             assert!(matches!(conflicting_start, Err(StaffingError::Conflict)));
 
-            let mut adjust_time = db.begin_tenant(tenant_id).await?;
-            sqlx::query!(
-                r#"
-            UPDATE business_shift_work_sessions
-            SET started_at = CURRENT_TIMESTAMP - INTERVAL '1 hour'
-            WHERE tenant_id = $1 AND id = $2
-            "#,
-                tenant_id,
-                first.id,
-            )
-            .execute(adjust_time.connection())
-            .await?;
-            adjust_time.commit().await?;
+            tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
 
             let end_input = ShiftWorkActionInput {
                 idempotency_key: Uuid::new_v4(),
@@ -770,7 +784,7 @@ mod database_tests {
                 .await
                 .map_err(staffing_error)?;
             assert_eq!(ended.id, repeated_end.id);
-            assert!(ended.worked_seconds.is_some_and(|seconds| seconds >= 3600));
+            assert!(ended.worked_seconds.is_some_and(|seconds| seconds >= 1));
 
             let mut customer_evidence = db.begin_tenant(tenant_id).await?;
             sqlx::query!(
@@ -810,13 +824,19 @@ mod database_tests {
 
             let staffing = StaffingDb::new_arc(Arc::clone(&db));
             let approved = staffing
-                .approve_shift_assignment(tenant_id, assignment_id, None, None, account_id)
+                .approve_shift_assignment(tenant_id, assignment_id, None, None, None, None, account_id)
                 .await
                 .map_err(staffing_error)?;
             assert_eq!(approved.status, ShiftAssignmentStatus::Approved);
             assert_eq!(approved.worked_seconds, approved.observed_worked_seconds);
 
             let mut verify = db.begin_tenant(tenant_id).await?;
+            sqlx::query(
+                "ALTER TABLE business_shift_work_sessions \
+                 DISABLE TRIGGER business_shift_work_sessions_reject_delete",
+            )
+            .execute(verify.connection())
+            .await?;
             let outbox_count = sqlx::query_scalar!(
                 r#"SELECT COUNT(*) AS "count!" FROM notification_outbox WHERE tenant_id = $1"#,
                 tenant_id
@@ -864,6 +884,12 @@ mod database_tests {
             sqlx::query!("DELETE FROM branches WHERE tenant_id = $1", tenant_id)
                 .execute(verify.connection())
                 .await?;
+            sqlx::query(
+                "ALTER TABLE business_shift_work_sessions \
+                 ENABLE TRIGGER business_shift_work_sessions_reject_delete",
+            )
+            .execute(verify.connection())
+            .await?;
             verify.commit().await?;
             sqlx::query!("DELETE FROM tenants WHERE id = $1", tenant_id)
                 .execute(db.global_pool())

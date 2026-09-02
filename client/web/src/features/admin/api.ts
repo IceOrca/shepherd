@@ -3,6 +3,7 @@ import type {
   AccessControlRole,
   AccessControlSnapshot,
   AccessControlUser,
+  AuthUserPage,
   AuthUserSummary,
   CreateAccessControlBranchRequest,
   CreateAccessControlRoleRequest,
@@ -84,8 +85,12 @@ export function updateAccountAccess(
   );
 }
 
-export function listAuthUsers(): Promise<AuthUserSummary[]> {
-  return apiRequest<AuthUserSummary[]>("/api/admin/auth-users");
+export function listAuthUsers(cursor: string | null = null, search = ""): Promise<AuthUserPage> {
+  const parameters: URLSearchParams = new URLSearchParams();
+  if (cursor !== null) parameters.set("cursor", cursor);
+  if (search.trim() !== "") parameters.set("search", search.trim());
+  const query: string = parameters.toString();
+  return apiRequest<AuthUserPage>(`/api/admin/auth-users${query ? `?${query}` : ""}`);
 }
 
 export function createAuthUser(

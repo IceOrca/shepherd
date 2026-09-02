@@ -2,21 +2,42 @@ use std::sync::Arc;
 
 use axum::{
     Extension, Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     routing::{get, post},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, trace, warn};
 use ts_rs::TS;
 use uuid::Uuid;
 
-use crate::{AppContext, auth::AuthedUser};
+use crate::{
+    AppContext,
+    auth::AuthedUser,
+    pagination::{decode_cursor, encode_cursor, resolve_limit},
+};
 
 use super::{
     super::core::StaffingError,
-    core::{OwnStaffingAssignment, ShiftWorkActionInput, ShiftWorkSession},
+    core::{
+        OwnStaffingAssignment, OwnStaffingAssignmentCursor, OwnStaffingAssignmentPage, ShiftWorkActionInput,
+        ShiftWorkSession,
+    },
 };
+
+#[derive(Debug, Deserialize)]
+struct OwnAssignmentPageQuery {
+    cursor: Option<String>,
+    limit: Option<u16>,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct OwnStaffingAssignmentPageResponse {
+    pub items: Vec<OwnStaffingAssignment>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+    pub limit: u16,
+}
 
 fn staffing_gps_enabled() -> bool {
     let enabled: bool = std::env::var("STAFFING_GPS_ENABLED")
@@ -70,28 +91,37 @@ pub fn routes() -> Router<Arc<AppContext>> {
 async fn list_own_assignments(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthedUser>,
-) -> Result<Json<Vec<OwnStaffingAssignment>>, StatusCode> {
+    Query(query): Query<OwnAssignmentPageQuery>,
+) -> Result<Json<OwnStaffingAssignmentPageResponse>, StatusCode> {
     require_permission(&user, "business.staffing_work.self.read")?;
+    let limit: u16 = resolve_limit(&context.list_pagination, query.limit)?;
+    let cursor: Option<OwnStaffingAssignmentCursor> = decode_cursor(query.cursor.as_deref())?;
     debug!(
         operation = "list_own_staffing_assignments",
         tenant_id = %user.tenant_id,
         account_id = %user.account_id,
         "Staffing work request accepted"
     );
-    let assignments: Vec<OwnStaffingAssignment> = context
+    let page: OwnStaffingAssignmentPage = context
         .core
         .staffing_work
-        .list_own_assignments(user.tenant_id, user.account_id)
+        .list_own_assignments(user.tenant_id, user.account_id, i64::from(limit), cursor)
         .await
         .map_err(|error: StaffingError| staffing_work_status("list own assignments", &user, error))?;
     debug!(
         operation = "list_own_staffing_assignments",
         tenant_id = %user.tenant_id,
         account_id = %user.account_id,
-        assignment_count = assignments.len(),
+        assignment_count = page.items.len(),
         "Staffing work request completed"
     );
-    Ok(Json(assignments))
+    let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
+    Ok(Json(OwnStaffingAssignmentPageResponse {
+        has_more: next_cursor.is_some(),
+        items: page.items,
+        next_cursor,
+        limit,
+    }))
 }
 
 async fn start(

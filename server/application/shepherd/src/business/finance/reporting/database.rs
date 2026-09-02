@@ -12,9 +12,9 @@ use crate::auth::RoleCode;
 use super::{
     super::core::FinanceError,
     core::{
-        EmployeeSalaryConfig, EmployeeSalaryRateInput, FinancialPeriodChangeInput, FinancialPeriodState,
-        FinancialPeriodStatus, FinancialReportingRepo, OperatingFinancialLine, OperatingFinancialReport, PayrollLine,
-        PayrollReport,
+        EmployeeSalaryConfig, EmployeeSalaryConfigCursor, EmployeeSalaryConfigPage, EmployeeSalaryRateInput,
+        FinancialPeriodChangeInput, FinancialPeriodState, FinancialPeriodStatus, FinancialReportingRepo,
+        OperatingFinancialLine, OperatingFinancialReport, PayrollLine, PayrollReport,
     },
 };
 
@@ -219,10 +219,10 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) AS rate ON TRUE
 WHERE employee.tenant_id = $1
+  AND employee.id = $2
   AND employee.status <> 'terminated'
   AND account.status = 'active'
   AND account.primary_role_code IN ('executive_manager', 'branch_manager', 'supervisor')
-ORDER BY account.primary_role_code, employee.display_name
 "#;
 
 const OPERATING_REPORT_QUERY: &str = r#"
@@ -547,11 +547,10 @@ async fn salary_configuration(
 ) -> Result<EmployeeSalaryConfig, FinanceError> {
     let row: SalaryConfigurationRow = sqlx::query_as(SALARY_CONFIGURATION_QUERY)
         .bind(tenant_id)
-        .fetch_all(connection)
+        .bind(employee_id)
+        .fetch_optional(connection)
         .await
         .map_err(map_sqlx)?
-        .into_iter()
-        .find(|row: &SalaryConfigurationRow| row.employee_id == employee_id)
         .ok_or(FinanceError::NotFound)?;
     row.try_into()
 }
@@ -701,6 +700,100 @@ impl FinancialReportingRepo for FinancialReportingDb {
         }
 
         if input.status == FinancialPeriodStatus::Closed {
+            let has_unreconciled_work: bool = sqlx::query_scalar(
+                r#"
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM business_shift_assignments AS assignment
+                    JOIN business_staffing_shifts AS shift
+                      ON shift.tenant_id = assignment.tenant_id
+                     AND shift.id = assignment.shift_id
+                    JOIN business_customers AS claimed_customer
+                      ON claimed_customer.tenant_id = shift.tenant_id
+                     AND claimed_customer.id = shift.customer_id
+                    LEFT JOIN business_customer_work_records AS customer_record
+                      ON customer_record.tenant_id = assignment.tenant_id
+                     AND customer_record.assignment_id = assignment.id
+                    LEFT JOIN business_customers AS confirmed_customer
+                      ON confirmed_customer.tenant_id = customer_record.tenant_id
+                     AND confirmed_customer.id = customer_record.confirmed_customer_id
+                    JOIN LATERAL (
+                        SELECT MIN(session.started_at) AS started_at,
+                               BOOL_OR(session.ended_at IS NULL) AS has_open,
+                               COALESCE(SUM(session.worked_seconds), 0) AS worked_seconds
+                        FROM business_shift_work_sessions AS session
+                        WHERE session.tenant_id = assignment.tenant_id
+                          AND session.assignment_id = assignment.id
+                    ) AS staff ON TRUE
+                    WHERE assignment.tenant_id = $1
+                      AND assignment.branch_id = $2
+                      AND assignment.status = 'assigned'
+                      AND staff.started_at IS NOT NULL
+                      AND NOT staff.has_open
+                      AND staff.worked_seconds > 0
+                      AND (
+                          (
+                              (staff.started_at AT TIME ZONE claimed_customer.time_zone)::DATE >= $3
+                              AND (staff.started_at AT TIME ZONE claimed_customer.time_zone)::DATE
+                                  < ($3::DATE + INTERVAL '1 month')::DATE
+                          )
+                          OR (
+                              customer_record.id IS NOT NULL
+                              AND (customer_record.confirmed_started_at
+                                  AT TIME ZONE confirmed_customer.time_zone)::DATE >= $3
+                              AND (customer_record.confirmed_started_at
+                                  AT TIME ZONE confirmed_customer.time_zone)::DATE
+                                  < ($3::DATE + INTERVAL '1 month')::DATE
+                          )
+                      )
+                    UNION ALL
+                    SELECT 1
+                    FROM business_urgent_work_reports AS report
+                    JOIN business_urgent_work_sessions AS session
+                      ON session.tenant_id = report.tenant_id
+                     AND session.report_id = report.id
+                    JOIN business_customers AS claimed_customer
+                      ON claimed_customer.tenant_id = report.tenant_id
+                     AND claimed_customer.id = report.claimed_customer_id
+                    LEFT JOIN business_urgent_customer_work_records AS customer_record
+                      ON customer_record.tenant_id = report.tenant_id
+                     AND customer_record.report_id = report.id
+                    LEFT JOIN business_customers AS confirmed_customer
+                      ON confirmed_customer.tenant_id = customer_record.tenant_id
+                     AND confirmed_customer.id = customer_record.confirmed_customer_id
+                    WHERE report.tenant_id = $1
+                      AND report.branch_id = $2
+                      AND report.status = 'completed'
+                      AND session.ended_at IS NOT NULL
+                      AND session.worked_seconds > 0
+                      AND (
+                          (
+                              (session.started_at AT TIME ZONE claimed_customer.time_zone)::DATE >= $3
+                              AND (session.started_at AT TIME ZONE claimed_customer.time_zone)::DATE
+                                  < ($3::DATE + INTERVAL '1 month')::DATE
+                          )
+                          OR (
+                              customer_record.id IS NOT NULL
+                              AND (customer_record.confirmed_started_at
+                                  AT TIME ZONE confirmed_customer.time_zone)::DATE >= $3
+                              AND (customer_record.confirmed_started_at
+                                  AT TIME ZONE confirmed_customer.time_zone)::DATE
+                                  < ($3::DATE + INTERVAL '1 month')::DATE
+                          )
+                      )
+                )
+                "#,
+            )
+            .bind(tenant_id)
+            .bind(branch_row.id)
+            .bind(input.period_start)
+            .fetch_one(&mut *connection)
+            .await
+            .map_err(map_sqlx)?;
+            if has_unreconciled_work {
+                return Err(FinanceError::Conflict);
+            }
+
             let has_attendance_overlap: bool = sqlx::query_scalar(
                 r#"
                 SELECT EXISTS (
@@ -791,6 +884,15 @@ impl FinancialReportingRepo for FinancialReportingDb {
                     $1, $2, $3, ($3::DATE + INTERVAL '1 month - 1 day')::DATE
                 ) AS base
                 WHERE recipient.percentage > 0
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM hr_employee_profit_share_payments AS existing
+                      WHERE existing.tenant_id = $1
+                        AND existing.branch_id = $2
+                        AND existing.payroll_period_start = $3
+                        AND existing.employee_id = recipient.employee_id
+                        AND existing.currency = base.currency
+                  )
                 "#,
             )
             .bind(tenant_id)
@@ -917,21 +1019,79 @@ impl FinancialReportingRepo for FinancialReportingDb {
         Ok(result)
     }
 
-    async fn list_salary_configurations(&self, tenant_id: Uuid) -> Result<Vec<EmployeeSalaryConfig>, FinanceError> {
+    async fn list_salary_configurations(
+        &self,
+        tenant_id: Uuid,
+        search: Option<&str>,
+        limit: i64,
+        cursor: Option<&EmployeeSalaryConfigCursor>,
+    ) -> Result<EmployeeSalaryConfigPage, FinanceError> {
+        let search: Option<String> = search.map(str::to_owned);
+        let cursor_role: Option<String> = cursor.map(|value| value.role.clone());
+        let cursor_name: Option<String> = cursor.map(|value| value.employee_name.clone());
+        let cursor_id: Option<Uuid> = cursor.map(|value| value.employee_id);
         let rows: Vec<SalaryConfigurationRow> = self
             .db
-            .tran_with_tenant(tenant_id, async |connection| {
-                sqlx::query_as(SALARY_CONFIGURATION_QUERY)
-                    .bind(tenant_id)
-                    .fetch_all(connection)
-                    .await
+            .tran_with_tenant(tenant_id, async move |connection| {
+                sqlx::query_as(
+                    r#"
+                    SELECT employee.id AS employee_id, employee.branch_id, employee.employee_code,
+                           employee.display_name AS employee_name, account.primary_role_code AS role_code,
+                           rate.id AS rate_id, rate.monthly_amount::TEXT AS monthly_amount,
+                           rate.currency, rate.effective_from, rate.effective_to
+                    FROM hr_employees AS employee
+                    JOIN accounts AS account
+                      ON account.tenant_id = employee.tenant_id AND account.id = employee.account_id
+                    LEFT JOIN LATERAL (
+                        SELECT salary.id, salary.monthly_amount, salary.currency,
+                               salary.effective_from, salary.effective_to
+                        FROM hr_employee_salary_rates AS salary
+                        WHERE salary.tenant_id = employee.tenant_id
+                          AND salary.branch_id = employee.branch_id
+                          AND salary.employee_id = employee.id
+                        ORDER BY salary.effective_from DESC
+                        LIMIT 1
+                    ) AS rate ON TRUE
+                    WHERE employee.tenant_id = $1
+                      AND employee.status <> 'terminated'
+                      AND account.status = 'active'
+                      AND account.primary_role_code IN ('executive_manager', 'branch_manager', 'supervisor')
+                      AND ($2::TEXT IS NULL OR employee.display_name ILIKE '%' || $2 || '%'
+                           OR employee.employee_code ILIKE '%' || $2 || '%')
+                      AND ($3::TEXT IS NULL
+                           OR (account.primary_role_code, lower(employee.display_name), employee.id) > ($3, $4, $5))
+                    ORDER BY account.primary_role_code, lower(employee.display_name), employee.id
+                    LIMIT $6
+                    "#,
+                )
+                .bind(tenant_id)
+                .bind(search)
+                .bind(cursor_role)
+                .bind(cursor_name)
+                .bind(cursor_id)
+                .bind(limit + 1)
+                .fetch_all(connection)
+                .await
             })
             .await
             .map_err(|error: TenantDbErr| {
                 error!(tenant_id = %tenant_id, reason = %error, "Salary configuration query failed");
                 FinanceError::BackendUnavailable
             })?;
-        rows.into_iter().map(TryInto::try_into).collect()
+        let mut items: Vec<EmployeeSalaryConfig> =
+            rows.into_iter().map(TryInto::try_into).collect::<Result<Vec<_>, _>>()?;
+        let has_more: bool = items.len() > limit as usize;
+        items.truncate(limit as usize);
+        let next_cursor: Option<EmployeeSalaryConfigCursor> =
+            has_more
+                .then(|| items.last())
+                .flatten()
+                .map(|item| EmployeeSalaryConfigCursor {
+                    role: item.role.as_str().to_owned(),
+                    employee_name: item.employee_name.to_lowercase(),
+                    employee_id: item.employee_id,
+                });
+        Ok(EmployeeSalaryConfigPage { items, next_cursor })
     }
 
     async fn create_salary_rate(

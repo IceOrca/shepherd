@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   CheckCircle2,
   CircleAlert,
@@ -81,9 +81,11 @@ export function MyAssignmentsPage() {
   const [preparingAssignmentId, setPreparingAssignmentId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
 
-  const assignmentsQuery = useQuery({
+  const assignmentsQuery = useInfiniteQuery({
     queryKey: operationsQueryKeys.ownAssignments,
-    queryFn: listOwnAssignments,
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => listOwnAssignments(pageParam),
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
     enabled: canRead,
   });
 
@@ -111,13 +113,13 @@ export function MyAssignmentsPage() {
 
   const assignments = useMemo(
     () =>
-      [...(assignmentsQuery.data ?? [])].sort((left, right) => {
+      [...(assignmentsQuery.data?.pages.flatMap((page) => page.items) ?? [])].sort((left, right) => {
         if (left.is_working !== right.is_working) {
           return left.is_working ? -1 : 1;
         }
         return new Date(left.starts_at).getTime() - new Date(right.starts_at).getTime();
       }),
-    [assignmentsQuery.data],
+    [assignmentsQuery.data?.pages],
   );
 
   const runAction = async (assignment: OwnStaffingAssignment, action: "start" | "end") => {
@@ -296,6 +298,13 @@ export function MyAssignmentsPage() {
               </article>
             );
           })}
+        </div>
+      ) : null}
+      {assignmentsQuery.hasNextPage ? (
+        <div className="flex justify-center">
+          <button className="action-secondary" disabled={assignmentsQuery.isFetchingNextPage} onClick={() => void assignmentsQuery.fetchNextPage()} type="button">
+            {assignmentsQuery.isFetchingNextPage ? "Đang tải..." : "Tải thêm ca"}
+          </button>
         </div>
       ) : null}
     </div>

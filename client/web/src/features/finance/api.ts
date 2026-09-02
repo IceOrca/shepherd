@@ -8,6 +8,7 @@ import type {
   ExpenseCorrectionReq,
   Employee,
   EmployeeSalaryConfig,
+  EmployeeSalaryConfigPageRsp,
   EmployeeSalaryRateCreateReq,
   FinancialDecisionReq,
   FinancialPeriodChangeRequest,
@@ -201,8 +202,9 @@ export function recoverSalaryAdvance(
   });
 }
 
-export function listSalaryConfigurations(): Promise<EmployeeSalaryConfig[]> {
-  return apiRequest<EmployeeSalaryConfig[]>("/api/business/finance/salary-configurations");
+export function listSalaryConfigurations(cursor: string | null = null): Promise<EmployeeSalaryConfigPageRsp> {
+  const query: string = cursor === null ? "" : `?cursor=${encodeURIComponent(cursor)}`;
+  return apiRequest<EmployeeSalaryConfigPageRsp>(`/api/business/finance/salary-configurations${query}`);
 }
 
 export function createEmployeeSalaryRate(

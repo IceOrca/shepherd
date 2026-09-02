@@ -11,19 +11,24 @@ use axum::{
     routing::{get, post},
 };
 use chrono::{NaiveDate, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::{error, info, warn};
 use ts_rs::TS;
 use uuid::Uuid;
 
-use crate::{AppContext, auth::AuthedUser};
+use crate::{
+    AppContext,
+    auth::AuthedUser,
+    pagination::{decode_cursor, encode_cursor, normalize_search, resolve_limit},
+};
 
 use super::{
     super::core::FinanceError,
     core::{
-        EmployeeSalaryConfig, EmployeeSalaryRateInput, FinancialPeriodChangeInput, FinancialPeriodState,
-        FinancialPeriodStatus, OperatingFinancialReport, PayrollReport,
+        EmployeeSalaryConfig, EmployeeSalaryConfigCursor, EmployeeSalaryConfigPage, EmployeeSalaryRateInput,
+        FinancialPeriodChangeInput, FinancialPeriodState, FinancialPeriodStatus, OperatingFinancialReport,
+        PayrollReport,
     },
     export::{
         FinancialPeriodExportState, GeneratedWorkbook, ReportExportKind, ReportExportMetadata,
@@ -35,6 +40,21 @@ use super::{
 pub struct ReportRangeQuery {
     pub start_date: NaiveDate,
     pub end_date: NaiveDate,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SalaryConfigurationPageQuery {
+    pub limit: Option<u16>,
+    pub cursor: Option<String>,
+    pub search: Option<String>,
+}
+
+#[derive(Debug, Serialize, TS)]
+pub struct EmployeeSalaryConfigPageRsp {
+    pub items: Vec<EmployeeSalaryConfig>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+    pub limit: u16,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -386,15 +406,24 @@ async fn change_financial_period(
 async fn list_salary_configurations(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthedUser>,
-) -> Result<Json<Vec<EmployeeSalaryConfig>>, StatusCode> {
+    Query(query): Query<SalaryConfigurationPageQuery>,
+) -> Result<Json<EmployeeSalaryConfigPageRsp>, StatusCode> {
     require_permission(&user, "hr.salary_rates.read")?;
-    context
+    let limit: u16 = resolve_limit(&context.list_pagination, query.limit)?;
+    let cursor: Option<EmployeeSalaryConfigCursor> = decode_cursor(query.cursor.as_deref())?;
+    let page: EmployeeSalaryConfigPage = context
         .core
         .financial_reporting
-        .list_salary_configurations(user.tenant_id)
+        .list_salary_configurations(user.tenant_id, normalize_search(query.search), i64::from(limit), cursor)
         .await
-        .map(Json)
-        .map_err(|error: FinanceError| reporting_status("list salary configurations", &user, error))
+        .map_err(|error: FinanceError| reporting_status("list salary configurations", &user, error))?;
+    let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
+    Ok(Json(EmployeeSalaryConfigPageRsp {
+        has_more: next_cursor.is_some(),
+        items: page.items,
+        next_cursor,
+        limit,
+    }))
 }
 
 async fn create_salary_rate(

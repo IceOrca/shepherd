@@ -59,18 +59,20 @@ export async function loadReconcileScopePage<T>({
     ),
   );
   let resolvedLimit: number | null = cursor.limit;
-  const branchIdsToRefill: string[] = Object.entries(branches)
-    .filter(([, state]: [string, BranchCursorState<T>]): boolean =>
-      state.buffer.length === 0 && !state.exhausted,
-    )
-    .map(([branchId]: [string, BranchCursorState<T>]): string => branchId);
-
-  await Promise.all(
-    branchIdsToRefill.map(async (branchId: string): Promise<void> => {
+  const refillEmptyBranches = async (): Promise<void> => {
+    const branchIdsToRefill: string[] = Object.entries(branches)
+      .filter(([, state]: [string, BranchCursorState<T>]): boolean =>
+        state.buffer.length === 0 && !state.exhausted,
+      )
+      .map(([branchId]: [string, BranchCursorState<T>]): string => branchId);
+    await Promise.all(branchIdsToRefill.map(async (branchId: string): Promise<void> => {
       const state: BranchCursorState<T> = branches[branchId];
       const page: ReconciliationApiPage<T> = await fetchBranchPage(branchId, state.cursor);
       if (page.has_more !== (page.next_cursor !== null)) {
         throw new Error("reconciliation cursor metadata returned by the server is inconsistent");
+      }
+      if (page.items.length === 0 && page.has_more) {
+        throw new Error("reconciliation cursor returned an empty non-terminal page");
       }
       if (resolvedLimit !== null && resolvedLimit !== page.limit) {
         throw new Error("reconciliation page-size configuration differs between branch requests");
@@ -81,23 +83,35 @@ export async function loadReconcileScopePage<T>({
         cursor: page.next_cursor,
         exhausted: !page.has_more,
       };
-    }),
-  );
+    }));
+  };
+
+  await refillEmptyBranches();
 
   if (resolvedLimit === null) {
     throw new Error("reconciliation page size was not returned by the server");
   }
 
-  const candidates: T[] = Object.values(branches)
-    .flatMap((state: BranchCursorState<T>): T[] => state.buffer)
-    .sort(compare);
-  const items: T[] = candidates.slice(0, resolvedLimit);
-  const selectedKeys: Set<string> = new Set<string>(items.map(itemKey));
-  const branchStates: BranchCursorState<T>[] = Object.values(branches);
-  for (const state of branchStates) {
-    state.buffer = state.buffer.filter((item: T): boolean => !selectedKeys.has(itemKey(item)));
+  const items: T[] = [];
+  const selectedKeys: Set<string> = new Set<string>();
+  while (items.length < resolvedLimit) {
+    await refillEmptyBranches();
+    const available: Array<[string, T]> = Object.entries(branches).flatMap(
+      ([branchId, state]: [string, BranchCursorState<T>]): Array<[string, T]> =>
+        state.buffer[0] === undefined ? [] : [[branchId, state.buffer[0]]],
+    );
+    if (available.length === 0) break;
+    available.sort((left: [string, T], right: [string, T]): number => compare(left[1], right[1]));
+    const [selectedBranchId, selected] = available[0];
+    branches[selectedBranchId].buffer.shift();
+    const key: string = itemKey(selected);
+    if (!selectedKeys.has(key)) {
+      selectedKeys.add(key);
+      items.push(selected);
+    }
   }
 
+  const branchStates: BranchCursorState<T>[] = Object.values(branches);
   const hasMore: boolean = branchStates.some(
     (state: BranchCursorState<T>): boolean => state.buffer.length > 0 || !state.exhausted,
   );

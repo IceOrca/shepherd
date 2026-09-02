@@ -660,6 +660,7 @@ async fn create_role(
     Json(mut request): Json<CreateAccessControlRoleRequest>,
 ) -> Result<(StatusCode, Json<AccessControlRole>), AccessControlError> {
     require_permission(&actor, &context.policy.role_manage_permission)?;
+    require_tenant_permission(&context, &actor, &context.policy.role_manage_permission).await?;
     normalize_create_role_request(&mut request)?;
     let tenant_id: Uuid = actor.tenant_id;
     let actor_id: Uuid = actor.account_id;
@@ -732,6 +733,7 @@ async fn update_role(
     Json(mut request): Json<UpdateAccessControlRoleRequest>,
 ) -> Result<Json<AccessControlRole>, AccessControlError> {
     require_permission(&actor, &context.policy.role_manage_permission)?;
+    require_tenant_permission(&context, &actor, &context.policy.role_manage_permission).await?;
     let role_code: RoleCode = RoleCode::parse(role_code_raw)
         .map_err(|code_error: AuthCodeError| AccessControlError::Validation(code_error.to_string()))?;
     normalize_update_role_request(&mut request)?;
@@ -826,6 +828,8 @@ async fn update_user_access(
 ) -> Result<Json<AccessControlUser>, AccessControlError> {
     require_permission(&actor, &context.policy.update_permission)?;
     require_permission(&actor, &context.policy.role_manage_permission)?;
+    require_tenant_permission(&context, &actor, &context.policy.update_permission).await?;
+    require_tenant_permission(&context, &actor, &context.policy.role_manage_permission).await?;
     normalize_user_access_request(&mut request)?;
     let tenant_id: Uuid = actor.tenant_id;
     let actor_id: Uuid = actor.account_id;
@@ -1595,6 +1599,36 @@ fn require_permission(actor: &AuthedUser, permission: &PermissionCode) -> Result
         Ok(())
     } else {
         warn!(operation = "access_control.authorize", tenant_id = %actor.tenant_id, actor_id = %actor.account_id, required_permission = %permission, "Access-control request denied");
+        Err(AccessControlError::Forbidden)
+    }
+}
+
+async fn require_tenant_permission(
+    context: &AccessControlContext,
+    actor: &AuthedUser,
+    permission: &PermissionCode,
+) -> Result<(), AccessControlError> {
+    let tenant_id = actor.tenant_id;
+    let actor_id = actor.account_id;
+    let permission_code = permission.as_str().to_owned();
+    let allowed: bool = context
+        .auth
+        .db
+        .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            sqlx::query_scalar!(
+                r#"SELECT shepherd_account_has_tenant_permission($1, $2, $3) AS "allowed!""#,
+                tenant_id,
+                actor_id,
+                permission_code,
+            )
+            .fetch_one(connection)
+            .await
+        })
+        .await
+        .map_err(|error| database_error_status("check tenant authority", tenant_id, actor_id, error))?;
+    if allowed {
+        Ok(())
+    } else {
         Err(AccessControlError::Forbidden)
     }
 }

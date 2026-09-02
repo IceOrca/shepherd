@@ -14,7 +14,7 @@ import {
   UserRoundX,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import type {
   AuthUserSummary,
@@ -127,10 +127,13 @@ export function AuthUsersPage() {
     kind: "success" | "error";
     message: string;
   } | null>(null);
+  const deferredSearch: string = useDeferredValue(search.trim());
 
-  const usersQuery = useQuery({
-    queryKey: authAdminQueryKeys.all,
-    queryFn: listAuthUsers,
+  const usersQuery = useInfiniteQuery({
+    queryKey: [...authAdminQueryKeys.all, deferredSearch],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }: { pageParam: string | null }) => listAuthUsers(pageParam, deferredSearch),
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
     enabled: canRead,
   });
   const branchesQuery = useQuery<BranchSummary[]>({
@@ -149,16 +152,6 @@ export function AuthUsersPage() {
       lastPage.role_next_cursor ?? undefined,
     enabled: canCreate && canReadRoles,
   });
-
-  useEffect((): void => {
-    if (roleCatalogQuery.hasNextPage && !roleCatalogQuery.isFetchingNextPage) {
-      void roleCatalogQuery.fetchNextPage();
-    }
-  }, [
-    roleCatalogQuery.hasNextPage,
-    roleCatalogQuery.isFetchingNextPage,
-    roleCatalogQuery.fetchNextPage,
-  ]);
 
   const roleOptions: CreateRoleOption[] = useMemo((): CreateRoleOption[] => {
     const catalogRoles: AccessControlRole[] =
@@ -195,10 +188,7 @@ export function AuthUsersPage() {
     mutationFn: (variables: CreateAuthUserVariables): Promise<AuthUserSummary> =>
       createAuthUser(variables.request, variables.idempotencyKey),
     onSuccess: (created: AuthUserSummary): void => {
-      queryClient.setQueryData<AuthUserSummary[]>(
-        authAdminQueryKeys.all,
-        (current = []) => [...current, created],
-      );
+      void queryClient.invalidateQueries({ queryKey: authAdminQueryKeys.all });
       setFeedback({
         kind: "success",
         message: `Đã tạo tài khoản ${created.username} và xác nhận email.`,
@@ -228,13 +218,7 @@ export function AuthUsersPage() {
       disabled: boolean;
     }) => setAuthUserStatus(authUserId, { disabled }),
     onSuccess: (updated) => {
-      queryClient.setQueryData<AuthUserSummary[]>(
-        authAdminQueryKeys.all,
-        (current = []) =>
-          current.map((user) =>
-            user.auth_user_id === updated.auth_user_id ? updated : user,
-          ),
-      );
+      void queryClient.invalidateQueries({ queryKey: authAdminQueryKeys.all });
       setFeedback({
         kind: "success",
         message: userIsDisabled(updated)
@@ -253,18 +237,10 @@ export function AuthUsersPage() {
     },
   });
 
-  const users = useMemo(() => {
-    const term = search.trim().toLocaleLowerCase("vi");
-    if (!term) {
-      return usersQuery.data ?? [];
-    }
-    return (usersQuery.data ?? []).filter((user) =>
-      [user.username, user.email ?? "", displayRole(user.primary_role)]
-        .join(" ")
-        .toLocaleLowerCase("vi")
-        .includes(term),
-    );
-  }, [displayRole, search, usersQuery.data]);
+  const users: AuthUserSummary[] = useMemo(
+    () => usersQuery.data?.pages.flatMap((page) => page.items) ?? [],
+    [usersQuery.data],
+  );
 
   if (!canRead) {
     return (
@@ -566,6 +542,13 @@ export function AuthUsersPage() {
             </table>
           </div>
         ) : null}
+        {usersQuery.hasNextPage ? (
+          <div className="border-t border-slate-100 p-4 text-center">
+            <button className="action-secondary" disabled={usersQuery.isFetchingNextPage} onClick={() => void usersQuery.fetchNextPage()} type="button">
+              {usersQuery.isFetchingNextPage ? "Đang tải..." : "Tải thêm tài khoản"}
+            </button>
+          </div>
+        ) : null}
       </section>
 
       {showCreate ? (
@@ -718,6 +701,11 @@ export function AuthUsersPage() {
                         </option>
                       ))}
                     </select>
+                    {roleCatalogQuery.hasNextPage ? (
+                      <button className="mt-2 text-xs font-semibold text-blue-700" disabled={roleCatalogQuery.isFetchingNextPage} onClick={() => void roleCatalogQuery.fetchNextPage()} type="button">
+                        {roleCatalogQuery.isFetchingNextPage ? "Đang tải..." : "Tải thêm vai trò"}
+                      </button>
+                    ) : null}
                   </label>
 
               {createRequest.primary_role === "tenant_owner" ? (

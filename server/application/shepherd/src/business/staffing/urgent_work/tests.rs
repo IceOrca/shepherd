@@ -254,37 +254,13 @@ impl Fixture {
         StaffingService::new_arc(StaffingDb::new_arc(Arc::clone(&self.database)))
     }
 
-    async fn age_urgent_report(&self, report_id: Uuid) -> Result<(), Box<dyn Error>> {
-        let mut transaction: infra_postgres::TenantTransaction = self.database.begin_tenant(self.tenant_id).await?;
-        sqlx::query!(
-            r#"
-            UPDATE business_urgent_work_sessions
-            SET started_at = CURRENT_TIMESTAMP - INTERVAL '2 minutes'
-            WHERE tenant_id = $1 AND report_id = $2
-            "#,
-            self.tenant_id,
-            report_id,
-        )
-        .execute(transaction.connection())
-        .await?;
-        transaction.commit().await?;
+    async fn age_urgent_report(&self, _report_id: Uuid) -> Result<(), Box<dyn Error>> {
+        tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
         Ok(())
     }
 
     async fn age_planned_assignment(&self) -> Result<(), Box<dyn Error>> {
-        let mut transaction: infra_postgres::TenantTransaction = self.database.begin_tenant(self.tenant_id).await?;
-        sqlx::query!(
-            r#"
-            UPDATE business_shift_work_sessions
-            SET started_at = CURRENT_TIMESTAMP - INTERVAL '2 minutes'
-            WHERE tenant_id = $1 AND assignment_id = $2
-            "#,
-            self.tenant_id,
-            self.planned_assignment_id,
-        )
-        .execute(transaction.connection())
-        .await?;
-        transaction.commit().await?;
+        tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
         Ok(())
     }
 
@@ -399,6 +375,33 @@ impl Fixture {
             "Removing isolated urgent-work test tenant and dependent data"
         );
         let mut transaction: infra_postgres::TenantTransaction = self.database.begin_tenant(self.tenant_id).await?;
+        // These fixtures own an isolated tenant. Disable only the explicit
+        // append-only guards inside this cleanup transaction; constraints and
+        // all unrelated production triggers remain active.
+        sqlx::query(
+            "ALTER TABLE business_customer_work_record_history \
+             DISABLE TRIGGER business_customer_work_record_history_immutable",
+        )
+        .execute(transaction.connection())
+        .await?;
+        sqlx::query(
+            "ALTER TABLE business_urgent_customer_work_record_history \
+             DISABLE TRIGGER business_urgent_customer_work_record_history_immutable",
+        )
+        .execute(transaction.connection())
+        .await?;
+        sqlx::query(
+            "ALTER TABLE business_shift_work_sessions \
+             DISABLE TRIGGER business_shift_work_sessions_reject_delete",
+        )
+        .execute(transaction.connection())
+        .await?;
+        sqlx::query(
+            "ALTER TABLE business_urgent_work_sessions \
+             DISABLE TRIGGER business_urgent_work_sessions_reject_delete",
+        )
+        .execute(transaction.connection())
+        .await?;
         let outbox_delete: PgQueryResult =
             sqlx::query!("DELETE FROM notification_outbox WHERE tenant_id = $1", self.tenant_id)
                 .execute(transaction.connection())
@@ -501,6 +504,30 @@ impl Fixture {
         let branch_delete: PgQueryResult = sqlx::query!("DELETE FROM branches WHERE tenant_id = $1", self.tenant_id)
             .execute(transaction.connection())
             .await?;
+        sqlx::query(
+            "ALTER TABLE business_customer_work_record_history \
+             ENABLE TRIGGER business_customer_work_record_history_immutable",
+        )
+        .execute(transaction.connection())
+        .await?;
+        sqlx::query(
+            "ALTER TABLE business_urgent_customer_work_record_history \
+             ENABLE TRIGGER business_urgent_customer_work_record_history_immutable",
+        )
+        .execute(transaction.connection())
+        .await?;
+        sqlx::query(
+            "ALTER TABLE business_shift_work_sessions \
+             ENABLE TRIGGER business_shift_work_sessions_reject_delete",
+        )
+        .execute(transaction.connection())
+        .await?;
+        sqlx::query(
+            "ALTER TABLE business_urgent_work_sessions \
+             ENABLE TRIGGER business_urgent_work_sessions_reject_delete",
+        )
+        .execute(transaction.connection())
+        .await?;
         transaction.commit().await?;
         let tenant_delete: PgQueryResult = sqlx::query!("DELETE FROM tenants WHERE id = $1", self.tenant_id)
             .execute(self.database.global_pool())
@@ -696,11 +723,12 @@ async fn peer_targets_require_effective_staff_clocking_permission() -> TestResul
     let test_result: TestResult = infra_postgres::with_active_branch(fixture.branch_id, async {
         let service: Arc<UrgentWorkService> = fixture.urgent_service();
         let employees: Vec<super::core::UrgentWorkEmployee> = service
-            .list_employees(fixture.tenant_id, fixture.actor_account_id)
+            .list_employees(fixture.tenant_id, fixture.actor_account_id, None, 100, None)
             .await
             .map_err(|operation_error: UrgentWorkError| {
                 io::Error::other(format!("urgent employee list failed: {operation_error:?}"))
-            })?;
+            })?
+            .items;
 
         let listed_employee_ids: BTreeSet<Uuid> = employees
             .iter()

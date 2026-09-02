@@ -1,10 +1,8 @@
 import {
   useInfiniteQuery,
   useMutation,
-  useQuery,
   useQueryClient,
   type UseMutationResult,
-  type UseQueryResult,
 } from "@tanstack/react-query";
 import {
   BadgeDollarSign,
@@ -148,9 +146,11 @@ export function StaffingConfigurationPage(): React.JSX.Element {
   const [draft, setDraft] = useState<PriceDraft | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
 
-  const ratesQuery: UseQueryResult<StaffingRate[], Error> = useQuery({
+  const ratesQuery = useInfiniteQuery({
     queryKey: [...operationsQueryKeys.staffingRates, "customer", selectedCustomerId],
-    queryFn: (): Promise<StaffingRate[]> => listStaffingRates(selectedCustomerId),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => listStaffingRates(selectedCustomerId, pageParam),
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
     enabled: canRead && selectedCustomerId !== "",
   });
   const staffQuery = useInfiniteQuery({
@@ -161,15 +161,17 @@ export function StaffingConfigurationPage(): React.JSX.Element {
     getNextPageParam: (lastPage: StaffingStaffPageResponse): string | undefined => lastPage.next_cursor ?? undefined,
     enabled: canRead,
   });
-  const customersQuery: UseQueryResult<Customer[], Error> = useQuery({
+  const customersQuery = useInfiniteQuery({
     queryKey: operationsQueryKeys.customers,
-    queryFn: listCustomers,
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => listCustomers(pageParam),
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
     enabled: canRead,
   });
 
   const activeCustomers: Customer[] = useMemo(
-    (): Customer[] => (customersQuery.data ?? []).filter((customer: Customer): boolean => customer.status === "active"),
-    [customersQuery.data],
+    (): Customer[] => (customersQuery.data?.pages.flatMap((page) => page.items) ?? []).filter((customer: Customer): boolean => customer.status === "active"),
+    [customersQuery.data?.pages],
   );
 
   useEffect((): void => {
@@ -199,7 +201,7 @@ export function StaffingConfigurationPage(): React.JSX.Element {
 
   const rows: PriceRow[] = useMemo((): PriceRow[] => {
     if (selectedCustomerId === "") return [];
-    const rates: StaffingRate[] = ratesQuery.data ?? [];
+    const rates: StaffingRate[] = ratesQuery.data?.pages.flatMap((page) => page.items) ?? [];
     const makeRow = (staff: StaffingStaff | null): PriceRow => {
       const employeeId: string | null = staff?.employee_id ?? null;
       return {
@@ -212,7 +214,7 @@ export function StaffingConfigurationPage(): React.JSX.Element {
     };
     const defaultRows: PriceRow[] = currentPage === 1 ? [makeRow(null)] : [];
     return [...defaultRows, ...pageStaff.map((staff: StaffingStaff): PriceRow => makeRow(staff))];
-  }, [currentPage, pageStaff, ratesQuery.data, selectedCustomerId, viewDate]);
+  }, [currentPage, pageStaff, ratesQuery.data?.pages, selectedCustomerId, viewDate]);
 
   const visibleRows: PriceRow[] = rows;
 
@@ -292,6 +294,7 @@ export function StaffingConfigurationPage(): React.JSX.Element {
                 {activeCustomers.length === 0 ? <option value="">Chưa có khách hàng đang hoạt động</option> : null}
                 {activeCustomers.map((customer: Customer): React.JSX.Element => <option key={customer.id} value={customer.id}>{customer.name}</option>)}
               </select>
+              {customersQuery.hasNextPage ? <button className="mt-2 text-xs font-semibold text-blue-700" disabled={customersQuery.isFetchingNextPage} onClick={() => void customersQuery.fetchNextPage()} type="button">{customersQuery.isFetchingNextPage ? "Đang tải..." : "Tải thêm khách hàng"}</button> : null}
             </label>
             <label className="text-sm font-semibold text-slate-700">
               Xem giá tại ngày
@@ -312,6 +315,7 @@ export function StaffingConfigurationPage(): React.JSX.Element {
             Giá quá khứ chỉ để xem. Mỗi thay đổi từ hôm nay trở đi tạo một phiên bản mới và giữ nguyên lịch sử.
           </p>
         </div>
+        {ratesQuery.hasNextPage ? <div className="mt-4 flex justify-end"><button className="action-secondary min-h-9 px-3" disabled={ratesQuery.isFetchingNextPage} onClick={() => void ratesQuery.fetchNextPage()} type="button">{ratesQuery.isFetchingNextPage ? "Đang tải..." : "Tải thêm lịch sử giá"}</button></div> : null}
       </section>
 
       <section className="panel overflow-hidden">

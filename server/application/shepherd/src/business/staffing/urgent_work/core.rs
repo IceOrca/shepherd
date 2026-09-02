@@ -81,6 +81,31 @@ pub struct UrgentWorkEmployee {
     pub has_open_work: bool,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct UrgentCustomerCursor {
+    pub name: String,
+    pub customer_id: Uuid,
+}
+
+#[derive(Clone, Debug)]
+pub struct UrgentCustomerPage {
+    pub items: Vec<UrgentWorkCustomer>,
+    pub next_cursor: Option<UrgentCustomerCursor>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct UrgentEmployeeCursor {
+    pub is_self: bool,
+    pub name: String,
+    pub employee_id: Uuid,
+}
+
+#[derive(Clone, Debug)]
+pub struct UrgentEmployeePage {
+    pub items: Vec<UrgentWorkEmployee>,
+    pub next_cursor: Option<UrgentEmployeeCursor>,
+}
+
 #[derive(Clone, Debug, Serialize, TS)]
 pub struct UrgentWorkItem {
     pub report_id: Uuid,
@@ -212,6 +237,8 @@ pub struct UrgentOwnWorkPage {
     pub next_cursor: Option<UrgentOwnWorkCursor>,
 }
 
+pub type UrgentTeamWorkPage = UrgentOwnWorkPage;
+
 #[derive(Clone, Debug)]
 pub struct UrgentCustomerWorkRecordInput {
     pub confirmed_customer_id: Uuid,
@@ -242,12 +269,21 @@ pub enum UrgentWorkError {
 
 #[async_trait]
 pub trait UrgentWorkRepo {
-    async fn list_customers(&self, tenant_id: Uuid) -> Result<Vec<UrgentWorkCustomer>, UrgentWorkError>;
+    async fn list_customers(
+        &self,
+        tenant_id: Uuid,
+        search: Option<&str>,
+        limit: i64,
+        cursor: Option<&UrgentCustomerCursor>,
+    ) -> Result<UrgentCustomerPage, UrgentWorkError>;
     async fn list_employees(
         &self,
         tenant_id: Uuid,
         actor_account_id: Uuid,
-    ) -> Result<Vec<UrgentWorkEmployee>, UrgentWorkError>;
+        search: Option<&str>,
+        limit: i64,
+        cursor: Option<&UrgentEmployeeCursor>,
+    ) -> Result<UrgentEmployeePage, UrgentWorkError>;
     async fn list_own_work(
         &self,
         tenant_id: Uuid,
@@ -259,7 +295,9 @@ pub trait UrgentWorkRepo {
         &self,
         tenant_id: Uuid,
         actor_account_id: Uuid,
-    ) -> Result<Vec<UrgentWorkItem>, UrgentWorkError>;
+        limit: i64,
+        cursor: Option<&UrgentOwnWorkCursor>,
+    ) -> Result<UrgentTeamWorkPage, UrgentWorkError>;
     #[allow(clippy::too_many_arguments)]
     async fn start(
         &self,
@@ -341,9 +379,23 @@ impl UrgentWorkService {
         Arc::new(Self { repo })
     }
 
-    pub async fn list_customers(&self, tenant_id: Uuid) -> Result<Vec<UrgentWorkCustomer>, UrgentWorkError> {
+    pub async fn list_customers(
+        &self,
+        tenant_id: Uuid,
+        search: Option<String>,
+        limit: i64,
+        cursor: Option<UrgentCustomerCursor>,
+    ) -> Result<UrgentCustomerPage, UrgentWorkError> {
+        if limit <= 0 {
+            return Err(UrgentWorkError::InvalidInput(
+                "urgent customer page size must be positive",
+            ));
+        }
         debug!(operation = "urgent_work.list_customers", tenant_id = %tenant_id, "Urgent-work operation accepted");
-        let result: Result<Vec<UrgentWorkCustomer>, UrgentWorkError> = self.repo.list_customers(tenant_id).await;
+        let result: Result<UrgentCustomerPage, UrgentWorkError> = self
+            .repo
+            .list_customers(tenant_id, search.as_deref(), limit, cursor.as_ref())
+            .await;
         log_result("urgent_work.list_customers", tenant_id, None, None, &result);
         result
     }
@@ -352,10 +404,20 @@ impl UrgentWorkService {
         &self,
         tenant_id: Uuid,
         actor_account_id: Uuid,
-    ) -> Result<Vec<UrgentWorkEmployee>, UrgentWorkError> {
+        search: Option<String>,
+        limit: i64,
+        cursor: Option<UrgentEmployeeCursor>,
+    ) -> Result<UrgentEmployeePage, UrgentWorkError> {
+        if limit <= 0 {
+            return Err(UrgentWorkError::InvalidInput(
+                "urgent employee page size must be positive",
+            ));
+        }
         debug!(operation = "urgent_work.list_employees", tenant_id = %tenant_id, actor_account_id = %actor_account_id, "Urgent-work operation accepted");
-        let result: Result<Vec<UrgentWorkEmployee>, UrgentWorkError> =
-            self.repo.list_employees(tenant_id, actor_account_id).await;
+        let result: Result<UrgentEmployeePage, UrgentWorkError> = self
+            .repo
+            .list_employees(tenant_id, actor_account_id, search.as_deref(), limit, cursor.as_ref())
+            .await;
         log_result(
             "urgent_work.list_employees",
             tenant_id,
@@ -390,9 +452,18 @@ impl UrgentWorkService {
         &self,
         tenant_id: Uuid,
         actor_account_id: Uuid,
-    ) -> Result<Vec<UrgentWorkItem>, UrgentWorkError> {
-        let result: Result<Vec<UrgentWorkItem>, UrgentWorkError> =
-            self.repo.list_team_work(tenant_id, actor_account_id).await;
+        limit: i64,
+        cursor: Option<UrgentOwnWorkCursor>,
+    ) -> Result<UrgentTeamWorkPage, UrgentWorkError> {
+        if limit <= 0 {
+            return Err(UrgentWorkError::InvalidInput(
+                "urgent team-work page size must be positive",
+            ));
+        }
+        let result: Result<UrgentTeamWorkPage, UrgentWorkError> = self
+            .repo
+            .list_team_work(tenant_id, actor_account_id, limit, cursor.as_ref())
+            .await;
         log_result(
             "urgent_work.list_team",
             tenant_id,

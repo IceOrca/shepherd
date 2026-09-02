@@ -1,11 +1,9 @@
 import {
   useInfiniteQuery,
   useMutation,
-  useQuery,
   useQueryClient,
   type QueryClient,
   type UseMutationResult,
-  type UseQueryResult,
 } from "@tanstack/react-query";
 import {
   CheckCircle2,
@@ -92,14 +90,18 @@ export function UrgentWorkPage(): React.JSX.Element {
   const [manualNote, setManualNote] = useState<string>("");
   const [historyPage, setHistoryPage] = useState<number>(1);
 
-  const customersQuery: UseQueryResult<UrgentWorkCustomer[], Error> = useQuery({
+  const customersQuery = useInfiniteQuery({
     queryKey: operationsQueryKeys.urgentCustomers,
-    queryFn: listUrgentCustomers,
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => listUrgentCustomers(pageParam),
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
     enabled: canRead,
   });
-  const employeesQuery: UseQueryResult<UrgentWorkEmployee[], Error> = useQuery({
+  const employeesQuery = useInfiniteQuery({
     queryKey: operationsQueryKeys.urgentEmployees,
-    queryFn: listUrgentEmployees,
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => listUrgentEmployees(pageParam),
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
     enabled: canRead,
   });
   const ownWorkQuery = useInfiniteQuery({
@@ -111,11 +113,22 @@ export function UrgentWorkPage(): React.JSX.Element {
       lastPage.next_cursor ?? undefined,
     enabled: canRead,
   });
-  const teamWorkQuery: UseQueryResult<UrgentWorkItem[], Error> = useQuery({
+  const teamWorkQuery = useInfiniteQuery({
     queryKey: operationsQueryKeys.urgentTeamWork,
-    queryFn: listTeamUrgentWork,
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => listTeamUrgentWork(pageParam),
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
     enabled: canRead && canManagePeers,
   });
+
+  const customers: UrgentWorkCustomer[] = useMemo(
+    () => customersQuery.data?.pages.flatMap((page) => page.items) ?? [],
+    [customersQuery.data?.pages],
+  );
+  const employees: UrgentWorkEmployee[] = useMemo(
+    () => employeesQuery.data?.pages.flatMap((page) => page.items) ?? [],
+    [employeesQuery.data?.pages],
+  );
 
   const ownWork: UrgentWorkItem[] = useMemo<UrgentWorkItem[]>(
     (): UrgentWorkItem[] => ownWorkQuery.data?.pages.flatMap((page: UrgentOwnWorkPageRsp) => page.items) ?? [],
@@ -125,8 +138,8 @@ export function UrgentWorkPage(): React.JSX.Element {
   const historyItems: UrgentWorkItem[] = historyPages[historyPage - 1]?.items ?? [];
   const historyHasNext: boolean = historyPage < historyPages.length || ownWorkQuery.hasNextPage;
   const teamWork: UrgentWorkItem[] = useMemo<UrgentWorkItem[]>(
-    (): UrgentWorkItem[] => teamWorkQuery.data ?? [],
-    [teamWorkQuery.data],
+    (): UrgentWorkItem[] => teamWorkQuery.data?.pages.flatMap((page) => page.items) ?? [],
+    [teamWorkQuery.data?.pages],
   );
   const activeOwnWork: UrgentWorkItem | null =
     ownWork.find((work: UrgentWorkItem): boolean => work.status === "active") ?? null;
@@ -140,10 +153,10 @@ export function UrgentWorkPage(): React.JSX.Element {
       ]
     : activeTeamWork;
   const selfEmployee: UrgentWorkEmployee | null =
-    (employeesQuery.data ?? []).find((employee: UrgentWorkEmployee): boolean => employee.is_self) ?? null;
+    employees.find((employee: UrgentWorkEmployee): boolean => employee.is_self) ?? null;
   const clockableEmployees: UrgentWorkEmployee[] = useMemo<UrgentWorkEmployee[]>(
-    (): UrgentWorkEmployee[] => employeesQuery.data ?? [],
-    [employeesQuery.data],
+    (): UrgentWorkEmployee[] => employees,
+    [employees],
   );
 
   useEffect((): void => {
@@ -152,14 +165,14 @@ export function UrgentWorkPage(): React.JSX.Element {
       setSelectedEmployeeIds([]);
       return;
     }
-    if (!customerId && (customersQuery.data?.length ?? 0) > 0) {
-      const firstCustomerId: string | undefined = customersQuery.data?.at(0)?.customer_id;
+    if (!customerId && customers.length > 0) {
+      const firstCustomerId: string | undefined = customers.at(0)?.customer_id;
       if (firstCustomerId) {
         setCustomerId(firstCustomerId);
         setManualCustomerId((current: string): string => current || firstCustomerId);
       }
     }
-  }, [activeOwnWork, customersQuery.data, customerId]);
+  }, [activeOwnWork, customers, customerId]);
 
   useEffect((): void => {
     if (!activeOwnWork && selfEmployee && !selfEmployee.has_open_work) {
@@ -477,12 +490,13 @@ export function UrgentWorkPage(): React.JSX.Element {
             value={customerId}
           >
             <option value="">Chọn khách hàng</option>
-            {(customersQuery.data ?? []).map((customer: UrgentWorkCustomer): React.JSX.Element => (
+            {customers.map((customer: UrgentWorkCustomer): React.JSX.Element => (
               <option key={customer.customer_id} value={customer.customer_id}>
                 {customer.customer_name}
               </option>
             ))}
           </select>
+          {customersQuery.hasNextPage ? <button className="mt-2 text-xs font-semibold text-blue-700" disabled={customersQuery.isFetchingNextPage} onClick={() => void customersQuery.fetchNextPage()} type="button">{customersQuery.isFetchingNextPage ? "Đang tải..." : "Tải thêm khách hàng"}</button> : null}
         </label>
 
         <div className="mt-5">
@@ -522,6 +536,7 @@ export function UrgentWorkPage(): React.JSX.Element {
               <p className="text-sm text-slate-500">Không có nhân viên thuộc nhóm làm việc để ghi nhận.</p>
             ) : null}
           </div>
+          {employeesQuery.hasNextPage ? <button className="mt-3 text-xs font-semibold text-blue-700" disabled={employeesQuery.isFetchingNextPage} onClick={() => void employeesQuery.fetchNextPage()} type="button">{employeesQuery.isFetchingNextPage ? "Đang tải..." : "Tải thêm nhân viên"}</button> : null}
         </div>
 
         <button
@@ -537,7 +552,7 @@ export function UrgentWorkPage(): React.JSX.Element {
           <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-violet-50 text-violet-700"><ClipboardPlus className="size-5" /></div>
           <div><h2 className="font-bold text-slate-950">Bổ sung công việc đã làm</h2><p className="mt-1 text-sm leading-6 text-slate-500">Chỉ khai công việc của chính bạn. Thông tin này là bằng chứng từ nhân viên, không tự động được duyệt hoặc tính lương.</p></div>
         </div>
-        <label className="mt-5 block text-sm font-semibold text-slate-700">Khách hàng / nơi đã làm việc<select className="mt-1.5 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3" disabled={manualMutation.isPending} onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => setManualCustomerId(event.target.value)} required value={manualCustomerId}><option value="">Chọn khách hàng</option>{(customersQuery.data ?? []).map((customer: UrgentWorkCustomer): React.JSX.Element => <option key={customer.customer_id} value={customer.customer_id}>{customer.customer_name}</option>)}</select></label>
+        <label className="mt-5 block text-sm font-semibold text-slate-700">Khách hàng / nơi đã làm việc<select className="mt-1.5 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3" disabled={manualMutation.isPending} onChange={(event: React.ChangeEvent<HTMLSelectElement>): void => setManualCustomerId(event.target.value)} required value={manualCustomerId}><option value="">Chọn khách hàng</option>{customers.map((customer: UrgentWorkCustomer): React.JSX.Element => <option key={customer.customer_id} value={customer.customer_id}>{customer.customer_name}</option>)}</select></label>
         <div className="mt-4 grid min-w-0 gap-3 sm:grid-cols-2">
           <label className="min-w-0 text-sm font-semibold text-slate-700">Bắt đầu làm<input className="mt-1.5 min-h-11 w-full min-w-0 rounded-xl border border-slate-200 px-3" disabled={manualMutation.isPending} max={manualEndedAt} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => setManualStartedAt(event.target.value)} required step="60" type="datetime-local" value={manualStartedAt} /></label>
           <label className="min-w-0 text-sm font-semibold text-slate-700">Kết thúc làm<input className="mt-1.5 min-h-11 w-full min-w-0 rounded-xl border border-slate-200 px-3" disabled={manualMutation.isPending} min={manualStartedAt} onChange={(event: React.ChangeEvent<HTMLInputElement>): void => setManualEndedAt(event.target.value)} required step="60" type="datetime-local" value={manualEndedAt} /></label>
@@ -546,6 +561,8 @@ export function UrgentWorkPage(): React.JSX.Element {
         <div className="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">Thời gian do bạn tự khai sẽ được giữ nguyên làm bằng chứng. Quản lý đối chiếu với thông tin khách hàng và chốt kết quả cuối cùng.</div>
         <button className="action-primary mt-5 w-full sm:w-auto" disabled={!canStart || !isOnline || !manualCustomerId || !manualStartedAt || !manualEndedAt || manualMutation.isPending} type="submit">{manualMutation.isPending ? <RefreshCw className="size-4 animate-spin" /> : <ClipboardPlus className="size-4" />}{manualMutation.isPending ? "Đang gửi..." : "Gửi công việc bổ sung"}</button>
       </form>}
+
+      {canManagePeers && teamWorkQuery.hasNextPage ? <div className="flex justify-center"><button className="action-secondary" disabled={teamWorkQuery.isFetchingNextPage} onClick={() => void teamWorkQuery.fetchNextPage()} type="button">{teamWorkQuery.isFetchingNextPage ? "Đang tải..." : "Tải thêm công việc cùng nhóm"}</button></div> : null}
 
       {historyItems.length > 0 ? (
         <section className="panel overflow-hidden">

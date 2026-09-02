@@ -16,7 +16,7 @@ use uuid::Uuid;
 use crate::{
     AppContext,
     auth::AuthedUser,
-    pagination::{decode_cursor, encode_cursor, resolve_limit},
+    pagination::{decode_cursor, encode_cursor, normalize_search, resolve_limit},
 };
 
 use super::super::{
@@ -24,11 +24,27 @@ use super::super::{
     host::ManualRateOverrideRequest,
 };
 use super::core::{
-    UrgentCustomerWorkRecord, UrgentCustomerWorkRecordInput, UrgentOwnWorkCursor, UrgentOwnWorkPage,
-    UrgentReconcileCursor, UrgentReconcilePage, UrgentWorkEmployee, UrgentWorkEndInput, UrgentWorkError,
+    UrgentCustomerCursor, UrgentCustomerPage, UrgentCustomerWorkRecord, UrgentCustomerWorkRecordInput,
+    UrgentEmployeeCursor, UrgentEmployeePage, UrgentOwnWorkCursor, UrgentOwnWorkPage, UrgentReconcileCursor,
+    UrgentReconcilePage, UrgentTeamWorkPage, UrgentWorkEmployee, UrgentWorkEndInput, UrgentWorkError,
     UrgentWorkCustomer, UrgentWorkItem, UrgentWorkLocationInput, UrgentWorkManualInput, UrgentWorkReconcileInput,
     UrgentWorkReconcile, UrgentWorkStartInput,
 };
+
+#[derive(Debug, Deserialize)]
+pub struct UrgentSelectorPageQuery {
+    pub limit: Option<u16>,
+    pub cursor: Option<String>,
+    pub search: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UrgentListPageRsp<T> {
+    pub items: Vec<T>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+    pub limit: u16,
+}
 
 #[derive(Debug, Deserialize)]
 pub struct UrgentOwnWorkPageQuery {
@@ -137,31 +153,55 @@ pub fn routes() -> Router<Arc<AppContext>> {
 async fn list_customers(
     State(ctx): State<Arc<AppContext>>,
     Extension(user): Extension<AuthedUser>,
-) -> Result<Json<Vec<UrgentWorkCustomer>>, StatusCode> {
+    Query(query): Query<UrgentSelectorPageQuery>,
+) -> Result<Json<UrgentListPageRsp<UrgentWorkCustomer>>, StatusCode> {
     require_any_permission(&user, &["business.urgent_work.read", "business.reconciliation.read"])?;
-    let customers: Vec<UrgentWorkCustomer> = ctx
+    let limit: u16 = resolve_limit(&ctx.list_pagination, query.limit)?;
+    let cursor: Option<UrgentCustomerCursor> = decode_cursor(query.cursor.as_deref())?;
+    let page: UrgentCustomerPage = ctx
         .core
         .urgent_work
-        .list_customers(user.tenant_id)
+        .list_customers(user.tenant_id, normalize_search(query.search), i64::from(limit), cursor)
         .await
         .map_err(|operation_error: UrgentWorkError| status("list urgent customers", &user, operation_error))?;
-    debug!(tenant_id = %user.tenant_id, account_id = %user.account_id, customer_count = customers.len(), "Urgent customer request completed");
-    Ok(Json(customers))
+    let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
+    debug!(tenant_id = %user.tenant_id, account_id = %user.account_id, customer_count = page.items.len(), "Urgent customer request completed");
+    Ok(Json(UrgentListPageRsp {
+        has_more: next_cursor.is_some(),
+        items: page.items,
+        next_cursor,
+        limit,
+    }))
 }
 
 async fn list_employees(
     State(ctx): State<Arc<AppContext>>,
     Extension(user): Extension<AuthedUser>,
-) -> Result<Json<Vec<UrgentWorkEmployee>>, StatusCode> {
+    Query(query): Query<UrgentSelectorPageQuery>,
+) -> Result<Json<UrgentListPageRsp<UrgentWorkEmployee>>, StatusCode> {
     require_permission(&user, "business.urgent_work.read")?;
-    let employees: Vec<UrgentWorkEmployee> = ctx
+    let limit: u16 = resolve_limit(&ctx.list_pagination, query.limit)?;
+    let cursor: Option<UrgentEmployeeCursor> = decode_cursor(query.cursor.as_deref())?;
+    let page: UrgentEmployeePage = ctx
         .core
         .urgent_work
-        .list_employees(user.tenant_id, user.account_id)
+        .list_employees(
+            user.tenant_id,
+            user.account_id,
+            normalize_search(query.search),
+            i64::from(limit),
+            cursor,
+        )
         .await
         .map_err(|operation_error: UrgentWorkError| status("list urgent employees", &user, operation_error))?;
-    debug!(tenant_id = %user.tenant_id, account_id = %user.account_id, employee_count = employees.len(), "Urgent employee request completed");
-    Ok(Json(employees))
+    let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
+    debug!(tenant_id = %user.tenant_id, account_id = %user.account_id, employee_count = page.items.len(), "Urgent employee request completed");
+    Ok(Json(UrgentListPageRsp {
+        has_more: next_cursor.is_some(),
+        items: page.items,
+        next_cursor,
+        limit,
+    }))
 }
 
 async fn list_own_work(
@@ -190,15 +230,24 @@ async fn list_own_work(
 async fn list_team_work(
     State(ctx): State<Arc<AppContext>>,
     Extension(user): Extension<AuthedUser>,
-) -> Result<Json<Vec<UrgentWorkItem>>, StatusCode> {
+    Query(query): Query<UrgentOwnWorkPageQuery>,
+) -> Result<Json<UrgentListPageRsp<UrgentWorkItem>>, StatusCode> {
     require_permission(&user, "business.urgent_work.peer_manage")?;
-    let work: Vec<UrgentWorkItem> = ctx
+    let limit: u16 = resolve_limit(&ctx.list_pagination, query.limit)?;
+    let cursor: Option<UrgentOwnWorkCursor> = decode_cursor(query.cursor.as_deref())?;
+    let page: UrgentTeamWorkPage = ctx
         .core
         .urgent_work
-        .list_team_work(user.tenant_id, user.account_id)
+        .list_team_work(user.tenant_id, user.account_id, i64::from(limit), cursor)
         .await
         .map_err(|operation_error: UrgentWorkError| status("list urgent team work", &user, operation_error))?;
-    Ok(Json(work))
+    let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
+    Ok(Json(UrgentListPageRsp {
+        has_more: next_cursor.is_some(),
+        items: page.items,
+        next_cursor,
+        limit,
+    }))
 }
 
 async fn start_work(

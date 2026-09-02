@@ -4,6 +4,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import type {
   Customer,
   ReconcileStatus,
+  StaffingJob,
   StaffingReconcile,
   StaffingReconcilePageRsp,
 } from "../../api/generated/contracts";
@@ -14,6 +15,7 @@ import {
   acceptAssignmentStaffRecordForBranch,
   correctReconciliationForBranch,
   listCustomersForBranch,
+  listJobsForBranch,
   listReconciliationsForBranch,
   operationsQueryKeys,
   reconcileAssignmentForBranch,
@@ -105,6 +107,8 @@ export function ReconciliationPage(): React.JSX.Element {
     notes: "",
   });
   const [finalHours, setFinalHours] = useState("");
+  const [finalCustomerId, setFinalCustomerId] = useState("");
+  const [finalJobId, setFinalJobId] = useState("");
   const [resolution, setResolution] = useState("");
   const [correctionReason, setCorrectionReason] = useState("");
   const [message, setMessage] = useState<string | null>(null);
@@ -159,11 +163,22 @@ export function ReconciliationPage(): React.JSX.Element {
       (item: ScopedStaffingReconcile): boolean => item.assignment_id === selectedId,
     ) ?? null;
 
-  const customersQuery = useQuery<Customer[], Error>({
+  const customersQuery = useInfiniteQuery({
     queryKey: [...operationsQueryKeys.customers, "branch", selected?.branch_id ?? "none"],
-    queryFn: (): Promise<Customer[]> => listCustomersForBranch(selected?.branch_id ?? ""),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => listCustomersForBranch(selected?.branch_id ?? "", pageParam),
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
     enabled: canRead && selected !== null,
   });
+  const customers: Customer[] = customersQuery.data?.pages.flatMap((page) => page.items) ?? [];
+  const jobsQuery = useInfiniteQuery({
+    queryKey: [...operationsQueryKeys.jobs, "branch", selected?.branch_id ?? "none"],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => listJobsForBranch(selected?.branch_id ?? "", pageParam),
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
+    enabled: canRead && selected !== null,
+  });
+  const jobs: StaffingJob[] = jobsQuery.data?.pages.flatMap((page) => page.items) ?? [];
 
   useEffect((): void => {
     const selectionRemainsVisible: boolean = pageItems.some(
@@ -216,6 +231,8 @@ export function ReconciliationPage(): React.JSX.Element {
     });
     const seconds = selected.final_worked_seconds ?? selected.customer_record?.confirmed_worked_seconds ?? selected.staff_worked_seconds;
     setFinalHours(seconds > 0 ? (seconds / 3600).toFixed(4) : "");
+    setFinalCustomerId(selected.final_customer_id ?? selected.customer_id);
+    setFinalJobId(selected.final_job_id ?? selected.job_id);
     setResolution(selected.adjustment_reason ?? "");
   }, [selected]);
 
@@ -235,6 +252,8 @@ export function ReconciliationPage(): React.JSX.Element {
     mutationFn: () => reconcileAssignmentForBranch(selected?.branch_id ?? "", selectedId ?? "", {
       worked_seconds: Math.round(Number(finalHours) * 3600),
       adjustment_reason: resolution.trim() || null,
+      final_customer_id: finalCustomerId !== selected?.customer_id ? finalCustomerId : null,
+      final_job_id: finalJobId !== selected?.job_id ? finalJobId : null,
     }),
     onSuccess: () => { setMessage("Đã chốt dữ liệu cuối cùng và khóa kết quả ca."); void refresh(); },
     onError: (error) => setMessage(friendlyApiError(error, "Không thể chốt đối soát. Chênh lệch cần có lý do xử lý.")),
@@ -335,7 +354,7 @@ export function ReconciliationPage(): React.JSX.Element {
               onChange={(event) => setEvidence({ ...evidence, customerId: event.target.value })}
             >
               <option value="">Chọn đúng khách hàng trên dữ liệu xác nhận</option>
-              {(customersQuery.data ?? []).map((customer) => (
+              {customers.map((customer) => (
                 <option key={customer.id} value={customer.id}>{customer.name}</option>
               ))}
             </select>
@@ -349,8 +368,24 @@ export function ReconciliationPage(): React.JSX.Element {
         <section className="panel p-4 sm:p-6"><div className="flex items-center gap-2"><GitCompareArrows className="size-5 text-blue-600" /><h3 className="font-bold text-slate-950">Chốt đối soát</h3></div>
           {selected.assignment_status !== "approved" && selected.reconciliation_status === "matched" ? <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-4"><p className="font-bold text-emerald-950">Hai nguồn đã khớp</p><p className="mt-1 text-sm leading-6 text-emerald-800">Xác nhận kết quả khi giờ nhân viên và dữ liệu khách hàng đã khớp hoàn toàn. Thao tác này không thay đổi dữ liệu của hai bên.</p><button className="mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 text-sm font-bold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto" disabled={!canManage || acceptStaffRecordMutation.isPending || evidenceMutation.isPending || reconcileMutation.isPending} onClick={(): void => { if (window.confirm("Xác nhận hai nguồn đã khớp và khóa kết quả ca làm này?")) acceptStaffRecordMutation.mutate(); }} type="button"><CheckCircle2 className="size-4" />{acceptStaffRecordMutation.isPending ? "Đang xác nhận..." : "Xác nhận giờ nhân viên"}</button></div> : null}
           {selected.assignment_status !== "approved" && selected.reconciliation_status !== "matched" ? <p className="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800">Nhập dữ liệu khách hàng trước. Nút xác nhận nhanh chỉ xuất hiện khi khách hàng và nhân viên ghi nhận hoàn toàn giống nhau.</p> : null}
-          <div className="mt-4 grid min-w-0 gap-3 sm:grid-cols-2"><label className="min-w-0 text-sm font-semibold text-slate-700">Thời gian cuối (giờ)<input className="mt-1.5 min-w-0 w-full rounded-xl border border-slate-200 px-3 py-2.5" disabled={selected.assignment_status === "approved" && !canCorrect} min="0.0001" required step="0.0001" type="number" value={finalHours} onChange={(event) => setFinalHours(event.target.value)} /></label>{selected.assignment_status === "approved" ? <label className="min-w-0 text-sm font-semibold text-slate-700">Lý do điều chỉnh<input className="mt-1.5 min-w-0 w-full rounded-xl border border-slate-200 px-3 py-2.5" disabled={!canCorrect} placeholder="Bắt buộc, ít nhất 3 ký tự" value={correctionReason} onChange={(event) => setCorrectionReason(event.target.value)} /></label> : <label className="min-w-0 text-sm font-semibold text-slate-700">Lý do xử lý chênh lệch<input className="mt-1.5 min-w-0 w-full rounded-xl border border-slate-200 px-3 py-2.5" placeholder="Bắt buộc nếu hai nguồn không khớp" value={resolution} onChange={(event) => setResolution(event.target.value)} /></label>}</div>
-          {selected.assignment_status === "approved" ? <div className="mt-4"><p className="flex items-center gap-2 text-sm font-semibold text-emerald-700"><CheckCircle2 className="size-5" />Đã chốt · phiên bản {selected.result_revision_number ?? 1}. Mỗi lần sửa tạo một phiên bản mới.</p>{canCorrect ? <button className="action-primary mt-3 w-full sm:w-auto" disabled={!selected.result_revision_id || correctionReason.trim().length < 3 || correctionMutation.isPending} onClick={() => correctionMutation.mutate()} type="button"><Save className="size-4" />Lưu phiên bản điều chỉnh</button> : null}</div> : <button className="action-primary mt-4 w-full sm:w-auto" disabled={!canManage || !selected.customer_record || selected.staff_worked_seconds <= 0 || reconcileMutation.isPending} onClick={() => reconcileMutation.mutate()} type="button"><CheckCircle2 className="size-4" />Chốt kết quả</button>}
+          {selected.assignment_status !== "approved" ? <div className="mt-4 grid min-w-0 gap-3 sm:grid-cols-2">
+            <label className="min-w-0 text-sm font-semibold text-slate-700">Khách hàng kết luận
+              <select className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5" required value={finalCustomerId} onChange={(event) => setFinalCustomerId(event.target.value)}>
+                <option value="">Chọn khách hàng cuối cùng</option>
+                {customers.filter((customer) => customer.status === "active").map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}
+              </select>
+              {customersQuery.hasNextPage ? <button className="mt-2 text-xs font-semibold text-blue-700" disabled={customersQuery.isFetchingNextPage} onClick={() => void customersQuery.fetchNextPage()} type="button">{customersQuery.isFetchingNextPage ? "Đang tải..." : "Tải thêm khách hàng"}</button> : null}
+            </label>
+            <label className="min-w-0 text-sm font-semibold text-slate-700">Công việc kết luận
+              <select className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5" required value={finalJobId} onChange={(event) => setFinalJobId(event.target.value)}>
+                <option value="">Chọn công việc cuối cùng</option>
+                {jobs.filter((job) => job.status === "active").map((job) => <option key={job.id} value={job.id}>{job.name}</option>)}
+              </select>
+              {jobsQuery.hasNextPage ? <button className="mt-2 text-xs font-semibold text-blue-700" disabled={jobsQuery.isFetchingNextPage} onClick={() => void jobsQuery.fetchNextPage()} type="button">{jobsQuery.isFetchingNextPage ? "Đang tải..." : "Tải thêm công việc"}</button> : null}
+            </label>
+          </div> : null}
+          <div className="mt-4 grid min-w-0 gap-3 sm:grid-cols-2"><label className="min-w-0 text-sm font-semibold text-slate-700">Thời gian cuối (giờ)<input className="mt-1.5 min-w-0 w-full rounded-xl border border-slate-200 px-3 py-2.5" disabled={selected.assignment_status === "approved" && !canCorrect} min="0.0001" required step="0.0001" type="number" value={finalHours} onChange={(event) => setFinalHours(event.target.value)} /></label>{selected.assignment_status === "approved" ? <label className="min-w-0 text-sm font-semibold text-slate-700">Lý do điều chỉnh<input className="mt-1.5 min-w-0 w-full rounded-xl border border-slate-200 px-3 py-2.5" disabled={!canCorrect} placeholder="Bắt buộc, ít nhất 3 ký tự" value={correctionReason} onChange={(event) => setCorrectionReason(event.target.value)} /></label> : <label className="min-w-0 text-sm font-semibold text-slate-700">Lý do xử lý chênh lệch<input className="mt-1.5 min-w-0 w-full rounded-xl border border-slate-200 px-3 py-2.5" placeholder="Bắt buộc nếu hai nguồn không khớp hoặc thay đổi kết luận" value={resolution} onChange={(event) => setResolution(event.target.value)} /></label>}</div>
+          {selected.assignment_status === "approved" ? <div className="mt-4"><p className="flex items-center gap-2 text-sm font-semibold text-emerald-700"><CheckCircle2 className="size-5" />Đã chốt · phiên bản {selected.result_revision_number ?? 1}. Mỗi lần sửa tạo một phiên bản mới.</p>{canCorrect ? <button className="action-primary mt-3 w-full sm:w-auto" disabled={!selected.result_revision_id || correctionReason.trim().length < 3 || correctionMutation.isPending} onClick={() => correctionMutation.mutate()} type="button"><Save className="size-4" />Lưu phiên bản điều chỉnh</button> : null}</div> : <button className="action-primary mt-4 w-full sm:w-auto" disabled={!canManage || !selected.customer_record || selected.staff_worked_seconds <= 0 || !finalCustomerId || !finalJobId || reconcileMutation.isPending} onClick={() => reconcileMutation.mutate()} type="button"><CheckCircle2 className="size-4" />Chốt kết quả</button>}
         </section>
       </div> : null}
       </div>

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use uuid::Uuid;
 
@@ -41,6 +41,18 @@ pub struct OwnStaffingAssignment {
     pub staff_ended_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct OwnStaffingAssignmentCursor {
+    pub starts_at: DateTime<Utc>,
+    pub assignment_id: Uuid,
+}
+
+#[derive(Clone, Debug)]
+pub struct OwnStaffingAssignmentPage {
+    pub items: Vec<OwnStaffingAssignment>,
+    pub next_cursor: Option<OwnStaffingAssignmentCursor>,
+}
+
 #[derive(Clone, Debug)]
 pub struct ShiftWorkActionInput {
     pub idempotency_key: Uuid,
@@ -73,7 +85,9 @@ pub trait StaffingWorkRepo {
         &self,
         tenant_id: Uuid,
         account_id: Uuid,
-    ) -> Result<Vec<OwnStaffingAssignment>, StaffingError>;
+        limit: i64,
+        cursor: Option<&OwnStaffingAssignmentCursor>,
+    ) -> Result<OwnStaffingAssignmentPage, StaffingError>;
 
     async fn start(
         &self,
@@ -107,15 +121,22 @@ impl StaffingWorkService {
         &self,
         tenant_id: Uuid,
         account_id: Uuid,
-    ) -> Result<Vec<OwnStaffingAssignment>, StaffingError> {
+        limit: i64,
+        cursor: Option<OwnStaffingAssignmentCursor>,
+    ) -> Result<OwnStaffingAssignmentPage, StaffingError> {
+        if limit <= 0 {
+            return Err(StaffingError::InvalidInput("own-assignment page size must be positive"));
+        }
         debug!(
             operation = "list_own_staffing_assignments",
             tenant_id = %tenant_id,
             account_id = %account_id,
             "Staffing-work service operation accepted"
         );
-        let result: Result<Vec<OwnStaffingAssignment>, StaffingError> =
-            self.repo.list_own_assignments(tenant_id, account_id).await;
+        let result: Result<OwnStaffingAssignmentPage, StaffingError> = self
+            .repo
+            .list_own_assignments(tenant_id, account_id, limit, cursor.as_ref())
+            .await;
         log_staffing_work_operation("list_own_staffing_assignments", tenant_id, account_id, None, &result);
         result
     }

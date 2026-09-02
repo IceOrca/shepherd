@@ -14,6 +14,8 @@ export type TenantMembershipSummary = { tenant_id: string, account_id: string, t
 
 export type AuthUserSummary = { auth_user_id: string, account_id: string, username: string, email: string | null, primary_role: RoleCode, branch_ids: Array<string>, account_status: AccountStatus, provider_status: AuthProviderUserStatus, email_confirmed: boolean, created_at: string | null, last_sign_in_at: string | null, };
 
+export type AuthUserPage = { items: Array<AuthUserSummary>, next_cursor: string | null, has_more: boolean, limit: number, };
+
 export type CreateAuthUserRequest = { username: string, email: string, password: string | null, primary_role: RoleCode, branch_ids: Array<string>, };
 
 export type SetAuthUserStatusRequest = { disabled: boolean, };
@@ -88,7 +90,7 @@ export type ReconcileStatus = "pending_staff" | "pending_customer" | "matched" |
 
 export type CustomerWorkRecord = { id: string, assignment_id: string, confirmed_customer_id: string, confirmed_started_at: string, confirmed_ended_at: string, confirmed_worked_seconds: number, customer_reference: string | null, notes: string | null, updated_at: string, };
 
-export type StaffingReconcile = { assignment_id: string, shift_id: string, customer_id: string, employee_id: string, employee_code: string, employee_name: string, customer_name: string, confirmed_customer_name: string | null, scheduled_starts_at: string, scheduled_ends_at: string, assignment_status: ShiftAssignmentStatus, staff_started_at: string | null, staff_ended_at: string | null, staff_worked_seconds: number, customer_record: CustomerWorkRecord | null, final_worked_seconds: number | null, adjustment_reason: string | null, reconciliation_status: ReconcileStatus, result_revision_id: string | null, result_revision_number: number | null, };
+export type StaffingReconcile = { assignment_id: string, shift_id: string, customer_id: string, job_id: string, employee_id: string, employee_code: string, employee_name: string, customer_name: string, confirmed_customer_name: string | null, scheduled_starts_at: string, scheduled_ends_at: string, assignment_status: ShiftAssignmentStatus, staff_started_at: string | null, staff_ended_at: string | null, staff_worked_seconds: number, customer_record: CustomerWorkRecord | null, final_worked_seconds: number | null, final_customer_id: string | null, final_job_id: string | null, adjustment_reason: string | null, reconciliation_status: ReconcileStatus, result_revision_id: string | null, result_revision_number: number | null, };
 
 export type StaffingReconcilePageRsp = { items: Array<StaffingReconcile>, next_cursor: string | null, has_more: boolean, limit: number, };
 
@@ -110,11 +112,13 @@ export type ManualRateOverrideRequest = { reason: string, currency: string, bill
 
 export type ShiftAssignmentCreateRequest = { employee_id: string, manual_rate?: ManualRateOverrideRequest | null, };
 
-export type ShiftAssignmentApproveRequest = { worked_seconds?: number | null, adjustment_reason?: string | null, };
+export type ShiftAssignmentApproveRequest = { worked_seconds?: number | null, adjustment_reason?: string | null, final_customer_id?: string | null, final_job_id?: string | null, };
 
 export type ShiftWorkSession = { id: string, assignment_id: string, employee_id: string, started_at: string, ended_at: string | null, worked_seconds: number | null, started_latitude: number | null, started_longitude: number | null, started_accuracy_meters: number | null, ended_latitude: number | null, ended_longitude: number | null, ended_accuracy_meters: number | null, created_at: string, updated_at: string, };
 
 export type OwnStaffingAssignment = { assignment_id: string, shift_id: string, customer_name: string, starts_at: string, ends_at: string, status: ShiftAssignmentStatus, observed_worked_seconds: number, is_working: boolean, staff_started_at: string | null, staff_ended_at: string | null, };
+
+export type OwnStaffingAssignmentPageResponse = { items: Array<OwnStaffingAssignment>, next_cursor: string | null, has_more: boolean, limit: number, };
 
 export type ShiftWorkActionRequest = { latitude?: number | null, longitude?: number | null, accuracy_meters?: number | null, };
 
@@ -163,6 +167,8 @@ export type SalaryAdvanceDisburseReq = { reference: string, };
 export type SalaryAdvanceRecoveryReq = { amount: string, source: SalaryAdvanceRecoverySource, reference: string, };
 
 export type EmployeeSalaryConfig = { employee_id: string, branch_id: string, employee_code: string, employee_name: string, role: RoleCode, rate_id: string | null, monthly_amount: string | null, currency: string | null, effective_from: string | null, effective_to: string | null, };
+
+export type EmployeeSalaryConfigPageRsp = { items: Array<EmployeeSalaryConfig>, next_cursor: string | null, has_more: boolean, limit: number, };
 
 export type EmployeeSalaryRateCreateReq = { employee_id: string, monthly_amount: string, currency: string, effective_from: string, };
 
@@ -235,4 +241,3 @@ export type AttendanceCheckInRequest = { branch_id: string, };
 export type EmployeeUpsertRequest = { account_id?: string | null, employee_code: string, display_name: string, legal_first_name?: string | null, legal_middle_name?: string | null, legal_last_name?: string | null, personal_phone_e164?: string | null, gender?: Gender | null, status: EmployeeStatus, hire_date: string, termination_date?: string | null, expected_version?: number | null, };
 
 export type EmployeeCitizenIdUpdateRequest = { citizen_id_country_code?: string | null, citizen_id?: string | null, expected_version: number, };
-

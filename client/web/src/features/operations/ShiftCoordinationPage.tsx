@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarPlus2, CircleAlert, RefreshCw, UserPlus, UsersRound } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type {
@@ -35,16 +35,16 @@ interface AssignShiftInput {
   employeeId: string;
 }
 
-async function loadScopedShifts(branchIds: string[]): Promise<ScopedStaffingShift[]> {
-  const groups: ScopedStaffingShift[][] = await Promise.all(
-    branchIds.map(async (branchId: string): Promise<ScopedStaffingShift[]> => {
-      const shifts: StaffingShift[] = await listStaffingShiftsForBranch(branchId);
-      return shifts.map(
-        (shift: StaffingShift): ScopedStaffingShift => ({ ...shift, branch_id: branchId }),
-      );
-    }),
-  );
-  return groups.flat();
+import {
+  createReconciliationScopeCursor,
+  loadReconcileScopePage,
+  type ReconcileScopePage,
+  type ReconciliationScopeCursor,
+} from "./reconciliationCursor";
+
+function compareScopedShifts(left: ScopedStaffingShift, right: ScopedStaffingShift): number {
+  const timeOrder: number = right.starts_at.localeCompare(left.starts_at);
+  return timeOrder !== 0 ? timeOrder : right.id.localeCompare(left.id);
 }
 
 interface ShiftDraft {
@@ -74,19 +74,43 @@ export function ShiftCoordinationPage(): React.JSX.Element {
   const [selectedShiftId, setSelectedShiftId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
-  const customersQuery = useQuery<Customer[], Error>({
+  const customersQuery = useInfiniteQuery({
     queryKey: operationsQueryKeys.customers,
-    queryFn: listCustomers,
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => listCustomers(pageParam),
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
   });
-  const jobsQuery = useQuery({ queryKey: operationsQueryKeys.jobs, queryFn: listJobs });
-  const shiftsQuery = useQuery<ScopedStaffingShift[], Error>({
+  const jobsQuery = useInfiniteQuery({
+    queryKey: operationsQueryKeys.jobs,
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => listJobs(pageParam),
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
+  });
+  const shiftsQuery = useInfiniteQuery({
     queryKey: [...operationsQueryKeys.shifts, "scope", scope.scopeKey],
-    queryFn: (): Promise<ScopedStaffingShift[]> => loadScopedShifts(scope.branchIds),
+    initialPageParam: createReconciliationScopeCursor<ScopedStaffingShift>(scope.branchIds),
+    queryFn: ({ pageParam }: { pageParam: ReconciliationScopeCursor<ScopedStaffingShift> }) =>
+      loadReconcileScopePage({
+        cursor: pageParam,
+        fetchBranchPage: async (branchId: string, cursor: string | null) => {
+          const page = await listStaffingShiftsForBranch(branchId, cursor);
+          return {
+            ...page,
+            items: page.items.map((shift): ScopedStaffingShift => ({ ...shift, branch_id: branchId })),
+          };
+        },
+        compare: compareScopedShifts,
+        itemKey: (shift: ScopedStaffingShift): string => shift.id,
+      }),
+    getNextPageParam: (page: ReconcileScopePage<ScopedStaffingShift>) => page.nextCursor ?? undefined,
     enabled: scope.branchIds.length > 0,
   });
+  const loadedShifts: ScopedStaffingShift[] =
+    shiftsQuery.data?.pages.flatMap((page: ReconcileScopePage<ScopedStaffingShift>) => page.items) ?? [];
+  const jobs = jobsQuery.data?.pages.flatMap((page) => page.items) ?? [];
   const shifts: ScopedStaffingShift[] = useMemo<ScopedStaffingShift[]>(
     (): ScopedStaffingShift[] =>
-      [...(shiftsQuery.data ?? [])]
+      [...loadedShifts]
         .filter(
           (shift: ScopedStaffingShift): boolean =>
             scope.selectedCustomerId === null || shift.customer_id === scope.selectedCustomerId,
@@ -95,19 +119,27 @@ export function ShiftCoordinationPage(): React.JSX.Element {
           (left: ScopedStaffingShift, right: ScopedStaffingShift): number =>
             new Date(left.starts_at).getTime() - new Date(right.starts_at).getTime(),
         ),
-    [scope.selectedCustomerId, shiftsQuery.data],
+    [scope.selectedCustomerId, loadedShifts],
   );
   const selectedShift: ScopedStaffingShift | null =
     shifts.find((shift: ScopedStaffingShift): boolean => shift.id === selectedShiftId) ?? null;
-  const candidatesQuery = useQuery({
+  const candidatesQuery = useInfiniteQuery({
     queryKey: [
       ...operationsQueryKeys.candidates(selectedShiftId ?? ""),
       selectedShift?.branch_id ?? "none",
     ],
-    queryFn: (): Promise<StaffingCandidate[]> =>
-      listShiftCandidatesForBranch(selectedShift?.branch_id ?? "", selectedShiftId ?? ""),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) =>
+      listShiftCandidatesForBranch(
+        selectedShift?.branch_id ?? "",
+        selectedShiftId ?? "",
+        pageParam,
+      ),
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
     enabled: selectedShift !== null,
   });
+  const candidates: StaffingCandidate[] =
+    candidatesQuery.data?.pages.flatMap((page) => page.items) ?? [];
 
   const customerNames: Map<string, string> = useMemo<Map<string, string>>(
     (): Map<string, string> =>
@@ -176,13 +208,15 @@ export function ShiftCoordinationPage(): React.JSX.Element {
         <form className="mt-5 space-y-4" onSubmit={submit}>
           <label className="block text-sm font-semibold text-slate-700">Khách hàng
             <select className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5" required value={draft.customerId} onChange={(event) => setDraft({ ...draft, customerId: event.target.value })}>
-              <option value="">Chọn khách hàng</option>{customersQuery.data?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              <option value="">Chọn khách hàng</option>{customersQuery.data?.pages.flatMap((page) => page.items).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
             </select>
+            {customersQuery.hasNextPage ? <button className="mt-2 text-xs font-semibold text-blue-700" disabled={customersQuery.isFetchingNextPage} onClick={() => void customersQuery.fetchNextPage()} type="button">{customersQuery.isFetchingNextPage ? "Đang tải..." : "Tải thêm khách hàng"}</button> : null}
           </label>
           <label className="block text-sm font-semibold text-slate-700">Công việc
             <select className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5" required value={draft.jobId} onChange={(event) => setDraft({ ...draft, jobId: event.target.value })}>
-              <option value="">Chọn vị trí</option>{jobsQuery.data?.filter((item) => item.status === "active").map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              <option value="">Chọn vị trí</option>{jobs.filter((item) => item.status === "active").map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
             </select>
+            {jobsQuery.hasNextPage ? <button className="mt-2 text-xs font-semibold text-blue-700" disabled={jobsQuery.isFetchingNextPage} onClick={() => void jobsQuery.fetchNextPage()} type="button">{jobsQuery.isFetchingNextPage ? "Đang tải..." : "Tải thêm công việc"}</button> : null}
           </label>
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="block text-sm font-semibold text-slate-700">Bắt đầu<input className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5" required type="datetime-local" value={draft.startsAt} onChange={(event) => setDraft({ ...draft, startsAt: event.target.value })} /></label>
@@ -201,14 +235,16 @@ export function ShiftCoordinationPage(): React.JSX.Element {
           {shiftsQuery.error ? <p className="p-5 text-sm text-red-600"><CircleAlert className="mr-2 inline size-4" />{friendlyApiError(shiftsQuery.error, "Không tải được danh sách ca.")}</p> : (
           <div className="max-h-72 divide-y divide-slate-100 overflow-y-auto">{shifts.map((shift: ScopedStaffingShift): React.JSX.Element => <button className={`grid w-full gap-1 px-5 py-3 text-left hover:bg-slate-50 ${selectedShiftId === shift.id ? "bg-blue-50" : ""}`} key={shift.id} onClick={(): void => setSelectedShiftId(shift.id)} type="button"><span className="font-bold text-slate-900">{customerNames.get(shift.customer_id) ?? "Khách hàng"} · {formatDateTime(shift.starts_at)}</span><span className="text-xs text-slate-500">{scope.branches.find((branch): boolean => branch.id === shift.branch_id)?.name ?? "Chi nhánh"} · Cần {shift.required_workers} người · {shiftStatusLabel(shift.status)}</span></button>)}</div>
           )}
+          {shiftsQuery.hasNextPage ? <div className="border-t border-slate-100 p-3 text-center"><button className="action-secondary min-h-9 px-4" disabled={shiftsQuery.isFetchingNextPage} onClick={() => void shiftsQuery.fetchNextPage()} type="button">{shiftsQuery.isFetchingNextPage ? "Đang tải..." : "Tải thêm ca"}</button></div> : null}
         </section>
 
         {selectedShiftId ? <section className="panel overflow-hidden">
           <div className="flex items-center gap-3 border-b border-slate-200 px-5 py-4"><UsersRound className="size-5 text-blue-600" /><div><h2 className="font-bold text-slate-950">Nhân viên có thể phân công</h2><p className="text-sm text-slate-500">Phù hợp dựa trên vị trí chính có hiệu lực tại ngày làm.</p></div></div>
-          <div className="divide-y divide-slate-100">{candidatesQuery.data?.map((candidate: StaffingCandidate): React.JSX.Element => {
+          <div className="divide-y divide-slate-100">{candidates.map((candidate: StaffingCandidate): React.JSX.Element => {
             const eligible: boolean = candidate.suitable && candidate.available && !candidate.already_assigned;
             return <div className="flex items-center justify-between gap-3 px-5 py-4" key={candidate.employee_id}><div><p className="font-bold text-slate-900">{candidate.display_name}</p><p className="text-xs text-slate-500">{candidate.employee_code} · {!candidate.suitable ? "Không đúng vị trí" : !candidate.available ? "Trùng lịch" : candidate.already_assigned ? "Đã phân công" : "Sẵn sàng"}</p></div>{canManage ? <button className="action-secondary min-h-9 px-3" disabled={!eligible || assignMutation.isPending || selectedShift === null} onClick={(): void => assignMutation.mutate({ branchId: selectedShift?.branch_id ?? "", shiftId: selectedShiftId, employeeId: candidate.employee_id })} type="button"><UserPlus className="size-4" />Phân công</button> : null}</div>;
-          })}{candidatesQuery.data?.length === 0 ? <p className="p-6 text-center text-sm text-slate-500">Chưa có nhân viên hoạt động.</p> : null}</div>
+          })}{candidates.length === 0 ? <p className="p-6 text-center text-sm text-slate-500">Chưa có nhân viên hoạt động.</p> : null}</div>
+          {candidatesQuery.hasNextPage ? <div className="border-t border-slate-100 p-3 text-center"><button className="action-secondary min-h-9 px-4" disabled={candidatesQuery.isFetchingNextPage} onClick={() => void candidatesQuery.fetchNextPage()} type="button">{candidatesQuery.isFetchingNextPage ? "Đang tải..." : "Tải thêm nhân viên"}</button></div> : null}
         </section> : null}
       </div>
     </div>

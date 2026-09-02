@@ -513,9 +513,11 @@ export function FinancialOperationsPage(): React.JSX.Element {
     getNextPageParam: (lastPage: SalaryAdvanceRevisionPageResponse): string | undefined => lastPage.next_cursor ?? undefined,
     enabled: historyTarget?.kind === "advance",
   });
-  const employeesQuery = useQuery({
+  const employeesQuery = useInfiniteQuery({
     queryKey: operationsQueryKeys.employees,
-    queryFn: listEmployees,
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => listEmployees(pageParam),
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
     enabled: canReadEmployeeDirectory && (expenseFormOpen || advanceFormOpen || correctionTarget !== null),
   });
   const ownEmployeeQuery = useQuery({
@@ -523,15 +525,18 @@ export function FinancialOperationsPage(): React.JSX.Element {
     queryFn: getOwnEmployee,
     enabled: !canReadEmployeeDirectory && (expenseFormOpen || advanceFormOpen || correctionTarget !== null),
   });
-  const customersQuery = useQuery({
+  const customersQuery = useInfiniteQuery({
     queryKey: operationsQueryKeys.customers,
-    queryFn: listCustomers,
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => listCustomers(pageParam),
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
     enabled: canReadCustomers && (expenseFormOpen || correctionTarget?.kind === "expense"),
   });
 
   const employeeOptions: Employee[] = canReadEmployeeDirectory
-    ? employeesQuery.data ?? []
+    ? employeesQuery.data?.pages.flatMap((page) => page.items) ?? []
     : ownEmployeeQuery.data ? [ownEmployeeQuery.data] : [];
+  const customerOptions: Customer[] = customersQuery.data?.pages.flatMap((page) => page.items) ?? [];
 
   const expensePages: ExpensePageRsp[] = expensesQuery.data?.pages ?? [];
   const advancePages: SalaryAdvancePageResponse[] = advancesQuery.data?.pages ?? [];
@@ -719,10 +724,10 @@ export function FinancialOperationsPage(): React.JSX.Element {
           <label className="text-sm font-semibold text-slate-700">Tính vào kỳ lương<input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" min={expenseDraft.paid_on} onChange={(event): void => setExpenseDraft((current): ExpenseClaimCreateReq => ({ ...current, payroll_inclusion_on: event.target.value }))} required type="date" value={expenseDraft.payroll_inclusion_on} /></label>
           <label className="text-sm font-semibold text-slate-700">Số tiền<input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" inputMode="decimal" onChange={(event): void => setExpenseDraft((current): ExpenseClaimCreateReq => ({ ...current, claimed_amount: event.target.value }))} required value={expenseDraft.claimed_amount} /></label>
           <label className="text-sm font-semibold text-slate-700">Tiền tệ<input className="mt-2 min-h-11 w-full rounded-xl border-slate-300 uppercase" maxLength={3} onChange={(event): void => setExpenseDraft((current): ExpenseClaimCreateReq => ({ ...current, currency: event.target.value.toUpperCase() }))} required value={expenseDraft.currency} /></label>
-          {canReadCustomers ? <label className="text-sm font-semibold text-slate-700">Khách hàng liên quan (không bắt buộc)<select className="mt-2 min-h-11 w-full rounded-xl border-slate-300" onChange={(event): void => setExpenseDraft((current): ExpenseClaimCreateReq => ({ ...current, customer_id: event.target.value || null }))} value={expenseDraft.customer_id ?? ""}><option value="">Không gắn khách hàng</option>{(customersQuery.data ?? []).map((customer: Customer): React.JSX.Element => <option key={customer.id} value={customer.id}>{customer.name}</option>)}</select></label> : null}
+          {canReadCustomers ? <label className="text-sm font-semibold text-slate-700">Khách hàng liên quan (không bắt buộc)<select className="mt-2 min-h-11 w-full rounded-xl border-slate-300" onChange={(event): void => setExpenseDraft((current): ExpenseClaimCreateReq => ({ ...current, customer_id: event.target.value || null }))} value={expenseDraft.customer_id ?? ""}><option value="">Không gắn khách hàng</option>{customerOptions.map((customer: Customer): React.JSX.Element => <option key={customer.id} value={customer.id}>{customer.name}</option>)}</select>{customersQuery.hasNextPage ? <button className="mt-2 text-xs font-semibold text-blue-700" disabled={customersQuery.isFetchingNextPage} onClick={() => void customersQuery.fetchNextPage()} type="button">{customersQuery.isFetchingNextPage ? "Đang tải..." : "Tải thêm khách hàng"}</button> : null}</label> : null}
           <label className="text-sm font-semibold text-slate-700 sm:col-span-2">Nội dung chi phí<textarea className="mt-2 min-h-24 w-full rounded-xl border-slate-300" maxLength={1000} onChange={(event): void => setExpenseDraft((current): ExpenseClaimCreateReq => ({ ...current, description: event.target.value }))} required value={expenseDraft.description} /></label>
           <label className="text-sm font-semibold text-slate-700 sm:col-span-2">Số hóa đơn, ảnh hoặc tham chiếu chứng từ<input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" maxLength={500} onChange={(event): void => setExpenseDraft((current): ExpenseClaimCreateReq => ({ ...current, evidence_reference: event.target.value }))} value={expenseDraft.evidence_reference ?? ""} /></label>
-        </div>{expenseCreateMutation.error ? <p className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{friendlyApiError(expenseCreateMutation.error, "Không thể ghi nhận chi phí.")}</p> : null}<div className="mt-6 flex justify-end gap-3"><button className="action-secondary" onClick={(): void => setExpenseFormOpen(false)} type="button">Hủy</button><button className="action-primary" disabled={expenseCreateMutation.isPending} type="submit">{expenseCreateMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <Plus className="size-4" />}Gửi duyệt</button></div></form></div>
+        </div>{employeesQuery.hasNextPage ? <button className="mt-3 text-xs font-semibold text-blue-700" disabled={employeesQuery.isFetchingNextPage} onClick={() => void employeesQuery.fetchNextPage()} type="button">{employeesQuery.isFetchingNextPage ? "Đang tải..." : "Tải thêm nhân viên"}</button> : null}{expenseCreateMutation.error ? <p className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{friendlyApiError(expenseCreateMutation.error, "Không thể ghi nhận chi phí.")}</p> : null}<div className="mt-6 flex justify-end gap-3"><button className="action-secondary" onClick={(): void => setExpenseFormOpen(false)} type="button">Hủy</button><button className="action-primary" disabled={expenseCreateMutation.isPending} type="submit">{expenseCreateMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <Plus className="size-4" />}Gửi duyệt</button></div></form></div>
       ) : null}
 
       {advanceFormOpen ? (
@@ -731,11 +736,11 @@ export function FinancialOperationsPage(): React.JSX.Element {
           <div className="grid gap-4 sm:grid-cols-2"><label className="text-sm font-semibold text-slate-700">Số tiền<input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" inputMode="decimal" onChange={(event): void => setAdvanceDraft((current): SalaryAdvanceCreateReq => ({ ...current, requested_amount: event.target.value }))} required value={advanceDraft.requested_amount} /></label><label className="text-sm font-semibold text-slate-700">Tiền tệ<input className="mt-2 min-h-11 w-full rounded-xl border-slate-300 uppercase" maxLength={3} onChange={(event): void => setAdvanceDraft((current): SalaryAdvanceCreateReq => ({ ...current, currency: event.target.value.toUpperCase() }))} required value={advanceDraft.currency} /></label></div>
           <div className="grid gap-4 sm:grid-cols-2"><label className="text-sm font-semibold text-slate-700">Ngày chi<input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" onChange={(event): void => setAdvanceDraft((current): SalaryAdvanceCreateReq => ({ ...current, paid_on: event.target.value }))} required type="date" value={advanceDraft.paid_on} /></label><label className="text-sm font-semibold text-slate-700">Tính vào kỳ lương<input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" min={advanceDraft.paid_on} onChange={(event): void => setAdvanceDraft((current): SalaryAdvanceCreateReq => ({ ...current, payroll_inclusion_on: event.target.value }))} required type="date" value={advanceDraft.payroll_inclusion_on} /></label></div>
           <label className="text-sm font-semibold text-slate-700">Lý do tạm ứng<textarea className="mt-2 min-h-24 w-full rounded-xl border-slate-300" maxLength={500} onChange={(event): void => setAdvanceDraft((current): SalaryAdvanceCreateReq => ({ ...current, reason: event.target.value }))} required value={advanceDraft.reason} /></label>
-        </div>{advanceCreateMutation.error ? <p className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{friendlyApiError(advanceCreateMutation.error, "Không thể tạo tạm ứng.")}</p> : null}<div className="mt-6 flex justify-end gap-3"><button className="action-secondary" onClick={(): void => setAdvanceFormOpen(false)} type="button">Hủy</button><button className="action-primary" disabled={advanceCreateMutation.isPending} type="submit">{advanceCreateMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <Plus className="size-4" />}Gửi duyệt</button></div></form></div>
+        </div>{employeesQuery.hasNextPage ? <button className="mt-3 text-xs font-semibold text-blue-700" disabled={employeesQuery.isFetchingNextPage} onClick={() => void employeesQuery.fetchNextPage()} type="button">{employeesQuery.isFetchingNextPage ? "Đang tải..." : "Tải thêm nhân viên"}</button> : null}{advanceCreateMutation.error ? <p className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{friendlyApiError(advanceCreateMutation.error, "Không thể tạo tạm ứng.")}</p> : null}<div className="mt-6 flex justify-end gap-3"><button className="action-secondary" onClick={(): void => setAdvanceFormOpen(false)} type="button">Hủy</button><button className="action-primary" disabled={advanceCreateMutation.isPending} type="submit">{advanceCreateMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <Plus className="size-4" />}Gửi duyệt</button></div></form></div>
       ) : null}
 
       {action ? <ActionDialog action={action} error={actionMutation.error} onClose={(): void => setAction(null)} onSubmit={(payload): void => actionMutation.mutate({ action, ...payload })} pending={actionMutation.isPending} /> : null}
-      {correctionTarget ? <CorrectionDialog categories={categoriesQuery.data ?? []} customers={customersQuery.data ?? []} employees={employeeOptions} error={correctionMutation.error} onClose={(): void => setCorrectionTarget(null)} onSubmit={(payload: CorrectionPayload): void => correctionMutation.mutate(payload)} pending={correctionMutation.isPending} target={correctionTarget} /> : null}
+      {correctionTarget ? <CorrectionDialog categories={categoriesQuery.data ?? []} customers={customerOptions} employees={employeeOptions} error={correctionMutation.error} onClose={(): void => setCorrectionTarget(null)} onSubmit={(payload: CorrectionPayload): void => correctionMutation.mutate(payload)} pending={correctionMutation.isPending} target={correctionTarget} /> : null}
       {historyTarget ? <RevisionHistoryDialog advanceRevisions={visibleAdvanceRevisions} currentPage={historyPage} error={(historyTarget.kind === "expense" ? expenseRevisionsQuery.error : advanceRevisionsQuery.error) as Error | null} expenseRevisions={visibleExpenseRevisions} hasNextPage={historyTarget.kind === "expense" ? historyPage < expenseHistoryPages.length || expenseRevisionsQuery.hasNextPage : historyPage < advanceHistoryPages.length || advanceRevisionsQuery.hasNextPage} nextPagePending={historyTarget.kind === "expense" ? expenseRevisionsQuery.isFetchingNextPage : advanceRevisionsQuery.isFetchingNextPage} onClose={(): void => setHistoryTarget(null)} onPageChange={changeHistoryPage} pending={historyTarget.kind === "expense" ? expenseRevisionsQuery.isPending : advanceRevisionsQuery.isPending} target={historyTarget} /> : null}
     </section>
   );

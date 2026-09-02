@@ -191,12 +191,6 @@ export function AccessControlPage() {
     (role: AccessControlRole): boolean => role.is_active,
   );
 
-  useEffect((): void => {
-    if (snapshotQuery.hasNextPage && !snapshotQuery.isFetchingNextPage) {
-      void snapshotQuery.fetchNextPage();
-    }
-  }, [snapshotQuery.hasNextPage, snapshotQuery.isFetchingNextPage, snapshotQuery.fetchNextPage]);
-
   const changeRolePage = (nextPage: number): void => {
     if (nextPage < 1) return;
     if (nextPage <= rolePages.length) return setRolePage(nextPage);

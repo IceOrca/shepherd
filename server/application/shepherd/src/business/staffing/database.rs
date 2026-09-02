@@ -8,12 +8,14 @@ use uuid::Uuid;
 
 use super::core::{
     BusinessRecordStatus, Customer, CustomerCursor, CustomerInput, CustomerPage, CustomerWorkRecord,
-    CustomerWorkRecordInput, ManualRateOverride, RateSource, ReconcileCollection, ReconcileStatus,
-    ReconciliationCorrectionInput, ReconciliationRevision, ShiftAssignment, ShiftAssignmentInput,
-    ShiftAssignmentStatus, StaffingCandidate, StaffingEligibility, StaffingEligibilityInput, StaffingError,
-    StaffingJob, StaffingPriceSet, StaffingPriceSetInput, StaffingRate, StaffingRateCursor, StaffingRateKind,
-    StaffingRatePage, StaffingReconcile, StaffingReconcileCursor, StaffingReconcilePage, StaffingRepo, StaffingShift,
-    StaffingShiftInput, StaffingShiftStatus, StaffingStaff, StaffingStaffCursor, StaffingStaffPage,
+    CustomerWorkRecordInput, ManualRateOverride, RateSource, ReconcileCollection, ReconcileStatus, NameCodeCursor,
+    ReconciliationCorrectionInput, ReconciliationRevision, ShiftAssignment, ShiftAssignmentCursor,
+    ShiftAssignmentInput, ShiftAssignmentPage, ShiftAssignmentStatus, StaffingCandidate, StaffingCandidateCursor,
+    StaffingCandidatePage, StaffingEligibility, StaffingEligibilityCursor, StaffingEligibilityInput,
+    StaffingEligibilityPage, StaffingError, StaffingJob, StaffingJobPage, StaffingPriceSet, StaffingPriceSetInput,
+    StaffingRate, StaffingRateCursor, StaffingRateKind, StaffingRatePage, StaffingReconcile, StaffingReconcileCursor,
+    StaffingReconcilePage, StaffingRepo, StaffingShift, StaffingShiftCursor, StaffingShiftInput, StaffingShiftPage,
+    StaffingShiftStatus, StaffingStaff, StaffingStaffCursor, StaffingStaffPage,
 };
 
 pub struct StaffingDb {
@@ -344,6 +346,7 @@ struct ReconcileRow {
     assignment_id: Uuid,
     shift_id: Uuid,
     customer_id: Uuid,
+    job_id: Uuid,
     employee_id: Uuid,
     employee_code: String,
     employee_name: String,
@@ -364,6 +367,8 @@ struct ReconcileRow {
     customer_notes: Option<String>,
     customer_updated_at: Option<DateTime<Utc>>,
     final_worked_seconds: Option<i64>,
+    final_customer_id: Option<Uuid>,
+    final_job_id: Option<Uuid>,
     adjustment_reason: Option<String>,
     result_revision_id: Option<Uuid>,
     result_revision_number: Option<i32>,
@@ -448,8 +453,17 @@ impl StaffingRepo for StaffingDb {
         Ok(CustomerPage { items, next_cursor })
     }
 
-    async fn list_jobs(&self, tenant_id: Uuid) -> Result<Vec<StaffingJob>, StaffingError> {
-        let rows: Vec<StaffingJobRow> = self
+    async fn list_jobs(
+        &self,
+        tenant_id: Uuid,
+        limit: i64,
+        cursor: Option<&NameCodeCursor>,
+    ) -> Result<StaffingJobPage, StaffingError> {
+        let cursor_name = cursor.map(|value| value.normalized_name.clone());
+        let cursor_code = cursor.map(|value| value.code.clone());
+        let cursor_id = cursor.map(|value| value.id);
+        let query_limit = limit + 1;
+        let mut rows: Vec<StaffingJobRow> = self
             .db
             .tran_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
                 sqlx::query_as!(
@@ -458,16 +472,36 @@ impl StaffingRepo for StaffingDb {
                     SELECT id, code, name, status, created_at, updated_at
                     FROM business_staffing_jobs
                     WHERE tenant_id = $1
-                    ORDER BY lower(name), code
+                      AND ($2::TEXT IS NULL OR (lower(name), code, id) > ($2, $3, $4))
+                    ORDER BY lower(name), code, id
+                    LIMIT $5
                     "#,
                     tenant_id,
+                    cursor_name,
+                    cursor_code,
+                    cursor_id,
+                    query_limit,
                 )
                 .fetch_all(connection)
                 .await
             })
             .await
             .map_err(|error: TenantDbErr| tenant_database_failure("list staffing jobs", tenant_id, error))?;
-        rows.into_iter().map(StaffingJob::try_from).collect()
+        let has_more = rows.len() > limit as usize;
+        rows.truncate(limit as usize);
+        let next_cursor = if has_more {
+            rows.last().map(|row| NameCodeCursor {
+                normalized_name: row.name.to_lowercase(),
+                code: row.code.clone(),
+                id: row.id,
+            })
+        } else {
+            None
+        };
+        Ok(StaffingJobPage {
+            items: rows.into_iter().map(StaffingJob::try_from).collect::<Result<_, _>>()?,
+            next_cursor,
+        })
     }
 
     async fn create_customer(
@@ -814,8 +848,18 @@ impl StaffingRepo for StaffingDb {
         })
     }
 
-    async fn list_eligibilities(&self, tenant_id: Uuid) -> Result<Vec<StaffingEligibility>, StaffingError> {
-        let rows: Vec<StaffingEligibilityRow> = self
+    async fn list_eligibilities(
+        &self,
+        tenant_id: Uuid,
+        limit: i64,
+        cursor: Option<&StaffingEligibilityCursor>,
+    ) -> Result<StaffingEligibilityPage, StaffingError> {
+        let cursor_date = cursor.map(|value| value.effective_from);
+        let cursor_employee = cursor.map(|value| value.employee_id);
+        let cursor_job = cursor.map(|value| value.job_id);
+        let cursor_id = cursor.map(|value| value.eligibility_id);
+        let query_limit = limit + 1;
+        let mut rows: Vec<StaffingEligibilityRow> = self
             .db
             .tran_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
                 sqlx::query_as!(
@@ -824,16 +868,40 @@ impl StaffingRepo for StaffingDb {
                     SELECT id, employee_id, job_id, effective_from, effective_to, notes, created_at
                     FROM business_staffing_employee_eligibilities
                     WHERE tenant_id = $1
-                    ORDER BY effective_from DESC, employee_id, job_id, id
+                      AND ($2::DATE IS NULL
+                           OR (effective_from, employee_id, job_id, id)
+                              < ($2, $3, $4, $5))
+                    ORDER BY effective_from DESC, employee_id DESC, job_id DESC, id DESC
+                    LIMIT $6
                     "#,
                     tenant_id,
+                    cursor_date,
+                    cursor_employee,
+                    cursor_job,
+                    cursor_id,
+                    query_limit,
                 )
                 .fetch_all(connection)
                 .await
             })
             .await
             .map_err(|error: TenantDbErr| tenant_database_failure("list staffing eligibilities", tenant_id, error))?;
-        Ok(rows.into_iter().map(StaffingEligibility::from).collect())
+        let has_more = rows.len() > limit as usize;
+        rows.truncate(limit as usize);
+        let next_cursor = if has_more {
+            rows.last().map(|row| StaffingEligibilityCursor {
+                effective_from: row.effective_from,
+                employee_id: row.employee_id,
+                job_id: row.job_id,
+                eligibility_id: row.id,
+            })
+        } else {
+            None
+        };
+        Ok(StaffingEligibilityPage {
+            items: rows.into_iter().map(StaffingEligibility::from).collect(),
+            next_cursor,
+        })
     }
 
     async fn create_eligibility(
@@ -881,8 +949,16 @@ impl StaffingRepo for StaffingDb {
         row.map(StaffingEligibility::from).ok_or(StaffingError::NotFound)
     }
 
-    async fn list_shifts(&self, tenant_id: Uuid) -> Result<Vec<StaffingShift>, StaffingError> {
-        let rows: Vec<ShiftRow> = self
+    async fn list_shifts(
+        &self,
+        tenant_id: Uuid,
+        limit: i64,
+        cursor: Option<&StaffingShiftCursor>,
+    ) -> Result<StaffingShiftPage, StaffingError> {
+        let cursor_starts_at = cursor.map(|value| value.starts_at);
+        let cursor_id = cursor.map(|value| value.shift_id);
+        let query_limit = limit + 1;
+        let mut rows: Vec<ShiftRow> = self
             .db
             .tran_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
                 sqlx::query_as!(
@@ -892,16 +968,37 @@ impl StaffingRepo for StaffingDb {
                            required_workers, status, notes, created_at, updated_at
                     FROM business_staffing_shifts
                     WHERE tenant_id = $1
-                    ORDER BY starts_at DESC, id
+                      AND ($2::TIMESTAMPTZ IS NULL OR (starts_at, id) < ($2, $3))
+                    ORDER BY starts_at DESC, id DESC
+                    LIMIT $4
                     "#,
                     tenant_id,
+                    cursor_starts_at,
+                    cursor_id,
+                    query_limit,
                 )
                 .fetch_all(connection)
                 .await
             })
             .await
             .map_err(|error: TenantDbErr| tenant_database_failure("list staffing shifts", tenant_id, error))?;
-        rows.into_iter().map(StaffingShift::try_from).collect()
+        let has_more = rows.len() > limit as usize;
+        rows.truncate(limit as usize);
+        let next_cursor = if has_more {
+            rows.last().map(|row| StaffingShiftCursor {
+                starts_at: row.starts_at,
+                shift_id: row.id,
+            })
+        } else {
+            None
+        };
+        Ok(StaffingShiftPage {
+            items: rows
+                .into_iter()
+                .map(StaffingShift::try_from)
+                .collect::<Result<_, _>>()?,
+            next_cursor,
+        })
     }
 
     async fn create_shift(
@@ -947,24 +1044,62 @@ impl StaffingRepo for StaffingDb {
         &self,
         tenant_id: Uuid,
         shift_id: Uuid,
-    ) -> Result<Vec<ShiftAssignment>, StaffingError> {
-        let rows: Vec<AssignmentRow> = self
+        limit: i64,
+        cursor: Option<&ShiftAssignmentCursor>,
+    ) -> Result<ShiftAssignmentPage, StaffingError> {
+        let cursor_created_at = cursor.map(|value| value.created_at);
+        let cursor_id = cursor.map(|value| value.assignment_id);
+        let query_limit = limit + 1;
+        let mut rows: Vec<AssignmentRow> = self
             .db
             .tran_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
-                list_assignments(connection, tenant_id, shift_id).await
+                list_assignments(
+                    connection,
+                    tenant_id,
+                    shift_id,
+                    cursor_created_at,
+                    cursor_id,
+                    query_limit,
+                )
+                .await
             })
             .await
             .map_err(|error: TenantDbErr| {
                 tenant_database_failure("list staffing shift assignments", tenant_id, error)
             })?;
-        rows.into_iter().map(ShiftAssignment::try_from).collect()
+        let has_more = rows.len() > limit as usize;
+        rows.truncate(limit as usize);
+        let next_cursor = if has_more {
+            rows.last().map(|row| ShiftAssignmentCursor {
+                created_at: row.created_at,
+                assignment_id: row.id,
+            })
+        } else {
+            None
+        };
+        Ok(ShiftAssignmentPage {
+            items: rows
+                .into_iter()
+                .map(ShiftAssignment::try_from)
+                .collect::<Result<_, _>>()?,
+            next_cursor,
+        })
     }
 
     async fn list_shift_candidates(
         &self,
         tenant_id: Uuid,
         shift_id: Uuid,
-    ) -> Result<Vec<StaffingCandidate>, StaffingError> {
+        search: Option<&str>,
+        limit: i64,
+        cursor: Option<&StaffingCandidateCursor>,
+    ) -> Result<StaffingCandidatePage, StaffingError> {
+        let normalized_search = search.map(str::to_owned);
+        let cursor_available = cursor.map(|value| value.available);
+        let cursor_name = cursor.map(|value| value.normalized_name.clone());
+        let cursor_code = cursor.map(|value| value.employee_code.clone());
+        let cursor_id = cursor.map(|value| value.employee_id);
+        let query_limit = limit + 1;
         let result: (bool, Vec<CandidateRow>) = self
             .db
             .tran_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
@@ -1031,10 +1166,35 @@ impl StaffingRepo for StaffingDb {
               AND employee.status = 'active'
               AND account.status = 'active'
               AND account.primary_role_code = 'staff'
-            ORDER BY "available!" DESC, lower(employee.display_name), employee.employee_code
+              AND ($3::TEXT IS NULL
+                   OR lower(employee.display_name) LIKE '%' || $3 || '%'
+                   OR lower(employee.employee_code) LIKE '%' || $3 || '%')
+              AND ($4::BOOLEAN IS NULL
+                   OR (NOT (NOT EXISTS (
+                        SELECT 1
+                        FROM business_shift_assignments AS cursor_assignment
+                        JOIN business_staffing_shifts AS cursor_shift
+                          ON cursor_shift.tenant_id = cursor_assignment.tenant_id
+                         AND cursor_shift.id = cursor_assignment.shift_id
+                        WHERE cursor_assignment.tenant_id = employee.tenant_id
+                          AND cursor_assignment.employee_id = employee.id
+                          AND cursor_assignment.status <> 'cancelled'
+                          AND cursor_shift.id <> target.id
+                          AND cursor_shift.starts_at < target.ends_at
+                          AND cursor_shift.ends_at > target.starts_at
+                   )), lower(employee.display_name), employee.employee_code, employee.id)
+                      > (NOT $4, $5, $6, $7))
+            ORDER BY "available!" DESC, lower(employee.display_name), employee.employee_code, employee.id
+            LIMIT $8
             "#,
                     tenant_id,
                     shift_id,
+                    normalized_search,
+                    cursor_available,
+                    cursor_name,
+                    cursor_code,
+                    cursor_id,
+                    query_limit,
                 )
                 .fetch_all(connection)
                 .await?;
@@ -1044,11 +1204,26 @@ impl StaffingRepo for StaffingDb {
             .map_err(|error: TenantDbErr| {
                 tenant_database_failure("list staffing shift candidates", tenant_id, error)
             })?;
-        let (shift_exists, rows): (bool, Vec<CandidateRow>) = result;
+        let (shift_exists, mut rows): (bool, Vec<CandidateRow>) = result;
         if !shift_exists {
             return Err(StaffingError::NotFound);
         }
-        Ok(rows.into_iter().map(StaffingCandidate::from).collect())
+        let has_more = rows.len() > limit as usize;
+        rows.truncate(limit as usize);
+        let next_cursor = if has_more {
+            rows.last().map(|row| StaffingCandidateCursor {
+                available: row.available,
+                normalized_name: row.display_name.to_lowercase(),
+                employee_code: row.employee_code.clone(),
+                employee_id: row.employee_id,
+            })
+        } else {
+            None
+        };
+        Ok(StaffingCandidatePage {
+            items: rows.into_iter().map(StaffingCandidate::from).collect(),
+            next_cursor,
+        })
     }
 
     async fn create_shift_assignment(
@@ -1332,6 +1507,8 @@ impl StaffingRepo for StaffingDb {
         assignment_id: Uuid,
         worked_seconds: Option<i64>,
         adjustment_reason: Option<String>,
+        final_customer_id: Option<Uuid>,
+        final_job_id: Option<Uuid>,
         audit_account_id: Uuid,
     ) -> Result<ShiftAssignment, StaffingError> {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
@@ -1341,6 +1518,8 @@ impl StaffingRepo for StaffingDb {
             assignment_id,
             worked_seconds,
             adjustment_reason,
+            final_customer_id,
+            final_job_id,
             audit_account_id,
         )
         .await?;
@@ -1362,6 +1541,8 @@ impl StaffingRepo for StaffingDb {
             &mut transaction,
             tenant_id,
             assignment_id,
+            None,
+            None,
             None,
             None,
             audit_account_id,
@@ -1396,7 +1577,7 @@ impl StaffingRepo for StaffingDb {
                     ReconcileRow,
                     r#"
             SELECT assignment.id AS assignment_id, assignment.shift_id,
-                   shift.customer_id, assignment.employee_id,
+                   shift.customer_id, shift.job_id, assignment.employee_id,
                    employee.employee_code, employee.display_name AS employee_name,
                    customer.name AS customer_name,
                    confirmed_customer.name AS "confirmed_customer_name?",
@@ -1412,6 +1593,8 @@ impl StaffingRepo for StaffingDb {
                    customer_record.customer_reference, customer_record.notes AS customer_notes,
                    customer_record.updated_at AS "customer_updated_at?",
                    result.worked_seconds AS "final_worked_seconds?",
+                   result.final_customer_id AS "final_customer_id?",
+                   result.final_job_id AS "final_job_id?",
                    result.adjustment_reason AS "adjustment_reason?",
                    result.revision_id AS "result_revision_id?",
                    result.revision_number AS "result_revision_number?"
@@ -1438,7 +1621,8 @@ impl StaffingRepo for StaffingDb {
                 ON confirmed_customer.tenant_id = customer_record.tenant_id
                AND confirmed_customer.id = customer_record.confirmed_customer_id
             LEFT JOIN LATERAL (
-                SELECT revision_id, revision_number, worked_seconds, adjustment_reason, confirmed_started_at
+                SELECT revision_id, revision_number, worked_seconds, adjustment_reason,
+                       confirmed_started_at, final_customer_id, final_job_id
                 FROM business_assignment_reconciliation_revisions
                 WHERE tenant_id = assignment.tenant_id AND assignment_id = assignment.id
                 ORDER BY revision_number DESC
@@ -1540,6 +1724,7 @@ impl StaffingRepo for StaffingDb {
                     assignment_id: row.assignment_id,
                     shift_id: row.shift_id,
                     customer_id: row.customer_id,
+                    job_id: row.job_id,
                     employee_id: row.employee_id,
                     employee_code: row.employee_code,
                     employee_name: row.employee_name,
@@ -1553,6 +1738,8 @@ impl StaffingRepo for StaffingDb {
                     staff_worked_seconds: row.staff_worked_seconds,
                     customer_record,
                     final_worked_seconds: row.final_worked_seconds,
+                    final_customer_id: row.final_customer_id,
+                    final_job_id: row.final_job_id,
                     adjustment_reason: row.adjustment_reason,
                     reconciliation_status,
                     result_revision_id: row.result_revision_id,
@@ -1732,6 +1919,11 @@ impl StaffingRepo for StaffingDb {
               AND shepherd_financial_date_is_open(
                     previous.tenant_id,
                     previous.branch_id,
+                    previous.local_work_date
+              )
+              AND shepherd_financial_date_is_open(
+                    previous.tenant_id,
+                    previous.branch_id,
                     (evidence.confirmed_started_at AT TIME ZONE evidence.time_zone)::DATE
               )
             RETURNING revision_id, assignment_id, revision_number, worked_seconds,
@@ -1763,14 +1955,20 @@ impl StaffingRepo for StaffingDb {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn approve_shift_assignment_in_transaction(
     transaction: &mut TenantTransaction,
     tenant_id: Uuid,
     assignment_id: Uuid,
     worked_seconds: Option<i64>,
     adjustment_reason: Option<String>,
+    final_customer_id: Option<Uuid>,
+    final_job_id: Option<Uuid>,
     audit_account_id: Uuid,
 ) -> Result<AssignmentRow, StaffingError> {
+    if (final_customer_id.is_some() || final_job_id.is_some()) && adjustment_reason.is_none() {
+        return Err(StaffingError::Conflict);
+    }
     let status: Option<String> = sqlx::query_scalar!(
         "SELECT status FROM business_shift_assignments WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
         tenant_id,
@@ -1784,6 +1982,42 @@ async fn approve_shift_assignment_in_transaction(
         Some("assigned") => {}
         Some(_) => return Err(StaffingError::Conflict),
     }
+    let conclusion: Option<(Uuid, Uuid)> = sqlx::query_as(
+        r#"
+        SELECT final_customer.id, final_job.id
+        FROM business_shift_assignments AS assignment
+        JOIN business_staffing_shifts AS shift
+          ON shift.tenant_id = assignment.tenant_id AND shift.id = assignment.shift_id
+        JOIN business_customers AS final_customer
+          ON final_customer.tenant_id = shift.tenant_id
+         AND final_customer.branch_id = shift.branch_id
+         AND final_customer.id = COALESCE($3, shift.customer_id)
+         AND final_customer.status = 'active'
+        JOIN business_staffing_jobs AS final_job
+          ON final_job.tenant_id = shift.tenant_id
+         AND final_job.id = COALESCE($4, shift.job_id)
+         AND final_job.status = 'active'
+        WHERE assignment.tenant_id = $1 AND assignment.id = $2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(assignment_id)
+    .bind(final_customer_id)
+    .bind(final_job_id)
+    .fetch_optional(transaction.connection())
+    .await
+    .map_err(|error| database_failure("validate final staffing conclusion", tenant_id, error))?;
+    let (conclusion_customer_id, conclusion_job_id) = conclusion.ok_or(StaffingError::NotFound)?;
+    sqlx::query_scalar::<_, String>("SELECT set_config('app.reconciliation_final_customer_id', $1, TRUE)")
+        .bind(conclusion_customer_id.to_string())
+        .fetch_one(transaction.connection())
+        .await
+        .map_err(|error| database_failure("set final customer conclusion", tenant_id, error))?;
+    sqlx::query_scalar::<_, String>("SELECT set_config('app.reconciliation_final_job_id', $1, TRUE)")
+        .bind(conclusion_job_id.to_string())
+        .fetch_one(transaction.connection())
+        .await
+        .map_err(|error| database_failure("set final job conclusion", tenant_id, error))?;
     let row: Option<AssignmentRow> = sqlx::query_as!(
         AssignmentRow,
         r#"
@@ -1794,10 +2028,14 @@ async fn approve_shift_assignment_in_transaction(
             FROM business_shift_work_sessions
             WHERE tenant_id = $1 AND assignment_id = $2 AND ended_at IS NOT NULL
         ), customer AS (
-            SELECT confirmed_customer_id, confirmed_started_at,
-                   confirmed_ended_at, confirmed_worked_seconds AS total
-            FROM business_customer_work_records
-            WHERE tenant_id = $1 AND assignment_id = $2
+            SELECT record.confirmed_customer_id, record.confirmed_started_at,
+                   record.confirmed_ended_at, record.confirmed_worked_seconds AS total,
+                   customer.time_zone
+            FROM business_customer_work_records AS record
+            JOIN business_customers AS customer
+              ON customer.tenant_id = record.tenant_id
+             AND customer.id = record.confirmed_customer_id
+            WHERE record.tenant_id = $1 AND record.assignment_id = $2
         )
         UPDATE business_shift_assignments AS assignment
         SET status = 'approved',
@@ -1826,6 +2064,11 @@ async fn approve_shift_assignment_in_transaction(
           AND assignment.id = $2
           AND assignment.status = 'assigned'
           AND observed.total > 0
+          AND shepherd_financial_date_is_open(
+                assignment.tenant_id,
+                assignment.branch_id,
+                (customer.confirmed_started_at AT TIME ZONE customer.time_zone)::DATE
+          )
           AND NOT EXISTS (
               SELECT 1 FROM business_shift_work_sessions AS open_session
               WHERE open_session.tenant_id = $1
@@ -1970,6 +2213,9 @@ async fn list_assignments(
     connection: &mut sqlx::PgConnection,
     tenant_id: Uuid,
     shift_id: Uuid,
+    cursor_created_at: Option<DateTime<Utc>>,
+    cursor_id: Option<Uuid>,
+    limit: i64,
 ) -> Result<Vec<AssignmentRow>, sqlx::Error> {
     sqlx::query_as!(
         AssignmentRow,
@@ -1985,10 +2231,15 @@ async fn list_assignments(
                approved_at, created_at
         FROM business_shift_assignments
         WHERE tenant_id = $1 AND shift_id = $2
-        ORDER BY created_at, id
+          AND ($3::TIMESTAMPTZ IS NULL OR (created_at, id) < ($3, $4))
+        ORDER BY created_at DESC, id DESC
+        LIMIT $5
         "#,
         tenant_id,
         shift_id,
+        cursor_created_at,
+        cursor_id,
+        limit,
     )
     .fetch_all(connection)
     .await

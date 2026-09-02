@@ -4,7 +4,7 @@ use crate::{
     auth::{
         AccessControlAuditEntry, AccessControlBranch, AccessControlPermission, AccessControlRole,
         AccessControlSnapshot, AccessControlUser, AccessRoleScope, AccountPermissionOverrideContract,
-        AccountRoleAssignmentContract, AccountStatus, AuthProviderUserStatus, AuthUserSummary,
+        AccountRoleAssignmentContract, AccountStatus, AuthProviderUserStatus, AuthUserPage, AuthUserSummary,
         CreateAccessControlBranchRequest, CreateAccessControlRoleRequest, CreateAuthUserRequest, CurrentUserProfile,
         PermissionCode, PermissionOverrideEffect, RoleCode, SetAuthUserStatusRequest, UpdateAccessControlBranchRequest,
         UpdateAccessControlRoleRequest, UpdateAccountAccessRequest, TenantMembershipSummary,
@@ -35,7 +35,7 @@ use crate::{
         },
         work_session::{
             core::{OwnStaffingAssignment, ShiftWorkSession},
-            host::ShiftWorkActionRequest,
+            host::{OwnStaffingAssignmentPageResponse, ShiftWorkActionRequest},
         },
     },
     business::finance::{
@@ -55,7 +55,10 @@ use crate::{
                 OperatingFinancialReport, PayrollLine, PayrollReport,
             },
             export::ReportExportKind,
-            host::{EmployeeSalaryRateCreateReq, FinancialPeriodChangeRequest, FinancialReportExportReq},
+            host::{
+                EmployeeSalaryConfigPageRsp, EmployeeSalaryRateCreateReq, FinancialPeriodChangeRequest,
+                FinancialReportExportReq,
+            },
         },
     },
     features::{
@@ -79,6 +82,7 @@ pub fn contract() -> String {
     push::<CurrentUserProfile>(&mut output, &config);
     push::<TenantMembershipSummary>(&mut output, &config);
     push::<AuthUserSummary>(&mut output, &config);
+    push::<AuthUserPage>(&mut output, &config);
     push::<CreateAuthUserRequest>(&mut output, &config);
     push::<SetAuthUserStatusRequest>(&mut output, &config);
     push::<AccessRoleScope>(&mut output, &config);
@@ -131,6 +135,7 @@ pub fn contract() -> String {
     push::<ShiftAssignmentApproveRequest>(&mut output, &config);
     push::<ShiftWorkSession>(&mut output, &config);
     push::<OwnStaffingAssignment>(&mut output, &config);
+    push::<OwnStaffingAssignmentPageResponse>(&mut output, &config);
     push::<ShiftWorkActionRequest>(&mut output, &config);
     push::<ExpenseFundingSource>(&mut output, &config);
     push::<ExpenseClaimStatus>(&mut output, &config);
@@ -155,6 +160,7 @@ pub fn contract() -> String {
     push::<SalaryAdvanceDisburseReq>(&mut output, &config);
     push::<SalaryAdvanceRecoveryReq>(&mut output, &config);
     push::<EmployeeSalaryConfig>(&mut output, &config);
+    push::<EmployeeSalaryConfigPageRsp>(&mut output, &config);
     push::<EmployeeSalaryRateCreateReq>(&mut output, &config);
     push::<FinancialPeriodStatus>(&mut output, &config);
     push::<FinancialPeriodState>(&mut output, &config);

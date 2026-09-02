@@ -18,10 +18,11 @@ use crate::pagination::{decode_cursor, encode_cursor, normalize_search, resolve_
 
 use super::core::{
     BusinessRecordStatus, Customer, CustomerCursor, CustomerInput, CustomerPage, CustomerWorkRecord,
-    CustomerWorkRecordInput, ManualRateOverride, ShiftAssignment, ShiftAssignmentInput, StaffingCandidate,
-    StaffingEligibility, StaffingEligibilityInput, StaffingError, StaffingJob, StaffingPriceSet, StaffingPriceSetInput,
-    ReconcileCollection, ReconciliationCorrectionInput, ReconciliationRevision, StaffingRate, StaffingRateCursor,
-    StaffingRatePage, StaffingReconcile, StaffingReconcileCursor, StaffingReconcilePage, StaffingShift,
+    CustomerWorkRecordInput, ManualRateOverride, NameCodeCursor, ReconcileCollection, ReconciliationCorrectionInput,
+    ReconciliationRevision, ShiftAssignment, ShiftAssignmentCursor, ShiftAssignmentInput, StaffingCandidate,
+    StaffingCandidateCursor, StaffingEligibility, StaffingEligibilityCursor, StaffingEligibilityInput, StaffingError,
+    StaffingJob, StaffingPriceSet, StaffingPriceSetInput, StaffingRate, StaffingRateCursor, StaffingRatePage,
+    StaffingReconcile, StaffingReconcileCursor, StaffingReconcilePage, StaffingShift, StaffingShiftCursor,
     StaffingShiftInput, StaffingStaff, StaffingStaffCursor, StaffingStaffPage,
 };
 
@@ -83,6 +84,14 @@ pub struct StaffingStaffPageResponse {
 #[derive(Debug, Serialize, TS)]
 pub struct StaffingReconcilePageRsp {
     pub items: Vec<StaffingReconcile>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+    pub limit: u16,
+}
+
+#[derive(Debug, Serialize)]
+pub struct StaffingListPageResponse<T> {
+    pub items: Vec<T>,
     pub next_cursor: Option<String>,
     pub has_more: bool,
     pub limit: u16,
@@ -222,6 +231,8 @@ impl From<ShiftAssignmentCreateRequest> for ShiftAssignmentInput {
 pub struct ShiftAssignmentApproveRequest {
     pub worked_seconds: Option<i64>,
     pub adjustment_reason: Option<String>,
+    pub final_customer_id: Option<Uuid>,
+    pub final_job_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -374,15 +385,24 @@ pub async fn list_rates(
 pub async fn list_jobs(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthedUser>,
-) -> Result<Json<Vec<StaffingJob>>, StatusCode> {
+    Query(query): Query<CustomerPageQuery>,
+) -> Result<Json<StaffingListPageResponse<StaffingJob>>, StatusCode> {
     require_permission(&user, "business.staffing_jobs.read")?;
-    context
+    let limit = resolve_limit(&context.list_pagination, query.limit)?;
+    let cursor: Option<NameCodeCursor> = decode_cursor(query.cursor.as_deref())?;
+    let page = context
         .core
         .staffing
-        .list_jobs(user.tenant_id)
+        .list_jobs(user.tenant_id, i64::from(limit), cursor)
         .await
-        .map(Json)
-        .map_err(|error| staffing_status("list staffing jobs", &user, error))
+        .map_err(|error| staffing_status("list staffing jobs", &user, error))?;
+    let next_cursor = encode_cursor(page.next_cursor.as_ref())?;
+    Ok(Json(StaffingListPageResponse {
+        has_more: next_cursor.is_some(),
+        items: page.items,
+        next_cursor,
+        limit,
+    }))
 }
 
 pub async fn list_staff(
@@ -426,15 +446,24 @@ pub async fn set_prices(
 pub async fn list_eligibilities(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthedUser>,
-) -> Result<Json<Vec<StaffingEligibility>>, StatusCode> {
+    Query(query): Query<CustomerPageQuery>,
+) -> Result<Json<StaffingListPageResponse<StaffingEligibility>>, StatusCode> {
     require_permission(&user, "business.staffing_eligibility.read")?;
-    context
+    let limit = resolve_limit(&context.list_pagination, query.limit)?;
+    let cursor: Option<StaffingEligibilityCursor> = decode_cursor(query.cursor.as_deref())?;
+    let page = context
         .core
         .staffing
-        .list_eligibilities(user.tenant_id)
+        .list_eligibilities(user.tenant_id, i64::from(limit), cursor)
         .await
-        .map(Json)
-        .map_err(|error: StaffingError| staffing_status("list staffing eligibilities", &user, error))
+        .map_err(|error: StaffingError| staffing_status("list staffing eligibilities", &user, error))?;
+    let next_cursor = encode_cursor(page.next_cursor.as_ref())?;
+    Ok(Json(StaffingListPageResponse {
+        has_more: next_cursor.is_some(),
+        items: page.items,
+        next_cursor,
+        limit,
+    }))
 }
 
 pub async fn create_eligibility(
@@ -455,15 +484,24 @@ pub async fn create_eligibility(
 pub async fn list_shifts(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthedUser>,
-) -> Result<Json<Vec<StaffingShift>>, StatusCode> {
+    Query(query): Query<CustomerPageQuery>,
+) -> Result<Json<StaffingListPageResponse<StaffingShift>>, StatusCode> {
     require_permission(&user, "business.shifts.read")?;
-    context
+    let limit = resolve_limit(&context.list_pagination, query.limit)?;
+    let cursor: Option<StaffingShiftCursor> = decode_cursor(query.cursor.as_deref())?;
+    let page = context
         .core
         .staffing
-        .list_shifts(user.tenant_id)
+        .list_shifts(user.tenant_id, i64::from(limit), cursor)
         .await
-        .map(Json)
-        .map_err(|error| staffing_status("list shifts", &user, error))
+        .map_err(|error| staffing_status("list shifts", &user, error))?;
+    let next_cursor = encode_cursor(page.next_cursor.as_ref())?;
+    Ok(Json(StaffingListPageResponse {
+        has_more: next_cursor.is_some(),
+        items: page.items,
+        next_cursor,
+        limit,
+    }))
 }
 
 pub async fn create_shift(
@@ -485,30 +523,54 @@ pub async fn list_shift_assignments(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthedUser>,
     Path(shift_id): Path<Uuid>,
-) -> Result<Json<Vec<ShiftAssignment>>, StatusCode> {
+    Query(query): Query<CustomerPageQuery>,
+) -> Result<Json<StaffingListPageResponse<ShiftAssignment>>, StatusCode> {
     require_permission(&user, "business.shifts.read")?;
-    context
+    let limit = resolve_limit(&context.list_pagination, query.limit)?;
+    let cursor: Option<ShiftAssignmentCursor> = decode_cursor(query.cursor.as_deref())?;
+    let page = context
         .core
         .staffing
-        .list_shift_assignments(user.tenant_id, shift_id)
+        .list_shift_assignments(user.tenant_id, shift_id, i64::from(limit), cursor)
         .await
-        .map(Json)
-        .map_err(|error| staffing_status("list shift assignments", &user, error))
+        .map_err(|error| staffing_status("list shift assignments", &user, error))?;
+    let next_cursor = encode_cursor(page.next_cursor.as_ref())?;
+    Ok(Json(StaffingListPageResponse {
+        has_more: next_cursor.is_some(),
+        items: page.items,
+        next_cursor,
+        limit,
+    }))
 }
 
 pub async fn list_shift_candidates(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthedUser>,
     Path(shift_id): Path<Uuid>,
-) -> Result<Json<Vec<StaffingCandidate>>, StatusCode> {
+    Query(query): Query<CustomerPageQuery>,
+) -> Result<Json<StaffingListPageResponse<StaffingCandidate>>, StatusCode> {
     require_permission(&user, "business.shifts.read")?;
-    context
+    let limit = resolve_limit(&context.list_pagination, query.limit)?;
+    let cursor: Option<StaffingCandidateCursor> = decode_cursor(query.cursor.as_deref())?;
+    let page = context
         .core
         .staffing
-        .list_shift_candidates(user.tenant_id, shift_id)
+        .list_shift_candidates(
+            user.tenant_id,
+            shift_id,
+            normalize_search(query.search),
+            i64::from(limit),
+            cursor,
+        )
         .await
-        .map(Json)
-        .map_err(|error| staffing_status("list shift candidates", &user, error))
+        .map_err(|error| staffing_status("list shift candidates", &user, error))?;
+    let next_cursor = encode_cursor(page.next_cursor.as_ref())?;
+    Ok(Json(StaffingListPageResponse {
+        has_more: next_cursor.is_some(),
+        items: page.items,
+        next_cursor,
+        limit,
+    }))
 }
 
 pub async fn create_shift_assignment(
@@ -681,6 +743,8 @@ async fn reconcile(
             assignment_id,
             payload.worked_seconds,
             normalize_optional(payload.adjustment_reason),
+            payload.final_customer_id,
+            payload.final_job_id,
             user.account_id,
         )
         .await

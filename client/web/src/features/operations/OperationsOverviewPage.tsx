@@ -1,4 +1,4 @@
-import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, type UseQueryResult } from "@tanstack/react-query";
 import {
   BriefcaseBusiness,
   Building2,
@@ -28,16 +28,16 @@ interface ScopedStaffingShift extends StaffingShift {
   branch_id: string;
 }
 
-async function loadScopedShifts(branchIds: string[]): Promise<ScopedStaffingShift[]> {
-  const shiftGroups: ScopedStaffingShift[][] = await Promise.all(
-    branchIds.map(async (branchId: string): Promise<ScopedStaffingShift[]> => {
-      const shifts: StaffingShift[] = await listStaffingShiftsForBranch(branchId);
-      return shifts.map(
-        (shift: StaffingShift): ScopedStaffingShift => ({ ...shift, branch_id: branchId }),
-      );
-    }),
-  );
-  return shiftGroups.flat();
+import {
+  createReconciliationScopeCursor,
+  loadReconcileScopePage,
+  type ReconcileScopePage,
+  type ReconciliationScopeCursor,
+} from "./reconciliationCursor";
+
+function compareScopedShifts(left: ScopedStaffingShift, right: ScopedStaffingShift): number {
+  const timeOrder: number = right.starts_at.localeCompare(left.starts_at);
+  return timeOrder !== 0 ? timeOrder : right.id.localeCompare(left.id);
 }
 
 type MetricTone = "blue" | "emerald" | "amber" | "violet";
@@ -133,9 +133,23 @@ export function OperationsOverviewPage(): React.JSX.Element {
   const canReadShifts: boolean = permissions.includes("business.shifts.read");
   const canReadUrgentWork: boolean = permissions.includes("business.urgent_work.read");
 
-  const shiftsQuery: UseQueryResult<ScopedStaffingShift[], Error> = useQuery({
+  const shiftsQuery = useInfiniteQuery({
     queryKey: [...operationsQueryKeys.shifts, "scope", scope.scopeKey],
-    queryFn: (): Promise<ScopedStaffingShift[]> => loadScopedShifts(scope.branchIds),
+    initialPageParam: createReconciliationScopeCursor<ScopedStaffingShift>(scope.branchIds),
+    queryFn: ({ pageParam }: { pageParam: ReconciliationScopeCursor<ScopedStaffingShift> }) =>
+      loadReconcileScopePage({
+        cursor: pageParam,
+        fetchBranchPage: async (branchId: string, cursor: string | null) => {
+          const page = await listStaffingShiftsForBranch(branchId, cursor);
+          return {
+            ...page,
+            items: page.items.map((shift): ScopedStaffingShift => ({ ...shift, branch_id: branchId })),
+          };
+        },
+        compare: compareScopedShifts,
+        itemKey: (shift: ScopedStaffingShift): string => shift.id,
+      }),
+    getNextPageParam: (page: ReconcileScopePage<ScopedStaffingShift>) => page.nextCursor ?? undefined,
     enabled: canReadShifts && scope.branchIds.length > 0,
   });
   const ownUrgentWorkQuery: UseQueryResult<UrgentOwnWorkPageRsp, Error> = useQuery({
@@ -154,7 +168,7 @@ export function OperationsOverviewPage(): React.JSX.Element {
 
   const shifts: ScopedStaffingShift[] = useMemo<ScopedStaffingShift[]>(
     (): ScopedStaffingShift[] =>
-      [...(shiftsQuery.data ?? [])]
+      [...(shiftsQuery.data?.pages.flatMap((page: ReconcileScopePage<ScopedStaffingShift>) => page.items) ?? [])]
         .filter(
           (shift: ScopedStaffingShift): boolean =>
             scope.selectedCustomerId === null || shift.customer_id === scope.selectedCustomerId,
@@ -163,7 +177,7 @@ export function OperationsOverviewPage(): React.JSX.Element {
           (left: ScopedStaffingShift, right: ScopedStaffingShift): number =>
             new Date(left.starts_at).getTime() - new Date(right.starts_at).getTime(),
         ),
-    [scope.selectedCustomerId, shiftsQuery.data],
+    [scope.selectedCustomerId, shiftsQuery.data?.pages],
   );
   const upcomingShifts: ScopedStaffingShift[] = useMemo<ScopedStaffingShift[]>(
     (): ScopedStaffingShift[] =>
@@ -266,6 +280,14 @@ export function OperationsOverviewPage(): React.JSX.Element {
         <MetricCard icon={Clock3} label="Đang diễn ra" value={inProgressCount} note="Ca đang hoạt động" tone="emerald" />
         <MetricCard icon={Building2} label="Khách hàng" value={scope.selectedCustomerId === null ? scope.customers.length : 1} note="Trong phạm vi đang lọc" tone="violet" />
       </div>
+
+      {shiftsQuery.hasNextPage ? (
+        <div className="flex justify-center">
+          <button className="action-secondary" disabled={shiftsQuery.isFetchingNextPage} onClick={() => void shiftsQuery.fetchNextPage()} type="button">
+            {shiftsQuery.isFetchingNextPage ? "Đang tải..." : "Tải thêm dữ liệu ca"}
+          </button>
+        </div>
+      ) : null}
 
       <section className="panel overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4 sm:px-6">

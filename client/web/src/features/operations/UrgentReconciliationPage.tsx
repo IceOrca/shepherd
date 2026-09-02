@@ -1,11 +1,9 @@
 import {
   useInfiniteQuery,
   useMutation,
-  useQuery,
   useQueryClient,
   type QueryClient,
   type UseMutationResult,
-  type UseQueryResult,
 } from "@tanstack/react-query";
 import { CheckCircle2, CircleAlert, GitCompareArrows, MapPin, RefreshCw, Save } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
@@ -264,17 +262,24 @@ export function UrgentReconciliationPage(): React.JSX.Element {
   }, [pageItems, selectedId]);
 
   const selectedBranchId: string | null = selected?.work.branch_id ?? null;
-  const customersQuery: UseQueryResult<UrgentWorkCustomer[], Error> = useQuery({
+  const customersQuery = useInfiniteQuery({
     queryKey: [...operationsQueryKeys.urgentCustomers, "branch", selectedBranchId],
-    queryFn: (): Promise<UrgentWorkCustomer[]> =>
-      listUrgentCustomersForBranch(selectedBranchId ?? ""),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) =>
+      listUrgentCustomersForBranch(selectedBranchId ?? "", pageParam),
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
     enabled: canRead && selectedBranchId !== null,
   });
-  const jobsQuery: UseQueryResult<StaffingJob[], Error> = useQuery({
+  const customers: UrgentWorkCustomer[] =
+    customersQuery.data?.pages.flatMap((page) => page.items) ?? [];
+  const jobsQuery = useInfiniteQuery({
     queryKey: [...operationsQueryKeys.jobs, "branch", selectedBranchId],
-    queryFn: (): Promise<StaffingJob[]> => listJobsForBranch(selectedBranchId ?? ""),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => listJobsForBranch(selectedBranchId ?? "", pageParam),
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
     enabled: canRead && selectedBranchId !== null,
   });
+  const jobs: StaffingJob[] = jobsQuery.data?.pages.flatMap((page) => page.items) ?? [];
 
   useEffect((): void => {
     if (!selected) {
@@ -286,7 +291,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
   }, [selected]);
 
   useEffect((): void => {
-    const activeJobs: StaffingJob[] = (jobsQuery.data ?? []).filter(
+    const activeJobs: StaffingJob[] = jobs.filter(
       (job: StaffingJob): boolean => job.status === "active",
     );
     if (!selected || activeJobs.length !== 1) {
@@ -295,7 +300,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
     setFinalDraft((current: FinalDraft): FinalDraft =>
       current.jobId ? current : { ...current, jobId: activeJobs[0].id },
     );
-  }, [jobsQuery.data, selected]);
+  }, [jobs, selected]);
 
   const refresh = (): Promise<void> =>
     queryClient.invalidateQueries({ queryKey: operationsQueryKeys.urgentReconciliations });
@@ -586,7 +591,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                   value={evidence.customerId}
                 >
                   <option value="">Chọn khách hàng theo bill</option>
-                  {(customersQuery.data ?? []).map((customer: UrgentWorkCustomer): React.JSX.Element => (
+                  {customers.map((customer: UrgentWorkCustomer): React.JSX.Element => (
                     <option key={customer.customer_id} value={customer.customer_id}>
                       {customer.customer_name}
                     </option>
@@ -706,12 +711,13 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                     value={finalDraft.customerId}
                   >
                     <option value="">Chọn khách hàng cuối</option>
-                    {(customersQuery.data ?? []).map((customer: UrgentWorkCustomer): React.JSX.Element => (
+                    {customers.map((customer: UrgentWorkCustomer): React.JSX.Element => (
                       <option key={customer.customer_id} value={customer.customer_id}>
                         {customer.customer_name}
                       </option>
                     ))}
                   </select>
+                  {customersQuery.hasNextPage ? <button className="mt-2 text-xs font-semibold text-blue-700" disabled={customersQuery.isFetchingNextPage} onClick={() => void customersQuery.fetchNextPage()} type="button">{customersQuery.isFetchingNextPage ? "Đang tải..." : "Tải thêm khách hàng"}</button> : null}
                 </label>
                 <label className="text-sm font-semibold text-slate-700">
                   Công việc / vị trí
@@ -724,10 +730,11 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                     value={finalDraft.jobId}
                   >
                     <option value="">Chọn công việc</option>
-                    {(jobsQuery.data ?? []).filter((job: StaffingJob): boolean => job.status === "active").map((job: StaffingJob): React.JSX.Element => (
+                    {jobs.filter((job: StaffingJob): boolean => job.status === "active").map((job: StaffingJob): React.JSX.Element => (
                       <option key={job.id} value={job.id}>{job.name}</option>
                     ))}
                   </select>
+                  {jobsQuery.hasNextPage ? <button className="mt-2 text-xs font-semibold text-blue-700" disabled={jobsQuery.isFetchingNextPage} onClick={() => void jobsQuery.fetchNextPage()} type="button">{jobsQuery.isFetchingNextPage ? "Đang tải..." : "Tải thêm công việc"}</button> : null}
                 </label>
                 <label className="text-sm font-semibold text-slate-700">
                   Thời gian cuối (giờ)

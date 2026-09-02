@@ -150,6 +150,21 @@ pub struct StaffingJob {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct NameCodeCursor {
+    pub normalized_name: String,
+    pub code: String,
+    pub id: Uuid,
+}
+
+#[derive(Clone, Debug)]
+pub struct KeysetPage<T, C> {
+    pub items: Vec<T>,
+    pub next_cursor: Option<C>,
+}
+
+pub type StaffingJobPage = KeysetPage<StaffingJob, NameCodeCursor>;
+
 #[derive(Clone, Debug, Serialize, TS)]
 pub struct StaffingRate {
     pub id: Uuid,
@@ -219,6 +234,14 @@ pub struct StaffingShift {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct StaffingShiftCursor {
+    pub starts_at: DateTime<Utc>,
+    pub shift_id: Uuid,
+}
+
+pub type StaffingShiftPage = KeysetPage<StaffingShift, StaffingShiftCursor>;
+
 #[derive(Clone, Debug, Serialize, TS)]
 pub struct ShiftAssignment {
     pub id: Uuid,
@@ -243,6 +266,14 @@ pub struct ShiftAssignment {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ShiftAssignmentCursor {
+    pub created_at: DateTime<Utc>,
+    pub assignment_id: Uuid,
+}
+
+pub type ShiftAssignmentPage = KeysetPage<ShiftAssignment, ShiftAssignmentCursor>;
+
 #[derive(Clone, Debug, Serialize, TS)]
 pub struct StaffingCandidate {
     pub employee_id: Uuid,
@@ -254,6 +285,16 @@ pub struct StaffingCandidate {
     pub conflict_shift_id: Option<Uuid>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct StaffingCandidateCursor {
+    pub available: bool,
+    pub normalized_name: String,
+    pub employee_code: String,
+    pub employee_id: Uuid,
+}
+
+pub type StaffingCandidatePage = KeysetPage<StaffingCandidate, StaffingCandidateCursor>;
+
 #[derive(Clone, Debug, Serialize, TS)]
 pub struct StaffingEligibility {
     pub id: Uuid,
@@ -264,6 +305,16 @@ pub struct StaffingEligibility {
     pub notes: Option<String>,
     pub created_at: DateTime<Utc>,
 }
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct StaffingEligibilityCursor {
+    pub effective_from: NaiveDate,
+    pub employee_id: Uuid,
+    pub job_id: Uuid,
+    pub eligibility_id: Uuid,
+}
+
+pub type StaffingEligibilityPage = KeysetPage<StaffingEligibility, StaffingEligibilityCursor>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -300,6 +351,7 @@ pub struct StaffingReconcile {
     pub assignment_id: Uuid,
     pub shift_id: Uuid,
     pub customer_id: Uuid,
+    pub job_id: Uuid,
     pub employee_id: Uuid,
     pub employee_code: String,
     pub employee_name: String,
@@ -313,6 +365,8 @@ pub struct StaffingReconcile {
     pub staff_worked_seconds: i64,
     pub customer_record: Option<CustomerWorkRecord>,
     pub final_worked_seconds: Option<i64>,
+    pub final_customer_id: Option<Uuid>,
+    pub final_job_id: Option<Uuid>,
     pub adjustment_reason: Option<String>,
     pub reconciliation_status: ReconcileStatus,
     pub result_revision_id: Option<Uuid>,
@@ -428,7 +482,12 @@ pub trait StaffingRepo {
         limit: i64,
         cursor: Option<&CustomerCursor>,
     ) -> Result<CustomerPage, StaffingError>;
-    async fn list_jobs(&self, tenant_id: Uuid) -> Result<Vec<StaffingJob>, StaffingError>;
+    async fn list_jobs(
+        &self,
+        tenant_id: Uuid,
+        limit: i64,
+        cursor: Option<&NameCodeCursor>,
+    ) -> Result<StaffingJobPage, StaffingError>;
     async fn create_customer(
         &self,
         tenant_id: Uuid,
@@ -463,7 +522,12 @@ pub trait StaffingRepo {
         input: &StaffingPriceSetInput,
         audit_account_id: Uuid,
     ) -> Result<StaffingPriceSet, StaffingError>;
-    async fn list_eligibilities(&self, tenant_id: Uuid) -> Result<Vec<StaffingEligibility>, StaffingError>;
+    async fn list_eligibilities(
+        &self,
+        tenant_id: Uuid,
+        limit: i64,
+        cursor: Option<&StaffingEligibilityCursor>,
+    ) -> Result<StaffingEligibilityPage, StaffingError>;
     async fn create_eligibility(
         &self,
         tenant_id: Uuid,
@@ -471,7 +535,12 @@ pub trait StaffingRepo {
         input: &StaffingEligibilityInput,
         audit_account_id: Uuid,
     ) -> Result<StaffingEligibility, StaffingError>;
-    async fn list_shifts(&self, tenant_id: Uuid) -> Result<Vec<StaffingShift>, StaffingError>;
+    async fn list_shifts(
+        &self,
+        tenant_id: Uuid,
+        limit: i64,
+        cursor: Option<&StaffingShiftCursor>,
+    ) -> Result<StaffingShiftPage, StaffingError>;
     async fn create_shift(
         &self,
         tenant_id: Uuid,
@@ -483,12 +552,17 @@ pub trait StaffingRepo {
         &self,
         tenant_id: Uuid,
         shift_id: Uuid,
-    ) -> Result<Vec<ShiftAssignment>, StaffingError>;
+        limit: i64,
+        cursor: Option<&ShiftAssignmentCursor>,
+    ) -> Result<ShiftAssignmentPage, StaffingError>;
     async fn list_shift_candidates(
         &self,
         tenant_id: Uuid,
         shift_id: Uuid,
-    ) -> Result<Vec<StaffingCandidate>, StaffingError>;
+        search: Option<&str>,
+        limit: i64,
+        cursor: Option<&StaffingCandidateCursor>,
+    ) -> Result<StaffingCandidatePage, StaffingError>;
     async fn create_shift_assignment(
         &self,
         tenant_id: Uuid,
@@ -497,12 +571,15 @@ pub trait StaffingRepo {
         input: &ShiftAssignmentInput,
         audit_account_id: Uuid,
     ) -> Result<ShiftAssignment, StaffingError>;
+    #[allow(clippy::too_many_arguments)]
     async fn approve_shift_assignment(
         &self,
         tenant_id: Uuid,
         assignment_id: Uuid,
         worked_seconds: Option<i64>,
         adjustment_reason: Option<String>,
+        final_customer_id: Option<Uuid>,
+        final_job_id: Option<Uuid>,
         audit_account_id: Uuid,
     ) -> Result<ShiftAssignment, StaffingError>;
     async fn accept_staff_work_record(
@@ -569,9 +646,17 @@ impl StaffingService {
         result
     }
 
-    pub async fn list_jobs(&self, tenant_id: Uuid) -> Result<Vec<StaffingJob>, StaffingError> {
+    pub async fn list_jobs(
+        &self,
+        tenant_id: Uuid,
+        limit: i64,
+        cursor: Option<NameCodeCursor>,
+    ) -> Result<StaffingJobPage, StaffingError> {
+        if limit <= 0 {
+            return Err(StaffingError::InvalidInput("staffing job page size must be positive"));
+        }
         debug!(operation = "list_staffing_jobs", tenant_id = %tenant_id, "Staffing service operation accepted");
-        let result: Result<Vec<StaffingJob>, StaffingError> = self.repo.list_jobs(tenant_id).await;
+        let result = self.repo.list_jobs(tenant_id, limit, cursor.as_ref()).await;
         log_staffing_operation("list_staffing_jobs", tenant_id, None, None, &result);
         result
     }
@@ -707,13 +792,23 @@ impl StaffingService {
         result
     }
 
-    pub async fn list_eligibilities(&self, tenant_id: Uuid) -> Result<Vec<StaffingEligibility>, StaffingError> {
+    pub async fn list_eligibilities(
+        &self,
+        tenant_id: Uuid,
+        limit: i64,
+        cursor: Option<StaffingEligibilityCursor>,
+    ) -> Result<StaffingEligibilityPage, StaffingError> {
+        if limit <= 0 {
+            return Err(StaffingError::InvalidInput(
+                "staffing eligibility page size must be positive",
+            ));
+        }
         debug!(
             operation = "list_staffing_eligibilities",
             tenant_id = %tenant_id,
             "Staffing service operation accepted"
         );
-        let result: Result<Vec<StaffingEligibility>, StaffingError> = self.repo.list_eligibilities(tenant_id).await;
+        let result = self.repo.list_eligibilities(tenant_id, limit, cursor.as_ref()).await;
         log_staffing_operation("list_staffing_eligibilities", tenant_id, None, None, &result);
         result
     }
@@ -771,9 +866,17 @@ impl StaffingService {
         result
     }
 
-    pub async fn list_shifts(&self, tenant_id: Uuid) -> Result<Vec<StaffingShift>, StaffingError> {
+    pub async fn list_shifts(
+        &self,
+        tenant_id: Uuid,
+        limit: i64,
+        cursor: Option<StaffingShiftCursor>,
+    ) -> Result<StaffingShiftPage, StaffingError> {
+        if limit <= 0 {
+            return Err(StaffingError::InvalidInput("staffing shift page size must be positive"));
+        }
         debug!(operation = "list_staffing_shifts", tenant_id = %tenant_id, "Staffing service operation accepted");
-        let result: Result<Vec<StaffingShift>, StaffingError> = self.repo.list_shifts(tenant_id).await;
+        let result = self.repo.list_shifts(tenant_id, limit, cursor.as_ref()).await;
         log_staffing_operation("list_staffing_shifts", tenant_id, None, None, &result);
         result
     }
@@ -816,15 +919,22 @@ impl StaffingService {
         &self,
         tenant_id: Uuid,
         shift_id: Uuid,
-    ) -> Result<Vec<ShiftAssignment>, StaffingError> {
+        limit: i64,
+        cursor: Option<ShiftAssignmentCursor>,
+    ) -> Result<ShiftAssignmentPage, StaffingError> {
+        if limit <= 0 {
+            return Err(StaffingError::InvalidInput("assignment page size must be positive"));
+        }
         debug!(
             operation = "list_shift_assignments",
             tenant_id = %tenant_id,
             shift_id = %shift_id,
             "Staffing service operation accepted"
         );
-        let result: Result<Vec<ShiftAssignment>, StaffingError> =
-            self.repo.list_shift_assignments(tenant_id, shift_id).await;
+        let result = self
+            .repo
+            .list_shift_assignments(tenant_id, shift_id, limit, cursor.as_ref())
+            .await;
         log_staffing_operation("list_shift_assignments", tenant_id, None, Some(shift_id), &result);
         result
     }
@@ -833,15 +943,23 @@ impl StaffingService {
         &self,
         tenant_id: Uuid,
         shift_id: Uuid,
-    ) -> Result<Vec<StaffingCandidate>, StaffingError> {
+        search: Option<String>,
+        limit: i64,
+        cursor: Option<StaffingCandidateCursor>,
+    ) -> Result<StaffingCandidatePage, StaffingError> {
+        if limit <= 0 {
+            return Err(StaffingError::InvalidInput("candidate page size must be positive"));
+        }
         debug!(
             operation = "list_shift_candidates",
             tenant_id = %tenant_id,
             shift_id = %shift_id,
             "Staffing service operation accepted"
         );
-        let result: Result<Vec<StaffingCandidate>, StaffingError> =
-            self.repo.list_shift_candidates(tenant_id, shift_id).await;
+        let result = self
+            .repo
+            .list_shift_candidates(tenant_id, shift_id, search.as_deref(), limit, cursor.as_ref())
+            .await;
         log_staffing_operation("list_shift_candidates", tenant_id, None, Some(shift_id), &result);
         result
     }
@@ -887,12 +1005,15 @@ impl StaffingService {
         result
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn approve_shift_assignment(
         &self,
         tenant_id: Uuid,
         assignment_id: Uuid,
         worked_seconds: Option<i64>,
         adjustment_reason: Option<String>,
+        final_customer_id: Option<Uuid>,
+        final_job_id: Option<Uuid>,
         audit_account_id: Uuid,
     ) -> Result<ShiftAssignment, StaffingError> {
         trace!(
@@ -905,6 +1026,14 @@ impl StaffingService {
             "Validating staffing reconciliation approval"
         );
         validate_approval_input(worked_seconds, adjustment_reason.as_deref())?;
+        if final_customer_id.is_some_and(|value| value.is_nil()) || final_job_id.is_some_and(|value| value.is_nil()) {
+            return Err(StaffingError::InvalidInput("final customer or job is invalid"));
+        }
+        if (final_customer_id.is_some() || final_job_id.is_some()) && adjustment_reason.is_none() {
+            return Err(StaffingError::InvalidInput(
+                "a final customer or job override requires an adjustment reason",
+            ));
+        }
         let result: Result<ShiftAssignment, StaffingError> = self
             .repo
             .approve_shift_assignment(
@@ -912,6 +1041,8 @@ impl StaffingService {
                 assignment_id,
                 worked_seconds,
                 adjustment_reason,
+                final_customer_id,
+                final_job_id,
                 audit_account_id,
             )
             .await;
