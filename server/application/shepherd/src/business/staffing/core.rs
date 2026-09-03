@@ -548,6 +548,13 @@ pub trait StaffingRepo {
         input: &StaffingShiftInput,
         audit_account_id: Uuid,
     ) -> Result<StaffingShift, StaffingError>;
+    async fn cancel_shift(
+        &self,
+        tenant_id: Uuid,
+        shift_id: Uuid,
+        reason: &str,
+        audit_account_id: Uuid,
+    ) -> Result<(), StaffingError>;
     async fn list_shift_assignments(
         &self,
         tenant_id: Uuid,
@@ -571,6 +578,13 @@ pub trait StaffingRepo {
         input: &ShiftAssignmentInput,
         audit_account_id: Uuid,
     ) -> Result<ShiftAssignment, StaffingError>;
+    async fn cancel_shift_assignment(
+        &self,
+        tenant_id: Uuid,
+        assignment_id: Uuid,
+        reason: &str,
+        audit_account_id: Uuid,
+    ) -> Result<(), StaffingError>;
     #[allow(clippy::too_many_arguments)]
     async fn approve_shift_assignment(
         &self,
@@ -915,6 +929,28 @@ impl StaffingService {
         result
     }
 
+    pub async fn cancel_shift(
+        &self,
+        tenant_id: Uuid,
+        shift_id: Uuid,
+        reason: String,
+        audit_account_id: Uuid,
+    ) -> Result<(), StaffingError> {
+        let reason: String = normalize_cancellation_reason(reason)?;
+        let result = self
+            .repo
+            .cancel_shift(tenant_id, shift_id, &reason, audit_account_id)
+            .await;
+        log_staffing_operation(
+            "cancel_staffing_shift",
+            tenant_id,
+            Some(audit_account_id),
+            Some(shift_id),
+            &result,
+        );
+        result
+    }
+
     pub async fn list_shift_assignments(
         &self,
         tenant_id: Uuid,
@@ -997,6 +1033,28 @@ impl StaffingService {
             .await;
         log_staffing_operation(
             "create_shift_assignment",
+            tenant_id,
+            Some(audit_account_id),
+            Some(assignment_id),
+            &result,
+        );
+        result
+    }
+
+    pub async fn cancel_shift_assignment(
+        &self,
+        tenant_id: Uuid,
+        assignment_id: Uuid,
+        reason: String,
+        audit_account_id: Uuid,
+    ) -> Result<(), StaffingError> {
+        let reason: String = normalize_cancellation_reason(reason)?;
+        let result = self
+            .repo
+            .cancel_shift_assignment(tenant_id, assignment_id, &reason, audit_account_id)
+            .await;
+        log_staffing_operation(
+            "cancel_staffing_shift_assignment",
             tenant_id,
             Some(audit_account_id),
             Some(assignment_id),
@@ -1201,6 +1259,14 @@ fn validate_customer_location(input: &CustomerInput) -> Result<(), StaffingError
         return Err(StaffingError::InvalidInput("customer address is invalid"));
     }
     Ok(())
+}
+
+fn normalize_cancellation_reason(reason: String) -> Result<String, StaffingError> {
+    let reason: String = reason.trim().to_owned();
+    if !(3..=500).contains(&reason.chars().count()) {
+        return Err(StaffingError::InvalidInput("staffing cancellation reason is invalid"));
+    }
+    Ok(reason)
 }
 
 fn log_staffing_operation<T>(

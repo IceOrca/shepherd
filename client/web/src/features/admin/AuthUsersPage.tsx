@@ -17,6 +17,7 @@ import {
 import { useCallback, useDeferredValue, useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import type {
+  AccountRoleAssignmentContract,
   AuthUserSummary,
   AccessControlRole,
   AccessControlSnapshot,
@@ -45,6 +46,7 @@ const emptyCreateRequest: CreateAuthUserRequest = {
   password: "",
   primary_role: "staff",
   branch_ids: [],
+  additional_role_assignments: [],
 };
 
 type CreateRoleOption = {
@@ -171,12 +173,21 @@ export function AuthUsersPage() {
       }));
   }, [roleCatalogQuery.data]);
   const grantableSystemRoles: RoleCode[] = grantableSystemRoleCodes(profile?.roles ?? []);
-  const grantableRoles: CreateRoleOption[] = roleOptions.filter(
+  const grantablePrimaryRoles: CreateRoleOption[] = roleOptions.filter(
     (role: CreateRoleOption): boolean =>
-      role.isSystem ? grantableSystemRoles.includes(role.code) : canManageRoles,
+      role.isSystem && grantableSystemRoles.includes(role.code),
   );
-  const selectedRole: CreateRoleOption | undefined = roleOptions.find(
+  const grantableCustomRoles: CreateRoleOption[] = roleOptions.filter(
+    (role: CreateRoleOption): boolean => !role.isSystem && canManageRoles,
+  );
+  const selectedPrimaryRole: CreateRoleOption | undefined = roleOptions.find(
     (role: CreateRoleOption): boolean => role.code === createRequest.primary_role,
+  );
+  const selectedAdditionalAssignment: AccountRoleAssignmentContract | undefined =
+    createRequest.additional_role_assignments[0];
+  const selectedAdditionalRole: CreateRoleOption | undefined = roleOptions.find(
+    (role: CreateRoleOption): boolean =>
+      role.code === selectedAdditionalAssignment?.role_code,
   );
   const displayRole = useCallback(
     (roleCode: RoleCode): string =>
@@ -315,8 +326,8 @@ export function AuthUsersPage() {
               className="action-primary"
               onClick={() => {
                 const initialRole: CreateRoleOption | undefined =
-                  grantableRoles.find((role: CreateRoleOption): boolean => role.code === "staff") ??
-                  grantableRoles[0];
+                  grantablePrimaryRoles.find((role: CreateRoleOption): boolean => role.code === "staff") ??
+                  grantablePrimaryRoles[0];
                 setFeedback(null);
                 setCreateRequest({
                   ...emptyCreateRequest,
@@ -669,11 +680,11 @@ export function AuthUsersPage() {
                 <div className="grid gap-6 sm:grid-cols-2">
                   <label className="block">
                     <span className="block text-sm font-semibold text-slate-700">
-                      Vai trò chính
+                      Vai trò tổ chức chính
                     </span>
                     <select
                       className="mt-3 min-h-12 w-full rounded-xl border-slate-300 px-4"
-                      disabled={grantableRoles.length === 0}
+                      disabled={grantablePrimaryRoles.length === 0}
                       onChange={(event): void => {
                         const primaryRole: RoleCode = event.target.value;
                         setCreateRequest((current: CreateAuthUserRequest): CreateAuthUserRequest => ({
@@ -695,7 +706,7 @@ export function AuthUsersPage() {
                       }}
                       value={createRequest.primary_role}
                     >
-                      {grantableRoles.map((role: CreateRoleOption) => (
+                      {grantablePrimaryRoles.map((role: CreateRoleOption) => (
                         <option key={role.code} value={role.code}>
                           {role.label}
                         </option>
@@ -706,6 +717,40 @@ export function AuthUsersPage() {
                         {roleCatalogQuery.isFetchingNextPage ? "Đang tải..." : "Tải thêm vai trò"}
                       </button>
                     ) : null}
+                  </label>
+
+                  <label className="block">
+                    <span className="block text-sm font-semibold text-slate-700">
+                      Vai trò nghiệp vụ bổ sung
+                    </span>
+                    <select
+                      className="mt-3 min-h-12 w-full rounded-xl border-slate-300 px-4"
+                      onChange={(event): void => {
+                        const role: CreateRoleOption | undefined = grantableCustomRoles.find(
+                          (option: CreateRoleOption): boolean => option.code === event.target.value,
+                        );
+                        setCreateRequest((current: CreateAuthUserRequest): CreateAuthUserRequest => ({
+                          ...current,
+                          additional_role_assignments: role
+                            ? [{
+                                role_code: role.code,
+                                branch_id:
+                                  role.scope === "tenant"
+                                    ? null
+                                    : current.branch_ids[0] ?? profile?.active_branch_id ?? branches[0]?.id ?? null,
+                              }]
+                            : [],
+                        }));
+                      }}
+                      value={selectedAdditionalAssignment?.role_code ?? ""}
+                    >
+                      <option value="">Không gán</option>
+                      {grantableCustomRoles.map((role: CreateRoleOption) => (
+                        <option key={role.code} value={role.code}>
+                          {role.label}
+                        </option>
+                      ))}
+                    </select>
                   </label>
 
               {createRequest.primary_role === "tenant_owner" ? (
@@ -741,7 +786,7 @@ export function AuthUsersPage() {
               ) : (
                 <label className="block">
                   <span className="block text-sm font-semibold text-slate-700">
-                    {selectedRole?.scope === "tenant" ? "Chi nhánh hồ sơ nhân sự" : "Chi nhánh"}
+                    {selectedPrimaryRole?.scope === "tenant" ? "Chi nhánh hồ sơ nhân sự" : "Chi nhánh"}
                   </span>
                   <select
                     className="mt-3 min-h-12 w-full rounded-xl border-slate-300 px-4"
@@ -763,13 +808,38 @@ export function AuthUsersPage() {
                   </select>
                 </label>
               )}
+                  {selectedAdditionalRole?.scope === "branch" ? (
+                    <label className="block">
+                      <span className="block text-sm font-semibold text-slate-700">
+                        Chi nhánh áp dụng vai trò bổ sung
+                      </span>
+                      <select
+                        className="mt-3 min-h-12 w-full rounded-xl border-slate-300 px-4"
+                        onChange={(event): void => {
+                          setCreateRequest((current: CreateAuthUserRequest): CreateAuthUserRequest => ({
+                            ...current,
+                            additional_role_assignments: [{
+                              role_code: selectedAdditionalRole.code,
+                              branch_id: event.target.value,
+                            }],
+                          }));
+                        }}
+                        required
+                        value={selectedAdditionalAssignment?.branch_id ?? ""}
+                      >
+                        <option disabled value="">Chọn chi nhánh</option>
+                        {branches.map((branch: BranchSummary) => (
+                          <option key={branch.id} value={branch.id}>
+                            {branch.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
                 </div>
-                {selectedRole && !selectedRole.isSystem ? (
+                {selectedAdditionalRole ? (
                   <p className="mt-4 border-t border-slate-100 pt-4 text-xs leading-5 text-slate-500">
-                    Vai trò tùy chỉnh “{selectedRole.label}” sẽ được gán ngay khi tạo tài khoản.
-                    {selectedRole.scope === "tenant"
-                      ? " Quyền của vai trò áp dụng toàn doanh nghiệp; chi nhánh trên dùng cho hồ sơ nhân sự."
-                      : " Quyền của vai trò áp dụng tại chi nhánh đã chọn."}
+                    Vai trò tùy chỉnh “{selectedAdditionalRole.label}” được gán thêm mà không thay đổi vai trò tổ chức chính.
                   </p>
                 ) : null}
               </div>

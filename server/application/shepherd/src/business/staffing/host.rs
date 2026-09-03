@@ -20,10 +20,9 @@ use super::core::{
     BusinessRecordStatus, Customer, CustomerCursor, CustomerInput, CustomerPage, CustomerWorkRecord,
     CustomerWorkRecordInput, ManualRateOverride, NameCodeCursor, ReconcileCollection, ReconciliationCorrectionInput,
     ReconciliationRevision, ShiftAssignment, ShiftAssignmentCursor, ShiftAssignmentInput, StaffingCandidate,
-    StaffingCandidateCursor, StaffingEligibility, StaffingEligibilityCursor, StaffingEligibilityInput, StaffingError,
-    StaffingJob, StaffingPriceSet, StaffingPriceSetInput, StaffingRate, StaffingRateCursor, StaffingRatePage,
-    StaffingReconcile, StaffingReconcileCursor, StaffingReconcilePage, StaffingShift, StaffingShiftCursor,
-    StaffingShiftInput, StaffingStaff, StaffingStaffCursor, StaffingStaffPage,
+    StaffingCandidateCursor, StaffingError, StaffingJob, StaffingPriceSet, StaffingPriceSetInput, StaffingRate,
+    StaffingRateCursor, StaffingRatePage, StaffingReconcile, StaffingReconcileCursor, StaffingReconcilePage,
+    StaffingShift, StaffingShiftCursor, StaffingShiftInput, StaffingStaff, StaffingStaffCursor, StaffingStaffPage,
 };
 
 #[derive(Debug, Deserialize)]
@@ -147,28 +146,6 @@ impl From<StaffingPriceSetRequest> for StaffingPriceSetInput {
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(optional_fields = nullable)]
-pub struct StaffingEligibilityCreateRequest {
-    pub employee_id: Uuid,
-    pub job_id: Uuid,
-    pub effective_from: NaiveDate,
-    pub effective_to: Option<NaiveDate>,
-    pub notes: Option<String>,
-}
-
-impl From<StaffingEligibilityCreateRequest> for StaffingEligibilityInput {
-    fn from(value: StaffingEligibilityCreateRequest) -> Self {
-        Self {
-            employee_id: value.employee_id,
-            job_id: value.job_id,
-            effective_from: value.effective_from,
-            effective_to: value.effective_to,
-            notes: normalize_optional(value.notes),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(optional_fields = nullable)]
 pub struct StaffingShiftCreateRequest {
     pub customer_id: Uuid,
     pub job_id: Uuid,
@@ -215,6 +192,11 @@ impl From<ManualRateOverrideRequest> for ManualRateOverride {
 pub struct ShiftAssignmentCreateRequest {
     pub employee_id: Uuid,
     pub manual_rate: Option<ManualRateOverrideRequest>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+pub struct StaffingCancellationRequest {
+    pub reason: String,
 }
 
 impl From<ShiftAssignmentCreateRequest> for ShiftAssignmentInput {
@@ -272,16 +254,17 @@ pub fn routes() -> Router<Arc<AppContext>> {
         .route("/staffing/jobs", get(list_jobs))
         .route("/staffing/staff", get(list_staff))
         .route("/staffing/prices", post(set_prices))
-        .route(
-            "/staffing/eligibilities",
-            get(list_eligibilities).post(create_eligibility),
-        )
         .route("/staffing/shifts", get(list_shifts).post(create_shift))
+        .route("/staffing/shifts/{shift_id}/cancel", post(cancel_shift))
         .route(
             "/staffing/shifts/{shift_id}/assignments",
             get(list_shift_assignments).post(create_shift_assignment),
         )
         .route("/staffing/shifts/{shift_id}/candidates", get(list_shift_candidates))
+        .route(
+            "/staffing/assignments/{assignment_id}/cancel",
+            post(cancel_shift_assignment),
+        )
         .route("/staffing/reconciliations", get(list_reconciliations))
         .route(
             "/staffing/assignments/{assignment_id}/customer-record",
@@ -443,44 +426,6 @@ pub async fn set_prices(
     Ok((StatusCode::CREATED, Json(prices)))
 }
 
-pub async fn list_eligibilities(
-    State(context): State<Arc<AppContext>>,
-    Extension(user): Extension<AuthedUser>,
-    Query(query): Query<CustomerPageQuery>,
-) -> Result<Json<StaffingListPageResponse<StaffingEligibility>>, StatusCode> {
-    require_permission(&user, "business.staffing_eligibility.read")?;
-    let limit = resolve_limit(&context.list_pagination, query.limit)?;
-    let cursor: Option<StaffingEligibilityCursor> = decode_cursor(query.cursor.as_deref())?;
-    let page = context
-        .core
-        .staffing
-        .list_eligibilities(user.tenant_id, i64::from(limit), cursor)
-        .await
-        .map_err(|error: StaffingError| staffing_status("list staffing eligibilities", &user, error))?;
-    let next_cursor = encode_cursor(page.next_cursor.as_ref())?;
-    Ok(Json(StaffingListPageResponse {
-        has_more: next_cursor.is_some(),
-        items: page.items,
-        next_cursor,
-        limit,
-    }))
-}
-
-pub async fn create_eligibility(
-    State(context): State<Arc<AppContext>>,
-    Extension(user): Extension<AuthedUser>,
-    Json(payload): Json<StaffingEligibilityCreateRequest>,
-) -> Result<(StatusCode, Json<StaffingEligibility>), StatusCode> {
-    require_permission(&user, "business.staffing_eligibility.manage")?;
-    let eligibility: StaffingEligibility = context
-        .core
-        .staffing
-        .create_eligibility(user.tenant_id, payload.into(), user.account_id)
-        .await
-        .map_err(|error: StaffingError| staffing_status("create staffing eligibility", &user, error))?;
-    Ok((StatusCode::CREATED, Json(eligibility)))
-}
-
 pub async fn list_shifts(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthedUser>,
@@ -587,6 +532,38 @@ pub async fn create_shift_assignment(
         .await
         .map_err(|error| staffing_status("create shift assignment", &user, error))?;
     Ok((StatusCode::CREATED, Json(assignment)))
+}
+
+pub async fn cancel_shift(
+    State(context): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthedUser>,
+    Path(shift_id): Path<Uuid>,
+    Json(payload): Json<StaffingCancellationRequest>,
+) -> Result<StatusCode, StatusCode> {
+    require_permission(&user, "business.shifts.manage")?;
+    context
+        .core
+        .staffing
+        .cancel_shift(user.tenant_id, shift_id, payload.reason, user.account_id)
+        .await
+        .map_err(|error| staffing_status("cancel staffing shift", &user, error))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn cancel_shift_assignment(
+    State(context): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthedUser>,
+    Path(assignment_id): Path<Uuid>,
+    Json(payload): Json<StaffingCancellationRequest>,
+) -> Result<StatusCode, StatusCode> {
+    require_permission(&user, "business.shifts.manage")?;
+    context
+        .core
+        .staffing
+        .cancel_shift_assignment(user.tenant_id, assignment_id, payload.reason, user.account_id)
+        .await
+        .map_err(|error| staffing_status("cancel staffing shift assignment", &user, error))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn list_reconciliations(

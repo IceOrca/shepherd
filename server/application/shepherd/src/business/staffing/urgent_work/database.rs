@@ -522,7 +522,19 @@ impl UrgentWorkRepo for UrgentWorkDb {
         // concurrent deliveries from the same device/account.
         let actor_employee: Option<IdRow> = sqlx::query_as!(
             IdRow,
-            "SELECT id FROM hr_employees WHERE tenant_id = $1 AND account_id = $2 AND status = 'active' FOR UPDATE",
+            r#"
+            SELECT employee.id
+            FROM hr_employees AS employee
+            JOIN accounts AS account
+              ON account.tenant_id = employee.tenant_id
+             AND account.id = employee.account_id
+            WHERE employee.tenant_id = $1
+              AND employee.account_id = $2
+              AND employee.status = 'active'
+              AND account.status = 'active'
+            FOR UPDATE OF employee
+            FOR SHARE OF account
+            "#,
             tenant_id,
             actor_account_id,
         )
@@ -561,22 +573,26 @@ impl UrgentWorkRepo for UrgentWorkDb {
             return rows.into_iter().map(UrgentWorkItem::try_from).collect();
         }
 
-        let customer: ExistsRow = sqlx::query_as!(
-            ExistsRow,
+        let customer_id: Option<Uuid> = sqlx::query_scalar!(
             r#"
-            SELECT EXISTS (
-                SELECT 1 FROM business_customers AS customer
-                WHERE customer.tenant_id = $1 AND customer.id = $2
-                  AND customer.status = 'active'
-            ) AS "exists!"
+            SELECT customer.id
+            FROM business_customers AS customer
+            JOIN branches AS branch
+              ON branch.tenant_id = customer.tenant_id
+             AND branch.id = customer.branch_id
+            WHERE customer.tenant_id = $1
+              AND customer.id = $2
+              AND customer.status = 'active'
+              AND branch.status = 'active'
+            FOR SHARE OF customer, branch
             "#,
             tenant_id,
             input.customer_id,
         )
-        .fetch_one(transaction.connection())
+        .fetch_optional(transaction.connection())
         .await
         .map_err(|error: sqlx::Error| database_failure("validate urgent customer", tenant_id, error))?;
-        if !customer.exists {
+        if customer_id.is_none() {
             return Err(UrgentWorkError::NotFound);
         }
 
@@ -600,6 +616,7 @@ impl UrgentWorkRepo for UrgentWorkDb {
               )
             ORDER BY employee.id
             FOR UPDATE OF employee
+            FOR SHARE OF account
             "#,
             tenant_id,
             input.employee_ids.as_slice(),
@@ -910,6 +927,7 @@ impl UrgentWorkRepo for UrgentWorkDb {
                   'business.urgent_work.start'
               )
             FOR UPDATE OF employee
+            FOR SHARE OF account
             "#,
             tenant_id,
             actor_account_id,
@@ -971,27 +989,69 @@ impl UrgentWorkRepo for UrgentWorkDb {
             return UrgentWorkItem::try_from(row);
         }
 
-        let customer_exists: ExistsRow = sqlx::query_as!(
-            ExistsRow,
+        let overlaps_existing_staff_evidence: bool = sqlx::query_scalar!(
             r#"
             SELECT EXISTS (
                 SELECT 1
-                FROM business_customers AS customer
-                INNER JOIN hr_employees AS employee
-                    ON employee.tenant_id = customer.tenant_id
-                   AND employee.branch_id = customer.branch_id
-                WHERE customer.tenant_id = $1 AND customer.id = $2
-                  AND customer.status = 'active' AND employee.id = $3
+                FROM business_shift_work_sessions AS session
+                JOIN business_shift_assignments AS assignment
+                  ON assignment.tenant_id = session.tenant_id
+                 AND assignment.id = session.assignment_id
+                WHERE session.tenant_id = $1
+                  AND session.employee_id = $2
+                  AND assignment.status <> 'cancelled'
+                  AND tstzrange(session.started_at, session.ended_at, '[)')
+                      && tstzrange($3::TIMESTAMPTZ, $4::TIMESTAMPTZ, '[)')
+                UNION ALL
+                SELECT 1
+                FROM business_urgent_work_sessions AS session
+                JOIN business_urgent_work_reports AS report
+                  ON report.tenant_id = session.tenant_id
+                 AND report.id = session.report_id
+                WHERE session.tenant_id = $1
+                  AND session.employee_id = $2
+                  AND report.status <> 'cancelled'
+                  AND tstzrange(session.started_at, session.ended_at, '[)')
+                      && tstzrange($3::TIMESTAMPTZ, $4::TIMESTAMPTZ, '[)')
             ) AS "exists!"
+            "#,
+            tenant_id,
+            employee_id,
+            input.started_at,
+            input.ended_at,
+        )
+        .fetch_one(transaction.connection())
+        .await
+        .map_err(|error: sqlx::Error| database_failure("validate manual urgent-work interval", tenant_id, error))?;
+        if overlaps_existing_staff_evidence {
+            return Err(UrgentWorkError::Conflict);
+        }
+
+        let customer_id: Option<Uuid> = sqlx::query_scalar!(
+            r#"
+            SELECT customer.id
+            FROM business_customers AS customer
+            JOIN branches AS branch
+              ON branch.tenant_id = customer.tenant_id
+             AND branch.id = customer.branch_id
+            JOIN hr_employees AS employee
+              ON employee.tenant_id = customer.tenant_id
+             AND employee.branch_id = customer.branch_id
+            WHERE customer.tenant_id = $1
+              AND customer.id = $2
+              AND customer.status = 'active'
+              AND branch.status = 'active'
+              AND employee.id = $3
+            FOR SHARE OF customer, branch
             "#,
             tenant_id,
             input.customer_id,
             employee_id,
         )
-        .fetch_one(transaction.connection())
+        .fetch_optional(transaction.connection())
         .await
         .map_err(|error: sqlx::Error| database_failure("validate manual urgent-work customer", tenant_id, error))?;
-        if !customer_exists.exists {
+        if customer_id.is_none() {
             return Err(UrgentWorkError::NotFound);
         }
 
@@ -1063,6 +1123,73 @@ impl UrgentWorkRepo for UrgentWorkDb {
             .map_err(|error: sqlx::Error| tenant_failure("commit manual urgent work", tenant_id, error))?;
         info!(tenant_id = %tenant_id, actor_account_id = %actor_account_id, report_id = %report_id, "Manual urgent-work declaration committed");
         UrgentWorkItem::try_from(row)
+    }
+
+    async fn cancel(
+        &self,
+        tenant_id: Uuid,
+        actor_account_id: Uuid,
+        report_id: Uuid,
+        reason: &str,
+    ) -> Result<(), UrgentWorkError> {
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        let context = sqlx::query!(
+            r#"
+            SELECT report.status,
+                   session.ended_at,
+                   EXISTS (
+                       SELECT 1
+                       FROM business_shift_assignments AS assignment
+                       WHERE assignment.tenant_id = report.tenant_id
+                         AND assignment.urgent_work_report_id = report.id
+                   ) AS "has_assignment!"
+            FROM business_urgent_work_reports AS report
+            JOIN business_urgent_work_sessions AS session
+              ON session.tenant_id = report.tenant_id
+             AND session.report_id = report.id
+            WHERE report.tenant_id = $1
+              AND report.id = $2
+            FOR UPDATE OF report, session
+            "#,
+            tenant_id,
+            report_id,
+        )
+        .fetch_optional(transaction.connection())
+        .await
+        .map_err(|error| database_failure("lock urgent work for cancellation", tenant_id, error))?
+        .ok_or(UrgentWorkError::NotFound)?;
+        if context.status != "completed" || context.ended_at.is_none() || context.has_assignment {
+            return Err(UrgentWorkError::Conflict);
+        }
+
+        let updated: PgQueryResult = sqlx::query!(
+            r#"
+            UPDATE business_urgent_work_reports
+            SET status = 'cancelled',
+                cancellation_reason = $3,
+                cancelled_at = CURRENT_TIMESTAMP,
+                cancelled_by_account_id = $4,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE tenant_id = $1
+              AND id = $2
+              AND status = 'completed'
+            "#,
+            tenant_id,
+            report_id,
+            reason,
+            actor_account_id,
+        )
+        .execute(transaction.connection())
+        .await
+        .map_err(|error| mutation_failure("cancel urgent work report", tenant_id, error))?;
+        if updated.rows_affected() != 1 {
+            return Err(UrgentWorkError::Conflict);
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|error| database_failure("commit urgent work cancellation", tenant_id, error))?;
+        Ok(())
     }
 
     async fn list_reconciliations(
@@ -1146,9 +1273,9 @@ impl UrgentWorkRepo for UrgentWorkDb {
         if status.as_deref() == Some("reconciled") {
             let dates_open: bool = sqlx::query_scalar!(
                 r#"
-                SELECT shepherd_financial_date_is_open(report.tenant_id, report.branch_id,
+                SELECT shepherd_financial_date_is_open_for_update(report.tenant_id, report.branch_id,
                            (current_record.confirmed_started_at AT TIME ZONE current_customer.time_zone)::DATE)
-                       AND shepherd_financial_date_is_open(report.tenant_id, report.branch_id,
+                       AND shepherd_financial_date_is_open_for_update(report.tenant_id, report.branch_id,
                            ($3::TIMESTAMPTZ AT TIME ZONE proposed_customer.time_zone)::DATE) AS "dates_open!"
                 FROM business_urgent_work_reports AS report
                 JOIN business_urgent_customer_work_records AS current_record
@@ -1858,12 +1985,14 @@ async fn reconcile_report_in_transaction(
         FROM business_urgent_work_reports AS report
         INNER JOIN business_urgent_work_sessions AS session
             ON session.tenant_id = report.tenant_id AND session.report_id = report.id
+        INNER JOIN hr_employees AS employee
+            ON employee.tenant_id = report.tenant_id AND employee.id = report.employee_id
         LEFT JOIN business_urgent_customer_work_records AS customer_record
             ON customer_record.tenant_id = report.tenant_id AND customer_record.report_id = report.id
         LEFT JOIN business_customers AS final_customer
             ON final_customer.tenant_id = report.tenant_id AND final_customer.id = $3
         WHERE report.tenant_id = $1 AND report.id = $2
-        FOR UPDATE OF report, session
+        FOR UPDATE OF report, session, employee
         "#,
         tenant_id,
         report_id,
@@ -1900,6 +2029,32 @@ async fn reconcile_report_in_transaction(
     let confirmed_worked_seconds: i64 = context
         .confirmed_worked_seconds
         .ok_or(UrgentWorkError::InvalidInput("customer evidence is required"))?;
+    let overlaps_existing_assignment: bool = sqlx::query_scalar!(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM business_shift_assignments AS assignment
+            JOIN business_staffing_shifts AS shift
+              ON shift.tenant_id = assignment.tenant_id
+             AND shift.id = assignment.shift_id
+            WHERE assignment.tenant_id = $1
+              AND assignment.employee_id = $2
+              AND assignment.status <> 'cancelled'
+              AND shift.starts_at < $3
+              AND shift.ends_at > $4
+        ) AS "exists!"
+        "#,
+        tenant_id,
+        context.employee_id,
+        confirmed_ended_at,
+        confirmed_started_at,
+    )
+    .fetch_one(transaction.connection())
+    .await
+    .map_err(|error| database_failure("validate urgent reconciliation assignment overlap", tenant_id, error))?;
+    if overlaps_existing_assignment {
+        return Err(UrgentWorkError::Conflict);
+    }
     let customer_time_zone: String = context.customer_time_zone.ok_or(UrgentWorkError::NotFound)?;
     let has_discrepancy: bool = context.claimed_customer_id != confirmed_customer_id
         || input.final_customer_id != context.claimed_customer_id
@@ -1937,7 +2092,7 @@ async fn reconcile_report_in_transaction(
     .map_err(|error: sqlx::Error| database_failure("derive urgent local work date", tenant_id, error))?;
     let work_date: NaiveDate = work_date_row.work_date;
     let financial_period_open: bool =
-        sqlx::query_scalar("SELECT shepherd_financial_date_is_open($1, shepherd_current_branch_id(), $2)")
+        sqlx::query_scalar("SELECT shepherd_financial_date_is_open_for_update($1, shepherd_current_branch_id(), $2)")
             .bind(tenant_id)
             .bind(work_date)
             .fetch_one(transaction.connection())
@@ -2224,6 +2379,9 @@ fn database_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> Urg
 fn mutation_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> UrgentWorkError {
     let mapped: UrgentWorkError = match &error {
         sqlx::Error::Database(database_error) if database_error.is_unique_violation() => UrgentWorkError::Conflict,
+        sqlx::Error::Database(database_error) if database_error.code().as_deref() == Some("55000") => {
+            UrgentWorkError::Conflict
+        }
         sqlx::Error::Database(database_error)
             if database_error.is_check_violation() || database_error.is_foreign_key_violation() =>
         {

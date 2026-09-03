@@ -860,6 +860,23 @@ async fn unreconciled_work_blocks_period_close() -> TestResult {
             .await
             .map_err(staffing_error)?;
         fixture.await_positive_duration().await;
+        let period_start = fixture.work_period_start().await?;
+
+        let open_close_result = reporting
+            .change_financial_period(
+                fixture.tenant_id,
+                fixture.account_id,
+                Uuid::new_v4(),
+                &FinancialPeriodChangeInput {
+                    period_start,
+                    status: FinancialPeriodStatus::Closed,
+                    expected_revision_number: 0,
+                    reason: "attempt close with open staffing work".to_owned(),
+                },
+            )
+            .await;
+        assert!(matches!(open_close_result, Err(FinanceError::Conflict)));
+
         work.end(
             fixture.tenant_id,
             fixture.assignment_id,
@@ -868,7 +885,6 @@ async fn unreconciled_work_blocks_period_close() -> TestResult {
         )
         .await
         .map_err(staffing_error)?;
-        let period_start = fixture.work_period_start().await?;
 
         let close_result = reporting
             .change_financial_period(
@@ -885,6 +901,73 @@ async fn unreconciled_work_blocks_period_close() -> TestResult {
             .await;
         assert!(matches!(close_result, Err(FinanceError::Conflict)));
 
+        Ok(())
+    })
+    .await;
+    let cleanup_result: TestResult = fixture.cleanup().await;
+    cleanup_result?;
+    test_result
+}
+
+#[tokio::test]
+async fn assignment_cancellation_before_work_is_audited_and_terminal() -> TestResult {
+    let fixture = Fixture::create().await?;
+    let test_result: TestResult = infra_postgres::with_active_branch(fixture.branch_id, async {
+        let staffing = fixture.staffing_provider();
+        staffing
+            .cancel_shift_assignment(
+                fixture.tenant_id,
+                fixture.assignment_id,
+                "Customer cancelled the worker request",
+                fixture.account_id,
+            )
+            .await
+            .map_err(staffing_error)?;
+
+        let mut verify = fixture.db.begin_tenant(fixture.tenant_id).await?;
+        let cancelled = sqlx::query!(
+            r#"
+            SELECT status, cancellation_reason,
+                   cancelled_at IS NOT NULL AS "has_cancelled_at!",
+                   cancelled_by_account_id
+            FROM business_shift_assignments
+            WHERE tenant_id = $1 AND id = $2
+            "#,
+            fixture.tenant_id,
+            fixture.assignment_id,
+        )
+        .fetch_one(verify.connection())
+        .await?;
+        verify.commit().await?;
+        assert_eq!(cancelled.status, "cancelled");
+        assert_eq!(
+            cancelled.cancellation_reason.as_deref(),
+            Some("Customer cancelled the worker request")
+        );
+        assert!(cancelled.has_cancelled_at);
+        assert_eq!(cancelled.cancelled_by_account_id, Some(fixture.account_id));
+
+        let repeated = staffing
+            .cancel_shift_assignment(
+                fixture.tenant_id,
+                fixture.assignment_id,
+                "Repeated cancellation",
+                fixture.account_id,
+            )
+            .await;
+        assert!(matches!(repeated, Err(StaffingError::Conflict)));
+
+        let start_after_cancel = fixture
+            .work_provider()
+            .start(
+                fixture.tenant_id,
+                fixture.assignment_id,
+                fixture.account_id,
+                Uuid::new_v4(),
+                &action_input(),
+            )
+            .await;
+        assert!(matches!(start_after_cancel, Err(StaffingError::Conflict)));
         Ok(())
     })
     .await;

@@ -358,6 +358,7 @@ struct ReconcileRow {
     staff_started_at: Option<DateTime<Utc>>,
     staff_ended_at: Option<DateTime<Utc>>,
     staff_worked_seconds: i64,
+    staff_has_open: bool,
     customer_record_id: Option<Uuid>,
     confirmed_customer_id: Option<Uuid>,
     customer_started_at: Option<DateTime<Utc>>,
@@ -1008,36 +1009,182 @@ impl StaffingRepo for StaffingDb {
         input: &StaffingShiftInput,
         audit_account_id: Uuid,
     ) -> Result<StaffingShift, StaffingError> {
-        let row: ShiftRow = self
-            .db
-            .tran_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
-                sqlx::query_as!(
-                    ShiftRow,
-                    r#"
-                    INSERT INTO business_staffing_shifts (
-                        id, tenant_id, customer_id, job_id, starts_at, ends_at,
-                        required_workers, status, notes, created_by_account_id, updated_by_account_id
-                    )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, 'open', $8, $9, $9)
-                    RETURNING id, customer_id, job_id, starts_at, ends_at,
-                              required_workers, status, notes, created_at, updated_at
-                    "#,
-                    shift_id,
-                    tenant_id,
-                    input.customer_id,
-                    input.job_id,
-                    input.starts_at,
-                    input.ends_at,
-                    input.required_workers,
-                    input.notes,
-                    audit_account_id,
-                )
-                .fetch_one(connection)
-                .await
-            })
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        // Share-lock the branch and customer so their deactivation triggers
+        // cannot pass this insert without observing the new open shift.
+        let scope_branch_id: Option<Uuid> = sqlx::query_scalar!(
+            r#"
+            SELECT branch.id
+            FROM branches AS branch
+            JOIN business_customers AS customer
+              ON customer.tenant_id = branch.tenant_id
+             AND customer.branch_id = branch.id
+            JOIN business_staffing_jobs AS job
+              ON job.tenant_id = branch.tenant_id
+             AND job.branch_id = branch.id
+            WHERE branch.tenant_id = $1
+              AND customer.id = $2
+              AND job.id = $3
+              AND branch.status = 'active'
+              AND customer.status = 'active'
+              AND job.status = 'active'
+            FOR SHARE OF branch, customer
+            "#,
+            tenant_id,
+            input.customer_id,
+            input.job_id,
+        )
+        .fetch_optional(transaction.connection())
+        .await
+        .map_err(|error| database_failure("lock staffing shift scope", tenant_id, error))?;
+        if scope_branch_id.is_none() {
+            return Err(StaffingError::NotFound);
+        }
+        let row: ShiftRow = sqlx::query_as!(
+            ShiftRow,
+            r#"
+            INSERT INTO business_staffing_shifts (
+                id, tenant_id, customer_id, job_id, starts_at, ends_at,
+                required_workers, status, notes, created_by_account_id, updated_by_account_id
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, 'open', $8, $9, $9)
+            RETURNING id, customer_id, job_id, starts_at, ends_at,
+                      required_workers, status, notes, created_at, updated_at
+            "#,
+            shift_id,
+            tenant_id,
+            input.customer_id,
+            input.job_id,
+            input.starts_at,
+            input.ends_at,
+            input.required_workers,
+            input.notes,
+            audit_account_id,
+        )
+        .fetch_one(transaction.connection())
+        .await
+        .map_err(|error| mutation_failure("create staffing shift", tenant_id, error))?;
+        transaction
+            .commit()
             .await
-            .map_err(|error: TenantDbErr| tenant_mutation_failure("create staffing shift", tenant_id, error))?;
+            .map_err(|error| database_failure("commit staffing shift", tenant_id, error))?;
         StaffingShift::try_from(row)
+    }
+
+    async fn cancel_shift(
+        &self,
+        tenant_id: Uuid,
+        shift_id: Uuid,
+        reason: &str,
+        audit_account_id: Uuid,
+    ) -> Result<(), StaffingError> {
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        let status: Option<String> = sqlx::query_scalar!(
+            r#"
+            SELECT shift.status AS "status!"
+            FROM business_staffing_shifts AS shift
+            WHERE shift.tenant_id = $1 AND shift.id = $2
+            FOR UPDATE
+            "#,
+            tenant_id,
+            shift_id,
+        )
+        .fetch_optional(transaction.connection())
+        .await
+        .map_err(|error| database_failure("lock staffing shift for cancellation", tenant_id, error))?;
+        let status: String = status.ok_or(StaffingError::NotFound)?;
+        if !matches!(status.as_str(), "open" | "filled") {
+            return Err(StaffingError::Conflict);
+        }
+
+        sqlx::query!(
+            r#"
+            SELECT assignment.id
+            FROM business_shift_assignments AS assignment
+            WHERE assignment.tenant_id = $1
+              AND assignment.shift_id = $2
+              AND assignment.status = 'assigned'
+            ORDER BY assignment.id
+            FOR UPDATE
+            "#,
+            tenant_id,
+            shift_id,
+        )
+        .fetch_all(transaction.connection())
+        .await
+        .map_err(|error| database_failure("lock staffing shift assignments for cancellation", tenant_id, error))?;
+
+        let has_work_evidence: bool = sqlx::query_scalar!(
+            r#"
+            SELECT EXISTS (
+                SELECT 1
+                FROM business_shift_assignments AS assignment
+                JOIN business_shift_work_sessions AS session
+                  ON session.tenant_id = assignment.tenant_id
+                 AND session.assignment_id = assignment.id
+                WHERE assignment.tenant_id = $1
+                  AND assignment.shift_id = $2
+            ) AS "exists!"
+            "#,
+            tenant_id,
+            shift_id,
+        )
+        .fetch_one(transaction.connection())
+        .await
+        .map_err(|error| database_failure("check staffing shift evidence before cancellation", tenant_id, error))?;
+        if has_work_evidence {
+            return Err(StaffingError::Conflict);
+        }
+
+        sqlx::query!(
+            r#"
+            UPDATE business_shift_assignments
+            SET status = 'cancelled',
+                cancellation_reason = $3,
+                cancelled_at = CURRENT_TIMESTAMP,
+                cancelled_by_account_id = $4
+            WHERE tenant_id = $1
+              AND shift_id = $2
+              AND status = 'assigned'
+            "#,
+            tenant_id,
+            shift_id,
+            reason,
+            audit_account_id,
+        )
+        .execute(transaction.connection())
+        .await
+        .map_err(|error| mutation_failure("cancel staffing shift assignments", tenant_id, error))?;
+
+        let updated = sqlx::query!(
+            r#"
+            UPDATE business_staffing_shifts
+            SET status = 'cancelled',
+                cancellation_reason = $3,
+                cancelled_at = CURRENT_TIMESTAMP,
+                cancelled_by_account_id = $4,
+                updated_at = CURRENT_TIMESTAMP,
+                updated_by_account_id = $4
+            WHERE tenant_id = $1
+              AND id = $2
+              AND status IN ('open', 'filled')
+            "#,
+            tenant_id,
+            shift_id,
+            reason,
+            audit_account_id,
+        )
+        .execute(transaction.connection())
+        .await
+        .map_err(|error| mutation_failure("cancel staffing shift", tenant_id, error))?;
+        if updated.rows_affected() != 1 {
+            return Err(StaffingError::Conflict);
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|error| database_failure("commit staffing shift cancellation", tenant_id, error))?;
+        Ok(())
     }
 
     async fn list_shift_assignments(
@@ -1269,46 +1416,58 @@ impl StaffingRepo for StaffingDb {
             return Err(StaffingError::Conflict);
         }
 
-        let employee_is_active_staff: bool = sqlx::query_scalar!(
+        let locked_employee_id: Option<Uuid> = sqlx::query_scalar!(
             r#"
-            SELECT EXISTS (
-                SELECT 1
-                FROM hr_employees AS employee
-                INNER JOIN accounts AS account
-                    ON account.tenant_id = employee.tenant_id
-                   AND account.id = employee.account_id
-                WHERE employee.tenant_id = $1
-                  AND employee.id = $2
-                  AND employee.status = 'active'
-                  AND account.status = 'active'
-                  AND account.primary_role_code = 'staff'
-            ) AS "exists!"
+            SELECT employee.id
+            FROM hr_employees AS employee
+            INNER JOIN accounts AS account
+                ON account.tenant_id = employee.tenant_id
+               AND account.id = employee.account_id
+            WHERE employee.tenant_id = $1
+              AND employee.id = $2
+              AND employee.status = 'active'
+              AND account.status = 'active'
+              AND account.primary_role_code = 'staff'
+            FOR UPDATE OF employee
+            FOR SHARE OF account
             "#,
             tenant_id,
             input.employee_id,
         )
-        .fetch_one(transaction.connection())
+        .fetch_optional(transaction.connection())
         .await
-        .map_err(|error| database_failure("validate staffing employee", tenant_id, error))?;
-        if !employee_is_active_staff {
+        .map_err(|error| database_failure("lock staffing employee", tenant_id, error))?;
+        if locked_employee_id.is_none() {
             return Err(StaffingError::NotFound);
         }
 
         let employee_is_available: bool = sqlx::query_scalar!(
             r#"
             SELECT NOT EXISTS (
-                SELECT 1
-                FROM business_shift_assignments AS existing_assignment
-                INNER JOIN business_staffing_shifts AS existing_shift
-                    ON existing_shift.tenant_id = existing_assignment.tenant_id
-                   AND existing_shift.id = existing_assignment.shift_id
-                WHERE existing_assignment.tenant_id = $1
-                  AND existing_assignment.employee_id = $2
-                  AND existing_assignment.status <> 'cancelled'
-                  AND existing_shift.id <> $3
-                  AND existing_shift.starts_at < $4
-                  AND existing_shift.ends_at > $5
-            ) AS "available!"
+                       SELECT 1
+                       FROM business_shift_assignments AS existing_assignment
+                       INNER JOIN business_staffing_shifts AS existing_shift
+                           ON existing_shift.tenant_id = existing_assignment.tenant_id
+                          AND existing_shift.id = existing_assignment.shift_id
+                       WHERE existing_assignment.tenant_id = $1
+                         AND existing_assignment.employee_id = $2
+                         AND existing_assignment.status <> 'cancelled'
+                         AND existing_shift.id <> $3
+                         AND existing_shift.starts_at < $4
+                         AND existing_shift.ends_at > $5
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM business_urgent_work_sessions AS urgent_session
+                       JOIN business_urgent_work_reports AS urgent_report
+                         ON urgent_report.tenant_id = urgent_session.tenant_id
+                        AND urgent_report.id = urgent_session.report_id
+                       WHERE urgent_session.tenant_id = $1
+                         AND urgent_session.employee_id = $2
+                         AND urgent_report.status <> 'cancelled'
+                         AND urgent_session.started_at < $4
+                         AND COALESCE(urgent_session.ended_at, 'infinity'::TIMESTAMPTZ) > $5
+                   ) AS "available!"
             "#,
             tenant_id,
             input.employee_id,
@@ -1501,6 +1660,90 @@ impl StaffingRepo for StaffingDb {
         ShiftAssignment::try_from(row)
     }
 
+    async fn cancel_shift_assignment(
+        &self,
+        tenant_id: Uuid,
+        assignment_id: Uuid,
+        reason: &str,
+        audit_account_id: Uuid,
+    ) -> Result<(), StaffingError> {
+        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        let context = sqlx::query!(
+            r#"
+            SELECT assignment.status AS assignment_status,
+                   shift.status AS shift_status
+            FROM business_shift_assignments AS assignment
+            JOIN business_staffing_shifts AS shift
+              ON shift.tenant_id = assignment.tenant_id
+             AND shift.id = assignment.shift_id
+            WHERE assignment.tenant_id = $1
+              AND assignment.id = $2
+            FOR UPDATE OF assignment, shift
+            "#,
+            tenant_id,
+            assignment_id,
+        )
+        .fetch_optional(transaction.connection())
+        .await
+        .map_err(|error| database_failure("lock staffing assignment for cancellation", tenant_id, error))?
+        .ok_or(StaffingError::NotFound)?;
+        if context.assignment_status != "assigned" || context.shift_status != "open" {
+            return Err(StaffingError::Conflict);
+        }
+
+        let has_work_evidence: bool = sqlx::query_scalar!(
+            r#"
+            SELECT EXISTS (
+                SELECT 1
+                FROM business_shift_work_sessions
+                WHERE tenant_id = $1 AND assignment_id = $2
+            ) AS "exists!"
+            "#,
+            tenant_id,
+            assignment_id,
+        )
+        .fetch_one(transaction.connection())
+        .await
+        .map_err(|error| {
+            database_failure(
+                "check staffing assignment evidence before cancellation",
+                tenant_id,
+                error,
+            )
+        })?;
+        if has_work_evidence {
+            return Err(StaffingError::Conflict);
+        }
+
+        let updated = sqlx::query!(
+            r#"
+            UPDATE business_shift_assignments
+            SET status = 'cancelled',
+                cancellation_reason = $3,
+                cancelled_at = CURRENT_TIMESTAMP,
+                cancelled_by_account_id = $4
+            WHERE tenant_id = $1
+              AND id = $2
+              AND status = 'assigned'
+            "#,
+            tenant_id,
+            assignment_id,
+            reason,
+            audit_account_id,
+        )
+        .execute(transaction.connection())
+        .await
+        .map_err(|error| mutation_failure("cancel staffing shift assignment", tenant_id, error))?;
+        if updated.rows_affected() != 1 {
+            return Err(StaffingError::Conflict);
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|error| database_failure("commit staffing assignment cancellation", tenant_id, error))?;
+        Ok(())
+    }
+
     async fn approve_shift_assignment(
         &self,
         tenant_id: Uuid,
@@ -1585,6 +1828,7 @@ impl StaffingRepo for StaffingDb {
                    assignment.status AS assignment_status,
                    work.staff_started_at, work.staff_ended_at,
                    work.staff_worked_seconds AS "staff_worked_seconds!",
+                   work.staff_has_open AS "staff_has_open!",
                    customer_record.id AS "customer_record_id?",
                    customer_record.confirmed_customer_id AS "confirmed_customer_id?",
                    customer_record.confirmed_started_at AS "customer_started_at?",
@@ -1609,7 +1853,8 @@ impl StaffingRepo for StaffingDb {
                 SELECT MIN(session.started_at) FILTER (WHERE session.ended_at IS NOT NULL) AS staff_started_at,
                        MAX(session.ended_at) AS staff_ended_at,
                        COALESCE(SUM(session.worked_seconds)
-                           FILTER (WHERE session.ended_at IS NOT NULL), 0)::BIGINT AS staff_worked_seconds
+                           FILTER (WHERE session.ended_at IS NOT NULL), 0)::BIGINT AS staff_worked_seconds,
+                       COALESCE(BOOL_OR(session.ended_at IS NULL), FALSE) AS staff_has_open
                 FROM business_shift_work_sessions AS session
                 WHERE session.tenant_id = assignment.tenant_id
                   AND session.assignment_id = assignment.id
@@ -1637,7 +1882,10 @@ impl StaffingRepo for StaffingDb {
                               AND result.confirmed_started_at < $6))
               AND ($2::TIMESTAMPTZ IS NULL
                    OR (shift.starts_at, assignment.id) < ($2, $3::UUID))
-              AND ($7::UUID IS NULL OR shift.customer_id = $7)
+              AND ($7::UUID IS NULL
+                   OR shift.customer_id = $7
+                   OR customer_record.confirmed_customer_id = $7
+                   OR result.final_customer_id = $7)
             ORDER BY shift.starts_at DESC, assignment.id DESC
             LIMIT $8
             "#,
@@ -1702,7 +1950,7 @@ impl StaffingRepo for StaffingDb {
                 };
                 let reconciliation_status: ReconcileStatus = if assignment_status == ShiftAssignmentStatus::Approved {
                     ReconcileStatus::Reconciled
-                } else if row.staff_worked_seconds == 0 {
+                } else if row.staff_has_open || row.staff_worked_seconds == 0 {
                     ReconcileStatus::PendingStaff
                 } else if customer_record.is_none() {
                     ReconcileStatus::PendingCustomer
@@ -1777,9 +2025,9 @@ impl StaffingRepo for StaffingDb {
         if status.as_deref() == Some("approved") {
             let dates_open: bool = sqlx::query_scalar!(
                 r#"
-                SELECT shepherd_financial_date_is_open(assignment.tenant_id, assignment.branch_id,
+                SELECT shepherd_financial_date_is_open_for_update(assignment.tenant_id, assignment.branch_id,
                            (current_record.confirmed_started_at AT TIME ZONE current_customer.time_zone)::DATE)
-                       AND shepherd_financial_date_is_open(assignment.tenant_id, assignment.branch_id,
+                       AND shepherd_financial_date_is_open_for_update(assignment.tenant_id, assignment.branch_id,
                            ($3::TIMESTAMPTZ AT TIME ZONE proposed_customer.time_zone)::DATE) AS "dates_open!"
                 FROM business_shift_assignments AS assignment
                 JOIN business_customer_work_records AS current_record
@@ -1876,22 +2124,6 @@ impl StaffingRepo for StaffingDb {
                 WHERE revision.tenant_id = $1 AND revision.assignment_id = $2
                 ORDER BY revision.revision_number DESC
                 LIMIT 1
-            ), evidence AS (
-                SELECT record.confirmed_started_at, record.confirmed_ended_at, customer.time_zone
-                FROM business_shift_assignments AS assignment
-                LEFT JOIN business_customer_work_records AS planned
-                  ON planned.tenant_id = assignment.tenant_id AND planned.assignment_id = assignment.id
-                LEFT JOIN business_urgent_customer_work_records AS urgent
-                  ON urgent.tenant_id = assignment.tenant_id
-                 AND urgent.report_id = assignment.urgent_work_report_id
-                JOIN business_customers AS customer
-                  ON customer.tenant_id = assignment.tenant_id
-                 AND customer.id = COALESCE(urgent.confirmed_customer_id, planned.confirmed_customer_id)
-                CROSS JOIN LATERAL (SELECT
-                    COALESCE(urgent.confirmed_started_at, planned.confirmed_started_at) AS confirmed_started_at,
-                    COALESCE(urgent.confirmed_ended_at, planned.confirmed_ended_at) AS confirmed_ended_at
-                ) AS record
-                WHERE assignment.tenant_id = $1 AND assignment.id = $2
             )
             INSERT INTO business_assignment_reconciliation_revisions (
                 tenant_id, branch_id, assignment_id, revision_number, supersedes_revision_id,
@@ -1904,8 +2136,8 @@ impl StaffingRepo for StaffingDb {
             SELECT previous.tenant_id, previous.branch_id, previous.assignment_id,
                    previous.revision_number + 1, previous.revision_id,
                    previous.final_customer_id, previous.final_job_id,
-                   evidence.confirmed_started_at, evidence.confirmed_ended_at,
-                   (evidence.confirmed_started_at AT TIME ZONE evidence.time_zone)::DATE,
+                   previous.confirmed_started_at, previous.confirmed_ended_at,
+                   previous.local_work_date,
                    $4::BIGINT,
                    previous.observed_worked_seconds, $5,
                    previous.currency, previous.bill_hourly_rate, previous.worker_hourly_rate,
@@ -1914,17 +2146,12 @@ impl StaffingRepo for StaffingDb {
                    ROUND(previous.bill_hourly_rate * $4::NUMERIC / 3600, 4)
                        - ROUND(previous.worker_hourly_rate * $4::NUMERIC / 3600, 4),
                    $5, $6
-            FROM previous, evidence
+            FROM previous
             WHERE previous.revision_id = $3
-              AND shepherd_financial_date_is_open(
+              AND shepherd_financial_date_is_open_for_update(
                     previous.tenant_id,
                     previous.branch_id,
                     previous.local_work_date
-              )
-              AND shepherd_financial_date_is_open(
-                    previous.tenant_id,
-                    previous.branch_id,
-                    (evidence.confirmed_started_at AT TIME ZONE evidence.time_zone)::DATE
               )
             RETURNING revision_id, assignment_id, revision_number, worked_seconds,
                       correction_reason, recorded_at
@@ -2064,7 +2291,7 @@ async fn approve_shift_assignment_in_transaction(
           AND assignment.id = $2
           AND assignment.status = 'assigned'
           AND observed.total > 0
-          AND shepherd_financial_date_is_open(
+          AND shepherd_financial_date_is_open_for_update(
                 assignment.tenant_id,
                 assignment.branch_id,
                 (customer.confirmed_started_at AT TIME ZONE customer.time_zone)::DATE
@@ -2274,6 +2501,9 @@ fn mutation_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> Sta
     let mapped: StaffingError = match &error {
         sqlx::Error::RowNotFound => StaffingError::NotFound,
         sqlx::Error::Database(database_error) if database_error.is_unique_violation() => StaffingError::Conflict,
+        sqlx::Error::Database(database_error) if database_error.code().as_deref() == Some("55000") => {
+            StaffingError::Conflict
+        }
         sqlx::Error::Database(database_error)
             if database_error.is_check_violation() || database_error.is_foreign_key_violation() =>
         {

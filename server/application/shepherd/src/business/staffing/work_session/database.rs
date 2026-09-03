@@ -266,8 +266,14 @@ impl StaffingWorkRepo for StaffingWorkDb {
     ) -> Result<ShiftWorkSession, StaffingError> {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
 
-        if let Some(existing) =
-            find_by_start_key(&mut transaction, tenant_id, account_id, input.idempotency_key).await?
+        if let Some(existing) = find_by_start_key(
+            &mut transaction,
+            tenant_id,
+            assignment_id,
+            account_id,
+            input.idempotency_key,
+        )
+        .await?
         {
             transaction
                 .commit()
@@ -352,7 +358,15 @@ impl StaffingWorkRepo for StaffingWorkDb {
     ) -> Result<ShiftWorkSession, StaffingError> {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
 
-        if let Some(existing) = find_by_end_key(&mut transaction, tenant_id, account_id, input.idempotency_key).await? {
+        if let Some(existing) = find_by_end_key(
+            &mut transaction,
+            tenant_id,
+            assignment_id,
+            account_id,
+            input.idempotency_key,
+        )
+        .await?
+        {
             transaction
                 .commit()
                 .await
@@ -435,16 +449,27 @@ async fn lock_work_context(
         INNER JOIN hr_employees AS employee
             ON employee.tenant_id = assignment.tenant_id
            AND employee.id = assignment.employee_id
+        INNER JOIN accounts AS account
+            ON account.tenant_id = employee.tenant_id
+           AND account.id = employee.account_id
         INNER JOIN business_staffing_shifts AS shift
             ON shift.tenant_id = assignment.tenant_id
            AND shift.id = assignment.shift_id
         INNER JOIN business_customers AS customer
             ON customer.tenant_id = shift.tenant_id
            AND customer.id = shift.customer_id
+        INNER JOIN branches AS branch
+            ON branch.tenant_id = assignment.tenant_id
+           AND branch.id = assignment.branch_id
         WHERE assignment.tenant_id = $1
           AND assignment.id = $2
           AND employee.account_id = $3
-        FOR UPDATE OF assignment
+          AND employee.status = 'active'
+          AND account.status = 'active'
+          AND customer.status = 'active'
+          AND branch.status = 'active'
+        FOR UPDATE OF assignment, employee
+        FOR SHARE OF account, customer, branch
         "#,
         tenant_id,
         assignment_id,
@@ -459,24 +484,43 @@ async fn lock_work_context(
 async fn find_by_start_key(
     transaction: &mut TenantTransaction,
     tenant_id: Uuid,
+    assignment_id: Uuid,
     account_id: Uuid,
     idempotency_key: Uuid,
 ) -> Result<Option<WorkSessionRow>, StaffingError> {
-    find_by_idempotency_key(transaction, tenant_id, account_id, idempotency_key, "start").await
+    find_by_idempotency_key(
+        transaction,
+        tenant_id,
+        assignment_id,
+        account_id,
+        idempotency_key,
+        "start",
+    )
+    .await
 }
 
 async fn find_by_end_key(
     transaction: &mut TenantTransaction,
     tenant_id: Uuid,
+    assignment_id: Uuid,
     account_id: Uuid,
     idempotency_key: Uuid,
 ) -> Result<Option<WorkSessionRow>, StaffingError> {
-    find_by_idempotency_key(transaction, tenant_id, account_id, idempotency_key, "end").await
+    find_by_idempotency_key(
+        transaction,
+        tenant_id,
+        assignment_id,
+        account_id,
+        idempotency_key,
+        "end",
+    )
+    .await
 }
 
 async fn find_by_idempotency_key(
     transaction: &mut TenantTransaction,
     tenant_id: Uuid,
+    assignment_id: Uuid,
     account_id: Uuid,
     idempotency_key: Uuid,
     key_kind: &str,
@@ -495,10 +539,12 @@ async fn find_by_idempotency_key(
                 ON employee.tenant_id = session.tenant_id AND employee.id = session.employee_id
             WHERE session.tenant_id = $1 AND session.start_idempotency_key = $2
               AND employee.account_id = $3
+              AND session.assignment_id = $4
             "#,
             tenant_id,
             idempotency_key,
             account_id,
+            assignment_id,
         )
         .fetch_optional(transaction.connection())
         .await
@@ -516,10 +562,12 @@ async fn find_by_idempotency_key(
                 ON employee.tenant_id = session.tenant_id AND employee.id = session.employee_id
             WHERE session.tenant_id = $1 AND session.end_idempotency_key = $2
               AND employee.account_id = $3
+              AND session.assignment_id = $4
             "#,
             tenant_id,
             idempotency_key,
             account_id,
+            assignment_id,
         )
         .fetch_optional(transaction.connection())
         .await
@@ -567,6 +615,9 @@ fn database_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> Sta
 fn mutation_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> StaffingError {
     let mapped: StaffingError = match &error {
         sqlx::Error::Database(database_error) if database_error.is_unique_violation() => StaffingError::Conflict,
+        sqlx::Error::Database(database_error) if database_error.code().as_deref() == Some("55000") => {
+            StaffingError::Conflict
+        }
         sqlx::Error::Database(database_error)
             if database_error.is_check_violation() || database_error.is_foreign_key_violation() =>
         {

@@ -16,7 +16,7 @@ export type AuthUserSummary = { auth_user_id: string, account_id: string, userna
 
 export type AuthUserPage = { items: Array<AuthUserSummary>, next_cursor: string | null, has_more: boolean, limit: number, };
 
-export type CreateAuthUserRequest = { username: string, email: string, password: string | null, primary_role: RoleCode, branch_ids: Array<string>, };
+export type CreateAuthUserRequest = { username: string, email: string, password: string | null, primary_role: RoleCode, branch_ids: Array<string>, additional_role_assignments: Array<AccountRoleAssignmentContract>, };
 
 export type SetAuthUserStatusRequest = { disabled: boolean, };
 
@@ -84,8 +84,6 @@ export type ShiftAssignment = { id: string, shift_id: string, employee_id: strin
 
 export type StaffingCandidate = { employee_id: string, employee_code: string, display_name: string, suitable: boolean, available: boolean, already_assigned: boolean, conflict_shift_id: string | null, };
 
-export type StaffingEligibility = { id: string, employee_id: string, job_id: string, effective_from: string, effective_to: string | null, notes: string | null, created_at: string, };
-
 export type ReconcileStatus = "pending_staff" | "pending_customer" | "matched" | "discrepancy" | "reconciled";
 
 export type CustomerWorkRecord = { id: string, assignment_id: string, confirmed_customer_id: string, confirmed_started_at: string, confirmed_ended_at: string, confirmed_worked_seconds: number, customer_reference: string | null, notes: string | null, updated_at: string, };
@@ -104,7 +102,7 @@ export type CustomerUpsertRequest = { code: string, name: string, address?: stri
 
 export type StaffingPriceSetRequest = { customer_id: string, employee_id?: string | null, currency: string, customer_hourly_rate: string, worker_hourly_rate: string, effective_from: string, };
 
-export type StaffingEligibilityCreateRequest = { employee_id: string, job_id: string, effective_from: string, effective_to?: string | null, notes?: string | null, };
+export type StaffingCancellationRequest = { reason: string, };
 
 export type StaffingShiftCreateRequest = { customer_id: string, job_id: string, starts_at: string, ends_at: string, required_workers: number, notes?: string | null, };
 
@@ -222,6 +220,8 @@ export type UrgentWorkReconcileReq = { final_customer_id: string, job_id: string
 
 export type UrgentWorkAcceptStaffRecordReq = { job_id: string, };
 
+export type UrgentWorkCancellationReq = { reason: string, };
+
 export type EmployeeStatus = "active" | "on_leave" | "terminated";
 
 export type Gender = "female" | "male" | "other" | "unspecified";
@@ -241,3 +241,4 @@ export type AttendanceCheckInRequest = { branch_id: string, };
 export type EmployeeUpsertRequest = { account_id?: string | null, employee_code: string, display_name: string, legal_first_name?: string | null, legal_middle_name?: string | null, legal_last_name?: string | null, personal_phone_e164?: string | null, gender?: Gender | null, status: EmployeeStatus, hire_date: string, termination_date?: string | null, expected_version?: number | null, };
 
 export type EmployeeCitizenIdUpdateRequest = { citizen_id_country_code?: string | null, citizen_id?: string | null, expected_version: number, };
+

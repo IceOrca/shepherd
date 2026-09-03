@@ -18,8 +18,6 @@ import type {
   ShiftWorkActionRequest,
   ShiftWorkSession,
   StaffingCandidate,
-  StaffingEligibility,
-  StaffingEligibilityCreateRequest,
   StaffingPriceSet,
   StaffingPriceSetRequest,
   StaffingRate,
@@ -195,23 +193,6 @@ export function listStaffingStaff(
 
 export function setStaffingPrices(payload: StaffingPriceSetRequest): Promise<StaffingPriceSet> {
   return apiRequest<StaffingPriceSet>("/api/business/staffing/prices", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-}
-
-export function listStaffingEligibilities(
-  cursor: string | null = null,
-): Promise<StaffingListPage<StaffingEligibility>> {
-  return apiRequest<StaffingListPage<StaffingEligibility>>(
-    cursorPath("/api/business/staffing/eligibilities", cursor),
-  );
-}
-
-export function createStaffingEligibility(
-  payload: StaffingEligibilityCreateRequest,
-): Promise<StaffingEligibility> {
-  return apiRequest<StaffingEligibility>("/api/business/staffing/eligibilities", {
     method: "POST",
     body: JSON.stringify(payload),
   });

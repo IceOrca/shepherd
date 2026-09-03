@@ -128,6 +128,11 @@ pub struct UrgentWorkAcceptStaffRecordReq {
     pub job_id: Uuid,
 }
 
+#[derive(Debug, Deserialize, TS)]
+pub struct UrgentWorkCancellationReq {
+    pub reason: String,
+}
+
 pub fn routes() -> Router<Arc<AppContext>> {
     info!("Configured urgent-first staffing routes");
     Router::new()
@@ -138,6 +143,7 @@ pub fn routes() -> Router<Arc<AppContext>> {
         .route("/staffing/urgent-work/start", post(start_work))
         .route("/staffing/urgent-work/manual", post(submit_manual_work))
         .route("/staffing/urgent-work/{report_id}/end", post(end_work))
+        .route("/staffing/urgent-work/{report_id}/cancel", post(cancel_work))
         .route("/staffing/urgent-work/reconciliations", get(list_reconciliations))
         .route(
             "/staffing/urgent-work/{report_id}/customer-record",
@@ -329,6 +335,21 @@ async fn submit_manual_work(
         .map_err(|operation_error: UrgentWorkError| status("submit manual urgent work", &user, operation_error))?;
     ctx.notifications.wake();
     Ok((StatusCode::CREATED, Json(work)))
+}
+
+async fn cancel_work(
+    State(ctx): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthedUser>,
+    Path(report_id): Path<Uuid>,
+    Json(request): Json<UrgentWorkCancellationReq>,
+) -> Result<StatusCode, StatusCode> {
+    require_permission(&user, "business.urgent_work.reconcile")?;
+    ctx.core
+        .urgent_work
+        .cancel(user.tenant_id, user.account_id, report_id, request.reason)
+        .await
+        .map_err(|operation_error| status("cancel urgent work", &user, operation_error))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn list_reconciliations(

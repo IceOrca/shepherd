@@ -1408,6 +1408,7 @@ async fn validate_primary_role_assignments(
         WHERE tenant_role.tenant_id = $1
           AND tenant_role.code = $2
           AND tenant_role.is_active
+          AND tenant_role.is_system
         "#,
         tenant_id,
         request.primary_role.as_str(),
@@ -1416,7 +1417,7 @@ async fn validate_primary_role_assignments(
     .await?;
     let Some(rule) = rule else {
         return Err(sqlx::Error::Protocol(
-            "Primary role is inactive or does not exist".to_owned(),
+            "Primary organizational role is inactive, custom, or does not exist".to_owned(),
         ));
     };
     let primary_assignments: Vec<&AccountRoleAssignmentContract> = request
@@ -1432,11 +1433,7 @@ async fn validate_primary_role_assignments(
         .iter()
         .any(|assignment: &&AccountRoleAssignmentContract| assignment.branch_id.is_none());
     let minimum: i64 = rule.min_assignments.map(i64::from).unwrap_or(1);
-    let maximum: Option<i64> = if rule.is_system {
-        rule.max_assignments.map(i64::from)
-    } else {
-        None
-    };
+    let maximum: Option<i64> = rule.max_assignments.map(i64::from);
     let valid_tenant_role: bool =
         rule.scope_type == "tenant" && primary_assignments.len() == 1 && branch_count == 0 && has_tenant_assignment;
     let valid_branch_role: bool = rule.scope_type == "branch"
@@ -1817,6 +1814,8 @@ fn database_error_status(
     error!(operation, tenant_id = %tenant_id, actor_id = %actor_id, reason = %database_error, "Access-control database operation failed");
     if message.contains("duplicate key") {
         AccessControlError::Conflict("That code or assignment already exists.".to_owned())
+    } else if message.contains("unfinished operations") {
+        AccessControlError::Conflict(message)
     } else if message.contains("tenant owner")
         || message.contains("system tenant role")
         || message.contains("branch cardinality")

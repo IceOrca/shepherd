@@ -327,6 +327,13 @@ pub trait UrgentWorkRepo {
         session_id: Uuid,
         input: &UrgentWorkManualInput,
     ) -> Result<UrgentWorkItem, UrgentWorkError>;
+    async fn cancel(
+        &self,
+        tenant_id: Uuid,
+        actor_account_id: Uuid,
+        report_id: Uuid,
+        reason: &str,
+    ) -> Result<(), UrgentWorkError>;
     #[allow(clippy::too_many_arguments)]
     async fn list_reconciliations(
         &self,
@@ -582,6 +589,33 @@ impl UrgentWorkService {
             .await;
         log_result(
             "urgent_work.submit_manual",
+            tenant_id,
+            Some(actor_account_id),
+            Some(report_id),
+            &result,
+        );
+        result
+    }
+
+    pub async fn cancel(
+        &self,
+        tenant_id: Uuid,
+        actor_account_id: Uuid,
+        report_id: Uuid,
+        reason: String,
+    ) -> Result<(), UrgentWorkError> {
+        if report_id.is_nil() {
+            return Err(UrgentWorkError::InvalidInput("urgent-work report ID is invalid"));
+        }
+        let reason: String = reason.trim().to_owned();
+        if !(3..=500).contains(&reason.chars().count()) {
+            return Err(UrgentWorkError::InvalidInput(
+                "urgent-work cancellation reason is invalid",
+            ));
+        }
+        let result = self.repo.cancel(tenant_id, actor_account_id, report_id, &reason).await;
+        log_result(
+            "urgent_work.cancel",
             tenant_id,
             Some(actor_account_id),
             Some(report_id),

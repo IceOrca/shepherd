@@ -12,15 +12,14 @@ use crate::{
     business::staffing::{
         core::{
             BusinessRecordStatus, Customer, CustomerWorkRecord, RateSource, ReconcileStatus, ReconciliationRevision,
-            ShiftAssignment, ShiftAssignmentStatus, StaffingCandidate, StaffingEligibility, StaffingPriceSet,
-            StaffingRate, StaffingJob, StaffingRateKind, StaffingReconcile, StaffingShift, StaffingShiftStatus,
-            StaffingStaff,
+            ShiftAssignment, ShiftAssignmentStatus, StaffingCandidate, StaffingJob, StaffingPriceSet, StaffingRate,
+            StaffingRateKind, StaffingReconcile, StaffingShift, StaffingShiftStatus, StaffingStaff,
         },
         host::{
             CustomerPageResponse, CustomerUpsertRequest, CustomerWorkRecordUpsertReq, ManualRateOverrideRequest,
             ReconciliationCorrectionReq, ShiftAssignmentApproveRequest, ShiftAssignmentCreateRequest,
-            StaffingEligibilityCreateRequest, StaffingPriceSetRequest, StaffingRatePageResponse,
-            StaffingReconcilePageRsp, StaffingShiftCreateRequest, StaffingStaffPageResponse,
+            StaffingCancellationRequest, StaffingPriceSetRequest, StaffingRatePageResponse, StaffingReconcilePageRsp,
+            StaffingShiftCreateRequest, StaffingStaffPageResponse,
         },
         urgent_work::{
             core::{
@@ -29,8 +28,8 @@ use crate::{
             },
             host::{
                 UrgentCustomerWorkRecordUpsertReq, UrgentWorkAcceptStaffRecordReq, UrgentWorkEndReq,
-                UrgentOwnWorkPageRsp, UrgentReconcileRsp, UrgentWorkManualReq, UrgentWorkReconcileReq,
-                UrgentWorkStartReq,
+                UrgentOwnWorkPageRsp, UrgentReconcileRsp, UrgentWorkCancellationReq, UrgentWorkManualReq,
+                UrgentWorkReconcileReq, UrgentWorkStartReq,
             },
         },
         work_session::{
@@ -118,7 +117,6 @@ pub fn contract() -> String {
     push::<StaffingShift>(&mut output, &config);
     push::<ShiftAssignment>(&mut output, &config);
     push::<StaffingCandidate>(&mut output, &config);
-    push::<StaffingEligibility>(&mut output, &config);
     push::<ReconcileStatus>(&mut output, &config);
     push::<CustomerWorkRecord>(&mut output, &config);
     push::<StaffingReconcile>(&mut output, &config);
@@ -128,7 +126,7 @@ pub fn contract() -> String {
     push::<ReconciliationRevision>(&mut output, &config);
     push::<CustomerUpsertRequest>(&mut output, &config);
     push::<StaffingPriceSetRequest>(&mut output, &config);
-    push::<StaffingEligibilityCreateRequest>(&mut output, &config);
+    push::<StaffingCancellationRequest>(&mut output, &config);
     push::<StaffingShiftCreateRequest>(&mut output, &config);
     push::<ManualRateOverrideRequest>(&mut output, &config);
     push::<ShiftAssignmentCreateRequest>(&mut output, &config);
@@ -187,6 +185,7 @@ pub fn contract() -> String {
     push::<UrgentCustomerWorkRecordUpsertReq>(&mut output, &config);
     push::<UrgentWorkReconcileReq>(&mut output, &config);
     push::<UrgentWorkAcceptStaffRecordReq>(&mut output, &config);
+    push::<UrgentWorkCancellationReq>(&mut output, &config);
     push::<EmployeeStatus>(&mut output, &config);
     push::<Gender>(&mut output, &config);
     push::<Employee>(&mut output, &config);

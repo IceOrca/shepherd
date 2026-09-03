@@ -718,6 +718,96 @@ async fn manual_self_declaration_is_immutable_idempotent_and_keyset_paginated() 
 }
 
 #[tokio::test]
+async fn completed_urgent_work_cancellation_is_audited_and_terminal() -> TestResult {
+    let fixture: Fixture = Fixture::create().await?;
+    let test_result: TestResult = infra_postgres::with_active_branch(fixture.branch_id, async {
+        let service: Arc<UrgentWorkService> = fixture.urgent_service();
+        let report = require_urgent(
+            service
+                .submit_manual(
+                    fixture.tenant_id,
+                    fixture.actor_account_id,
+                    UrgentWorkManualInput {
+                        customer_id: fixture.customer_id,
+                        started_at: Utc
+                            .with_ymd_and_hms(2026, 8, 22, 8, 0, 0)
+                            .single()
+                            .ok_or_else(|| io::Error::other("cancellation start timestamp is invalid"))?,
+                        ended_at: Utc
+                            .with_ymd_and_hms(2026, 8, 22, 12, 0, 0)
+                            .single()
+                            .ok_or_else(|| io::Error::other("cancellation end timestamp is invalid"))?,
+                        note: Some("Submitted against the wrong customer request".to_owned()),
+                        idempotency_key: Uuid::new_v4(),
+                    },
+                )
+                .await,
+        )?;
+
+        require_urgent(
+            service
+                .cancel(
+                    fixture.tenant_id,
+                    fixture.actor_account_id,
+                    report.report_id,
+                    "Duplicate customer request".to_owned(),
+                )
+                .await,
+        )?;
+
+        let mut verify = fixture.database.begin_tenant(fixture.tenant_id).await?;
+        let cancelled = sqlx::query!(
+            r#"
+            SELECT status, cancellation_reason,
+                   cancelled_at IS NOT NULL AS "has_cancelled_at!",
+                   cancelled_by_account_id
+            FROM business_urgent_work_reports
+            WHERE tenant_id = $1 AND id = $2
+            "#,
+            fixture.tenant_id,
+            report.report_id,
+        )
+        .fetch_one(verify.connection())
+        .await?;
+        let retained_session_count: i64 = sqlx::query_scalar!(
+            r#"
+            SELECT COUNT(*) AS "count!"
+            FROM business_urgent_work_sessions
+            WHERE tenant_id = $1 AND report_id = $2
+            "#,
+            fixture.tenant_id,
+            report.report_id,
+        )
+        .fetch_one(verify.connection())
+        .await?;
+        verify.commit().await?;
+        assert_eq!(cancelled.status, "cancelled");
+        assert_eq!(
+            cancelled.cancellation_reason.as_deref(),
+            Some("Duplicate customer request")
+        );
+        assert!(cancelled.has_cancelled_at);
+        assert_eq!(cancelled.cancelled_by_account_id, Some(fixture.actor_account_id));
+        assert_eq!(retained_session_count, 1);
+
+        let repeated = service
+            .cancel(
+                fixture.tenant_id,
+                fixture.actor_account_id,
+                report.report_id,
+                "Repeated cancellation".to_owned(),
+            )
+            .await;
+        assert!(matches!(repeated, Err(UrgentWorkError::Conflict)));
+        Ok(())
+    })
+    .await;
+    let cleanup_result: TestResult = fixture.cleanup().await;
+    cleanup_result?;
+    test_result
+}
+
+#[tokio::test]
 async fn peer_targets_require_effective_staff_clocking_permission() -> TestResult {
     let fixture: Fixture = Fixture::create().await?;
     let test_result: TestResult = infra_postgres::with_active_branch(fixture.branch_id, async {

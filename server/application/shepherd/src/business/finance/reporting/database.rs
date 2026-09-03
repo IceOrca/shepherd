@@ -377,15 +377,24 @@ WITH profit_share AS (
     )
 ), employees AS (
     SELECT employee.id, employee.branch_id, employee.employee_code,
-           employee.display_name AS employee_name, account.primary_role_code AS role_code
+           employee.display_name AS employee_name,
+           COALESCE(account.primary_role_code, 'staff') AS role_code
     FROM hr_employees AS employee
-    JOIN accounts AS account
+    LEFT JOIN accounts AS account
       ON account.tenant_id = employee.tenant_id AND account.id = employee.account_id
-    WHERE employee.tenant_id = $1 AND employee.status <> 'terminated' AND account.status = 'active'
+    WHERE employee.tenant_id = $1
     UNION
     SELECT payment.employee_id, shepherd_current_branch_id(), payment.employee_code,
            payment.employee_name, payment.role_code
     FROM profit_share AS payment
+), active_employees AS (
+    SELECT employee.id
+    FROM hr_employees AS employee
+    JOIN accounts AS account
+      ON account.tenant_id = employee.tenant_id AND account.id = employee.account_id
+    WHERE employee.tenant_id = $1
+      AND employee.status <> 'terminated'
+      AND account.status = 'active'
 ), assignment_evidence AS (
     SELECT assignment.employee_id, result.currency, result.worked_seconds,
            result.worker_amount,
@@ -471,7 +480,7 @@ WITH profit_share AS (
          && tstzrange(evidence.started_at, evidence.ended_at, '[)')
     GROUP BY evidence.employee_id
 ), employee_currencies AS (
-    SELECT id AS employee_id, 'VND'::TEXT AS currency FROM employees
+    SELECT id AS employee_id, 'VND'::TEXT AS currency FROM active_employees
     UNION SELECT employee_id, currency FROM staffing
     UNION SELECT employee_id, currency FROM salary
     UNION SELECT employee_id, currency FROM recorded_expense
@@ -719,6 +728,7 @@ impl FinancialReportingRepo for FinancialReportingDb {
                      AND confirmed_customer.id = customer_record.confirmed_customer_id
                     JOIN LATERAL (
                         SELECT MIN(session.started_at) AS started_at,
+                               MAX(session.ended_at) AS ended_at,
                                BOOL_OR(session.ended_at IS NULL) AS has_open,
                                COALESCE(SUM(session.worked_seconds), 0) AS worked_seconds
                         FROM business_shift_work_sessions AS session
@@ -729,21 +739,22 @@ impl FinancialReportingRepo for FinancialReportingDb {
                       AND assignment.branch_id = $2
                       AND assignment.status = 'assigned'
                       AND staff.started_at IS NOT NULL
-                      AND NOT staff.has_open
-                      AND staff.worked_seconds > 0
                       AND (
                           (
-                              (staff.started_at AT TIME ZONE claimed_customer.time_zone)::DATE >= $3
-                              AND (staff.started_at AT TIME ZONE claimed_customer.time_zone)::DATE
+                              (staff.started_at AT TIME ZONE claimed_customer.time_zone)::DATE
                                   < ($3::DATE + INTERVAL '1 month')::DATE
+                              AND (
+                                  staff.has_open
+                                  OR (staff.ended_at AT TIME ZONE claimed_customer.time_zone)::DATE >= $3
+                              )
                           )
                           OR (
                               customer_record.id IS NOT NULL
                               AND (customer_record.confirmed_started_at
-                                  AT TIME ZONE confirmed_customer.time_zone)::DATE >= $3
-                              AND (customer_record.confirmed_started_at
                                   AT TIME ZONE confirmed_customer.time_zone)::DATE
                                   < ($3::DATE + INTERVAL '1 month')::DATE
+                              AND (customer_record.confirmed_ended_at
+                                  AT TIME ZONE confirmed_customer.time_zone)::DATE >= $3
                           )
                       )
                     UNION ALL
@@ -763,22 +774,23 @@ impl FinancialReportingRepo for FinancialReportingDb {
                      AND confirmed_customer.id = customer_record.confirmed_customer_id
                     WHERE report.tenant_id = $1
                       AND report.branch_id = $2
-                      AND report.status = 'completed'
-                      AND session.ended_at IS NOT NULL
-                      AND session.worked_seconds > 0
+                      AND report.status IN ('active', 'completed')
                       AND (
                           (
-                              (session.started_at AT TIME ZONE claimed_customer.time_zone)::DATE >= $3
-                              AND (session.started_at AT TIME ZONE claimed_customer.time_zone)::DATE
+                              (session.started_at AT TIME ZONE claimed_customer.time_zone)::DATE
                                   < ($3::DATE + INTERVAL '1 month')::DATE
+                              AND (
+                                  session.ended_at IS NULL
+                                  OR (session.ended_at AT TIME ZONE claimed_customer.time_zone)::DATE >= $3
+                              )
                           )
                           OR (
                               customer_record.id IS NOT NULL
                               AND (customer_record.confirmed_started_at
-                                  AT TIME ZONE confirmed_customer.time_zone)::DATE >= $3
-                              AND (customer_record.confirmed_started_at
                                   AT TIME ZONE confirmed_customer.time_zone)::DATE
                                   < ($3::DATE + INTERVAL '1 month')::DATE
+                              AND (customer_record.confirmed_ended_at
+                                  AT TIME ZONE confirmed_customer.time_zone)::DATE >= $3
                           )
                       )
                 )
@@ -884,15 +896,6 @@ impl FinancialReportingRepo for FinancialReportingDb {
                     $1, $2, $3, ($3::DATE + INTERVAL '1 month - 1 day')::DATE
                 ) AS base
                 WHERE recipient.percentage > 0
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM hr_employee_profit_share_payments AS existing
-                      WHERE existing.tenant_id = $1
-                        AND existing.branch_id = $2
-                        AND existing.payroll_period_start = $3
-                        AND existing.employee_id = recipient.employee_id
-                        AND existing.currency = base.currency
-                  )
                 "#,
             )
             .bind(tenant_id)
