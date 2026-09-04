@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT date_trunc('month', session.started_at AT TIME ZONE customer.time_zone)::DATE\n                   AS \"period_start!\"\n            FROM business_shift_work_sessions AS session\n            JOIN business_shift_assignments AS assignment\n              ON assignment.tenant_id = session.tenant_id AND assignment.id = session.assignment_id\n            JOIN business_staffing_shifts AS shift\n              ON shift.tenant_id = assignment.tenant_id AND shift.id = assignment.shift_id\n            JOIN business_customers AS customer\n              ON customer.tenant_id = shift.tenant_id AND customer.id = shift.customer_id\n            WHERE session.tenant_id = $1 AND session.assignment_id = $2\n            LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "period_start!",
+        "type_info": "Date",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "200252fa29e7caaffe77934b5d41d3d861d7b1b53d75fa49dc5d90bd72daba87"
+}

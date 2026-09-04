@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO business_urgent_work_sessions (\n                id, tenant_id, report_id, employee_id, started_at, ended_at,\n                end_idempotency_key, started_by_account_id, start_source,\n                ended_by_account_id, end_source\n            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'self', $8, 'self')\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "390ba48badaf29198ae256b25a2eb4521b7b234eda2aa22c26b8554660292ca7"
+}

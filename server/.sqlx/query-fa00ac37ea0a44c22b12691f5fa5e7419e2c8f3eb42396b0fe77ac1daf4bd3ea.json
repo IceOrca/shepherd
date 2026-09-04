@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE hr_salary_advances\n            SET employee_id = $3,\n                requested_amount = $4::NUMERIC,\n                approved_amount = CASE WHEN $5 THEN $6::NUMERIC ELSE NULL END,\n                currency = $7,\n                reason = $8,\n                paid_on = $9,\n                payroll_inclusion_on = $10,\n                status = CASE WHEN $5 THEN status ELSE 'requested' END,\n                decision_reason = CASE\n                    WHEN $5 AND $6::NUMERIC <> $4::NUMERIC THEN $11\n                    WHEN $5 THEN decision_reason\n                    ELSE NULL\n                END,\n                approved_by_account_id = CASE WHEN $5 THEN approved_by_account_id ELSE NULL END,\n                approved_at = CASE WHEN $5 THEN approved_at ELSE NULL END,\n                version = version + 1,\n                updated_at = CURRENT_TIMESTAMP\n            WHERE tenant_id = $1 AND id = $2\n            RETURNING id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "hr_salary_advances",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Numeric",
+        "Bool",
+        "Numeric",
+        "Text",
+        "Text",
+        "Date",
+        "Date",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "fa00ac37ea0a44c22b12691f5fa5e7419e2c8f3eb42396b0fe77ac1daf4bd3ea"
+}

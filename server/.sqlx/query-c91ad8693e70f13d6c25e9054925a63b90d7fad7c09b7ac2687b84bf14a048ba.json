@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO hr_salary_advance_recoveries (\n                id, tenant_id, salary_advance_id, employee_id, amount, currency,\n                recovery_source, settlement_reference, recorded_by_account_id, idempotency_key\n            ) VALUES ($1, $2, $3, $4, $5::NUMERIC, $6, $7, $8, $9, $10)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Numeric",
+        "Text",
+        "Text",
+        "Text",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c91ad8693e70f13d6c25e9054925a63b90d7fad7c09b7ac2687b84bf14a048ba"
+}

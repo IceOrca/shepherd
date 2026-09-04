@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "ALTER TABLE business_urgent_work_sessions ENABLE TRIGGER business_urgent_work_sessions_reject_delete",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "095a83a0e5556836d14c0405e59c1019da779eee7fa10d34d21dff17a142525a"
+}

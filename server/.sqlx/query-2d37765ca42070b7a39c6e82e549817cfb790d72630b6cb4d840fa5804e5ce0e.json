@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT employee.id\n            FROM hr_employees AS employee\n            INNER JOIN accounts AS account\n                ON account.tenant_id = employee.tenant_id AND account.id = employee.account_id\n            WHERE employee.tenant_id = $1 AND employee.account_id = $2\n              AND employee.status = 'active' AND account.status = 'active'\n              AND shepherd_account_has_permission(\n                  employee.tenant_id, employee.account_id, employee.branch_id,\n                  'business.urgent_work.start'\n              )\n            FOR UPDATE OF employee\n            FOR SHARE OF account\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "2d37765ca42070b7a39c6e82e549817cfb790d72630b6cb4d840fa5804e5ce0e"
+}

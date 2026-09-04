@@ -1,0 +1,144 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO business_staffing_shifts (\n                id, tenant_id, customer_id, job_id, starts_at, ends_at,\n                required_workers, status, notes, created_by_account_id, updated_by_account_id\n            )\n            VALUES ($1, $2, $3, $4, $5, $6, $7, 'open', $8, $9, $9)\n            RETURNING id, customer_id, job_id, starts_at, ends_at,\n                      required_workers, status, notes, created_at, updated_at\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_shifts",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "customer_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_shifts",
+            "name": "customer_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "job_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_shifts",
+            "name": "job_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "starts_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_shifts",
+            "name": "starts_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "ends_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_shifts",
+            "name": "ends_at"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "required_workers",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_shifts",
+            "name": "required_workers"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_shifts",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "notes",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_shifts",
+            "name": "notes"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_shifts",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_shifts",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz",
+        "Int4",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "c2462a374b968b9a90cc40ad7a932b5bff70abb423bd3f7f86ebd951a724fc2d"
+}

@@ -1,0 +1,50 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    SELECT id, currency, hourly_rate::TEXT AS \"hourly_rate!\"\n                    FROM business_staffing_rates\n                    WHERE tenant_id = $1\n                      AND rate_kind = 'customer_bill'\n                      AND customer_id = $2\n                      AND (employee_id IS NULL OR employee_id = $3)\n                      AND effective_from <= $4\n                      AND (effective_to IS NULL OR effective_to >= $4)\n                      AND is_active\n                    ORDER BY\n                        (employee_id IS NOT NULL) DESC,\n                        priority DESC,\n                        effective_from DESC,\n                        id\n                    LIMIT 1\n                    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "currency",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "currency"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "hourly_rate!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Date"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "a0c5246fb6e442255d81fd69a7a8def09fbeb48dbc53da4b25617d0cda179641"
+}

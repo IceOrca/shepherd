@@ -1,0 +1,68 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    SELECT customer.id AS customer_id, customer.name AS customer_name,\n                           customer.address, customer.time_zone\n                    FROM business_customers AS customer\n                    WHERE customer.tenant_id = $1 AND customer.status = 'active'\n                      AND ($2::TEXT IS NULL OR customer.name ILIKE '%' || $2 || '%')\n                      AND ($3::TEXT IS NULL OR (lower(customer.name), customer.id) > ($3, $4))\n                    ORDER BY lower(customer.name), customer.id\n                    LIMIT $5\n                    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "customer_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_customers",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "customer_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_customers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "address",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_customers",
+            "name": "address"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "time_zone",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_customers",
+            "name": "time_zone"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "62717819ef5a52afc371c4cf34323adac99cb66538e6481011ce2eaf62d1d808"
+}

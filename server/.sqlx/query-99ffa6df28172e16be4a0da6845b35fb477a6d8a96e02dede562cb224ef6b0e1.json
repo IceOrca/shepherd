@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(SUM(amount), 0) AS \"amount!\"\n               FROM business_expense_reimbursements\n               WHERE tenant_id = $1 AND expense_claim_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "amount!",
+        "type_info": "Numeric",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "99ffa6df28172e16be4a0da6845b35fb477a6d8a96e02dede562cb224ef6b0e1"
+}

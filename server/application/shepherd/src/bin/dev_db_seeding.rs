@@ -1316,15 +1316,15 @@ async fn seed_staff_work_history(
     owner_account_id: Uuid,
     history_days: i32,
 ) -> Result<(), io::Error> {
-    let report_insert = sqlx::query(
+    let report_insert = sqlx::query!(
         r#"
         WITH work_seed AS (
             SELECT employee.id AS employee_id, employee.account_id,
                    employee.branch_id, customer.id AS customer_id,
                    day_index,
                    (day_index % 4 = 0) AS is_manual,
-                   (md5($1::TEXT || ':demo-work-batch:' || employee.id::TEXT || ':' || day_index::TEXT))::UUID AS batch_id,
-                   (md5($1::TEXT || ':demo-work-report:' || employee.id::TEXT || ':' || day_index::TEXT))::UUID AS report_id,
+                   (md5($1::UUID::TEXT || ':demo-work-batch:' || employee.id::TEXT || ':' || day_index::TEXT))::UUID AS batch_id,
+                   (md5($1::UUID::TEXT || ':demo-work-report:' || employee.id::TEXT || ':' || day_index::TEXT))::UUID AS report_id,
                    ((((CURRENT_TIMESTAMP AT TIME ZONE customer.time_zone)::DATE - day_index)
                        + CASE WHEN day_index % 4 = 0 THEN TIME '18:00' ELSE TIME '08:00' END)
                        AT TIME ZONE customer.time_zone) AS submitted_at
@@ -1371,19 +1371,19 @@ async fn seed_staff_work_history(
         INNER JOIN inserted_batches AS batch ON batch.id = seed.batch_id
         ON CONFLICT (id) DO NOTHING
         "#,
+        tenant_id,
+        history_days,
     )
-    .bind(tenant_id)
-    .bind(history_days)
     .execute(transaction.connection())
     .await
     .map_err(io::Error::other)?;
 
-    let session_insert = sqlx::query(
+    let session_insert = sqlx::query!(
         r#"
         WITH work_seed AS (
             SELECT employee.id AS employee_id, day_index,
-                   (md5($1::TEXT || ':demo-work-report:' || employee.id::TEXT || ':' || day_index::TEXT))::UUID AS report_id,
-                   (md5($1::TEXT || ':demo-work-session:' || employee.id::TEXT || ':' || day_index::TEXT))::UUID AS session_id
+                   (md5($1::UUID::TEXT || ':demo-work-report:' || employee.id::TEXT || ':' || day_index::TEXT))::UUID AS report_id,
+                   (md5($1::UUID::TEXT || ':demo-work-session:' || employee.id::TEXT || ':' || day_index::TEXT))::UUID AS session_id
             FROM hr_employees AS employee
             INNER JOIN accounts AS account
                 ON account.tenant_id = employee.tenant_id AND account.id = employee.account_id
@@ -1411,19 +1411,19 @@ async fn seed_staff_work_history(
             ON report.tenant_id = $1 AND report.id = seed.report_id
         ON CONFLICT (id) DO NOTHING
         "#,
+        tenant_id,
+        history_days,
     )
-    .bind(tenant_id)
-    .bind(history_days)
     .execute(transaction.connection())
     .await
     .map_err(io::Error::other)?;
 
-    let customer_record_insert = sqlx::query(
+    let customer_record_insert = sqlx::query!(
         r#"
         WITH work_seed AS (
             SELECT employee.id AS employee_id, employee.employee_code, day_index,
-                   (md5($1::TEXT || ':demo-work-report:' || employee.id::TEXT || ':' || day_index::TEXT))::UUID AS report_id,
-                   (md5($1::TEXT || ':demo-work-customer:' || employee.id::TEXT || ':' || day_index::TEXT))::UUID AS customer_record_id
+                   (md5($1::UUID::TEXT || ':demo-work-report:' || employee.id::TEXT || ':' || day_index::TEXT))::UUID AS report_id,
+                   (md5($1::UUID::TEXT || ':demo-work-customer:' || employee.id::TEXT || ':' || day_index::TEXT))::UUID AS customer_record_id
             FROM hr_employees AS employee
             INNER JOIN accounts AS account
                 ON account.tenant_id = employee.tenant_id AND account.id = employee.account_id
@@ -1453,10 +1453,10 @@ async fn seed_staff_work_history(
             ON session.tenant_id = report.tenant_id AND session.report_id = report.id
         ON CONFLICT (id) DO NOTHING
         "#,
+        tenant_id,
+        owner_account_id,
+        history_days,
     )
-    .bind(tenant_id)
-    .bind(owner_account_id)
-    .bind(history_days)
     .execute(transaction.connection())
     .await
     .map_err(io::Error::other)?;

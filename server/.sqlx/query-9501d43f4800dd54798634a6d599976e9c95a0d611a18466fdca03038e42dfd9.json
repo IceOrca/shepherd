@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO business_financial_period_events (\n                tenant_id, branch_id, period_start, status, revision_number,\n                reason, actor_account_id, idempotency_key\n            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)\n            RETURNING id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_financial_period_events",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Date",
+        "Text",
+        "Int8",
+        "Text",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "9501d43f4800dd54798634a6d599976e9c95a0d611a18466fdca03038e42dfd9"
+}

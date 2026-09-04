@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO business_customer_work_records (\n            id, tenant_id, branch_id, assignment_id, confirmed_customer_id,\n            confirmed_started_at, confirmed_ended_at, customer_reference,\n            notes, recorded_by_account_id\n        ) VALUES (\n            $1, $2, $3, $4, $5,\n            (((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Ho_Chi_Minh')::DATE - 1) + TIME '18:00')\n                AT TIME ZONE 'Asia/Ho_Chi_Minh',\n            ((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Ho_Chi_Minh')::DATE + TIME '00:00')\n                AT TIME ZONE 'Asia/Ho_Chi_Minh',\n            'DEV-DA-DOI-SOAT-001', 'Bằng chứng khách hàng mẫu đã được đối soát', $6\n        )\n        ON CONFLICT (id) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9527d99e45c7617f9dd4c9a63414557926920888dfe71958095f01cbb6d0a452"
+}

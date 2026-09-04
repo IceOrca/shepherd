@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT tenant_role.is_system,\n                       rule.min_assignments,\n                       rule.max_assignments,\n                       COUNT(branch.id)::BIGINT AS \"valid_branch_count!\"\n                FROM tenant_roles AS tenant_role\n                LEFT JOIN auth_role_branch_assignment_rules AS rule\n                    ON rule.role_code = tenant_role.code\n                LEFT JOIN branches AS branch\n                    ON branch.tenant_id = $1\n                   AND branch.id = ANY($2)\n                   AND branch.status = 'active'\n                   AND branch.id = ANY($3)\n                WHERE tenant_role.tenant_id = $1\n                  AND tenant_role.code = $4\n                  AND tenant_role.is_active\n                  AND tenant_role.is_system\n                GROUP BY tenant_role.code, tenant_role.is_system,\n                         rule.min_assignments, rule.max_assignments\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "is_system",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "tenant_roles",
+            "name": "is_system"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "min_assignments",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "auth_role_branch_assignment_rules",
+            "name": "min_assignments"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "max_assignments",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "auth_role_branch_assignment_rules",
+            "name": "max_assignments"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "valid_branch_count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray",
+        "UuidArray",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      null
+    ]
+  },
+  "hash": "21d1130215ac6980d5046177afae56c5e2abb293b5ab8a2fc9ce9c5fc645105d"
+}

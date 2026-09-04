@@ -887,7 +887,7 @@ mod database_tests {
             assert_eq!(approved.worked_seconds, approved.observed_worked_seconds);
 
             let mut verify = db.begin_tenant(tenant_id).await?;
-            sqlx::query(
+            sqlx::query!(
                 "ALTER TABLE business_shift_work_sessions \
                  DISABLE TRIGGER business_shift_work_sessions_reject_delete",
             )
@@ -940,7 +940,7 @@ mod database_tests {
             sqlx::query!("DELETE FROM branches WHERE tenant_id = $1", tenant_id)
                 .execute(verify.connection())
                 .await?;
-            sqlx::query(
+            sqlx::query!(
                 "ALTER TABLE business_shift_work_sessions \
                  ENABLE TRIGGER business_shift_work_sessions_reject_delete",
             )

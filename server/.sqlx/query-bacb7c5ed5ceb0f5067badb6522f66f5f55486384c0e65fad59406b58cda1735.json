@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE business_staffing_shifts\n        SET status = 'completed', updated_by_account_id = $3\n        WHERE tenant_id = $1 AND id = $2 AND status = 'in_progress'\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bacb7c5ed5ceb0f5067badb6522f66f5f55486384c0e65fad59406b58cda1735"
+}

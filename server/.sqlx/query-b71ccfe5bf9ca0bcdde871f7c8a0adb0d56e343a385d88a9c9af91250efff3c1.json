@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO business_report_export_events (\n                    tenant_id, actor_account_id, report_kind, start_date, end_date, branch_ids,\n                    row_count, currencies, contains_open_period, warning_count, workbook_sha256\n                )\n                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Date",
+        "Date",
+        "UuidArray",
+        "Int8",
+        "TextArray",
+        "Bool",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b71ccfe5bf9ca0bcdde871f7c8a0adb0d56e343a385d88a9c9af91250efff3c1"
+}

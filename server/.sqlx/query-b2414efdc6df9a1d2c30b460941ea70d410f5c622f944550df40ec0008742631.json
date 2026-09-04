@@ -1,0 +1,101 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT identity.subject, account.id AS account_id, account.username, account.email,\n                       account.status AS account_status, account.primary_role_code AS primary_role,\n                       COALESCE(\n                           array_agg(DISTINCT assignment.branch_id ORDER BY assignment.branch_id)\n                               FILTER (WHERE assignment.branch_id IS NOT NULL),\n                           ARRAY[]::UUID[]\n                       ) AS \"branch_ids!\"\n                FROM account_identities AS identity\n                JOIN accounts AS account\n                  ON account.tenant_id = identity.tenant_id AND account.id = identity.account_id\n                LEFT JOIN account_role_assignments AS assignment\n                  ON assignment.tenant_id = account.tenant_id\n                 AND assignment.account_id = account.id\n                 AND assignment.role_code = account.primary_role_code\n                WHERE identity.tenant_id = $1\n                  AND (\n                      EXISTS (\n                          SELECT 1 FROM account_role_assignments AS tenant_actor\n                          WHERE tenant_actor.tenant_id = $1\n                            AND tenant_actor.account_id = $2\n                            AND tenant_actor.branch_id IS NULL\n                      )\n                      OR EXISTS (\n                          SELECT 1 FROM account_role_assignments AS visible\n                          WHERE visible.tenant_id = account.tenant_id\n                            AND visible.account_id = account.id\n                            AND visible.branch_id = ANY($3)\n                      )\n                  )\n                  AND ($4::TEXT IS NULL\n                       OR lower(account.username) LIKE '%' || $4 || '%'\n                       OR lower(COALESCE(account.email, '')) LIKE '%' || $4 || '%')\n                  AND ($5::TEXT IS NULL OR (lower(account.username), account.id) > ($5, $6::UUID))\n                GROUP BY identity.subject, account.id, account.username, account.email,\n                         account.status, account.primary_role_code\n                ORDER BY lower(account.username), account.id\n                LIMIT $7\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "subject",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "account_identities",
+            "name": "subject"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "account_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "username",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "email",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "email"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "account_status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "primary_role",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "primary_role_code"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "branch_ids!",
+        "type_info": "UuidArray",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "UuidArray",
+        "Text",
+        "Text",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "b2414efdc6df9a1d2c30b460941ea70d410f5c622f944550df40ec0008742631"
+}

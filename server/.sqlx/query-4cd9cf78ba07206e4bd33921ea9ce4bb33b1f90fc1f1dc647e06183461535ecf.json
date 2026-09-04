@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    INSERT INTO business_expense_categories (tenant_id, code, display_name)\n                    VALUES\n                        ($1, 'di_chuyen', 'Đi lại và vận chuyển'),\n                        ($1, 'vat_tu', 'Vật tư và đồ dùng'),\n                        ($1, 'tiep_khach', 'Tiếp khách'),\n                        ($1, 'xu_ly_khan_cap', 'Xử lý tình huống khẩn cấp'),\n                        ($1, 'khac', 'Chi phí khác')\n                    ON CONFLICT (tenant_id, code) DO NOTHING\n                    ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4cd9cf78ba07206e4bd33921ea9ce4bb33b1f90fc1f1dc647e06183461535ecf"
+}

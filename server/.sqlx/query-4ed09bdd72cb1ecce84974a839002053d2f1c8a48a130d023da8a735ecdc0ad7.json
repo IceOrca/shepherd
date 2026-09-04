@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "ALTER TABLE business_urgent_customer_work_record_history DISABLE TRIGGER business_urgent_customer_work_record_history_immutable",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "4ed09bdd72cb1ecce84974a839002053d2f1c8a48a130d023da8a735ecdc0ad7"
+}

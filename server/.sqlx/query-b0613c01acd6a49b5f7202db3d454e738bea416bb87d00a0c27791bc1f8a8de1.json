@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE business_shift_work_sessions\n            SET started_at = started_at - INTERVAL '1 minute'\n            WHERE tenant_id = $1 AND assignment_id = $2 AND ended_at IS NOT NULL\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b0613c01acd6a49b5f7202db3d454e738bea416bb87d00a0c27791bc1f8a8de1"
+}

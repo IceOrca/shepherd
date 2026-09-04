@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO hr_salary_advances (\n            id, tenant_id, branch_id, employee_id, requested_amount, approved_amount,\n            currency, reason, paid_on, payroll_inclusion_on, status, requested_by_account_id,\n            approved_by_account_id, disbursed_by_account_id, disbursement_reference,\n            approved_at, disbursed_at, request_idempotency_key\n        ) VALUES (\n            $1, $2, $3, $4, 1000000, 1000000, 'VND',\n            'Tạm ứng chi phí gia đình trong tháng', CURRENT_DATE,\n            CURRENT_DATE + 20, 'disbursed',\n            $5, $6, $6, 'CK-DEV-TAMUNG-001', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, $1\n        ) ON CONFLICT (id) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b2bb66f953b000f38b3f4d2910acbcfce806175b7ee3a8ebe65e0b8bc0f0da1f"
+}

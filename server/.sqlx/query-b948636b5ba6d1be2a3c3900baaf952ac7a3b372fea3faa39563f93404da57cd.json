@@ -1,0 +1,37 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO hr_salary_advances (\n                id, tenant_id, employee_id, requested_amount, currency, reason,\n                paid_on, payroll_inclusion_on, requested_by_account_id,\n                request_idempotency_key\n            ) VALUES ($1, $2, $3, $4::NUMERIC, $5, $6, $7, $8, $9, $10)\n            ON CONFLICT (tenant_id, branch_id, requested_by_account_id, request_idempotency_key)\n            DO NOTHING RETURNING id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "hr_salary_advances",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Numeric",
+        "Text",
+        "Text",
+        "Date",
+        "Date",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b948636b5ba6d1be2a3c3900baaf952ac7a3b372fea3faa39563f93404da57cd"
+}

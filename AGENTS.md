@@ -403,6 +403,17 @@ The user starts Compose before development. Run language toolchains inside conta
 - `docker compose up -d --wait` is the normal development startup and must converge from one invocation. It automatically runs the idempotent `postgres-bootstrap` one-shot service after PostgreSQL is healthy; users must not run `scripts/bootstrap-postgres.sh` directly or initialize roles and schemas manually. Do not recommend repeatedly running `up`; inspect `docker compose ps -a` and the PostgreSQL/bootstrap/Auth logs when startup fails.
 - `docker compose exec -T server bash -c 'cargo test --workspace'` runs server tests.
 - `docker compose exec -T server bash -c 'cargo clippy --workspace && cargo check --workspace'` validates Rust.
+- PostgreSQL access uses SQLx compile-time macros. Use `query!`,
+  `query_as!`, and `query_scalar!` for inline SQL, or their
+  `query_file!` variants for large statements. Do not introduce the runtime
+  `sqlx::query`, `sqlx::query_as`, or `sqlx::query_scalar` constructors,
+  and do not bypass validation with `AssertSqlSafe` when a fixed query can be
+  expressed with nullable filter parameters.
+- After changing SQL, migrations, or macro bind/result types, regenerate and
+  commit `server/.sqlx` from the running development stack with
+  `docker compose exec -T -e SQLX_OFFLINE=false server cargo sqlx prepare --workspace -- --all-targets --features planned-staffing`.
+  Then verify the cache without database access using
+  `docker compose exec -T -e SQLX_OFFLINE=true server cargo check --workspace --all-targets --features planned-staffing`.
 - `docker compose exec -T client sh -c 'npm run lint'` checks TypeScript; replace `lint` with `build` or `dev` as needed. The Alpine client image does not contain Bash.
 - `bash scripts/generate-api-types.sh` regenerates TypeScript DTO contracts using Cargo inside `server`.
 - `sh scripts/dev-data-seeding.sh` resets the unified development database, lets GoTrue recreate its owned `auth` schema, creates every development GoTrue user listed in `scripts/dev-auth-accounts.tsv` through the admin API, and seeds linked tenant accounts and employees in `public`. Keep the catalog development-only. Its eight columns (tenant UUID, slug, name, role, username, email, password, and branch) are the single source of truth; never duplicate tenant or account definitions in Rust.

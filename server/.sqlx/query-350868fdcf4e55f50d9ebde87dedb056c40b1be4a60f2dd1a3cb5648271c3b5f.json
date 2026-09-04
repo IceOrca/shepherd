@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT shepherd_financial_date_is_open_for_update(\n            $1,\n            shepherd_current_branch_id(),\n            $2\n        ) AS \"is_open!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "is_open!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "350868fdcf4e55f50d9ebde87dedb056c40b1be4a60f2dd1a3cb5648271c3b5f"
+}

@@ -1,0 +1,65 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT advance.id, advance.status, advance.requested_by_account_id AS owner_account_id,\n                   revision.revision_id\n            FROM hr_salary_advances AS advance\n            JOIN LATERAL (\n                SELECT item.revision_id\n                FROM hr_salary_advance_revisions AS item\n                WHERE item.tenant_id = advance.tenant_id\n                  AND item.branch_id = advance.branch_id\n                  AND item.salary_advance_id = advance.id\n                ORDER BY item.revision_number DESC\n                LIMIT 1\n            ) AS revision ON TRUE\n            WHERE advance.tenant_id = $1 AND advance.id = $2\n            FOR UPDATE OF advance\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "hr_salary_advances",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hr_salary_advances",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "owner_account_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "hr_salary_advances",
+            "name": "requested_by_account_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "revision_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "hr_salary_advance_revisions",
+            "name": "revision_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "92dee12e731ed9858930ea52e23ea705dc00dae8efebac4fc976a8c89e85ec5d"
+}

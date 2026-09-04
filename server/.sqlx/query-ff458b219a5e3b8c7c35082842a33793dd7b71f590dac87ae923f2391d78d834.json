@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n                    SELECT 1\n                    FROM tenant_roles AS target_role\n                    WHERE target_role.tenant_id = $1\n                      AND target_role.code = $3\n                      AND target_role.is_active\n                      AND (\n                          (\n                              target_role.is_system\n                              AND EXISTS (\n                                  SELECT 1\n                                  FROM account_roles AS actor_role\n                                  INNER JOIN auth_role_assignment_grants AS role_grant\n                                      ON role_grant.grantor_role_code = actor_role.role_code\n                                  WHERE actor_role.tenant_id = $1\n                                    AND actor_role.account_id = $2\n                                    AND role_grant.target_role_code = target_role.code\n                              )\n                          )\n                          OR (\n                              NOT target_role.is_system\n                              AND (\n                                  (\n                                      target_role.scope_type = 'tenant'\n                                      AND shepherd_account_has_tenant_permission($1, $2, $4)\n                                  )\n                                  OR (\n                                      target_role.scope_type = 'branch'\n                                      AND cardinality($5::UUID[]) > 0\n                                      AND NOT EXISTS (\n                                          SELECT 1\n                                          FROM unnest($5::UUID[]) AS requested(branch_id)\n                                          WHERE NOT shepherd_account_has_permission(\n                                              $1,\n                                              $2,\n                                              requested.branch_id,\n                                              $4\n                                          )\n                                      )\n                                  )\n                              )\n                          )\n                      )\n                ) AS \"exists!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ff458b219a5e3b8c7c35082842a33793dd7b71f590dac87ae923f2391d78d834"
+}

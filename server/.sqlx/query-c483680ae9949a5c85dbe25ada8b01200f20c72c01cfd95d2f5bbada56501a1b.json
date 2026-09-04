@@ -1,0 +1,116 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH staffing AS (\n    SELECT result.currency,\n           SUM(result.customer_amount) AS revenue,\n           SUM(result.worker_amount) AS worker_cost\n    FROM business_shift_assignments AS assignment\n    JOIN LATERAL (\n        SELECT currency, customer_amount, worker_amount, local_work_date\n        FROM business_assignment_reconciliation_revisions\n        WHERE tenant_id = assignment.tenant_id\n          AND assignment_id = assignment.id\n        ORDER BY revision_number DESC\n        LIMIT 1\n    ) AS result ON TRUE\n    WHERE assignment.tenant_id = $1\n      AND assignment.status = 'approved'\n      AND result.local_work_date BETWEEN $2 AND $3\n    GROUP BY result.currency\n), salary AS (\n    SELECT rate.currency,\n           ROUND(SUM(\n               rate.monthly_amount\n               / EXTRACT(DAY FROM (\n                   date_trunc('month', day.work_date::DATE)\n                   + INTERVAL '1 month - 1 day'\n               ))\n           ), 4) AS amount\n    FROM generate_series($2::DATE, $3::DATE, INTERVAL '1 day') AS day(work_date)\n    JOIN hr_employee_salary_rates AS rate\n      ON day.work_date::DATE BETWEEN rate.effective_from\n                                AND COALESCE(rate.effective_to, 'infinity'::DATE)\n    JOIN hr_employees AS employee\n      ON employee.tenant_id = rate.tenant_id\n     AND employee.branch_id = rate.branch_id\n     AND employee.id = rate.employee_id\n    WHERE rate.tenant_id = $1\n      AND day.work_date::DATE >= employee.hire_date\n      AND (\n          employee.termination_date IS NULL\n          OR day.work_date::DATE <= employee.termination_date\n      )\n    GROUP BY rate.currency\n), expense AS (\n    SELECT currency, SUM(approved_amount) AS amount\n    FROM business_expense_claims\n    WHERE tenant_id = $1\n      AND status = 'approved'\n      AND paid_on BETWEEN $2 AND $3\n    GROUP BY currency\n), profit_share AS (\n    SELECT payment.currency, SUM(payment.payment_amount) AS amount\n    FROM shepherd_branch_profit_share_payroll(\n        $1,\n        shepherd_current_branch_id(),\n        $2,\n        $3\n    ) AS payment\n    GROUP BY payment.currency\n), reimbursement AS (\n    SELECT payment.currency, SUM(payment.amount) AS amount\n    FROM business_expense_reimbursements AS payment\n    JOIN branches AS branch\n      ON branch.tenant_id = payment.tenant_id\n     AND branch.id = payment.branch_id\n    WHERE payment.tenant_id = $1\n      AND COALESCE(\n          payment.payroll_inclusion_on,\n          (payment.reimbursed_at AT TIME ZONE branch.time_zone)::DATE\n      ) BETWEEN $2 AND $3\n    GROUP BY payment.currency\n), advance_disbursed AS (\n    SELECT advance.currency, SUM(advance.approved_amount) AS amount\n    FROM hr_salary_advances AS advance\n    WHERE advance.tenant_id = $1\n      AND advance.disbursed_at IS NOT NULL\n      AND advance.paid_on BETWEEN $2 AND $3\n    GROUP BY advance.currency\n), advance_recovered AS (\n    SELECT recovery.currency, SUM(recovery.amount) AS amount\n    FROM hr_salary_advance_recoveries AS recovery\n    JOIN branches AS branch\n      ON branch.tenant_id = recovery.tenant_id\n     AND branch.id = recovery.branch_id\n    WHERE recovery.tenant_id = $1\n      AND COALESCE(\n          recovery.payroll_inclusion_on,\n          (recovery.recovered_at AT TIME ZONE branch.time_zone)::DATE\n      ) BETWEEN $2 AND $3\n    GROUP BY recovery.currency\n), reimbursement_balance AS (\n    SELECT claim.currency,\n           SUM(GREATEST(\n               claim.approved_amount - COALESCE(payment.amount, 0),\n               0\n           )) AS amount\n    FROM business_expense_claims AS claim\n    JOIN branches AS branch\n      ON branch.tenant_id = claim.tenant_id\n     AND branch.id = claim.branch_id\n    LEFT JOIN LATERAL (\n        SELECT SUM(item.amount) AS amount\n        FROM business_expense_reimbursements AS item\n        WHERE item.tenant_id = claim.tenant_id\n          AND item.expense_claim_id = claim.id\n          AND COALESCE(\n              item.payroll_inclusion_on,\n              (item.reimbursed_at AT TIME ZONE branch.time_zone)::DATE\n          ) <= $3\n    ) AS payment ON TRUE\n    WHERE claim.tenant_id = $1\n      AND claim.status = 'approved'\n      AND claim.funding_source = 'employee_personal'\n      AND claim.paid_on <= $3\n      AND (claim.approved_at AT TIME ZONE branch.time_zone)::DATE <= $3\n    GROUP BY claim.currency\n), advance_balance AS (\n    SELECT advance.currency,\n           SUM(GREATEST(\n               advance.approved_amount - COALESCE(recovery.amount, 0),\n               0\n           )) AS amount\n    FROM hr_salary_advances AS advance\n    JOIN branches AS branch\n      ON branch.tenant_id = advance.tenant_id\n     AND branch.id = advance.branch_id\n    LEFT JOIN LATERAL (\n        SELECT SUM(item.amount) AS amount\n        FROM hr_salary_advance_recoveries AS item\n        WHERE item.tenant_id = advance.tenant_id\n          AND item.salary_advance_id = advance.id\n          AND COALESCE(\n              item.payroll_inclusion_on,\n              (item.recovered_at AT TIME ZONE branch.time_zone)::DATE\n          ) <= $3\n    ) AS recovery ON TRUE\n    WHERE advance.tenant_id = $1\n      AND advance.disbursed_at IS NOT NULL\n      AND advance.paid_on <= $3\n    GROUP BY advance.currency\n), currencies AS (\n    SELECT 'VND'::TEXT AS currency\n    UNION SELECT currency FROM staffing\n    UNION SELECT currency FROM salary\n    UNION SELECT currency FROM expense\n    UNION SELECT currency FROM profit_share\n    UNION SELECT currency FROM reimbursement\n    UNION SELECT currency FROM advance_disbursed\n    UNION SELECT currency FROM advance_recovered\n    UNION SELECT currency FROM reimbursement_balance\n    UNION SELECT currency FROM advance_balance\n)\nSELECT currencies.currency AS \"currency!\",\n       COALESCE(staffing.revenue, 0)::TEXT AS \"staffing_revenue!\",\n       COALESCE(staffing.worker_cost, 0)::TEXT AS \"staffing_worker_cost!\",\n       COALESCE(salary.amount, 0)::TEXT AS \"coordination_salary_cost!\",\n       COALESCE(expense.amount, 0)::TEXT AS \"approved_business_expense!\",\n       COALESCE(profit_share.amount, 0)::TEXT AS \"profit_share_cost!\",\n       (\n           COALESCE(staffing.worker_cost, 0)\n           + COALESCE(salary.amount, 0)\n           + COALESCE(expense.amount, 0)\n       )::TEXT AS \"operating_cost!\",\n       (\n           COALESCE(staffing.revenue, 0)\n           - COALESCE(staffing.worker_cost, 0)\n           - COALESCE(salary.amount, 0)\n           - COALESCE(expense.amount, 0)\n       )::TEXT AS \"operating_profit!\",\n       (\n           COALESCE(staffing.revenue, 0)\n           - COALESCE(staffing.worker_cost, 0)\n           - COALESCE(salary.amount, 0)\n           - COALESCE(expense.amount, 0)\n           - COALESCE(profit_share.amount, 0)\n       )::TEXT AS \"business_profit_after_profit_share!\",\n       COALESCE(reimbursement.amount, 0)::TEXT AS \"reimbursed_cash!\",\n       COALESCE(advance_disbursed.amount, 0)::TEXT AS \"salary_advance_disbursed!\",\n       COALESCE(advance_recovered.amount, 0)::TEXT AS \"salary_advance_recovered!\",\n       COALESCE(reimbursement_balance.amount, 0)::TEXT\n           AS \"outstanding_expense_reimbursement!\",\n       COALESCE(advance_balance.amount, 0)::TEXT AS \"outstanding_salary_advance!\"\nFROM currencies\nLEFT JOIN staffing USING (currency)\nLEFT JOIN salary USING (currency)\nLEFT JOIN expense USING (currency)\nLEFT JOIN profit_share USING (currency)\nLEFT JOIN reimbursement USING (currency)\nLEFT JOIN advance_disbursed USING (currency)\nLEFT JOIN advance_recovered USING (currency)\nLEFT JOIN reimbursement_balance USING (currency)\nLEFT JOIN advance_balance USING (currency)\nORDER BY currencies.currency\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "currency!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "staffing_revenue!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "staffing_worker_cost!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "coordination_salary_cost!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "approved_business_expense!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "profit_share_cost!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "operating_cost!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "operating_profit!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "business_profit_after_profit_share!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "reimbursed_cash!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 10,
+        "name": "salary_advance_disbursed!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 11,
+        "name": "salary_advance_recovered!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 12,
+        "name": "outstanding_expense_reimbursement!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 13,
+        "name": "outstanding_salary_advance!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date",
+        "Date"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "c483680ae9949a5c85dbe25ada8b01200f20c72c01cfd95d2f5bbada56501a1b"
+}

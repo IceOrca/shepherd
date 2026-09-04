@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT shepherd_financial_date_is_open_for_update(report.tenant_id, report.branch_id,\n                           (current_record.confirmed_started_at AT TIME ZONE current_customer.time_zone)::DATE)\n                       AND shepherd_financial_date_is_open_for_update(report.tenant_id, report.branch_id,\n                           ($3::TIMESTAMPTZ AT TIME ZONE proposed_customer.time_zone)::DATE) AS \"dates_open!\"\n                FROM business_urgent_work_reports AS report\n                JOIN business_urgent_customer_work_records AS current_record\n                  ON current_record.tenant_id = report.tenant_id AND current_record.report_id = report.id\n                JOIN business_customers AS current_customer\n                  ON current_customer.tenant_id = current_record.tenant_id AND current_customer.id = current_record.confirmed_customer_id\n                JOIN business_customers AS proposed_customer\n                  ON proposed_customer.tenant_id = report.tenant_id AND proposed_customer.id = $4\n                WHERE report.tenant_id = $1 AND report.id = $2\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "dates_open!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "fc7aad536e509c4596fd7a828fbb6f4d23d8e34f856890bd59618b954850e23d"
+}

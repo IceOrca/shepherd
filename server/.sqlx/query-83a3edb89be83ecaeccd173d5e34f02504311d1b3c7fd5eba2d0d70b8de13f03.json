@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE business_staffing_shifts AS shift\n        SET status = 'completed', updated_at = CURRENT_TIMESTAMP, updated_by_account_id = $3\n        WHERE shift.tenant_id = $1\n          AND shift.id = $2\n          AND NOT EXISTS (\n              SELECT 1 FROM business_shift_assignments AS pending\n              WHERE pending.tenant_id = shift.tenant_id\n                AND pending.shift_id = shift.id\n                AND pending.status = 'assigned'\n          )\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "83a3edb89be83ecaeccd173d5e34f02504311d1b3c7fd5eba2d0d70b8de13f03"
+}

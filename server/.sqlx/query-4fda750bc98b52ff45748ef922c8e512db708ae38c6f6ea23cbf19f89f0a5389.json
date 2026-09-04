@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT assignment.status AS assignment_status,\n                   shift.status AS shift_status\n            FROM business_shift_assignments AS assignment\n            JOIN business_staffing_shifts AS shift\n              ON shift.tenant_id = assignment.tenant_id\n             AND shift.id = assignment.shift_id\n            WHERE assignment.tenant_id = $1\n              AND assignment.id = $2\n            FOR UPDATE OF assignment, shift\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "assignment_status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "shift_status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_shifts",
+            "name": "status"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "4fda750bc98b52ff45748ef922c8e512db708ae38c6f6ea23cbf19f89f0a5389"
+}

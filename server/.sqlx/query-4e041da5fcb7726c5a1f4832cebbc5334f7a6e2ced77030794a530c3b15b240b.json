@@ -1,0 +1,72 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    SELECT employee.id AS employee_id, employee.employee_code,\n                           employee.display_name, employee.account_id = $2 AS \"is_self!\",\n                           EXISTS (\n                               SELECT 1 FROM business_urgent_work_sessions AS urgent_session\n                               WHERE urgent_session.tenant_id = employee.tenant_id\n                                 AND urgent_session.employee_id = employee.id\n                                 AND urgent_session.ended_at IS NULL\n                               UNION ALL\n                               SELECT 1 FROM business_shift_work_sessions AS planned_session\n                               WHERE planned_session.tenant_id = employee.tenant_id\n                                 AND planned_session.employee_id = employee.id\n                                 AND planned_session.ended_at IS NULL\n                           ) AS \"has_open_work!\"\n                    FROM hr_employees AS employee\n                    INNER JOIN accounts AS account\n                        ON account.tenant_id = employee.tenant_id\n                       AND account.id = employee.account_id\n                    WHERE employee.tenant_id = $1\n                      AND employee.status = 'active'\n                      AND account.status = 'active'\n                      AND shepherd_account_has_permission(\n                          employee.tenant_id,\n                          employee.account_id,\n                          employee.branch_id,\n                          'business.urgent_work.start'\n                      )\n                      AND ($3::TEXT IS NULL OR employee.display_name ILIKE '%' || $3 || '%'\n                           OR employee.employee_code ILIKE '%' || $3 || '%')\n                      AND ($4::BOOLEAN IS NULL\n                           OR (employee.account_id = $2) < $4\n                           OR ((employee.account_id = $2) = $4\n                               AND (lower(employee.display_name), employee.id) > ($5, $6)))\n                    ORDER BY (employee.account_id = $2) DESC, lower(employee.display_name), employee.id\n                    LIMIT $7\n                    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "employee_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "employee_code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "employee_code"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "display_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "is_self!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "has_open_work!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Bool",
+        "Text",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "4e041da5fcb7726c5a1f4832cebbc5334f7a6e2ced77030794a530c3b15b240b"
+}

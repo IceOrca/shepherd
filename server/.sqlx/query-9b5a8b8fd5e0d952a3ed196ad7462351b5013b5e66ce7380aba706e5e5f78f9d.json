@@ -1,0 +1,408 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT claim.id,\n       claim.branch_id,\n       claim.category_id,\n       category.display_name AS category_name,\n       claim.funding_source,\n       claim.paid_by_employee_id,\n       payer.display_name AS paid_by_employee_name,\n       claim.customer_id,\n       claim.urgent_work_report_id,\n       claim.staffing_assignment_id,\n       claim.paid_on,\n       claim.payroll_inclusion_on,\n       claim.description,\n       claim.evidence_reference,\n       claim.claimed_amount::TEXT AS \"claimed_amount!\",\n       claim.approved_amount::TEXT AS \"approved_amount?\",\n       COALESCE(SUM(reimbursement.amount), 0)::TEXT AS \"reimbursed_amount!\",\n       CASE\n           WHEN claim.funding_source = 'employee_personal'\n                AND claim.approved_amount IS NOT NULL\n           THEN GREATEST(\n               claim.approved_amount - COALESCE(SUM(reimbursement.amount), 0),\n               0\n           )::TEXT\n           ELSE 0::NUMERIC::TEXT\n       END AS \"outstanding_reimbursement!\",\n       claim.currency,\n       claim.status,\n       claim.decision_reason,\n       claim.submitted_by_account_id,\n       submitter.username AS submitted_by_username,\n       approver.username AS approved_by_username,\n       claim.approved_at,\n       revision.revision_id,\n       revision.revision_number,\n       revision.revision_kind,\n       revision.correction_reason,\n       reviser.username AS revised_by_username,\n       revision.revised_at,\n       (\n           shepherd_financial_date_is_open(claim.tenant_id, claim.branch_id, claim.paid_on)\n           AND shepherd_financial_date_is_open(\n               claim.tenant_id,\n               claim.branch_id,\n               claim.payroll_inclusion_on\n           )\n       ) AS \"financial_period_open!\",\n       claim.created_at,\n       claim.updated_at\nFROM business_expense_claims AS claim\nJOIN business_expense_categories AS category\n  ON category.tenant_id = claim.tenant_id\n AND category.id = claim.category_id\nLEFT JOIN hr_employees AS payer\n  ON payer.tenant_id = claim.tenant_id\n AND payer.branch_id = claim.branch_id\n AND payer.id = claim.paid_by_employee_id\nJOIN accounts AS submitter\n  ON submitter.tenant_id = claim.tenant_id\n AND submitter.id = claim.submitted_by_account_id\nLEFT JOIN accounts AS approver\n  ON approver.tenant_id = claim.tenant_id\n AND approver.id = claim.approved_by_account_id\nJOIN LATERAL (\n    SELECT item.revision_id,\n           item.revision_number,\n           item.revision_kind,\n           item.correction_reason,\n           item.revised_by_account_id,\n           item.revised_at\n    FROM business_expense_claim_revisions AS item\n    WHERE item.tenant_id = claim.tenant_id\n      AND item.branch_id = claim.branch_id\n      AND item.expense_claim_id = claim.id\n    ORDER BY item.revision_number DESC\n    LIMIT 1\n) AS revision ON TRUE\nJOIN accounts AS reviser\n  ON reviser.tenant_id = claim.tenant_id\n AND reviser.id = revision.revised_by_account_id\nLEFT JOIN business_expense_reimbursements AS reimbursement\n  ON reimbursement.tenant_id = claim.tenant_id\n AND reimbursement.branch_id = claim.branch_id\n AND reimbursement.expense_claim_id = claim.id\nWHERE claim.tenant_id = $1\n  AND ($2 OR claim.submitted_by_account_id = $3 OR payer.account_id = $3)\n  AND ($4::TEXT IS NULL OR claim.status = $4)\n  AND (\n      $5::TEXT IS NULL\n      OR lower(claim.description) LIKE '%' || $5 || '%'\n      OR lower(category.display_name) LIKE '%' || $5 || '%'\n      OR lower(COALESCE(payer.display_name, '')) LIKE '%' || $5 || '%'\n      OR lower(submitter.username) LIKE '%' || $5 || '%'\n  )\n  AND (\n      $6::DATE IS NULL\n      OR (claim.paid_on, claim.created_at, claim.id)\n         < ($6, $7::TIMESTAMPTZ, $8::UUID)\n  )\n  AND ($10::UUID IS NULL OR claim.id = $10)\nGROUP BY claim.id,\n         category.display_name,\n         payer.display_name,\n         submitter.username,\n         approver.username,\n         revision.revision_id,\n         revision.revision_number,\n         revision.revision_kind,\n         revision.correction_reason,\n         reviser.username,\n         revision.revised_at\nORDER BY claim.paid_on DESC, claim.created_at DESC, claim.id DESC\nLIMIT $9\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claims",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "branch_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claims",
+            "name": "branch_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "category_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claims",
+            "name": "category_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "category_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_expense_categories",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "funding_source",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claims",
+            "name": "funding_source"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "paid_by_employee_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claims",
+            "name": "paid_by_employee_id"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "paid_by_employee_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "customer_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claims",
+            "name": "customer_id"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "urgent_work_report_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claims",
+            "name": "urgent_work_report_id"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "staffing_assignment_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claims",
+            "name": "staffing_assignment_id"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "paid_on",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claims",
+            "name": "paid_on"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "payroll_inclusion_on",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claims",
+            "name": "payroll_inclusion_on"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "description",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claims",
+            "name": "description"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "evidence_reference",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claims",
+            "name": "evidence_reference"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "claimed_amount!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 15,
+        "name": "approved_amount?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 16,
+        "name": "reimbursed_amount!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 17,
+        "name": "outstanding_reimbursement!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 18,
+        "name": "currency",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claims",
+            "name": "currency"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claims",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 20,
+        "name": "decision_reason",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claims",
+            "name": "decision_reason"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
+        "name": "submitted_by_account_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claims",
+            "name": "submitted_by_account_id"
+          }
+        }
+      },
+      {
+        "ordinal": 22,
+        "name": "submitted_by_username",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "ordinal": 23,
+        "name": "approved_by_username",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "ordinal": 24,
+        "name": "approved_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claims",
+            "name": "approved_at"
+          }
+        }
+      },
+      {
+        "ordinal": 25,
+        "name": "revision_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claim_revisions",
+            "name": "revision_id"
+          }
+        }
+      },
+      {
+        "ordinal": 26,
+        "name": "revision_number",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claim_revisions",
+            "name": "revision_number"
+          }
+        }
+      },
+      {
+        "ordinal": 27,
+        "name": "revision_kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claim_revisions",
+            "name": "revision_kind"
+          }
+        }
+      },
+      {
+        "ordinal": 28,
+        "name": "correction_reason",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claim_revisions",
+            "name": "correction_reason"
+          }
+        }
+      },
+      {
+        "ordinal": 29,
+        "name": "revised_by_username",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "ordinal": 30,
+        "name": "revised_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claim_revisions",
+            "name": "revised_at"
+          }
+        }
+      },
+      {
+        "ordinal": 31,
+        "name": "financial_period_open!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 32,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claims",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 33,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claims",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bool",
+        "Uuid",
+        "Text",
+        "Text",
+        "Date",
+        "Timestamptz",
+        "Uuid",
+        "Int8",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      true,
+      null,
+      null,
+      null,
+      null,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      null,
+      false,
+      false
+    ]
+  },
+  "hash": "9b5a8b8fd5e0d952a3ed196ad7462351b5013b5e66ce7380aba706e5e5f78f9d"
+}

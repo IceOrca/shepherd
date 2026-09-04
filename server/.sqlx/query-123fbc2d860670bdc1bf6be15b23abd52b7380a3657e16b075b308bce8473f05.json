@@ -1,0 +1,45 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE business_expense_claims\n            SET category_id = $3,\n                funding_source = $4,\n                paid_by_employee_id = $5,\n                customer_id = $6,\n                urgent_work_report_id = $7,\n                staffing_assignment_id = $8,\n                paid_on = $9,\n                payroll_inclusion_on = $10,\n                description = $11,\n                evidence_reference = $12,\n                claimed_amount = $13::NUMERIC,\n                approved_amount = CASE WHEN $14 THEN $15::NUMERIC ELSE NULL END,\n                currency = $16,\n                status = CASE WHEN $14 THEN 'approved' ELSE 'submitted' END,\n                decision_reason = CASE\n                    WHEN $14 AND $15::NUMERIC <> $13::NUMERIC THEN $17\n                    ELSE NULL\n                END,\n                approved_by_account_id = CASE WHEN $14 THEN approved_by_account_id ELSE NULL END,\n                approved_at = CASE WHEN $14 THEN approved_at ELSE NULL END,\n                version = version + 1,\n                updated_at = CURRENT_TIMESTAMP\n            WHERE tenant_id = $1 AND id = $2\n              AND ($15::NUMERIC IS NULL OR $15::NUMERIC >= $18::NUMERIC)\n            RETURNING id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claims",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Date",
+        "Date",
+        "Text",
+        "Text",
+        "Numeric",
+        "Bool",
+        "Numeric",
+        "Text",
+        "Text",
+        "Numeric"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "123fbc2d860670bdc1bf6be15b23abd52b7380a3657e16b075b308bce8473f05"
+}

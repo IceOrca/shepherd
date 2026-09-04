@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE hr_salary_advances\n            SET status = 'disbursed', disbursed_by_account_id = $3,\n                disbursement_reference = $4, disbursed_at = CURRENT_TIMESTAMP,\n                version = version + 1, updated_at = CURRENT_TIMESTAMP\n            WHERE tenant_id = $1 AND id = $2 AND status = 'approved'\n            RETURNING id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "hr_salary_advances",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ada43afd75998ec0c76df518e9f3261ac4c5173621470da542e39d7c2dfb28fe"
+}

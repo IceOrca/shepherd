@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH work_seed AS (\n            SELECT employee.id AS employee_id, employee.employee_code, day_index,\n                   (md5($1::UUID::TEXT || ':demo-work-report:' || employee.id::TEXT || ':' || day_index::TEXT))::UUID AS report_id,\n                   (md5($1::UUID::TEXT || ':demo-work-customer:' || employee.id::TEXT || ':' || day_index::TEXT))::UUID AS customer_record_id\n            FROM hr_employees AS employee\n            INNER JOIN accounts AS account\n                ON account.tenant_id = employee.tenant_id AND account.id = employee.account_id\n            CROSS JOIN generate_series(1, $3) AS day_index\n            WHERE employee.tenant_id = $1 AND employee.status = 'active'\n              AND account.status = 'active' AND account.primary_role_code = 'staff'\n              AND day_index % 3 <> 2\n        )\n        INSERT INTO business_urgent_customer_work_records (\n            id, tenant_id, branch_id, report_id, confirmed_customer_id,\n            confirmed_started_at, confirmed_ended_at, customer_reference,\n            notes, recorded_by_account_id, created_at, updated_at\n        )\n        SELECT seed.customer_record_id, report.tenant_id, report.branch_id, report.id,\n               report.claimed_customer_id, session.started_at,\n               CASE WHEN seed.day_index % 3 = 0\n                    THEN session.ended_at ELSE session.ended_at - INTERVAL '15 minutes' END,\n               'DEMO-' || to_char(session.started_at, 'YYYYMMDD') || '-' || seed.employee_code,\n               CASE WHEN seed.day_index % 3 = 0\n                    THEN 'Dữ liệu demo: khách hàng xác nhận khớp với nhân viên.'\n                    ELSE 'Dữ liệu demo: khách hàng xác nhận lệch 15 phút.' END,\n               $2, report.created_at + INTERVAL '1 day', report.created_at + INTERVAL '1 day'\n        FROM work_seed AS seed\n        INNER JOIN business_urgent_work_reports AS report\n            ON report.tenant_id = $1 AND report.id = seed.report_id\n        INNER JOIN business_urgent_work_sessions AS session\n            ON session.tenant_id = report.tenant_id AND session.report_id = report.id\n        ON CONFLICT (id) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9c80106d785e6d2a19b3a8d0968622848ce920df3b8f5e855e836651be514421"
+}

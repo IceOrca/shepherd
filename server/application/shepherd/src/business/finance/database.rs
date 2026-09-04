@@ -3,7 +3,7 @@ use std::{str::FromStr, sync::Arc};
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use infra_postgres::{DatabaseAdapter, TenantDbErr, TenantTransaction};
-use sqlx::{AssertSqlSafe, FromRow, PgConnection};
+use sqlx::{FromRow, PgConnection};
 use tracing::{debug, error, info, trace, warn};
 use uuid::Uuid;
 use bigdecimal::BigDecimal;
@@ -15,135 +15,6 @@ use super::core::{
     SalaryAdvanceCursor, SalaryAdvanceInput, SalaryAdvanceListQuery, SalaryAdvancePage, SalaryAdvanceRecoveryInput,
     SalaryAdvanceRevision, SalaryAdvanceRevisionPage, SalaryAdvanceStatus,
 };
-
-const EXPENSE_SELECT: &str = r#"
-SELECT claim.id, claim.branch_id, claim.category_id,
-       category.display_name AS category_name,
-       claim.funding_source, claim.paid_by_employee_id,
-       payer.display_name AS paid_by_employee_name,
-       claim.customer_id, claim.urgent_work_report_id, claim.staffing_assignment_id,
-       claim.paid_on, claim.payroll_inclusion_on, claim.description, claim.evidence_reference,
-       claim.claimed_amount::TEXT AS claimed_amount,
-       claim.approved_amount::TEXT AS approved_amount,
-       COALESCE(SUM(reimbursement.amount), 0)::TEXT AS reimbursed_amount,
-       CASE
-           WHEN claim.funding_source = 'employee_personal' AND claim.approved_amount IS NOT NULL
-           THEN GREATEST(claim.approved_amount - COALESCE(SUM(reimbursement.amount), 0), 0)::TEXT
-           ELSE 0::NUMERIC::TEXT
-       END AS outstanding_reimbursement,
-       claim.currency, claim.status, claim.decision_reason,
-       claim.submitted_by_account_id,
-       submitter.username AS submitted_by_username,
-       approver.username AS approved_by_username,
-       claim.approved_at,
-       revision.revision_id, revision.revision_number, revision.revision_kind,
-       revision.correction_reason, reviser.username AS revised_by_username,
-       revision.revised_at,
-       (
-           shepherd_financial_date_is_open(claim.tenant_id, claim.branch_id, claim.paid_on)
-           AND shepherd_financial_date_is_open(
-               claim.tenant_id, claim.branch_id, claim.payroll_inclusion_on
-           )
-       )
-           AS financial_period_open,
-       claim.created_at, claim.updated_at
-FROM business_expense_claims AS claim
-JOIN business_expense_categories AS category
-  ON category.tenant_id = claim.tenant_id AND category.id = claim.category_id
-LEFT JOIN hr_employees AS payer
-  ON payer.tenant_id = claim.tenant_id AND payer.branch_id = claim.branch_id
- AND payer.id = claim.paid_by_employee_id
-JOIN accounts AS submitter
-  ON submitter.tenant_id = claim.tenant_id AND submitter.id = claim.submitted_by_account_id
-LEFT JOIN accounts AS approver
-  ON approver.tenant_id = claim.tenant_id AND approver.id = claim.approved_by_account_id
-JOIN LATERAL (
-    SELECT item.revision_id, item.revision_number, item.revision_kind,
-           item.correction_reason, item.revised_by_account_id, item.revised_at
-    FROM business_expense_claim_revisions AS item
-    WHERE item.tenant_id = claim.tenant_id
-      AND item.branch_id = claim.branch_id
-      AND item.expense_claim_id = claim.id
-    ORDER BY item.revision_number DESC
-    LIMIT 1
-) AS revision ON TRUE
-JOIN accounts AS reviser
-  ON reviser.tenant_id = claim.tenant_id AND reviser.id = revision.revised_by_account_id
-LEFT JOIN business_expense_reimbursements AS reimbursement
-  ON reimbursement.tenant_id = claim.tenant_id
- AND reimbursement.branch_id = claim.branch_id
- AND reimbursement.expense_claim_id = claim.id
-"#;
-
-const EXPENSE_GROUP_ORDER: &str = r#"
-GROUP BY claim.id, category.display_name, payer.display_name, submitter.username, approver.username,
-         revision.revision_id, revision.revision_number, revision.revision_kind,
-         revision.correction_reason, reviser.username, revision.revised_at
-ORDER BY claim.paid_on DESC, claim.created_at DESC, claim.id DESC
-"#;
-
-const ADVANCE_SELECT: &str = r#"
-SELECT advance.id, advance.branch_id, advance.employee_id,
-       employee.employee_code, employee.display_name AS employee_name,
-       advance.requested_amount::TEXT AS requested_amount,
-       advance.approved_amount::TEXT AS approved_amount,
-       COALESCE(SUM(recovery.amount), 0)::TEXT AS recovered_amount,
-       CASE
-           WHEN advance.approved_amount IS NULL THEN 0::NUMERIC::TEXT
-           ELSE GREATEST(advance.approved_amount - COALESCE(SUM(recovery.amount), 0), 0)::TEXT
-       END AS outstanding_amount,
-       advance.currency, advance.reason, advance.paid_on, advance.payroll_inclusion_on,
-       advance.status,
-       advance.decision_reason, requester.username AS requested_by_username,
-       approver.username AS approved_by_username,
-       disburser.username AS disbursed_by_username,
-       advance.disbursement_reference, advance.requested_at, advance.approved_at,
-       advance.disbursed_at,
-       revision.revision_id, revision.revision_number, revision.revision_kind,
-       revision.correction_reason, reviser.username AS revised_by_username,
-       revision.revised_at,
-       (
-           shepherd_financial_date_is_open(advance.tenant_id, advance.branch_id, advance.paid_on)
-           AND shepherd_financial_date_is_open(
-               advance.tenant_id, advance.branch_id, advance.payroll_inclusion_on
-           )
-       ) AS financial_period_open,
-       advance.updated_at
-FROM hr_salary_advances AS advance
-JOIN hr_employees AS employee
-  ON employee.tenant_id = advance.tenant_id AND employee.branch_id = advance.branch_id
- AND employee.id = advance.employee_id
-JOIN accounts AS requester
-  ON requester.tenant_id = advance.tenant_id AND requester.id = advance.requested_by_account_id
-LEFT JOIN accounts AS approver
-  ON approver.tenant_id = advance.tenant_id AND approver.id = advance.approved_by_account_id
-LEFT JOIN accounts AS disburser
-  ON disburser.tenant_id = advance.tenant_id AND disburser.id = advance.disbursed_by_account_id
-JOIN LATERAL (
-    SELECT item.revision_id, item.revision_number, item.revision_kind,
-           item.correction_reason, item.revised_by_account_id, item.revised_at
-    FROM hr_salary_advance_revisions AS item
-    WHERE item.tenant_id = advance.tenant_id
-      AND item.branch_id = advance.branch_id
-      AND item.salary_advance_id = advance.id
-    ORDER BY item.revision_number DESC
-    LIMIT 1
-) AS revision ON TRUE
-JOIN accounts AS reviser
-  ON reviser.tenant_id = advance.tenant_id AND reviser.id = revision.revised_by_account_id
-LEFT JOIN hr_salary_advance_recoveries AS recovery
-  ON recovery.tenant_id = advance.tenant_id
- AND recovery.branch_id = advance.branch_id
- AND recovery.salary_advance_id = advance.id
-"#;
-
-const ADVANCE_GROUP_ORDER: &str = r#"
-GROUP BY advance.id, employee.employee_code, employee.display_name,
-         requester.username, approver.username, disburser.username,
-         revision.revision_id, revision.revision_number, revision.revision_kind,
-         revision.correction_reason, reviser.username, revision.revised_at
-ORDER BY advance.requested_at DESC, advance.id DESC
-"#;
 
 pub struct FinanceRepo {
     db: Arc<DatabaseAdapter>,
@@ -363,9 +234,7 @@ async fn set_correction_context(
         ("app.revision_idempotency_key", idempotency_key.to_string()),
         ("app.revision_reason", reason.to_owned()),
     ] {
-        sqlx::query_scalar::<_, String>("SELECT set_config($1, $2, TRUE)")
-            .bind(key)
-            .bind(value)
+        sqlx::query_scalar!(r#"SELECT set_config($1, $2, TRUE) AS "context!""#, key, value,)
             .fetch_one(&mut *connection)
             .await
             .map_err(map_sqlx)?;
@@ -460,14 +329,24 @@ async fn fetch_expense(
     tenant_id: Uuid,
     expense_id: Uuid,
 ) -> Result<ExpenseClaim, FinanceError> {
-    let query: String = format!("{EXPENSE_SELECT} WHERE claim.tenant_id = $1 AND claim.id = $2 {EXPENSE_GROUP_ORDER}");
-    let row: ExpenseRow = sqlx::query_as(AssertSqlSafe(query.as_str()))
-        .bind(tenant_id)
-        .bind(expense_id)
-        .fetch_optional(connection)
-        .await
-        .map_err(map_sqlx)?
-        .ok_or(FinanceError::NotFound)?;
+    let row: ExpenseRow = sqlx::query_file_as!(
+        ExpenseRow,
+        "src/business/finance/sql/expense_claims.sql",
+        tenant_id,
+        true,
+        Uuid::nil(),
+        None::<String>,
+        None::<String>,
+        None::<NaiveDate>,
+        None::<DateTime<Utc>>,
+        None::<Uuid>,
+        1_i64,
+        expense_id,
+    )
+    .fetch_optional(connection)
+    .await
+    .map_err(map_sqlx)?
+    .ok_or(FinanceError::NotFound)?;
     row.try_into()
 }
 
@@ -476,15 +355,23 @@ async fn fetch_advance(
     tenant_id: Uuid,
     advance_id: Uuid,
 ) -> Result<SalaryAdvance, FinanceError> {
-    let query: String =
-        format!("{ADVANCE_SELECT} WHERE advance.tenant_id = $1 AND advance.id = $2 {ADVANCE_GROUP_ORDER}");
-    let row: SalaryAdvanceRow = sqlx::query_as(AssertSqlSafe(query.as_str()))
-        .bind(tenant_id)
-        .bind(advance_id)
-        .fetch_optional(connection)
-        .await
-        .map_err(map_sqlx)?
-        .ok_or(FinanceError::NotFound)?;
+    let row: SalaryAdvanceRow = sqlx::query_file_as!(
+        SalaryAdvanceRow,
+        "src/business/finance/sql/salary_advances.sql",
+        tenant_id,
+        true,
+        Uuid::nil(),
+        None::<String>,
+        None::<String>,
+        None::<DateTime<Utc>>,
+        None::<Uuid>,
+        1_i64,
+        advance_id,
+    )
+    .fetch_optional(connection)
+    .await
+    .map_err(map_sqlx)?
+    .ok_or(FinanceError::NotFound)?;
     row.try_into()
 }
 
@@ -502,6 +389,17 @@ fn map_sqlx(error: sqlx::Error) -> FinanceError {
     }
     error!(reason = %error, "Financial database operation failed");
     FinanceError::BackendUnavailable
+}
+
+fn parse_decimal(value: &str, error_message: &'static str) -> Result<BigDecimal, FinanceError> {
+    BigDecimal::from_str(value).map_err(|_| FinanceError::InvalidInput(error_message))
+}
+
+fn parse_optional_decimal(
+    value: Option<&str>,
+    error_message: &'static str,
+) -> Result<Option<BigDecimal>, FinanceError> {
+    value.map(|item| parse_decimal(item, error_message)).transpose()
 }
 
 async fn commit(transaction: TenantTransaction) -> Result<(), FinanceError> {
@@ -542,10 +440,11 @@ impl FinanceRepo {
                 )
                 .execute(&mut *connection)
                 .await?;
-                sqlx::query_as::<_, ExpenseCategoryRow>(
+                sqlx::query_as!(
+                    ExpenseCategoryRow,
                     "SELECT id, code, display_name FROM business_expense_categories WHERE tenant_id = $1 AND status = 'active' ORDER BY display_name",
+                    tenant_id,
                 )
-                .bind(tenant_id)
                 .fetch_all(&mut *connection)
                 .await
             })
@@ -568,35 +467,25 @@ impl FinanceRepo {
             query.cursor.as_ref().map(|value: &ExpenseCursor| value.created_at);
         let cursor_id: Option<Uuid> = query.cursor.as_ref().map(|value: &ExpenseCursor| value.expense_id);
         let query_limit: i64 = query.limit + 1;
-        let sql_query: String = format!(
-            "{EXPENSE_SELECT} 
-            WHERE claim.tenant_id = $1 
-                AND ($2 OR claim.submitted_by_account_id = $3 OR payer.account_id = $3) 
-                AND ($4::TEXT IS NULL OR claim.status = $4) 
-                AND ($5::TEXT IS NULL OR lower(claim.description) 
-                    LIKE '%' || $5 || '%' OR lower(category.display_name) 
-                    LIKE '%' || $5 || '%' OR lower(COALESCE(payer.display_name, '')) 
-                    LIKE '%' || $5 || '%' OR lower(submitter.username) 
-                    LIKE '%' || $5 || '%') AND ($6::DATE IS NULL OR 
-                    (claim.paid_on, claim.created_at, claim.id) < ($6, $7::TIMESTAMPTZ, $8::UUID)) 
-            {EXPENSE_GROUP_ORDER} 
-            LIMIT $9"
-        );
         let mut rows: Vec<ExpenseRow> = self
             .db
             .tran_with_tenant(tenant_id, async |connection: &mut PgConnection| {
-                sqlx::query_as::<_, ExpenseRow>(AssertSqlSafe(sql_query.as_str()))
-                    .bind(tenant_id)
-                    .bind(can_read_all)
-                    .bind(actor_account_id)
-                    .bind(status_code)
-                    .bind(normalized_search)
-                    .bind(cursor_paid_on)
-                    .bind(cursor_created_at)
-                    .bind(cursor_id)
-                    .bind(query_limit)
-                    .fetch_all(connection)
-                    .await
+                sqlx::query_file_as!(
+                    ExpenseRow,
+                    "src/business/finance/sql/expense_claims.sql",
+                    tenant_id,
+                    can_read_all,
+                    actor_account_id,
+                    status_code,
+                    normalized_search,
+                    cursor_paid_on,
+                    cursor_created_at,
+                    cursor_id,
+                    query_limit,
+                    None::<Uuid>,
+                )
+                .fetch_all(connection)
+                .await
             })
             .await
             .map_err(|_| FinanceError::BackendUnavailable)?;
@@ -629,18 +518,20 @@ impl FinanceRepo {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
         let connection: &mut PgConnection = transaction.connection();
         let payer_is_allowed: bool = match input.paid_by_employee_id {
-            Some(employee_id) => {
-                sqlx::query_scalar(
-                    "SELECT EXISTS(SELECT 1 FROM hr_employees WHERE tenant_id = $1 AND id = $2 AND status = 'active' AND ($3 OR account_id = $4))",
-                )
-                .bind(tenant_id)
-                .bind(employee_id)
-                .bind(can_submit_for_others)
-                .bind(actor_account_id)
-                .fetch_one(&mut *connection)
-                .await
-                .map_err(map_sqlx)?
-            }
+            Some(employee_id) => sqlx::query_scalar!(
+                r#"SELECT EXISTS(
+                        SELECT 1 FROM hr_employees
+                        WHERE tenant_id = $1 AND id = $2 AND status = 'active'
+                          AND ($3 OR account_id = $4)
+                    ) AS "is_allowed!""#,
+                tenant_id,
+                employee_id,
+                can_submit_for_others,
+                actor_account_id,
+            )
+            .fetch_one(&mut *connection)
+            .await
+            .map_err(map_sqlx)?,
             None => true,
         };
         if !payer_is_allowed {
@@ -700,12 +591,12 @@ impl FinanceRepo {
             .map_err(map_sqlx)?;
             inserted_id
         } else {
-            sqlx::query_scalar(
+            sqlx::query_scalar!(
                 "SELECT id FROM business_expense_claims WHERE tenant_id = $1 AND submitted_by_account_id = $2 AND submission_idempotency_key = $3",
+                tenant_id,
+                actor_account_id,
+                idempotency_key,
             )
-            .bind(tenant_id)
-            .bind(actor_account_id)
-            .bind(idempotency_key)
             .fetch_one(&mut *connection)
             .await
             .map_err(map_sqlx)?
@@ -726,12 +617,17 @@ impl FinanceRepo {
     ) -> Result<ExpenseClaim, FinanceError> {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
         let connection: &mut PgConnection = transaction.connection();
-        let repeated_expense_id: Option<Uuid> = sqlx::query_scalar(
+        let claimed_amount = parse_decimal(&input.claimed_amount, "claimed amount is not a valid number")?;
+        let approved_amount = parse_optional_decimal(
+            input.approved_amount.as_deref(),
+            "approved amount is not a valid number",
+        )?;
+        let repeated_expense_id: Option<Uuid> = sqlx::query_scalar!(
             "SELECT expense_claim_id FROM business_expense_claim_revisions WHERE tenant_id = $1 AND revised_by_account_id = $2 AND idempotency_key = $3",
+            tenant_id,
+            actor_account_id,
+            idempotency_key,
         )
-        .bind(tenant_id)
-        .bind(actor_account_id)
-        .bind(idempotency_key)
         .fetch_optional(&mut *connection)
         .await
         .map_err(map_sqlx)?;
@@ -744,7 +640,8 @@ impl FinanceRepo {
             return Ok(result);
         }
 
-        let locked: CorrectionLockRow = sqlx::query_as(
+        let locked: CorrectionLockRow = sqlx::query_as!(
+            CorrectionLockRow,
             r#"
             SELECT claim.id, claim.status, claim.submitted_by_account_id AS owner_account_id,
                    revision.revision_id
@@ -761,9 +658,9 @@ impl FinanceRepo {
             WHERE claim.tenant_id = $1 AND claim.id = $2
             FOR UPDATE OF claim
             "#,
+            tenant_id,
+            expense_id,
         )
-        .bind(tenant_id)
-        .bind(expense_id)
         .fetch_optional(&mut *connection)
         .await
         .map_err(map_sqlx)?
@@ -784,11 +681,13 @@ impl FinanceRepo {
             ));
         }
 
-        let reimbursed_amount: String = sqlx::query_scalar(
-            "SELECT COALESCE(SUM(amount), 0)::TEXT FROM business_expense_reimbursements WHERE tenant_id = $1 AND expense_claim_id = $2",
+        let reimbursed_amount: BigDecimal = sqlx::query_scalar!(
+            r#"SELECT COALESCE(SUM(amount), 0) AS "amount!"
+               FROM business_expense_reimbursements
+               WHERE tenant_id = $1 AND expense_claim_id = $2"#,
+            tenant_id,
+            expense_id,
         )
-        .bind(tenant_id)
-        .bind(expense_id)
         .fetch_one(&mut *connection)
         .await
         .map_err(map_sqlx)?;
@@ -801,7 +700,7 @@ impl FinanceRepo {
         )
         .await?;
 
-        let changed: Option<Uuid> = sqlx::query_scalar(
+        let changed: Option<Uuid> = sqlx::query_scalar!(
             r#"
             UPDATE business_expense_claims
             SET category_id = $3,
@@ -830,25 +729,25 @@ impl FinanceRepo {
               AND ($15::NUMERIC IS NULL OR $15::NUMERIC >= $18::NUMERIC)
             RETURNING id
             "#,
+            tenant_id,
+            expense_id,
+            input.category_id,
+            input.funding_source.as_code(),
+            input.paid_by_employee_id,
+            input.customer_id,
+            input.urgent_work_report_id,
+            input.staffing_assignment_id,
+            input.paid_on,
+            input.payroll_inclusion_on,
+            &input.description,
+            input.evidence_reference.as_deref(),
+            &claimed_amount,
+            preserve_approval,
+            approved_amount.as_ref(),
+            &input.currency,
+            &input.correction_reason,
+            &reimbursed_amount,
         )
-        .bind(tenant_id)
-        .bind(expense_id)
-        .bind(input.category_id)
-        .bind(input.funding_source.as_code())
-        .bind(input.paid_by_employee_id)
-        .bind(input.customer_id)
-        .bind(input.urgent_work_report_id)
-        .bind(input.staffing_assignment_id)
-        .bind(input.paid_on)
-        .bind(input.payroll_inclusion_on)
-        .bind(&input.description)
-        .bind(&input.evidence_reference)
-        .bind(&input.claimed_amount)
-        .bind(preserve_approval)
-        .bind(input.approved_amount.as_deref())
-        .bind(&input.currency)
-        .bind(&input.correction_reason)
-        .bind(&reimbursed_amount)
         .fetch_optional(&mut *connection)
         .await
         .map_err(map_sqlx)?;
@@ -874,14 +773,16 @@ impl FinanceRepo {
         let mut rows: Vec<ExpenseRevisionRow> = self
             .db
             .tran_with_tenant(tenant_id, async |connection| {
-                sqlx::query_as(
+                sqlx::query_as!(
+                    ExpenseRevisionRow,
                     r#"
                     SELECT revision.revision_id, revision.revision_number,
                            revision.revision_kind, revision.correction_reason,
                            reviser.username AS revised_by_username, revision.revised_at,
                            category.display_name AS category_name, revision.paid_on,
                            revision.payroll_inclusion_on,
-                           revision.description, revision.claimed_amount::TEXT AS claimed_amount,
+                           revision.description,
+                           revision.claimed_amount::TEXT AS "claimed_amount!",
                            revision.approved_amount::TEXT AS approved_amount,
                            revision.currency, revision.status
                     FROM business_expense_claim_revisions AS revision
@@ -904,13 +805,13 @@ impl FinanceRepo {
                     ORDER BY revision.revision_number DESC
                     LIMIT $6
                     "#,
+                    tenant_id,
+                    expense_id,
+                    can_read_all,
+                    actor_account_id,
+                    cursor_revision_number,
+                    query_limit,
                 )
-                .bind(tenant_id)
-                .bind(expense_id)
-                .bind(can_read_all)
-                .bind(actor_account_id)
-                .bind(cursor_revision_number)
-                .bind(query_limit)
                 .fetch_all(connection)
                 .await
             })
@@ -943,13 +844,18 @@ impl FinanceRepo {
     ) -> Result<ExpenseClaim, FinanceError> {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
         let connection: &mut PgConnection = transaction.connection();
+        let approved_amount = parse_optional_decimal(
+            command.approved_amount.as_deref(),
+            "approved amount is not a valid number",
+        )?;
         let expected_action: &str = if command.approved { "approved" } else { "rejected" };
-        let repeated: Option<ActionEventRow> = sqlx::query_as(
+        let repeated: Option<ActionEventRow> = sqlx::query_as!(
+            ActionEventRow,
             "SELECT expense_claim_id AS record_id, action FROM business_expense_claim_events WHERE tenant_id = $1 AND actor_account_id = $2 AND idempotency_key = $3",
+            tenant_id,
+            command.actor_account_id,
+            command.idempotency_key,
         )
-        .bind(tenant_id)
-        .bind(command.actor_account_id)
-        .bind(command.idempotency_key)
         .fetch_optional(&mut *connection)
         .await
         .map_err(map_sqlx)?;
@@ -961,7 +867,7 @@ impl FinanceRepo {
             commit(transaction).await?;
             return Ok(result);
         }
-        let changed: Option<Uuid> = sqlx::query_scalar(
+        let changed: Option<Uuid> = sqlx::query_scalar!(
             r#"
             UPDATE business_expense_claims
             SET status = $3,
@@ -974,28 +880,28 @@ impl FinanceRepo {
             WHERE tenant_id = $1 AND id = $2 AND status = 'submitted'
             RETURNING id
             "#,
+            tenant_id,
+            expense_id,
+            expected_action,
+            approved_amount.as_ref(),
+            command.reason.as_deref(),
+            command.actor_account_id,
         )
-        .bind(tenant_id)
-        .bind(expense_id)
-        .bind(expected_action)
-        .bind(command.approved_amount.as_deref())
-        .bind(command.reason.as_deref())
-        .bind(command.actor_account_id)
         .fetch_optional(&mut *connection)
         .await
         .map_err(map_sqlx)?;
         if changed.is_none() {
             return Err(FinanceError::Conflict);
         }
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO business_expense_claim_events (tenant_id, expense_claim_id, action, actor_account_id, idempotency_key, reason) VALUES ($1, $2, $3, $4, $5, $6)",
+            tenant_id,
+            expense_id,
+            expected_action,
+            command.actor_account_id,
+            command.idempotency_key,
+            command.reason.as_deref(),
         )
-        .bind(tenant_id)
-        .bind(expense_id)
-        .bind(expected_action)
-        .bind(command.actor_account_id)
-        .bind(command.idempotency_key)
-        .bind(command.reason.as_deref())
         .execute(&mut *connection)
         .await
         .map_err(map_sqlx)?;
@@ -1014,12 +920,13 @@ impl FinanceRepo {
     ) -> Result<ExpenseClaim, FinanceError> {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
         let connection: &mut PgConnection = transaction.connection();
-        let existing_expense_id: Option<Uuid> = sqlx::query_scalar(
+        let amount = parse_decimal(&input.amount, "reimbursement amount is not a valid number")?;
+        let existing_expense_id: Option<Uuid> = sqlx::query_scalar!(
             "SELECT expense_claim_id FROM business_expense_reimbursements WHERE tenant_id = $1 AND recorded_by_account_id = $2 AND idempotency_key = $3",
+            tenant_id,
+            actor_account_id,
+            idempotency_key,
         )
-        .bind(tenant_id)
-        .bind(actor_account_id)
-        .bind(idempotency_key)
         .fetch_optional(&mut *connection)
         .await
         .map_err(map_sqlx)?;
@@ -1031,11 +938,12 @@ impl FinanceRepo {
             commit(transaction).await?;
             return Ok(result);
         }
-        let claim: ExpenseLockRow = sqlx::query_as(
+        let claim: ExpenseLockRow = sqlx::query_as!(
+            ExpenseLockRow,
             "SELECT id, status, paid_by_employee_id, currency FROM business_expense_claims WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
+            tenant_id,
+            expense_id,
         )
-        .bind(tenant_id)
-        .bind(expense_id)
         .fetch_optional(&mut *connection)
         .await
         .map_err(map_sqlx)?
@@ -1044,23 +952,23 @@ impl FinanceRepo {
         if claim.status != "approved" {
             return Err(FinanceError::Conflict);
         }
-        sqlx::query(
+        sqlx::query!(
             r#"
             INSERT INTO business_expense_reimbursements (
                 id, tenant_id, expense_claim_id, employee_id, amount, currency,
                 payment_reference, recorded_by_account_id, idempotency_key
             ) VALUES ($1, $2, $3, $4, $5::NUMERIC, $6, $7, $8, $9)
             "#,
+            Uuid::new_v4(),
+            tenant_id,
+            claim.id,
+            employee_id,
+            &amount,
+            &claim.currency,
+            &input.reference,
+            actor_account_id,
+            idempotency_key,
         )
-        .bind(Uuid::new_v4())
-        .bind(tenant_id)
-        .bind(claim.id)
-        .bind(employee_id)
-        .bind(&input.amount)
-        .bind(&claim.currency)
-        .bind(&input.reference)
-        .bind(actor_account_id)
-        .bind(idempotency_key)
         .execute(&mut *connection)
         .await
         .map_err(map_sqlx)?;
@@ -1089,23 +997,24 @@ impl FinanceRepo {
             .as_ref()
             .map(|value: &SalaryAdvanceCursor| value.advance_id);
         let query_limit: i64 = query.limit + 1;
-        let sql_query: String = format!(
-            "{ADVANCE_SELECT} WHERE advance.tenant_id = $1 AND ($2 OR advance.requested_by_account_id = $3 OR employee.account_id = $3) AND ($4::TEXT IS NULL OR advance.status = $4) AND ($5::TEXT IS NULL OR lower(employee.display_name) LIKE '%' || $5 || '%' OR lower(employee.employee_code) LIKE '%' || $5 || '%' OR lower(advance.reason) LIKE '%' || $5 || '%' OR lower(requester.username) LIKE '%' || $5 || '%') AND ($6::TIMESTAMPTZ IS NULL OR (advance.requested_at, advance.id) < ($6, $7::UUID)) {ADVANCE_GROUP_ORDER} LIMIT $8"
-        );
         let mut rows: Vec<SalaryAdvanceRow> = self
             .db
             .tran_with_tenant(tenant_id, async |connection| {
-                sqlx::query_as::<_, SalaryAdvanceRow>(AssertSqlSafe(sql_query.as_str()))
-                    .bind(tenant_id)
-                    .bind(can_read_all)
-                    .bind(actor_account_id)
-                    .bind(status_code)
-                    .bind(normalized_search)
-                    .bind(cursor_requested_at)
-                    .bind(cursor_id)
-                    .bind(query_limit)
-                    .fetch_all(connection)
-                    .await
+                sqlx::query_file_as!(
+                    SalaryAdvanceRow,
+                    "src/business/finance/sql/salary_advances.sql",
+                    tenant_id,
+                    can_read_all,
+                    actor_account_id,
+                    status_code,
+                    normalized_search,
+                    cursor_requested_at,
+                    cursor_id,
+                    query_limit,
+                    None::<Uuid>,
+                )
+                .fetch_all(connection)
+                .await
             })
             .await
             .map_err(|_| FinanceError::BackendUnavailable)?;
@@ -1136,20 +1045,25 @@ impl FinanceRepo {
     ) -> Result<SalaryAdvance, FinanceError> {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
         let connection: &mut PgConnection = transaction.connection();
-        let employee_allowed: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM hr_employees WHERE tenant_id = $1 AND id = $2 AND status = 'active' AND ($3 OR account_id = $4))",
+        let requested_amount = parse_decimal(&input.requested_amount, "requested amount is not a valid number")?;
+        let employee_allowed: bool = sqlx::query_scalar!(
+            r#"SELECT EXISTS(
+                SELECT 1 FROM hr_employees
+                WHERE tenant_id = $1 AND id = $2 AND status = 'active'
+                  AND ($3 OR account_id = $4)
+            ) AS "is_allowed!""#,
+            tenant_id,
+            input.employee_id,
+            can_request_for_others,
+            actor_account_id,
         )
-        .bind(tenant_id)
-        .bind(input.employee_id)
-        .bind(can_request_for_others)
-        .bind(actor_account_id)
         .fetch_one(&mut *connection)
         .await
         .map_err(map_sqlx)?;
         if !employee_allowed {
             return Err(FinanceError::Forbidden);
         }
-        let inserted_id: Option<Uuid> = sqlx::query_scalar(
+        let inserted_id: Option<Uuid> = sqlx::query_scalar!(
             r#"
             INSERT INTO hr_salary_advances (
                 id, tenant_id, employee_id, requested_amount, currency, reason,
@@ -1159,39 +1073,39 @@ impl FinanceRepo {
             ON CONFLICT (tenant_id, branch_id, requested_by_account_id, request_idempotency_key)
             DO NOTHING RETURNING id
             "#,
+            Uuid::new_v4(),
+            tenant_id,
+            input.employee_id,
+            &requested_amount,
+            &input.currency,
+            &input.reason,
+            input.paid_on,
+            input.payroll_inclusion_on,
+            actor_account_id,
+            idempotency_key,
         )
-        .bind(Uuid::new_v4())
-        .bind(tenant_id)
-        .bind(input.employee_id)
-        .bind(&input.requested_amount)
-        .bind(&input.currency)
-        .bind(&input.reason)
-        .bind(input.paid_on)
-        .bind(input.payroll_inclusion_on)
-        .bind(actor_account_id)
-        .bind(idempotency_key)
         .fetch_optional(&mut *connection)
         .await
         .map_err(map_sqlx)?;
         let resolved_id: Uuid = if let Some(id) = inserted_id {
-            sqlx::query(
+            sqlx::query!(
                 "INSERT INTO hr_salary_advance_events (tenant_id, salary_advance_id, action, actor_account_id, idempotency_key) VALUES ($1, $2, 'requested', $3, $4)",
+                tenant_id,
+                id,
+                actor_account_id,
+                idempotency_key,
             )
-            .bind(tenant_id)
-            .bind(id)
-            .bind(actor_account_id)
-            .bind(idempotency_key)
             .execute(&mut *connection)
             .await
             .map_err(map_sqlx)?;
             id
         } else {
-            sqlx::query_scalar(
+            sqlx::query_scalar!(
                 "SELECT id FROM hr_salary_advances WHERE tenant_id = $1 AND requested_by_account_id = $2 AND request_idempotency_key = $3",
+                tenant_id,
+                actor_account_id,
+                idempotency_key,
             )
-            .bind(tenant_id)
-            .bind(actor_account_id)
-            .bind(idempotency_key)
             .fetch_one(&mut *connection)
             .await
             .map_err(map_sqlx)?
@@ -1212,12 +1126,17 @@ impl FinanceRepo {
     ) -> Result<SalaryAdvance, FinanceError> {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
         let connection: &mut PgConnection = transaction.connection();
-        let repeated_advance_id: Option<Uuid> = sqlx::query_scalar(
+        let requested_amount = parse_decimal(&input.requested_amount, "requested amount is not a valid number")?;
+        let approved_amount = parse_optional_decimal(
+            input.approved_amount.as_deref(),
+            "approved amount is not a valid number",
+        )?;
+        let repeated_advance_id: Option<Uuid> = sqlx::query_scalar!(
             "SELECT salary_advance_id FROM hr_salary_advance_revisions WHERE tenant_id = $1 AND revised_by_account_id = $2 AND idempotency_key = $3",
+            tenant_id,
+            actor_account_id,
+            idempotency_key,
         )
-        .bind(tenant_id)
-        .bind(actor_account_id)
-        .bind(idempotency_key)
         .fetch_optional(&mut *connection)
         .await
         .map_err(map_sqlx)?;
@@ -1230,7 +1149,8 @@ impl FinanceRepo {
             return Ok(result);
         }
 
-        let locked: CorrectionLockRow = sqlx::query_as(
+        let locked: CorrectionLockRow = sqlx::query_as!(
+            CorrectionLockRow,
             r#"
             SELECT advance.id, advance.status, advance.requested_by_account_id AS owner_account_id,
                    revision.revision_id
@@ -1247,9 +1167,9 @@ impl FinanceRepo {
             WHERE advance.tenant_id = $1 AND advance.id = $2
             FOR UPDATE OF advance
             "#,
+            tenant_id,
+            advance_id,
         )
-        .bind(tenant_id)
-        .bind(advance_id)
         .fetch_optional(&mut *connection)
         .await
         .map_err(map_sqlx)?
@@ -1278,7 +1198,7 @@ impl FinanceRepo {
             &input.correction_reason,
         )
         .await?;
-        let changed: Option<Uuid> = sqlx::query_scalar(
+        let changed: Option<Uuid> = sqlx::query_scalar!(
             r#"
             UPDATE hr_salary_advances
             SET employee_id = $3,
@@ -1301,18 +1221,18 @@ impl FinanceRepo {
             WHERE tenant_id = $1 AND id = $2
             RETURNING id
             "#,
+            tenant_id,
+            advance_id,
+            input.employee_id,
+            &requested_amount,
+            preserve_decision,
+            approved_amount.as_ref(),
+            &input.currency,
+            &input.reason,
+            input.paid_on,
+            input.payroll_inclusion_on,
+            &input.correction_reason,
         )
-        .bind(tenant_id)
-        .bind(advance_id)
-        .bind(input.employee_id)
-        .bind(&input.requested_amount)
-        .bind(preserve_decision)
-        .bind(input.approved_amount.as_deref())
-        .bind(&input.currency)
-        .bind(&input.reason)
-        .bind(input.paid_on)
-        .bind(input.payroll_inclusion_on)
-        .bind(&input.correction_reason)
         .fetch_optional(&mut *connection)
         .await
         .map_err(map_sqlx)?;
@@ -1338,13 +1258,14 @@ impl FinanceRepo {
         let mut rows: Vec<SalaryAdvanceRevisionRow> = self
             .db
             .tran_with_tenant(tenant_id, async |connection| {
-                sqlx::query_as(
+                sqlx::query_as!(
+                    SalaryAdvanceRevisionRow,
                     r#"
                     SELECT revision.revision_id, revision.revision_number,
                            revision.revision_kind, revision.correction_reason,
                            reviser.username AS revised_by_username, revision.revised_at,
                            employee.display_name AS employee_name,
-                           revision.requested_amount::TEXT AS requested_amount,
+                           revision.requested_amount::TEXT AS "requested_amount!",
                            revision.approved_amount::TEXT AS approved_amount,
                            revision.currency, revision.reason, revision.paid_on,
                            revision.payroll_inclusion_on,
@@ -1367,13 +1288,13 @@ impl FinanceRepo {
                     ORDER BY revision.revision_number DESC
                     LIMIT $6
                     "#,
+                    tenant_id,
+                    advance_id,
+                    can_read_all,
+                    actor_account_id,
+                    cursor_revision_number,
+                    query_limit,
                 )
-                .bind(tenant_id)
-                .bind(advance_id)
-                .bind(can_read_all)
-                .bind(actor_account_id)
-                .bind(cursor_revision_number)
-                .bind(query_limit)
                 .fetch_all(connection)
                 .await
             })
@@ -1406,13 +1327,18 @@ impl FinanceRepo {
     ) -> Result<SalaryAdvance, FinanceError> {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
         let connection: &mut PgConnection = transaction.connection();
+        let approved_amount = parse_optional_decimal(
+            command.approved_amount.as_deref(),
+            "approved amount is not a valid number",
+        )?;
         let action: &str = if command.approved { "approved" } else { "rejected" };
-        let repeated: Option<ActionEventRow> = sqlx::query_as(
+        let repeated: Option<ActionEventRow> = sqlx::query_as!(
+            ActionEventRow,
             "SELECT salary_advance_id AS record_id, action FROM hr_salary_advance_events WHERE tenant_id = $1 AND actor_account_id = $2 AND idempotency_key = $3",
+            tenant_id,
+            command.actor_account_id,
+            command.idempotency_key,
         )
-        .bind(tenant_id)
-        .bind(command.actor_account_id)
-        .bind(command.idempotency_key)
         .fetch_optional(&mut *connection)
         .await
         .map_err(map_sqlx)?;
@@ -1424,7 +1350,7 @@ impl FinanceRepo {
             commit(transaction).await?;
             return Ok(result);
         }
-        let changed: Option<Uuid> = sqlx::query_scalar(
+        let changed: Option<Uuid> = sqlx::query_scalar!(
             r#"
             UPDATE hr_salary_advances
             SET status = $3, approved_amount = $4::NUMERIC, decision_reason = $5,
@@ -1433,28 +1359,28 @@ impl FinanceRepo {
             WHERE tenant_id = $1 AND id = $2 AND status = 'requested'
             RETURNING id
             "#,
+            tenant_id,
+            advance_id,
+            action,
+            approved_amount.as_ref(),
+            command.reason.as_deref(),
+            command.actor_account_id,
         )
-        .bind(tenant_id)
-        .bind(advance_id)
-        .bind(action)
-        .bind(command.approved_amount.as_deref())
-        .bind(command.reason.as_deref())
-        .bind(command.actor_account_id)
         .fetch_optional(&mut *connection)
         .await
         .map_err(map_sqlx)?;
         if changed.is_none() {
             return Err(FinanceError::Conflict);
         }
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO hr_salary_advance_events (tenant_id, salary_advance_id, action, actor_account_id, idempotency_key, reason) VALUES ($1, $2, $3, $4, $5, $6)",
+            tenant_id,
+            advance_id,
+            action,
+            command.actor_account_id,
+            command.idempotency_key,
+            command.reason.as_deref(),
         )
-        .bind(tenant_id)
-        .bind(advance_id)
-        .bind(action)
-        .bind(command.actor_account_id)
-        .bind(command.idempotency_key)
-        .bind(command.reason.as_deref())
         .execute(&mut *connection)
         .await
         .map_err(map_sqlx)?;
@@ -1473,12 +1399,13 @@ impl FinanceRepo {
     ) -> Result<SalaryAdvance, FinanceError> {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
         let connection: &mut PgConnection = transaction.connection();
-        let repeated: Option<ActionEventRow> = sqlx::query_as(
+        let repeated: Option<ActionEventRow> = sqlx::query_as!(
+            ActionEventRow,
             "SELECT salary_advance_id AS record_id, action FROM hr_salary_advance_events WHERE tenant_id = $1 AND actor_account_id = $2 AND idempotency_key = $3",
+            tenant_id,
+            actor_account_id,
+            idempotency_key,
         )
-        .bind(tenant_id)
-        .bind(actor_account_id)
-        .bind(idempotency_key)
         .fetch_optional(&mut *connection)
         .await
         .map_err(map_sqlx)?;
@@ -1490,7 +1417,7 @@ impl FinanceRepo {
             commit(transaction).await?;
             return Ok(result);
         }
-        let changed: Option<Uuid> = sqlx::query_scalar(
+        let changed: Option<Uuid> = sqlx::query_scalar!(
             r#"
             UPDATE hr_salary_advances
             SET status = 'disbursed', disbursed_by_account_id = $3,
@@ -1499,24 +1426,24 @@ impl FinanceRepo {
             WHERE tenant_id = $1 AND id = $2 AND status = 'approved'
             RETURNING id
             "#,
+            tenant_id,
+            advance_id,
+            actor_account_id,
+            reference,
         )
-        .bind(tenant_id)
-        .bind(advance_id)
-        .bind(actor_account_id)
-        .bind(reference)
         .fetch_optional(&mut *connection)
         .await
         .map_err(map_sqlx)?;
         if changed.is_none() {
             return Err(FinanceError::Conflict);
         }
-        sqlx::query(
+        sqlx::query!(
             "INSERT INTO hr_salary_advance_events (tenant_id, salary_advance_id, action, actor_account_id, idempotency_key) VALUES ($1, $2, 'disbursed', $3, $4)",
+            tenant_id,
+            advance_id,
+            actor_account_id,
+            idempotency_key,
         )
-        .bind(tenant_id)
-        .bind(advance_id)
-        .bind(actor_account_id)
-        .bind(idempotency_key)
         .execute(&mut *connection)
         .await
         .map_err(map_sqlx)?;
@@ -1535,12 +1462,13 @@ impl FinanceRepo {
     ) -> Result<SalaryAdvance, FinanceError> {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
         let connection: &mut PgConnection = transaction.connection();
-        let existing_advance_id: Option<Uuid> = sqlx::query_scalar(
+        let amount = parse_decimal(&input.amount, "recovery amount is not a valid number")?;
+        let existing_advance_id: Option<Uuid> = sqlx::query_scalar!(
             "SELECT salary_advance_id FROM hr_salary_advance_recoveries WHERE tenant_id = $1 AND recorded_by_account_id = $2 AND idempotency_key = $3",
+            tenant_id,
+            actor_account_id,
+            idempotency_key,
         )
-        .bind(tenant_id)
-        .bind(actor_account_id)
-        .bind(idempotency_key)
         .fetch_optional(&mut *connection)
         .await
         .map_err(map_sqlx)?;
@@ -1552,11 +1480,12 @@ impl FinanceRepo {
             commit(transaction).await?;
             return Ok(result);
         }
-        let advance: AdvanceLockRow = sqlx::query_as(
+        let advance: AdvanceLockRow = sqlx::query_as!(
+            AdvanceLockRow,
             "SELECT id, employee_id, status, currency FROM hr_salary_advances WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
+            tenant_id,
+            advance_id,
         )
-        .bind(tenant_id)
-        .bind(advance_id)
         .fetch_optional(&mut *connection)
         .await
         .map_err(map_sqlx)?
@@ -1564,24 +1493,24 @@ impl FinanceRepo {
         if advance.status != "disbursed" {
             return Err(FinanceError::Conflict);
         }
-        sqlx::query(
+        sqlx::query!(
             r#"
             INSERT INTO hr_salary_advance_recoveries (
                 id, tenant_id, salary_advance_id, employee_id, amount, currency,
                 recovery_source, settlement_reference, recorded_by_account_id, idempotency_key
             ) VALUES ($1, $2, $3, $4, $5::NUMERIC, $6, $7, $8, $9, $10)
             "#,
+            Uuid::new_v4(),
+            tenant_id,
+            advance.id,
+            advance.employee_id,
+            &amount,
+            &advance.currency,
+            input.source.as_code(),
+            &input.reference,
+            actor_account_id,
+            idempotency_key,
         )
-        .bind(Uuid::new_v4())
-        .bind(tenant_id)
-        .bind(advance.id)
-        .bind(advance.employee_id)
-        .bind(&input.amount)
-        .bind(&advance.currency)
-        .bind(input.source.as_code())
-        .bind(&input.reference)
-        .bind(actor_account_id)
-        .bind(idempotency_key)
         .execute(&mut *connection)
         .await
         .map_err(map_sqlx)?;

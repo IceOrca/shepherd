@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE business_shift_assignments\n        SET status = 'approved',\n            worked_seconds = 21600,\n            observed_worked_seconds = 21600,\n            customer_amount = 900000,\n            worker_amount = 720000,\n            margin_amount = 180000,\n            approved_at = CURRENT_TIMESTAMP,\n            approved_by_account_id = $3\n        WHERE tenant_id = $1 AND id = $2 AND status = 'assigned'\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f8bbec997baef58ea4a4a73db76456cef9d5a82260fb6f467acd5273c675e57d"
+}

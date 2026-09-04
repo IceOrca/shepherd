@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT shift.status AS \"status!\"\n            FROM business_staffing_shifts AS shift\n            WHERE shift.tenant_id = $1 AND shift.id = $2\n            FOR UPDATE\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "status!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_shifts",
+            "name": "status"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b0c28219d24f65cc7f897e13645e37399a2a78800135fa4f6aa3e15fa16c41e3"
+}

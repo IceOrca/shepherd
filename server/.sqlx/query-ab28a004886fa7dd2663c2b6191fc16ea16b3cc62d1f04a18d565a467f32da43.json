@@ -1,0 +1,132 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO business_customer_work_records (\n                id, tenant_id, assignment_id, confirmed_customer_id,\n                confirmed_started_at, confirmed_ended_at,\n                customer_reference, notes, recorded_by_account_id\n            )\n            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)\n            ON CONFLICT (tenant_id, assignment_id) DO UPDATE\n            SET confirmed_customer_id = EXCLUDED.confirmed_customer_id,\n                confirmed_started_at = EXCLUDED.confirmed_started_at,\n                confirmed_ended_at = EXCLUDED.confirmed_ended_at,\n                customer_reference = EXCLUDED.customer_reference,\n                notes = EXCLUDED.notes,\n                recorded_by_account_id = EXCLUDED.recorded_by_account_id,\n                updated_at = CURRENT_TIMESTAMP\n            RETURNING id, assignment_id, confirmed_customer_id,\n                      confirmed_started_at, confirmed_ended_at,\n                      confirmed_worked_seconds AS \"confirmed_worked_seconds!\",\n                      customer_reference, notes, updated_at\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_customer_work_records",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "assignment_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_customer_work_records",
+            "name": "assignment_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "confirmed_customer_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_customer_work_records",
+            "name": "confirmed_customer_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "confirmed_started_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_customer_work_records",
+            "name": "confirmed_started_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "confirmed_ended_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_customer_work_records",
+            "name": "confirmed_ended_at"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "confirmed_worked_seconds!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "business_customer_work_records",
+            "name": "confirmed_worked_seconds"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "customer_reference",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_customer_work_records",
+            "name": "customer_reference"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "notes",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_customer_work_records",
+            "name": "notes"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_customer_work_records",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz",
+        "Text",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "ab28a004886fa7dd2663c2b6191fc16ea16b3cc62d1f04a18d565a467f32da43"
+}

@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO business_expense_claim_events (tenant_id, expense_claim_id, action, actor_account_id, idempotency_key, reason) VALUES ($1, $2, $3, $4, $5, $6)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "88126f72735a1eed9d6860a2bbbb7133fdac9cdea1ed612cdb542210de9e57c5"
+}

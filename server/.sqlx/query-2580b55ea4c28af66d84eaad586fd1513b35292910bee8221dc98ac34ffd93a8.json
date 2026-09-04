@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO business_staffing_shifts (\n            id, tenant_id, branch_id, customer_id, job_id, starts_at, ends_at,\n            required_workers, status, notes, created_by_account_id, updated_by_account_id\n        )\n        VALUES (\n            $1, $2, $3, $4, $5, CURRENT_TIMESTAMP - INTERVAL '15 minutes',\n            CURRENT_TIMESTAMP + INTERVAL '6 hours', 1, 'filled',\n            'Ca làm việc mẫu để kiểm tra thao tác bắt đầu và kết thúc', $6, $6\n        )\n        ON CONFLICT (id) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2580b55ea4c28af66d84eaad586fd1513b35292910bee8221dc98ac34ffd93a8"
+}

@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT employee_id FROM hr_employee_salary_rates WHERE tenant_id = $1 AND created_by_account_id = $2 AND idempotency_key = $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "employee_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "hr_employee_salary_rates",
+            "name": "employee_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b89f5df1b2a4b3c8ecc461557d640abb3094baaf1bf2b9ff1d09636e4037e929"
+}

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO hr_salary_advance_events (tenant_id, salary_advance_id, action, actor_account_id, idempotency_key) VALUES ($1, $2, 'requested', $3, $4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "971e643f22ed70055210ddff2b2adcd0ac94722a073eab63ca05f332384026de"
+}

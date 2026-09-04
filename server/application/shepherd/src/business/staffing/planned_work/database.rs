@@ -1543,9 +1543,10 @@ async fn approve_shift_assignment_in_transaction(
         Some("assigned") => {}
         Some(_) => return Err(StaffingErr::Conflict),
     }
-    let conclusion: Option<(Uuid, Uuid)> = sqlx::query_as(
+    let conclusion = sqlx::query!(
         r#"
-        SELECT final_customer.id, final_job.id
+        SELECT final_customer.id AS final_customer_id,
+               final_job.id AS final_job_id
         FROM business_shift_assignments AS assignment
         JOIN business_staffing_shifts AS shift
           ON shift.tenant_id = assignment.tenant_id AND shift.id = assignment.shift_id
@@ -1560,25 +1561,31 @@ async fn approve_shift_assignment_in_transaction(
          AND final_job.status = 'active'
         WHERE assignment.tenant_id = $1 AND assignment.id = $2
         "#,
+        tenant_id,
+        assignment_id,
+        final_customer_id,
+        final_job_id,
     )
-    .bind(tenant_id)
-    .bind(assignment_id)
-    .bind(final_customer_id)
-    .bind(final_job_id)
     .fetch_optional(tran.connection())
     .await
     .map_err(|error| database_failure("validate final staffing conclusion", tenant_id, error))?;
-    let (conclusion_customer_id, conclusion_job_id) = conclusion.ok_or(StaffingErr::NotFound)?;
-    sqlx::query_scalar::<_, String>("SELECT set_config('app.reconciliation_final_customer_id', $1, TRUE)")
-        .bind(conclusion_customer_id.to_string())
-        .fetch_one(tran.connection())
-        .await
-        .map_err(|error| database_failure("set final customer conclusion", tenant_id, error))?;
-    sqlx::query_scalar::<_, String>("SELECT set_config('app.reconciliation_final_job_id', $1, TRUE)")
-        .bind(conclusion_job_id.to_string())
-        .fetch_one(tran.connection())
-        .await
-        .map_err(|error| database_failure("set final job conclusion", tenant_id, error))?;
+    let conclusion = conclusion.ok_or(StaffingErr::NotFound)?;
+    let conclusion_customer_id = conclusion.final_customer_id;
+    let conclusion_job_id = conclusion.final_job_id;
+    sqlx::query_scalar!(
+        r#"SELECT set_config('app.reconciliation_final_customer_id', $1, TRUE) AS "context!""#,
+        conclusion_customer_id.to_string(),
+    )
+    .fetch_one(tran.connection())
+    .await
+    .map_err(|error| database_failure("set final customer conclusion", tenant_id, error))?;
+    sqlx::query_scalar!(
+        r#"SELECT set_config('app.reconciliation_final_job_id', $1, TRUE) AS "context!""#,
+        conclusion_job_id.to_string(),
+    )
+    .fetch_one(tran.connection())
+    .await
+    .map_err(|error| database_failure("set final job conclusion", tenant_id, error))?;
     let row: Option<AssignmentRow> = sqlx::query_as!(
         AssignmentRow,
         r#"

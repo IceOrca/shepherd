@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE hr_employees\n            SET citizen_id_country_code = $3,\n                citizen_id_key_id = $4,\n                citizen_id_ciphertext = $5,\n                citizen_id_lookup_hmac = $6,\n                citizen_id_last4 = $7,\n                version = version + 1,\n                updated_at = CURRENT_TIMESTAMP,\n                updated_by_account_id = $8\n            WHERE tenant_id = $1 AND id = $2 AND version = $9\n            RETURNING version\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "version",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "version"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Bytea",
+        "Bytea",
+        "Text",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bf3846203948477f5cf86c6eda7b1d63bbbbc2af34801da4bddc8a93ea025270"
+}

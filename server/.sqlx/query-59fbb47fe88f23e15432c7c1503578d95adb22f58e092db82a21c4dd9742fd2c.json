@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                WITH due AS (\n                    SELECT claim.id AS expense_claim_id,\n                           claim.paid_by_employee_id AS employee_id,\n                           claim.currency, claim.payroll_inclusion_on,\n                           claim.approved_amount - COALESCE(reimbursement.amount, 0) AS amount\n                    FROM business_expense_claims AS claim\n                    LEFT JOIN LATERAL (\n                        SELECT SUM(item.amount) AS amount\n                        FROM business_expense_reimbursements AS item\n                        WHERE item.tenant_id = claim.tenant_id\n                          AND item.branch_id = claim.branch_id\n                          AND item.expense_claim_id = claim.id\n                    ) AS reimbursement ON TRUE\n                    WHERE claim.tenant_id = $1\n                      AND claim.branch_id = $2\n                      AND claim.status = 'approved'\n                      AND claim.funding_source = 'employee_personal'\n                      AND claim.payroll_inclusion_on >= $3\n                      AND claim.payroll_inclusion_on < ($3::DATE + INTERVAL '1 month')::DATE\n                    FOR UPDATE OF claim\n                )\n                INSERT INTO business_expense_reimbursements (\n                    id, tenant_id, branch_id, expense_claim_id, employee_id,\n                    amount, currency, settlement_source, payroll_period_start,\n                    payroll_inclusion_on, payment_reference,\n                    recorded_by_account_id, idempotency_key,\n                    financial_period_event_id\n                )\n                SELECT gen_random_uuid(), $1, $2, due.expense_claim_id, due.employee_id,\n                       due.amount, due.currency, 'payroll_settlement', $3,\n                       due.payroll_inclusion_on,\n                       'Kỳ lương ' || to_char($3::DATE, 'MM/YYYY'),\n                       $4, gen_random_uuid(), $5\n                FROM due\n                WHERE due.amount > 0\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Date",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "59fbb47fe88f23e15432c7c1503578d95adb22f58e092db82a21c4dd9742fd2c"
+}

@@ -1,0 +1,78 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT assignment.employee_id, employee.display_name AS employee_name,\n               customer.name AS customer_name,\n               assignment.status AS assignment_status, shift.status AS shift_status\n        FROM business_shift_assignments AS assignment\n        INNER JOIN hr_employees AS employee\n            ON employee.tenant_id = assignment.tenant_id\n           AND employee.id = assignment.employee_id\n        INNER JOIN accounts AS account\n            ON account.tenant_id = employee.tenant_id\n           AND account.id = employee.account_id\n        INNER JOIN business_staffing_shifts AS shift\n            ON shift.tenant_id = assignment.tenant_id\n           AND shift.id = assignment.shift_id\n        INNER JOIN business_customers AS customer\n            ON customer.tenant_id = shift.tenant_id\n           AND customer.id = shift.customer_id\n        INNER JOIN branches AS branch\n            ON branch.tenant_id = assignment.tenant_id\n           AND branch.id = assignment.branch_id\n        WHERE assignment.tenant_id = $1\n          AND assignment.id = $2\n          AND employee.account_id = $3\n          AND employee.status = 'active'\n          AND account.status = 'active'\n          AND customer.status = 'active'\n          AND branch.status = 'active'\n        FOR UPDATE OF assignment, employee\n        FOR SHARE OF account, customer, branch\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "employee_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "employee_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "employee_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "customer_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_customers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "assignment_status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "shift_status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_shifts",
+            "name": "status"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "e8368cd4de4b4d7895c9248b8ddf5c3eae56ccc4feae557e90ebfd51d124c2ca"
+}

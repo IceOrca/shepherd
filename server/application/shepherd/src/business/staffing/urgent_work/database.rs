@@ -2083,13 +2083,18 @@ pub async fn reconcile_report_in_transaction(
     .await
     .map_err(|err: sqlx::Error| database_failure("derive urgent local work date", tenant_id, err))?;
     let work_date: NaiveDate = work_date_row.work_date;
-    let financial_period_open: bool =
-        sqlx::query_scalar("SELECT shepherd_financial_date_is_open_for_update($1, shepherd_current_branch_id(), $2)")
-            .bind(tenant_id)
-            .bind(work_date)
-            .fetch_one(tran.connection())
-            .await
-            .map_err(|err| database_failure("validate urgent reconciliation period", tenant_id, err))?;
+    let financial_period_open = sqlx::query_scalar!(
+        r#"SELECT shepherd_financial_date_is_open_for_update(
+            $1,
+            shepherd_current_branch_id(),
+            $2
+        ) AS "is_open!""#,
+        tenant_id,
+        work_date,
+    )
+    .fetch_one(tran.connection())
+    .await
+    .map_err(|err| database_failure("validate urgent reconciliation period", tenant_id, err))?;
     if !financial_period_open {
         return Err(UrgentStaffingErr::Conflict);
     }

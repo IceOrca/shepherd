@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT employee.id\n        FROM hr_employees AS employee\n        INNER JOIN accounts AS account\n            ON account.tenant_id = employee.tenant_id\n           AND account.id = employee.account_id\n           AND account.primary_role_code = 'staff'\n        WHERE employee.tenant_id = $1 AND employee.status = 'active'\n          AND employee.branch_id = $2\n        ORDER BY employee.employee_code\n        LIMIT 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "2e20f06f5e735603db301b279dff5b18e8b7be4103c9ff7a86cdeccd390d33b2"
+}

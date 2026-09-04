@@ -1,0 +1,179 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    SELECT revision.revision_id, revision.revision_number,\n                           revision.revision_kind, revision.correction_reason,\n                           reviser.username AS revised_by_username, revision.revised_at,\n                           category.display_name AS category_name, revision.paid_on,\n                           revision.payroll_inclusion_on,\n                           revision.description,\n                           revision.claimed_amount::TEXT AS \"claimed_amount!\",\n                           revision.approved_amount::TEXT AS approved_amount,\n                           revision.currency, revision.status\n                    FROM business_expense_claim_revisions AS revision\n                    JOIN business_expense_claims AS claim\n                      ON claim.tenant_id = revision.tenant_id\n                     AND claim.branch_id = revision.branch_id\n                     AND claim.id = revision.expense_claim_id\n                    LEFT JOIN hr_employees AS payer\n                      ON payer.tenant_id = claim.tenant_id\n                     AND payer.branch_id = claim.branch_id\n                     AND payer.id = claim.paid_by_employee_id\n                    JOIN business_expense_categories AS category\n                      ON category.tenant_id = revision.tenant_id AND category.id = revision.category_id\n                    JOIN accounts AS reviser\n                      ON reviser.tenant_id = revision.tenant_id\n                     AND reviser.id = revision.revised_by_account_id\n                    WHERE revision.tenant_id = $1 AND revision.expense_claim_id = $2\n                      AND ($3 OR claim.submitted_by_account_id = $4 OR payer.account_id = $4)\n                      AND ($5::BIGINT IS NULL OR revision.revision_number < $5)\n                    ORDER BY revision.revision_number DESC\n                    LIMIT $6\n                    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "revision_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claim_revisions",
+            "name": "revision_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "revision_number",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claim_revisions",
+            "name": "revision_number"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "revision_kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claim_revisions",
+            "name": "revision_kind"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "correction_reason",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claim_revisions",
+            "name": "correction_reason"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "revised_by_username",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "revised_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claim_revisions",
+            "name": "revised_at"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "category_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_expense_categories",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "paid_on",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claim_revisions",
+            "name": "paid_on"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "payroll_inclusion_on",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claim_revisions",
+            "name": "payroll_inclusion_on"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "description",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claim_revisions",
+            "name": "description"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "claimed_amount!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 11,
+        "name": "approved_amount",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 12,
+        "name": "currency",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claim_revisions",
+            "name": "currency"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claim_revisions",
+            "name": "status"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Bool",
+        "Uuid",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      false,
+      false
+    ]
+  },
+  "hash": "d2d46d0116f04b280b34fd867dbfdbae4a07296305de6e1f79a5d1f045109d69"
+}

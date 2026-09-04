@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO business_urgent_customer_work_records (\n                id, tenant_id, report_id, confirmed_customer_id,\n                confirmed_started_at, confirmed_ended_at, customer_reference,\n                notes, recorded_by_account_id\n            )\n            SELECT $1, $2, $3, customer.id, $5, $6, $7, $8, $9\n            FROM business_customers AS customer\n            WHERE customer.tenant_id = $2 AND customer.id = $4 AND customer.status = 'active'\n            ON CONFLICT (tenant_id, report_id) DO UPDATE\n            SET confirmed_customer_id = EXCLUDED.confirmed_customer_id,\n                confirmed_started_at = EXCLUDED.confirmed_started_at,\n                confirmed_ended_at = EXCLUDED.confirmed_ended_at,\n                customer_reference = EXCLUDED.customer_reference,\n                notes = EXCLUDED.notes,\n                recorded_by_account_id = EXCLUDED.recorded_by_account_id,\n                updated_at = CURRENT_TIMESTAMP\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz",
+        "Text",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "edfa011db8a3e03b044163344e4fa00ccfc125b16697d236419ec07082873d67"
+}

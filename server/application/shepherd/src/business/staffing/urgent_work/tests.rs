@@ -377,25 +377,25 @@ impl Fixture {
         // These fixtures own an isolated tenant. Disable only the explicit
         // append-only guards inside this cleanup transaction; constraints and
         // all unrelated production triggers remain active.
-        sqlx::query(
+        sqlx::query!(
             "ALTER TABLE business_customer_work_record_history \
              DISABLE TRIGGER business_customer_work_record_history_immutable",
         )
         .execute(transaction.connection())
         .await?;
-        sqlx::query(
+        sqlx::query!(
             "ALTER TABLE business_urgent_customer_work_record_history \
              DISABLE TRIGGER business_urgent_customer_work_record_history_immutable",
         )
         .execute(transaction.connection())
         .await?;
-        sqlx::query(
+        sqlx::query!(
             "ALTER TABLE business_shift_work_sessions \
              DISABLE TRIGGER business_shift_work_sessions_reject_delete",
         )
         .execute(transaction.connection())
         .await?;
-        sqlx::query(
+        sqlx::query!(
             "ALTER TABLE business_urgent_work_sessions \
              DISABLE TRIGGER business_urgent_work_sessions_reject_delete",
         )
@@ -503,25 +503,25 @@ impl Fixture {
         let branch_delete: PgQueryResult = sqlx::query!("DELETE FROM branches WHERE tenant_id = $1", self.tenant_id)
             .execute(transaction.connection())
             .await?;
-        sqlx::query(
+        sqlx::query!(
             "ALTER TABLE business_customer_work_record_history \
              ENABLE TRIGGER business_customer_work_record_history_immutable",
         )
         .execute(transaction.connection())
         .await?;
-        sqlx::query(
+        sqlx::query!(
             "ALTER TABLE business_urgent_customer_work_record_history \
              ENABLE TRIGGER business_urgent_customer_work_record_history_immutable",
         )
         .execute(transaction.connection())
         .await?;
-        sqlx::query(
+        sqlx::query!(
             "ALTER TABLE business_shift_work_sessions \
              ENABLE TRIGGER business_shift_work_sessions_reject_delete",
         )
         .execute(transaction.connection())
         .await?;
-        sqlx::query(
+        sqlx::query!(
             "ALTER TABLE business_urgent_work_sessions \
              ENABLE TRIGGER business_urgent_work_sessions_reject_delete",
         )

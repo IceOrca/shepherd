@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO business_urgent_work_reports (\n                id, tenant_id, start_batch_id, employee_id, claimed_customer_id,\n                status, created_by_account_id, submission_kind, staff_note\n            ) VALUES ($1, $2, $3, $4, $5, 'completed', $6, 'manual', $7)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0b31ca93abb1ea7b8c98c9d3b6cddca96493b0bd2cee8c65b9b81cb271810b8c"
+}

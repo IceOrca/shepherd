@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE business_staffing_shifts\n            SET status = 'cancelled',\n                cancellation_reason = $3,\n                cancelled_at = CURRENT_TIMESTAMP,\n                cancelled_by_account_id = $4,\n                updated_at = CURRENT_TIMESTAMP,\n                updated_by_account_id = $4\n            WHERE tenant_id = $1\n              AND id = $2\n              AND status IN ('open', 'filled')\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d957aea69effeb57492eda42ff5e57cecb919b68914fad54eeefb9e501c10cdb"
+}

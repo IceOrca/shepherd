@@ -1,0 +1,77 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    SELECT id AS employee_id, citizen_id_country_code, citizen_id_key_id,\n                           citizen_id_ciphertext, version\n                    FROM hr_employees\n                    WHERE tenant_id = $1 AND id = $2\n                    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "employee_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "citizen_id_country_code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "citizen_id_country_code"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "citizen_id_key_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "citizen_id_key_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "citizen_id_ciphertext",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "citizen_id_ciphertext"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "version",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "version"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "86ef02a224ec13f033d7430acb4838c8e7e5a5201a680fee1972479df5211e01"
+}

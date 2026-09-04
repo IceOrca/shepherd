@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO business_staffing_shifts (\n            id, tenant_id, branch_id, customer_id, job_id, starts_at, ends_at,\n            required_workers, status, notes, created_by_account_id, updated_by_account_id\n        ) VALUES (\n            $1, $2, $3, $4, $5,\n            (((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Ho_Chi_Minh')::DATE - 1) + TIME '18:00')\n                AT TIME ZONE 'Asia/Ho_Chi_Minh',\n            ((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Ho_Chi_Minh')::DATE + TIME '00:00')\n                AT TIME ZONE 'Asia/Ho_Chi_Minh',\n            1, 'in_progress', 'Ca đã đối soát mẫu dùng cho báo cáo lương và tài chính', $6, $6\n        )\n        ON CONFLICT (id) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ca283a8c85d9c5390ae02a29cb89876442ef2f25478ab3957c0c4bd235bcfb25"
+}

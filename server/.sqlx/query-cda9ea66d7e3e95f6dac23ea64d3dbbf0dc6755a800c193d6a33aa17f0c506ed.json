@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO hr_salary_advance_recoveries (\n            id, tenant_id, branch_id, salary_advance_id, employee_id, amount,\n            currency, recovery_source, settlement_reference, recorded_by_account_id,\n            idempotency_key\n        ) VALUES (\n            $1, $2, $3, $4, $5, 250000, 'VND', 'manual_repayment',\n            'THU-HOI-DEV-001', $6, $1\n        ) ON CONFLICT (id) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cda9ea66d7e3e95f6dac23ea64d3dbbf0dc6755a800c193d6a33aa17f0c506ed"
+}

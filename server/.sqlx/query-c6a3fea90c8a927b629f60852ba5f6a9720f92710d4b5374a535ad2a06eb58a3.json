@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT set_config('app.reconciliation_final_customer_id', $1, TRUE) AS \"context!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "context!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "c6a3fea90c8a927b629f60852ba5f6a9720f92710d4b5374a535ad2a06eb58a3"
+}

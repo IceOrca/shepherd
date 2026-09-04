@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT expense_claim_id FROM business_expense_reimbursements WHERE tenant_id = $1 AND recorded_by_account_id = $2 AND idempotency_key = $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "expense_claim_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_expense_reimbursements",
+            "name": "expense_claim_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "911c998ffda24388815087c970fb1d2637269cdac35a5ac41083e43b1b2817f9"
+}

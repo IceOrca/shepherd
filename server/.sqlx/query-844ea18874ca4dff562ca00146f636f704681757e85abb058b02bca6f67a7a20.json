@@ -1,0 +1,65 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT branch_id, citizen_id_country_code, citizen_id_last4, version\n            FROM hr_employees\n            WHERE tenant_id = $1 AND id = $2\n            FOR UPDATE\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "branch_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "branch_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "citizen_id_country_code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "citizen_id_country_code"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "citizen_id_last4",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "citizen_id_last4"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "version",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "version"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "844ea18874ca4dff562ca00146f636f704681757e85abb058b02bca6f67a7a20"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "ALTER TABLE business_shift_work_sessions DISABLE TRIGGER business_shift_work_sessions_reject_delete",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "0dab62ab17a602200c2d343e14302f2e3ef8a25244ef99c22c445c4026fdd191"
+}

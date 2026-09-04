@@ -1,0 +1,177 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO business_staffing_rates (\n            id, tenant_id, rate_kind, code, name, customer_id, employee_id,\n            currency, hourly_rate, priority, effective_from, is_active,\n            created_by_account_id\n        )\n        VALUES (\n            $1, $2, $3, $4, $5, $6, $7, $8, $9::TEXT::NUMERIC,\n            0, $10, TRUE, $11\n        )\n        RETURNING id, rate_kind, code, name, customer_id, employee_id, currency,\n                  hourly_rate::TEXT AS \"hourly_rate!\", priority, effective_from,\n                  effective_to, is_active, created_at\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "rate_kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "rate_kind"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "code"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "customer_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "customer_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "employee_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "employee_id"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "currency",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "currency"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "hourly_rate!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "priority",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "priority"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "effective_from",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "effective_from"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "effective_to",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "effective_to"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "is_active",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "is_active"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Date",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      null,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "4aebc09c8cce7013d7ceb0897faf053f6789c29dab70f7ab4bd2a920658a3d0d"
+}

@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT EXISTS (\n                SELECT 1\n                FROM business_shift_work_sessions AS session\n                JOIN business_shift_assignments AS assignment\n                  ON assignment.tenant_id = session.tenant_id\n                 AND assignment.id = session.assignment_id\n                WHERE session.tenant_id = $1\n                  AND session.employee_id = $2\n                  AND assignment.status <> 'cancelled'\n                  AND tstzrange(session.started_at, session.ended_at, '[)')\n                      && tstzrange($3::TIMESTAMPTZ, $4::TIMESTAMPTZ, '[)')\n                UNION ALL\n                SELECT 1\n                FROM business_urgent_work_sessions AS session\n                JOIN business_urgent_work_reports AS report\n                  ON report.tenant_id = session.tenant_id\n                 AND report.id = session.report_id\n                WHERE session.tenant_id = $1\n                  AND session.employee_id = $2\n                  AND report.status <> 'cancelled'\n                  AND tstzrange(session.started_at, session.ended_at, '[)')\n                      && tstzrange($3::TIMESTAMPTZ, $4::TIMESTAMPTZ, '[)')\n            ) AS \"exists!\"\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d0ab9535dccd395ef4af78ebca3ce8783f9a7de0eb23f39b9c0fc6dbbfca5479"
+}

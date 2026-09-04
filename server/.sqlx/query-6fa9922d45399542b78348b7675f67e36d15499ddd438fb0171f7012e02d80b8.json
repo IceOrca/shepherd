@@ -1,0 +1,39 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO business_staffing_rates (\n            id, tenant_id, branch_id, rate_kind, code, name, customer_id,\n            employee_id, currency, hourly_rate, priority, effective_from,\n            is_active, created_by_account_id\n        )\n        VALUES (\n            $1, $2, $3, $4, $5, $6, $7, $8, 'VND',\n            $9::TEXT::NUMERIC, $10, $11, TRUE, $12\n        )\n        ON CONFLICT (tenant_id, branch_id, rate_kind, code, effective_from) DO UPDATE\n        SET name = EXCLUDED.name,\n            customer_id = EXCLUDED.customer_id,\n            employee_id = EXCLUDED.employee_id,\n            currency = EXCLUDED.currency,\n            hourly_rate = EXCLUDED.hourly_rate,\n            priority = EXCLUDED.priority,\n            effective_to = NULL,\n            is_active = TRUE\n        RETURNING id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Int2",
+        "Date",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "6fa9922d45399542b78348b7675f67e36d15499ddd438fb0171f7012e02d80b8"
+}

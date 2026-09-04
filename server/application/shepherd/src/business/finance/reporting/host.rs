@@ -122,8 +122,10 @@ async fn export_report_xlsx(
     let tenant_name: String = context
         .db
         .tran_with_tenant(user.tenant_id, async move |connection| {
-            sqlx::query_scalar::<_, String>("SELECT display_name FROM tenants WHERE id = $1")
-                .bind(user.tenant_id)
+            sqlx::query_scalar!(
+                "SELECT display_name FROM tenants WHERE id = $1",
+                user.tenant_id,
+            )
                 .fetch_one(connection)
                 .await
         })
@@ -331,7 +333,7 @@ async fn append_export_audit(
     context
         .db
         .tran_with_tenant(user.tenant_id, async move |connection| {
-            sqlx::query(
+            sqlx::query!(
                 r#"
                 INSERT INTO business_report_export_events (
                     tenant_id, actor_account_id, report_kind, start_date, end_date, branch_ids,
@@ -339,18 +341,18 @@ async fn append_export_audit(
                 )
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                 "#,
+                user.tenant_id,
+                user.account_id,
+                report_kind,
+                start_date,
+                end_date,
+                &branch_ids,
+                row_count,
+                &currencies,
+                generated.contains_open_period,
+                warning_count,
+                workbook_sha256,
             )
-            .bind(user.tenant_id)
-            .bind(user.account_id)
-            .bind(report_kind)
-            .bind(start_date)
-            .bind(end_date)
-            .bind(branch_ids)
-            .bind(row_count)
-            .bind(currencies)
-            .bind(generated.contains_open_period)
-            .bind(warning_count)
-            .bind(workbook_sha256)
             .execute(connection)
             .await?;
             Ok(())

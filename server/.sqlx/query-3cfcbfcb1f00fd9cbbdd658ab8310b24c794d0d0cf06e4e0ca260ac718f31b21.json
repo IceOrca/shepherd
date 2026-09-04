@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT salary_advance_id FROM hr_salary_advance_recoveries WHERE tenant_id = $1 AND recorded_by_account_id = $2 AND idempotency_key = $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "salary_advance_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "hr_salary_advance_recoveries",
+            "name": "salary_advance_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "3cfcbfcb1f00fd9cbbdd658ab8310b24c794d0d0cf06e4e0ca260ac718f31b21"
+}

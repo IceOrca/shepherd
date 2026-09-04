@@ -305,10 +305,7 @@ impl PostgresCli {
     }
 
     pub async fn ready(&self) -> bool {
-        sqlx::query_scalar::<_, i32>("SELECT 1")
-            .fetch_one(&self.pool)
-            .await
-            .is_ok()
+        sqlx::query_scalar!("SELECT 1").fetch_one(&self.pool).await.is_ok()
     }
 }
 

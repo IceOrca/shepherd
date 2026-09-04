@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id FROM business_staffing_rates\n        WHERE tenant_id = $1 AND branch_id = $2 AND customer_id = $3\n          AND employee_id IS NULL AND rate_kind = 'customer_bill'\n          AND code = $4 AND effective_from = $5\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_rates",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Date"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "9a3f20922d8bfd26c2e58b7123e93498e4ddc98f680176a858c88ac7e8631468"
+}

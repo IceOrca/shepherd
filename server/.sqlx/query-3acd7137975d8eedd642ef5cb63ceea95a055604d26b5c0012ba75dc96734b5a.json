@@ -1,0 +1,93 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            WITH previous AS (\n                SELECT revision.*\n                FROM business_assignment_reconciliation_revisions AS revision\n                WHERE revision.tenant_id = $1 AND revision.assignment_id = $2\n                ORDER BY revision.revision_number DESC\n                LIMIT 1\n            )\n            INSERT INTO business_assignment_reconciliation_revisions (\n                tenant_id, branch_id, assignment_id, revision_number, supersedes_revision_id,\n                final_customer_id, final_job_id, confirmed_started_at, confirmed_ended_at,\n                local_work_date, worked_seconds, observed_worked_seconds,\n                adjustment_reason, currency, bill_hourly_rate, worker_hourly_rate,\n                customer_amount, worker_amount, margin_amount, correction_reason,\n                recorded_by_account_id\n            )\n            SELECT previous.tenant_id, previous.branch_id, previous.assignment_id,\n                   previous.revision_number + 1, previous.revision_id,\n                   previous.final_customer_id, previous.final_job_id,\n                   previous.confirmed_started_at, previous.confirmed_ended_at,\n                   previous.local_work_date,\n                   $4::BIGINT,\n                   previous.observed_worked_seconds, $5,\n                   previous.currency, previous.bill_hourly_rate, previous.worker_hourly_rate,\n                   ROUND(previous.bill_hourly_rate * $4::NUMERIC / 3600, 4),\n                   ROUND(previous.worker_hourly_rate * $4::NUMERIC / 3600, 4),\n                   ROUND(previous.bill_hourly_rate * $4::NUMERIC / 3600, 4)\n                       - ROUND(previous.worker_hourly_rate * $4::NUMERIC / 3600, 4),\n                   $5, $6\n            FROM previous\n            WHERE previous.revision_id = $3\n              AND shepherd_financial_date_is_open_for_update(\n                    previous.tenant_id,\n                    previous.branch_id,\n                    previous.local_work_date\n              )\n            RETURNING revision_id, assignment_id, revision_number, worked_seconds,\n                      correction_reason, recorded_at\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "revision_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_assignment_reconciliation_revisions",
+            "name": "revision_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "assignment_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_assignment_reconciliation_revisions",
+            "name": "assignment_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "revision_number",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "business_assignment_reconciliation_revisions",
+            "name": "revision_number"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "worked_seconds",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "business_assignment_reconciliation_revisions",
+            "name": "worked_seconds"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "correction_reason",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_assignment_reconciliation_revisions",
+            "name": "correction_reason"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "recorded_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_assignment_reconciliation_revisions",
+            "name": "recorded_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Int8",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "3acd7137975d8eedd642ef5cb63ceea95a055604d26b5c0012ba75dc96734b5a"
+}

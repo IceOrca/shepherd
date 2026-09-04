@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT COALESCE(MAX(revision_number), 0) AS \"revision_number!\"\n            FROM business_financial_period_events\n            WHERE tenant_id = $1 AND branch_id = $2 AND period_start = $3\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "revision_number!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Date"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "81f50b342ad5a4fbc31001d27c86c5f07878ca8b92b4fd5e64fcff3569fcc37f"
+}

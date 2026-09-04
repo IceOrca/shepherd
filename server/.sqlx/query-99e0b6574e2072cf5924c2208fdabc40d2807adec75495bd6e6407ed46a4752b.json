@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT COALESCE((\n                SELECT status\n                FROM business_financial_period_events\n                WHERE tenant_id = $1 AND branch_id = $2 AND period_start = $3\n                ORDER BY revision_number DESC\n                LIMIT 1\n            ), 'open') AS \"status!\"\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "status!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Date"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "99e0b6574e2072cf5924c2208fdabc40d2807adec75495bd6e6407ed46a4752b"
+}

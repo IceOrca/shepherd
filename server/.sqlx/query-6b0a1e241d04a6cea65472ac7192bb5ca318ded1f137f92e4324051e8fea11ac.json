@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE business_staffing_rates\n                SET is_active = FALSE,\n                    superseded_at = CURRENT_TIMESTAMP,\n                    superseded_by_account_id = $5\n                WHERE tenant_id = $1\n                  AND rate_kind = $2\n                  AND customer_id = $3\n                  AND employee_id IS NOT DISTINCT FROM $4\n                  AND is_active\n                  AND effective_from >= $6\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Date"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6b0a1e241d04a6cea65472ac7192bb5ca318ded1f137f92e4324051e8fea11ac"
+}

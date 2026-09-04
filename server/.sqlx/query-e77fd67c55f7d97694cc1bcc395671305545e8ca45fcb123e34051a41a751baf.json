@@ -1,0 +1,165 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH profit_share AS (\n    SELECT employee_id,\n           employee_home_branch_id,\n           employee_code,\n           employee_name,\n           role_code,\n           currency,\n           profit_base,\n           percentage,\n           payment_amount,\n           is_locked\n    FROM shepherd_branch_profit_share_payroll(\n        $1,\n        shepherd_current_branch_id(),\n        $2,\n        $3\n    )\n), employees AS (\n    SELECT employee.id,\n           employee.branch_id,\n           employee.employee_code,\n           employee.display_name AS employee_name,\n           COALESCE(account.primary_role_code, 'staff') AS role_code\n    FROM hr_employees AS employee\n    LEFT JOIN accounts AS account\n      ON account.tenant_id = employee.tenant_id\n     AND account.id = employee.account_id\n    WHERE employee.tenant_id = $1\n    UNION\n    SELECT payment.employee_id,\n           shepherd_current_branch_id(),\n           payment.employee_code,\n           payment.employee_name,\n           payment.role_code\n    FROM profit_share AS payment\n), active_employees AS (\n    SELECT employee.id\n    FROM hr_employees AS employee\n    JOIN accounts AS account\n      ON account.tenant_id = employee.tenant_id\n     AND account.id = employee.account_id\n    WHERE employee.tenant_id = $1\n      AND employee.status <> 'terminated'\n      AND account.status = 'active'\n), assignment_evidence AS (\n    SELECT assignment.employee_id,\n           result.currency,\n           result.worked_seconds,\n           result.worker_amount,\n           result.confirmed_started_at AS started_at,\n           result.confirmed_ended_at AS ended_at\n    FROM business_shift_assignments AS assignment\n    JOIN LATERAL (\n        SELECT currency,\n               worked_seconds,\n               worker_amount,\n               confirmed_started_at,\n               confirmed_ended_at,\n               local_work_date\n        FROM business_assignment_reconciliation_revisions\n        WHERE tenant_id = assignment.tenant_id\n          AND assignment_id = assignment.id\n        ORDER BY revision_number DESC\n        LIMIT 1\n    ) AS result ON TRUE\n    WHERE assignment.tenant_id = $1\n      AND assignment.status = 'approved'\n      AND result.local_work_date BETWEEN $2 AND $3\n), staffing AS (\n    SELECT employee_id,\n           currency,\n           SUM(worked_seconds)::BIGINT AS worked_seconds,\n           SUM(worker_amount) AS amount\n    FROM assignment_evidence\n    GROUP BY employee_id, currency\n), salary AS (\n    SELECT rate.employee_id,\n           rate.currency,\n           ROUND(SUM(\n               rate.monthly_amount\n               / EXTRACT(DAY FROM (\n                   date_trunc('month', day.work_date::DATE)\n                   + INTERVAL '1 month - 1 day'\n               ))\n           ), 4) AS amount\n    FROM generate_series($2::DATE, $3::DATE, INTERVAL '1 day') AS day(work_date)\n    JOIN hr_employee_salary_rates AS rate\n      ON day.work_date::DATE BETWEEN rate.effective_from\n                                AND COALESCE(rate.effective_to, 'infinity'::DATE)\n    JOIN hr_employees AS employee\n      ON employee.tenant_id = rate.tenant_id\n     AND employee.branch_id = rate.branch_id\n     AND employee.id = rate.employee_id\n    WHERE rate.tenant_id = $1\n      AND day.work_date::DATE >= employee.hire_date\n      AND (\n          employee.termination_date IS NULL\n          OR day.work_date::DATE <= employee.termination_date\n      )\n    GROUP BY rate.employee_id, rate.currency\n), recorded_expense AS (\n    SELECT reimbursement.employee_id,\n           reimbursement.currency,\n           SUM(reimbursement.amount) AS amount\n    FROM business_expense_reimbursements AS reimbursement\n    WHERE reimbursement.tenant_id = $1\n      AND reimbursement.settlement_source = 'payroll_settlement'\n      AND reimbursement.payroll_inclusion_on BETWEEN $2 AND $3\n    GROUP BY reimbursement.employee_id, reimbursement.currency\n), expense_due AS (\n    SELECT claim.paid_by_employee_id AS employee_id,\n           claim.currency,\n           SUM(GREATEST(\n               claim.approved_amount - COALESCE(reimbursement.amount, 0),\n               0\n           )) AS amount\n    FROM business_expense_claims AS claim\n    LEFT JOIN LATERAL (\n        SELECT SUM(item.amount) AS amount\n        FROM business_expense_reimbursements AS item\n        WHERE item.tenant_id = claim.tenant_id\n          AND item.branch_id = claim.branch_id\n          AND item.expense_claim_id = claim.id\n    ) AS reimbursement ON TRUE\n    WHERE claim.tenant_id = $1\n      AND claim.status = 'approved'\n      AND claim.funding_source = 'employee_personal'\n      AND claim.payroll_inclusion_on BETWEEN $2 AND $3\n    GROUP BY claim.paid_by_employee_id, claim.currency\n), recorded_deduction AS (\n    SELECT recovery.employee_id,\n           recovery.currency,\n           SUM(recovery.amount) AS amount\n    FROM hr_salary_advance_recoveries AS recovery\n    WHERE recovery.tenant_id = $1\n      AND recovery.recovery_source = 'payroll_deduction'\n      AND recovery.payroll_inclusion_on BETWEEN $2 AND $3\n    GROUP BY recovery.employee_id, recovery.currency\n), outstanding_due AS (\n    SELECT advance.employee_id,\n           advance.currency,\n           SUM(GREATEST(\n               advance.approved_amount - COALESCE(recovery.amount, 0),\n               0\n           )) AS amount\n    FROM hr_salary_advances AS advance\n    LEFT JOIN LATERAL (\n        SELECT SUM(item.amount) AS amount\n        FROM hr_salary_advance_recoveries AS item\n        WHERE item.tenant_id = advance.tenant_id\n          AND item.salary_advance_id = advance.id\n    ) AS recovery ON TRUE\n    WHERE advance.tenant_id = $1\n      AND advance.disbursed_at IS NOT NULL\n      AND advance.payroll_inclusion_on BETWEEN $2 AND $3\n    GROUP BY advance.employee_id, advance.currency\n), attendance_overlaps AS (\n    SELECT evidence.employee_id, COUNT(*)::BIGINT AS count\n    FROM assignment_evidence AS evidence\n    JOIN hr_attendance_sessions AS attendance\n      ON attendance.tenant_id = $1\n     AND attendance.employee_id = evidence.employee_id\n     AND attendance.check_out_at IS NOT NULL\n     AND tstzrange(attendance.check_in_at, attendance.check_out_at, '[)')\n         && tstzrange(evidence.started_at, evidence.ended_at, '[)')\n    GROUP BY evidence.employee_id\n), employee_currencies AS (\n    SELECT id AS employee_id, 'VND'::TEXT AS currency\n    FROM active_employees\n    UNION SELECT employee_id, currency FROM staffing\n    UNION SELECT employee_id, currency FROM salary\n    UNION SELECT employee_id, currency FROM recorded_expense\n    UNION SELECT employee_id, currency FROM expense_due\n    UNION SELECT employee_id, currency FROM recorded_deduction\n    UNION SELECT employee_id, currency FROM outstanding_due\n    UNION SELECT employee_id, currency FROM profit_share\n), amounts AS (\n    SELECT employee_currency.employee_id,\n           employee_currency.currency,\n           COALESCE(staffing.worked_seconds, 0)::BIGINT AS staffing_worked_seconds,\n           COALESCE(staffing.amount, 0) AS staffing_earnings,\n           COALESCE(salary.amount, 0) AS base_salary,\n           COALESCE(profit_share.profit_base, 0) AS profit_share_base,\n           COALESCE(profit_share.percentage, 0) AS profit_share_percent,\n           COALESCE(profit_share.payment_amount, 0) AS profit_share_payment,\n           COALESCE(profit_share.is_locked, FALSE) AS profit_share_locked,\n           COALESCE(recorded_expense.amount, 0) AS recorded_expense,\n           COALESCE(expense_due.amount, 0) AS expense_due,\n           COALESCE(recorded_deduction.amount, 0) AS recorded_deduction,\n           COALESCE(outstanding_due.amount, 0) AS outstanding_due\n    FROM employee_currencies AS employee_currency\n    LEFT JOIN staffing USING (employee_id, currency)\n    LEFT JOIN salary USING (employee_id, currency)\n    LEFT JOIN profit_share USING (employee_id, currency)\n    LEFT JOIN recorded_expense USING (employee_id, currency)\n    LEFT JOIN expense_due USING (employee_id, currency)\n    LEFT JOIN recorded_deduction USING (employee_id, currency)\n    LEFT JOIN outstanding_due USING (employee_id, currency)\n)\nSELECT employee.id AS \"employee_id!\",\n       employee.branch_id AS \"branch_id!\",\n       employee.employee_code AS \"employee_code!\",\n       employee.employee_name AS \"employee_name!\",\n       employee.role_code AS \"role_code!\",\n       amounts.currency AS \"currency!\",\n       amounts.staffing_worked_seconds AS \"staffing_worked_seconds!\",\n       amounts.staffing_earnings::TEXT AS \"staffing_earnings!\",\n       amounts.base_salary::TEXT AS \"prorated_monthly_salary!\",\n       amounts.profit_share_base::TEXT AS \"profit_share_base!\",\n       amounts.profit_share_percent::TEXT AS \"profit_share_percent!\",\n       amounts.profit_share_payment::TEXT AS \"profit_share_payment!\",\n       amounts.profit_share_locked AS \"profit_share_locked!\",\n       (\n           amounts.staffing_earnings\n           + amounts.base_salary\n           + amounts.profit_share_payment\n       )::TEXT AS \"gross_pay!\",\n       amounts.recorded_expense::TEXT AS \"recorded_expense_reimbursement!\",\n       amounts.expense_due::TEXT AS \"suggested_expense_reimbursement!\",\n       amounts.recorded_deduction::TEXT AS \"recorded_advance_deduction!\",\n       amounts.outstanding_due::TEXT AS \"outstanding_advance_due!\",\n       amounts.outstanding_due::TEXT AS \"suggested_advance_deduction!\",\n       (\n           amounts.staffing_earnings\n           + amounts.base_salary\n           + amounts.profit_share_payment\n           + amounts.recorded_expense\n           + amounts.expense_due\n           - amounts.recorded_deduction\n           - amounts.outstanding_due\n       )::TEXT AS \"estimated_net_pay!\",\n       COALESCE(attendance_overlaps.count, 0)::BIGINT AS \"attendance_overlap_count!\"\nFROM amounts\nJOIN employees AS employee\n  ON employee.id = amounts.employee_id\nLEFT JOIN attendance_overlaps\n  ON attendance_overlaps.employee_id = amounts.employee_id\nORDER BY employee.employee_name, amounts.currency\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "employee_id!",
+        "type_info": "Uuid",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "branch_id!",
+        "type_info": "Uuid",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "employee_code!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "employee_name!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "role_code!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "currency!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "staffing_worked_seconds!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "staffing_earnings!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "prorated_monthly_salary!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "profit_share_base!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 10,
+        "name": "profit_share_percent!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 11,
+        "name": "profit_share_payment!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 12,
+        "name": "profit_share_locked!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 13,
+        "name": "gross_pay!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 14,
+        "name": "recorded_expense_reimbursement!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 15,
+        "name": "suggested_expense_reimbursement!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 16,
+        "name": "recorded_advance_deduction!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 17,
+        "name": "outstanding_advance_due!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 18,
+        "name": "suggested_advance_deduction!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 19,
+        "name": "estimated_net_pay!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 20,
+        "name": "attendance_overlap_count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date",
+        "Date"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "e77fd67c55f7d97694cc1bcc395671305545e8ca45fcb123e34051a41a751baf"
+}

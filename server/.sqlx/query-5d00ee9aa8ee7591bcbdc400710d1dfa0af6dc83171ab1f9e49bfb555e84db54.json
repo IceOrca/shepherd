@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO hr_employee_salary_rates (\n            id, tenant_id, branch_id, employee_id, monthly_amount, currency,\n            effective_from, created_by_account_id, idempotency_key\n        )\n        SELECT gen_random_uuid(), employee.tenant_id, employee.branch_id, employee.id,\n               CASE account.primary_role_code\n                   WHEN 'executive_manager' THEN 30000000\n                   WHEN 'branch_manager' THEN 22000000\n                   WHEN 'supervisor' THEN 14000000\n               END,\n               'VND', DATE '2026-01-01', $2, gen_random_uuid()\n        FROM hr_employees AS employee\n        JOIN accounts AS account\n          ON account.tenant_id = employee.tenant_id AND account.id = employee.account_id\n        WHERE employee.tenant_id = $1\n          AND employee.status = 'active'\n          AND account.primary_role_code IN ('executive_manager', 'branch_manager', 'supervisor')\n        ON CONFLICT (tenant_id, branch_id, employee_id, effective_from) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5d00ee9aa8ee7591bcbdc400710d1dfa0af6dc83171ab1f9e49bfb555e84db54"
+}

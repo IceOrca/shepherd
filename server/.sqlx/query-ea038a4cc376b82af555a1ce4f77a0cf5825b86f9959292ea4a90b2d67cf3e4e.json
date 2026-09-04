@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT role_code, permission_code FROM tenant_role_permissions WHERE tenant_id = $1 AND role_code = $2 ORDER BY permission_code",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "role_code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tenant_role_permissions",
+            "name": "role_code"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "permission_code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tenant_role_permissions",
+            "name": "permission_code"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "ea038a4cc376b82af555a1ce4f77a0cf5825b86f9959292ea4a90b2d67cf3e4e"
+}

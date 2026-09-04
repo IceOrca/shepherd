@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH work_seed AS (\n            SELECT employee.id AS employee_id, day_index,\n                   (md5($1::UUID::TEXT || ':demo-work-report:' || employee.id::TEXT || ':' || day_index::TEXT))::UUID AS report_id,\n                   (md5($1::UUID::TEXT || ':demo-work-session:' || employee.id::TEXT || ':' || day_index::TEXT))::UUID AS session_id\n            FROM hr_employees AS employee\n            INNER JOIN accounts AS account\n                ON account.tenant_id = employee.tenant_id AND account.id = employee.account_id\n            CROSS JOIN generate_series(1, $2) AS day_index\n            WHERE employee.tenant_id = $1 AND employee.status = 'active'\n              AND account.status = 'active' AND account.primary_role_code = 'staff'\n        )\n        INSERT INTO business_urgent_work_sessions (\n            id, tenant_id, branch_id, report_id, employee_id,\n            started_at, ended_at, end_idempotency_key,\n            started_by_account_id, start_source, ended_by_account_id, end_source,\n            created_at, updated_at\n        )\n        SELECT seed.session_id, report.tenant_id, report.branch_id, report.id, seed.employee_id,\n               CASE WHEN report.submission_kind = 'manual'\n                    THEN report.created_at - INTERVAL '10 hours'\n                    ELSE report.created_at END,\n               CASE WHEN report.submission_kind = 'manual'\n                    THEN report.created_at - INTERVAL '2 hours'\n                    ELSE report.created_at + INTERVAL '8 hours' END,\n               report.start_batch_id, report.created_by_account_id, 'self',\n               report.created_by_account_id, 'self', report.created_at, report.created_at\n        FROM work_seed AS seed\n        INNER JOIN business_urgent_work_reports AS report\n            ON report.tenant_id = $1 AND report.id = seed.report_id\n        ON CONFLICT (id) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "545bd12cbdbfba646a5dbdfcd8456566c6c0e20c85a2d771a63cabf9a7603777"
+}

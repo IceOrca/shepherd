@@ -1,0 +1,105 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    SELECT id, employee_id, job_id, effective_from, effective_to, notes, created_at\n                    FROM business_staffing_employee_eligibilities\n                    WHERE tenant_id = $1\n                      AND ($2::DATE IS NULL\n                           OR (effective_from, employee_id, job_id, id)\n                              < ($2, $3, $4, $5))\n                    ORDER BY effective_from DESC, employee_id DESC, job_id DESC, id DESC\n                    LIMIT $6\n                    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_employee_eligibilities",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "employee_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_employee_eligibilities",
+            "name": "employee_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "job_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_employee_eligibilities",
+            "name": "job_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "effective_from",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_employee_eligibilities",
+            "name": "effective_from"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "effective_to",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_employee_eligibilities",
+            "name": "effective_to"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "notes",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_employee_eligibilities",
+            "name": "notes"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_staffing_employee_eligibilities",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "c66b83b235fb005d3d794dd938546c3fdf51547f1ea621f88183310f8ef23e7b"
+}

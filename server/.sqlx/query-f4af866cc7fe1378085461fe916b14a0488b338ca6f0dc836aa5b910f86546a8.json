@@ -1,0 +1,87 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            WITH target AS (\n                SELECT shift.id, shift.starts_at, shift.ends_at\n                FROM business_staffing_shifts AS shift\n                WHERE shift.tenant_id = $1 AND shift.id = $2\n            )\n            SELECT employee.id AS employee_id, employee.employee_code, employee.display_name,\n                   TRUE AS \"suitable!\",\n                   NOT EXISTS (\n                       SELECT 1\n                       FROM business_shift_assignments AS existing_assignment\n                       INNER JOIN business_staffing_shifts AS existing_shift\n                           ON existing_shift.tenant_id = existing_assignment.tenant_id\n                          AND existing_shift.id = existing_assignment.shift_id\n                       WHERE existing_assignment.tenant_id = employee.tenant_id\n                         AND existing_assignment.employee_id = employee.id\n                         AND existing_assignment.status <> 'cancelled'\n                         AND existing_shift.id <> target.id\n                         AND existing_shift.starts_at < target.ends_at\n                         AND existing_shift.ends_at > target.starts_at\n                   ) AS \"available!\",\n                   EXISTS (\n                       SELECT 1 FROM business_shift_assignments AS current_assignment\n                       WHERE current_assignment.tenant_id = employee.tenant_id\n                         AND current_assignment.shift_id = target.id\n                         AND current_assignment.employee_id = employee.id\n                         AND current_assignment.status <> 'cancelled'\n                   ) AS \"already_assigned!\",\n                   (\n                       SELECT existing_shift.id\n                       FROM business_shift_assignments AS existing_assignment\n                       INNER JOIN business_staffing_shifts AS existing_shift\n                           ON existing_shift.tenant_id = existing_assignment.tenant_id\n                          AND existing_shift.id = existing_assignment.shift_id\n                       WHERE existing_assignment.tenant_id = employee.tenant_id\n                         AND existing_assignment.employee_id = employee.id\n                         AND existing_assignment.status <> 'cancelled'\n                         AND existing_shift.id <> target.id\n                         AND existing_shift.starts_at < target.ends_at\n                         AND existing_shift.ends_at > target.starts_at\n                       ORDER BY existing_shift.starts_at, existing_shift.id\n                       LIMIT 1\n                   ) AS conflict_shift_id\n            FROM hr_employees AS employee\n            INNER JOIN accounts AS account\n                ON account.tenant_id = employee.tenant_id\n               AND account.id = employee.account_id\n            CROSS JOIN target\n            WHERE employee.tenant_id = $1\n              AND employee.status = 'active'\n              AND account.status = 'active'\n              AND account.primary_role_code = 'staff'\n              AND ($3::TEXT IS NULL\n                   OR lower(employee.display_name) LIKE '%' || $3 || '%'\n                   OR lower(employee.employee_code) LIKE '%' || $3 || '%')\n              AND ($4::BOOLEAN IS NULL\n                   OR (NOT (NOT EXISTS (\n                        SELECT 1\n                        FROM business_shift_assignments AS cursor_assignment\n                        JOIN business_staffing_shifts AS cursor_shift\n                          ON cursor_shift.tenant_id = cursor_assignment.tenant_id\n                         AND cursor_shift.id = cursor_assignment.shift_id\n                        WHERE cursor_assignment.tenant_id = employee.tenant_id\n                          AND cursor_assignment.employee_id = employee.id\n                          AND cursor_assignment.status <> 'cancelled'\n                          AND cursor_shift.id <> target.id\n                          AND cursor_shift.starts_at < target.ends_at\n                          AND cursor_shift.ends_at > target.starts_at\n                   )), lower(employee.display_name), employee.employee_code, employee.id)\n                      > (NOT $4, $5, $6, $7))\n            ORDER BY \"available!\" DESC, lower(employee.display_name), employee.employee_code, employee.id\n            LIMIT $8\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "employee_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "employee_code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "employee_code"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "display_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "suitable!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "available!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "already_assigned!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "conflict_shift_id",
+        "type_info": "Uuid",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Bool",
+        "Text",
+        "Text",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "f4af866cc7fe1378085461fe916b14a0488b338ca6f0dc836aa5b910f86546a8"
+}

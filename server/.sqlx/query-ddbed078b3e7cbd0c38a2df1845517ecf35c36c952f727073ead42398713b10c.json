@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT customer.id\n            FROM business_customers AS customer\n            JOIN branches AS branch\n              ON branch.tenant_id = customer.tenant_id\n             AND branch.id = customer.branch_id\n            WHERE customer.tenant_id = $1\n              AND customer.id = $2\n              AND customer.status = 'active'\n              AND branch.status = 'active'\n            FOR SHARE OF customer, branch\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_customers",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ddbed078b3e7cbd0c38a2df1845517ecf35c36c952f727073ead42398713b10c"
+}

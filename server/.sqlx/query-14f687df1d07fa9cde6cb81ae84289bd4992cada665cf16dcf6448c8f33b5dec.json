@@ -1,0 +1,66 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT report.id AS report_id, session.started_at,\n                       session.ended_at AS \"ended_at!\", report.staff_note\n                FROM business_urgent_work_reports AS report\n                INNER JOIN business_urgent_work_sessions AS session\n                    ON session.tenant_id = report.tenant_id AND session.report_id = report.id\n                WHERE report.tenant_id = $1 AND report.start_batch_id = $2\n                  AND report.employee_id = $3 AND report.submission_kind = 'manual'\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "report_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_work_reports",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "started_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_work_sessions",
+            "name": "started_at"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "ended_at!",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_work_sessions",
+            "name": "ended_at"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "staff_note",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_work_reports",
+            "name": "staff_note"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "14f687df1d07fa9cde6cb81ae84289bd4992cada665cf16dcf6448c8f33b5dec"
+}

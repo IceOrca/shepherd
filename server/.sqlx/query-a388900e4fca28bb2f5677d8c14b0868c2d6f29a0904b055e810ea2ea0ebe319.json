@@ -1,0 +1,83 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT $2::UUID AS \"branch_id!\",\n                   month.period_start::DATE AS \"period_start!\",\n                   COALESCE(event.status, 'open') AS \"status!\",\n                   COALESCE(event.revision_number, 0) AS \"revision_number!\",\n                   event.reason, account.username AS actor_username, event.occurred_at\n            FROM generate_series(\n                date_trunc('month', $3::DATE),\n                date_trunc('month', $4::DATE),\n                INTERVAL '1 month'\n            ) AS month(period_start)\n            LEFT JOIN LATERAL (\n                SELECT period.status, period.revision_number, period.reason,\n                       period.actor_account_id, period.occurred_at\n                FROM business_financial_period_events AS period\n                WHERE period.tenant_id = $1\n                  AND period.branch_id = $2\n                  AND period.period_start = month.period_start::DATE\n                ORDER BY period.revision_number DESC\n                LIMIT 1\n            ) AS event ON TRUE\n            LEFT JOIN accounts AS account\n              ON account.tenant_id = $1 AND account.id = event.actor_account_id\n            ORDER BY month.period_start DESC\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "branch_id!",
+        "type_info": "Uuid",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "period_start!",
+        "type_info": "Date",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "status!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "revision_number!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "reason",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_financial_period_events",
+            "name": "reason"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "actor_username",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "occurred_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_financial_period_events",
+            "name": "occurred_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Date",
+        "Date"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "a388900e4fca28bb2f5677d8c14b0868c2d6f29a0904b055e810ea2ea0ebe319"
+}

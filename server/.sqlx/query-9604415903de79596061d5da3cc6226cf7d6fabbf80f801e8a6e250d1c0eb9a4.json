@@ -1,0 +1,102 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT event.branch_id, event.period_start, event.status, event.revision_number,\n                   event.reason, account.username AS actor_username, event.occurred_at\n            FROM business_financial_period_events AS event\n            JOIN accounts AS account\n              ON account.tenant_id = event.tenant_id AND account.id = event.actor_account_id\n            WHERE event.tenant_id = $1 AND event.branch_id = $2 AND event.id = $3\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "branch_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_financial_period_events",
+            "name": "branch_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "period_start",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "business_financial_period_events",
+            "name": "period_start"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_financial_period_events",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "revision_number",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "business_financial_period_events",
+            "name": "revision_number"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "reason",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_financial_period_events",
+            "name": "reason"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "actor_username",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "occurred_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_financial_period_events",
+            "name": "occurred_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "9604415903de79596061d5da3cc6226cf7d6fabbf80f801e8a6e250d1c0eb9a4"
+}

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO business_staffing_jobs (id, tenant_id, branch_id, code, name, status)\n            VALUES ($1, $2, $3, $4, 'Corrected Job', 'active')\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "465a82af4b642b619a3a1073749c3516cd41023a4cdef010df4003dd06d7e10b"
+}

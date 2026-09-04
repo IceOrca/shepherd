@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO business_shift_assignments (\n            id, tenant_id, shift_id, employee_id, urgent_work_report_id,\n            customer_bill_rate_id, worker_pay_rate_id, rate_source, manual_rate_reason, currency,\n            bill_hourly_rate_snapshot, worker_hourly_rate_snapshot,\n            eligibility_exception_reason, status, worked_seconds, observed_worked_seconds, approval_adjustment_reason,\n            customer_amount, worker_amount, margin_amount,\n            approved_at, approved_by_account_id, created_by_account_id\n        ) VALUES (\n            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::TEXT::NUMERIC, $12::TEXT::NUMERIC,\n            $13, 'approved', $14::BIGINT, $15::BIGINT, $16,\n            ROUND($11::TEXT::NUMERIC * $14::BIGINT::NUMERIC / 3600, 4),\n            ROUND($12::TEXT::NUMERIC * $14::BIGINT::NUMERIC / 3600, 4),\n            ROUND($11::TEXT::NUMERIC * $14::BIGINT::NUMERIC / 3600, 4)\n                - ROUND($12::TEXT::NUMERIC * $14::BIGINT::NUMERIC / 3600, 4),\n            CURRENT_TIMESTAMP, $17, $17\n        )\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int8",
+        "Int8",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1fd7e93e02eb39e2ce6e327ac1c59d9f6dbcdfaea22377cbb6be5f5faf267daf"
+}

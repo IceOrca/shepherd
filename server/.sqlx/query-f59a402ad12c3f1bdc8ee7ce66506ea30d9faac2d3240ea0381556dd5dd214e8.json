@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT EXISTS (\n                    SELECT 1\n                    FROM hr_employees AS employee\n                    INNER JOIN accounts AS account\n                        ON account.tenant_id = employee.tenant_id\n                       AND account.id = employee.account_id\n                    WHERE employee.tenant_id = $1\n                      AND employee.branch_id = $2\n                      AND employee.id = $3\n                      AND employee.status = 'active'\n                      AND account.status = 'active'\n                      AND account.primary_role_code = 'staff'\n                ) AS \"exists!\"\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "f59a402ad12c3f1bdc8ee7ce66506ea30d9faac2d3240ea0381556dd5dd214e8"
+}

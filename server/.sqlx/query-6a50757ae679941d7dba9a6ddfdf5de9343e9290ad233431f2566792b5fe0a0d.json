@@ -1,0 +1,294 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT report.id AS report_id, report.branch_id, branch.name AS branch_name,\n               report.employee_id, employee.employee_code,\n               employee.display_name AS employee_name,\n               report.claimed_customer_id, customer.name AS customer_name,\n               report.submission_kind, report.staff_note, report.status,\n               session.started_at, session.ended_at, session.worked_seconds,\n               session.started_by_account_id, started_actor.username AS started_by_username,\n               session.start_source, session.ended_by_account_id,\n               ended_actor.username AS \"ended_by_username?\", session.end_source,\n               assignment.id AS \"reconciled_assignment_id?\",\n               report.created_at, report.updated_at\n        FROM business_urgent_work_sessions AS session\n        INNER JOIN business_urgent_work_reports AS report\n            ON report.tenant_id = session.tenant_id AND report.id = session.report_id\n        INNER JOIN hr_employees AS employee\n            ON employee.tenant_id = report.tenant_id AND employee.id = report.employee_id\n        INNER JOIN business_customers AS customer\n            ON customer.tenant_id = report.tenant_id AND customer.id = report.claimed_customer_id\n        INNER JOIN branches AS branch\n            ON branch.tenant_id = report.tenant_id AND branch.id = report.branch_id\n        INNER JOIN accounts AS started_actor\n            ON started_actor.tenant_id = session.tenant_id AND started_actor.id = session.started_by_account_id\n        LEFT JOIN accounts AS ended_actor\n            ON ended_actor.tenant_id = session.tenant_id AND ended_actor.id = session.ended_by_account_id\n        LEFT JOIN business_shift_assignments AS assignment\n            ON assignment.tenant_id = report.tenant_id AND assignment.urgent_work_report_id = report.id\n        WHERE session.tenant_id = $1 AND session.ended_by_account_id = $2\n          AND session.end_idempotency_key = $3\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "report_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_work_reports",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "branch_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_work_reports",
+            "name": "branch_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "branch_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "branches",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "employee_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_work_reports",
+            "name": "employee_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "employee_code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "employee_code"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "employee_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "claimed_customer_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_work_reports",
+            "name": "claimed_customer_id"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "customer_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_customers",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "submission_kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_work_reports",
+            "name": "submission_kind"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "staff_note",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_work_reports",
+            "name": "staff_note"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_work_reports",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "started_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_work_sessions",
+            "name": "started_at"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "ended_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_work_sessions",
+            "name": "ended_at"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "worked_seconds",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_work_sessions",
+            "name": "worked_seconds"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "started_by_account_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_work_sessions",
+            "name": "started_by_account_id"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "started_by_username",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "start_source",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_work_sessions",
+            "name": "start_source"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "ended_by_account_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_work_sessions",
+            "name": "ended_by_account_id"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "ended_by_username?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "end_source",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_work_sessions",
+            "name": "end_source"
+          }
+        }
+      },
+      {
+        "ordinal": 20,
+        "name": "reconciled_assignment_id?",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_work_reports",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 22,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_urgent_work_reports",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "6a50757ae679941d7dba9a6ddfdf5de9343e9290ad233431f2566792b5fe0a0d"
+}

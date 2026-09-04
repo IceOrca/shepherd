@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO hr_salary_advance_events (\n            tenant_id, branch_id, salary_advance_id, action, actor_account_id,\n            idempotency_key\n        ) VALUES\n            ($1, $2, $3, 'requested', $4, $3),\n            ($1, $2, $3, 'approved', $5, $6),\n            ($1, $2, $3, 'disbursed', $5, $7)\n        ON CONFLICT (tenant_id, actor_account_id, idempotency_key) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d3bfbd7ec0e97a59153bab1015d1a010c00f1929864d4c5462b74b5cb4b02d9f"
+}

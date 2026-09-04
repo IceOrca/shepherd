@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT assignment.id\n            FROM business_shift_assignments AS assignment\n            WHERE assignment.tenant_id = $1\n              AND assignment.shift_id = $2\n              AND assignment.status = 'assigned'\n            ORDER BY assignment.id\n            FOR UPDATE\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c577f0e7363fbd06c9335d8f6a76b341088fc0c069f61632f45df9044f95a88b"
+}

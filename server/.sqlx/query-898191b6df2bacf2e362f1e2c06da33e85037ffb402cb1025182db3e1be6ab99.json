@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                WITH due AS (\n                    SELECT advance.id AS salary_advance_id, advance.employee_id,\n                           advance.currency, advance.payroll_inclusion_on,\n                           advance.approved_amount - COALESCE(recovery.amount, 0) AS amount\n                    FROM hr_salary_advances AS advance\n                    LEFT JOIN LATERAL (\n                        SELECT SUM(item.amount) AS amount\n                        FROM hr_salary_advance_recoveries AS item\n                        WHERE item.tenant_id = advance.tenant_id\n                          AND item.branch_id = advance.branch_id\n                          AND item.salary_advance_id = advance.id\n                    ) AS recovery ON TRUE\n                    WHERE advance.tenant_id = $1\n                      AND advance.branch_id = $2\n                      AND advance.status = 'disbursed'\n                      AND advance.payroll_inclusion_on >= $3\n                      AND advance.payroll_inclusion_on < ($3::DATE + INTERVAL '1 month')::DATE\n                    FOR UPDATE OF advance\n                )\n                INSERT INTO hr_salary_advance_recoveries (\n                    id, tenant_id, branch_id, salary_advance_id, employee_id,\n                    amount, currency, recovery_source, payroll_period_start,\n                    payroll_inclusion_on, settlement_reference,\n                    recorded_by_account_id, idempotency_key,\n                    financial_period_event_id\n                )\n                SELECT gen_random_uuid(), $1, $2, due.salary_advance_id, due.employee_id,\n                       due.amount, due.currency, 'payroll_deduction', $3,\n                       due.payroll_inclusion_on,\n                       'Kỳ lương ' || to_char($3::DATE, 'MM/YYYY'),\n                       $4, gen_random_uuid(), $5\n                FROM due\n                WHERE due.amount > 0\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Date",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "898191b6df2bacf2e362f1e2c06da33e85037ffb402cb1025182db3e1be6ab99"
+}

@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT EXISTS (\n                    SELECT 1\n                    FROM business_shift_assignments AS assignment\n                    JOIN LATERAL (\n                        SELECT confirmed_started_at, confirmed_ended_at, local_work_date\n                        FROM business_assignment_reconciliation_revisions\n                        WHERE tenant_id = assignment.tenant_id AND assignment_id = assignment.id\n                        ORDER BY revision_number DESC LIMIT 1\n                    ) AS result ON TRUE\n                    JOIN hr_attendance_sessions AS attendance\n                      ON attendance.tenant_id = assignment.tenant_id\n                     AND attendance.employee_id = assignment.employee_id\n                     AND attendance.check_out_at IS NOT NULL\n                     AND tstzrange(attendance.check_in_at, attendance.check_out_at, '[)')\n                         && tstzrange(\n                             result.confirmed_started_at,\n                             result.confirmed_ended_at,\n                             '[)'\n                         )\n                    WHERE assignment.tenant_id = $1\n                      AND assignment.branch_id = $2\n                      AND assignment.status = 'approved'\n                      AND result.local_work_date >= $3\n                      AND result.local_work_date < ($3::DATE + INTERVAL '1 month')::DATE\n                ) AS \"exists!\"\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Date"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "f45f2a2f150c6b0c36f57a1a8dcb8e01fa9968c0fd1578f30c381589ab514079"
+}

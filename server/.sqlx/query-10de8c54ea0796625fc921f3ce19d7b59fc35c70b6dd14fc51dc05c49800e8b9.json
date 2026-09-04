@@ -1,0 +1,43 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO business_expense_claims (\n                id, tenant_id, category_id, funding_source, paid_by_employee_id,\n                customer_id, urgent_work_report_id, staffing_assignment_id,\n                paid_on, payroll_inclusion_on, description, evidence_reference,\n                claimed_amount, currency, submitted_by_account_id, submission_idempotency_key\n            ) VALUES (\n                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,\n                $13::NUMERIC, $14, $15, $16\n            )\n            ON CONFLICT (tenant_id, branch_id, submitted_by_account_id, submission_idempotency_key)\n            DO NOTHING RETURNING id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claims",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Date",
+        "Date",
+        "Text",
+        "Text",
+        "Numeric",
+        "Text",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "10de8c54ea0796625fc921f3ce19d7b59fc35c70b6dd14fc51dc05c49800e8b9"
+}

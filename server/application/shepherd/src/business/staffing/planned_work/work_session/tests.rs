@@ -202,9 +202,10 @@ impl Fixture {
 
     async fn work_period_start(&self) -> Result<chrono::NaiveDate, Box<dyn Error>> {
         let mut transaction = self.db.begin_tenant(self.tenant_id).await?;
-        let period_start = sqlx::query_scalar::<_, chrono::NaiveDate>(
+        let period_start = sqlx::query_scalar!(
             r#"
             SELECT date_trunc('month', session.started_at AT TIME ZONE customer.time_zone)::DATE
+                   AS "period_start!"
             FROM business_shift_work_sessions AS session
             JOIN business_shift_assignments AS assignment
               ON assignment.tenant_id = session.tenant_id AND assignment.id = session.assignment_id
@@ -215,9 +216,9 @@ impl Fixture {
             WHERE session.tenant_id = $1 AND session.assignment_id = $2
             LIMIT 1
             "#,
+            self.tenant_id,
+            self.assignment_id,
         )
-        .bind(self.tenant_id)
-        .bind(self.assignment_id)
         .fetch_one(transaction.connection())
         .await?;
         transaction.commit().await?;
@@ -347,31 +348,31 @@ impl Fixture {
         let customer_id = Uuid::new_v4();
         let job_id = Uuid::new_v4();
         let mut transaction = self.db.begin_tenant(self.tenant_id).await?;
-        sqlx::query(
+        sqlx::query!(
             r#"
             INSERT INTO business_customers (
                 id, tenant_id, branch_id, code, name, time_zone,
                 created_by_account_id, updated_by_account_id
             ) VALUES ($1, $2, $3, $4, 'Corrected Customer', 'Asia/Bangkok', $5, $5)
             "#,
+            customer_id,
+            self.tenant_id,
+            self.branch_id,
+            format!("corrected-{}", customer_id.simple()),
+            self.account_id,
         )
-        .bind(customer_id)
-        .bind(self.tenant_id)
-        .bind(self.branch_id)
-        .bind(format!("corrected-{}", customer_id.simple()))
-        .bind(self.account_id)
         .execute(transaction.connection())
         .await?;
-        sqlx::query(
+        sqlx::query!(
             r#"
             INSERT INTO business_staffing_jobs (id, tenant_id, branch_id, code, name, status)
             VALUES ($1, $2, $3, $4, 'Corrected Job', 'active')
             "#,
+            job_id,
+            self.tenant_id,
+            self.branch_id,
+            format!("corrected-{}", job_id.simple()),
         )
-        .bind(job_id)
-        .bind(self.tenant_id)
-        .bind(self.branch_id)
-        .bind(format!("corrected-{}", job_id.simple()))
         .execute(transaction.connection())
         .await?;
         transaction.commit().await?;
@@ -380,32 +381,32 @@ impl Fixture {
 
     async fn reconciliation_conclusion(&self) -> Result<(Uuid, Uuid), Box<dyn Error>> {
         let mut transaction = self.db.begin_tenant(self.tenant_id).await?;
-        let conclusion = sqlx::query_as::<_, (Uuid, Uuid)>(
+        let conclusion = sqlx::query!(
             r#"
             SELECT final_customer_id, final_job_id
             FROM business_assignment_reconciliation_revisions
             WHERE tenant_id = $1 AND assignment_id = $2 AND revision_number = 1
             "#,
+            self.tenant_id,
+            self.assignment_id,
         )
-        .bind(self.tenant_id)
-        .bind(self.assignment_id)
         .fetch_one(transaction.connection())
         .await?;
         transaction.commit().await?;
-        Ok(conclusion)
+        Ok((conclusion.final_customer_id, conclusion.final_job_id))
     }
 
     async fn completed_session_rejects_rewrite(&self) -> Result<bool, Box<dyn Error>> {
         let mut transaction = self.db.begin_tenant(self.tenant_id).await?;
-        let result = sqlx::query(
+        let result = sqlx::query!(
             r#"
             UPDATE business_shift_work_sessions
             SET started_at = started_at - INTERVAL '1 minute'
             WHERE tenant_id = $1 AND assignment_id = $2 AND ended_at IS NOT NULL
             "#,
+            self.tenant_id,
+            self.assignment_id,
         )
-        .bind(self.tenant_id)
-        .bind(self.assignment_id)
         .execute(transaction.connection())
         .await;
         Ok(result.is_err())
@@ -413,7 +414,7 @@ impl Fixture {
 
     async fn cleanup(self) -> Result<(), Box<dyn Error>> {
         let mut transaction = self.db.begin_tenant(self.tenant_id).await?;
-        sqlx::query(
+        sqlx::query!(
             "ALTER TABLE business_shift_work_sessions \
              DISABLE TRIGGER business_shift_work_sessions_reject_delete",
         )
@@ -470,7 +471,7 @@ impl Fixture {
         sqlx::query!("DELETE FROM branches WHERE tenant_id = $1", self.tenant_id)
             .execute(transaction.connection())
             .await?;
-        sqlx::query(
+        sqlx::query!(
             "ALTER TABLE business_shift_work_sessions \
              ENABLE TRIGGER business_shift_work_sessions_reject_delete",
         )

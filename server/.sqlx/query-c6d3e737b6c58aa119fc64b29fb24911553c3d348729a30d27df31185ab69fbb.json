@@ -1,0 +1,33 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE business_expense_claims\n            SET status = $3,\n                approved_amount = $4::NUMERIC,\n                decision_reason = $5,\n                approved_by_account_id = $6,\n                approved_at = CURRENT_TIMESTAMP,\n                version = version + 1,\n                updated_at = CURRENT_TIMESTAMP\n            WHERE tenant_id = $1 AND id = $2 AND status = 'submitted'\n            RETURNING id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claims",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Numeric",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c6d3e737b6c58aa119fc64b29fb24911553c3d348729a30d27df31185ab69fbb"
+}

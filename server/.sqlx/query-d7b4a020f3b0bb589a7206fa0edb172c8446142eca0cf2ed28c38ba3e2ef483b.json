@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT set_config('app.reconciliation_final_job_id', $1, TRUE) AS \"context!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "context!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d7b4a020f3b0bb589a7206fa0edb172c8446142eca0cf2ed28c38ba3e2ef483b"
+}

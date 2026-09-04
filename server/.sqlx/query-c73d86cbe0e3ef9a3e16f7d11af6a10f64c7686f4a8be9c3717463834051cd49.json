@@ -1,0 +1,136 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    SELECT employee.id AS employee_id, employee.branch_id, employee.employee_code,\n                           employee.display_name AS employee_name, account.primary_role_code AS role_code,\n                           rate.id AS rate_id, rate.monthly_amount::TEXT AS \"monthly_amount?\",\n                           rate.currency, rate.effective_from, rate.effective_to\n                    FROM hr_employees AS employee\n                    JOIN accounts AS account\n                      ON account.tenant_id = employee.tenant_id AND account.id = employee.account_id\n                    LEFT JOIN LATERAL (\n                        SELECT salary.id, salary.monthly_amount, salary.currency,\n                               salary.effective_from, salary.effective_to\n                        FROM hr_employee_salary_rates AS salary\n                        WHERE salary.tenant_id = employee.tenant_id\n                          AND salary.branch_id = employee.branch_id\n                          AND salary.employee_id = employee.id\n                        ORDER BY salary.effective_from DESC\n                        LIMIT 1\n                    ) AS rate ON TRUE\n                    WHERE employee.tenant_id = $1\n                      AND employee.status <> 'terminated'\n                      AND account.status = 'active'\n                      AND account.primary_role_code IN ('executive_manager', 'branch_manager', 'supervisor')\n                      AND ($2::TEXT IS NULL OR employee.display_name ILIKE '%' || $2 || '%'\n                           OR employee.employee_code ILIKE '%' || $2 || '%')\n                      AND ($3::TEXT IS NULL\n                           OR (account.primary_role_code, lower(employee.display_name), employee.id) > ($3, $4, $5))\n                    ORDER BY account.primary_role_code, lower(employee.display_name), employee.id\n                    LIMIT $6\n                    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "employee_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "branch_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "branch_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "employee_code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "employee_code"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "employee_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "role_code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "primary_role_code"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "rate_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "hr_employee_salary_rates",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "monthly_amount?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "currency",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hr_employee_salary_rates",
+            "name": "currency"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "effective_from",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "hr_employee_salary_rates",
+            "name": "effective_from"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "effective_to",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "hr_employee_salary_rates",
+            "name": "effective_to"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "c73d86cbe0e3ef9a3e16f7d11af6a10f64c7686f4a8be9c3717463834051cd49"
+}

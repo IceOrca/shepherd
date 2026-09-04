@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS(\n                        SELECT 1 FROM hr_employees\n                        WHERE tenant_id = $1 AND id = $2 AND status = 'active'\n                          AND ($3 OR account_id = $4)\n                    ) AS \"is_allowed!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "is_allowed!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Bool",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "cf23d0427061e11f17f91dde4d83d4619dec010fbd7fc53fbfac61e47260d79b"
+}

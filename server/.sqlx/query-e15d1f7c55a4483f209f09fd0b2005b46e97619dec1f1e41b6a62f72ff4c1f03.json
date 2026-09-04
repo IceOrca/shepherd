@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO hr_employee_profit_share_payments (\n                    tenant_id, branch_id, payroll_period_start,\n                    employee_id, employee_home_branch_id, employee_code,\n                    employee_name, role_code, currency, profit_base,\n                    percentage, payment_amount, financial_period_event_id\n                )\n                SELECT $1, $2, $3,\n                       recipient.employee_id, recipient.employee_home_branch_id,\n                       recipient.employee_code, recipient.employee_name,\n                       recipient.role_code, base.currency, base.profit_base,\n                       recipient.percentage,\n                       ROUND(base.profit_base * recipient.percentage / 100, 4),\n                       $4\n                FROM shepherd_branch_profit_share_recipients(\n                    $1, $2, ($3::DATE + INTERVAL '1 month - 1 day')::DATE\n                ) AS recipient\n                CROSS JOIN shepherd_branch_profit_before_share(\n                    $1, $2, $3, ($3::DATE + INTERVAL '1 month - 1 day')::DATE\n                ) AS base\n                WHERE recipient.percentage > 0\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Date",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e15d1f7c55a4483f209f09fd0b2005b46e97619dec1f1e41b6a62f72ff4c1f03"
+}

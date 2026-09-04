@@ -1,0 +1,235 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, shift_id, employee_id, customer_bill_rate_id, worker_pay_rate_id, rate_source, manual_rate_reason, currency,\n               bill_hourly_rate_snapshot::TEXT AS \"bill_hourly_rate_snapshot!\",\n               worker_hourly_rate_snapshot::TEXT AS \"worker_hourly_rate_snapshot!\",\n               eligibility_exception_reason, status, worked_seconds,\n               observed_worked_seconds, approval_adjustment_reason,\n               customer_amount::TEXT AS customer_amount,\n               worker_amount::TEXT AS worker_amount,\n               margin_amount::TEXT AS margin_amount,\n               approved_at, created_at\n        FROM business_shift_assignments\n        WHERE tenant_id = $1 AND shift_id = $2\n          AND ($3::TIMESTAMPTZ IS NULL OR (created_at, id) < ($3, $4))\n        ORDER BY created_at DESC, id DESC\n        LIMIT $5\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "shift_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "shift_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "employee_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "employee_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "customer_bill_rate_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "customer_bill_rate_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "worker_pay_rate_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "worker_pay_rate_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "rate_source",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "rate_source"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "manual_rate_reason",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "manual_rate_reason"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "currency",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "currency"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "bill_hourly_rate_snapshot!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "worker_hourly_rate_snapshot!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 10,
+        "name": "eligibility_exception_reason",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "eligibility_exception_reason"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "worked_seconds",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "worked_seconds"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "observed_worked_seconds",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "observed_worked_seconds"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "approval_adjustment_reason",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "approval_adjustment_reason"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "customer_amount",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 16,
+        "name": "worker_amount",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 17,
+        "name": "margin_amount",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 18,
+        "name": "approved_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "approved_at"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "business_shift_assignments",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true,
+      false,
+      null,
+      null,
+      true,
+      false,
+      true,
+      true,
+      true,
+      null,
+      null,
+      null,
+      true,
+      false
+    ]
+  },
+  "hash": "ffb1a9d7f1dbad3895a80e4b4494bbda08601801922160fdabe7da2adc144b7b"
+}

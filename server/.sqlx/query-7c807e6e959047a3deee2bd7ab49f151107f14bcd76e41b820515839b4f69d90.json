@@ -1,0 +1,65 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT tenant_role.scope_type, tenant_role.is_system,\n               rule.min_assignments, rule.max_assignments\n        FROM tenant_roles AS tenant_role\n        LEFT JOIN auth_role_branch_assignment_rules AS rule\n            ON rule.role_code = tenant_role.code\n        WHERE tenant_role.tenant_id = $1\n          AND tenant_role.code = $2\n          AND tenant_role.is_active\n          AND tenant_role.is_system\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "scope_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tenant_roles",
+            "name": "scope_type"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "is_system",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "tenant_roles",
+            "name": "is_system"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "min_assignments",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "auth_role_branch_assignment_rules",
+            "name": "min_assignments"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "max_assignments",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "auth_role_branch_assignment_rules",
+            "name": "max_assignments"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "7c807e6e959047a3deee2bd7ab49f151107f14bcd76e41b820515839b4f69d90"
+}

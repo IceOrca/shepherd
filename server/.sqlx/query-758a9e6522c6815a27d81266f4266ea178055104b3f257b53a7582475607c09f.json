@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO business_expense_claims (\n            id, tenant_id, branch_id, category_id, funding_source, paid_by_employee_id,\n            paid_on, payroll_inclusion_on, description, evidence_reference,\n            claimed_amount, approved_amount,\n            currency, status, submitted_by_account_id, approved_by_account_id,\n            approved_at, submission_idempotency_key\n        ) VALUES (\n            $1, $2, $3, $4, 'employee_personal', $5, CURRENT_DATE - 1, CURRENT_DATE,\n            'Giám sát mua nước và đồ dùng bổ sung cho ca phát sinh', 'HD-DEV-CHIHO-001',\n            320000, 320000, 'VND', 'approved', $6, $7, CURRENT_TIMESTAMP, $1\n        ) ON CONFLICT (id) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "758a9e6522c6815a27d81266f4266ea178055104b3f257b53a7582475607c09f"
+}

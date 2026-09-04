@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO business_customers (\n            id, tenant_id, branch_id, code, name, address, time_zone, status,\n            created_by_account_id, updated_by_account_id\n        )\n        VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $8)\n        ON CONFLICT (tenant_id, branch_id, lower(code)) DO UPDATE\n        SET name = EXCLUDED.name,\n            address = EXCLUDED.address,\n            time_zone = EXCLUDED.time_zone,\n            status = 'active',\n            updated_at = CURRENT_TIMESTAMP,\n            updated_by_account_id = EXCLUDED.updated_by_account_id\n        RETURNING id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_customers",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a5c89c244f60d1183bf43857fa5b0e4dbbdef761a2fd318354ad1db900822b9a"
+}

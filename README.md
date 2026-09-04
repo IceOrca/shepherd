@@ -847,6 +847,31 @@ rerunning the same one-shot bootstrap job, GoTrue migrations, API-based Auth
 provisioning, and Shepherd data seeding. Never run that destructive development
 workflow in production.
 
+### SQLx compile-time query validation
+
+Server PostgreSQL statements are compile-time checked with SQLx macros.
+Short statements use `query!`, `query_as!`, or `query_scalar!`; large
+finance and reporting statements live beside their domain code as `.sql`
+files and use the corresponding `query_file!` macro. Fixed query shapes must
+use nullable bind parameters for optional filters instead of runtime string
+assembly or `AssertSqlSafe`. This keeps parameter types, selected columns,
+and result nullability checked against the migrated schema.
+
+After changing a query, its Rust input/output type, or a migration, regenerate
+the tracked offline cache while the development database is running:
+
+```bash
+docker compose exec -T -e SQLX_OFFLINE=false server \
+  cargo sqlx prepare --workspace -- --all-targets --features planned-staffing
+```
+
+Verify that all targets can then build without consulting PostgreSQL:
+
+```bash
+docker compose exec -T -e SQLX_OFFLINE=true server \
+  cargo check --workspace --all-targets --features planned-staffing
+```
+
 Each development tenant receives three branches: `head-office`,
 `north-branch`, and `south-branch`. Above them are one `tenant_owner` and one
 `executive_manager`; the executive manager is assigned to all three branches.

@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT EXISTS (\n                SELECT 1\n                FROM business_shift_assignments AS assignment\n                JOIN business_shift_work_sessions AS session\n                  ON session.tenant_id = assignment.tenant_id\n                 AND session.assignment_id = assignment.id\n                WHERE assignment.tenant_id = $1\n                  AND assignment.shift_id = $2\n            ) AS \"exists!\"\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "bf7fbbd2e917358dc2a0db0a38cab380e49a0838f3ef3b95e7f4090cdb91be9c"
+}

@@ -1,0 +1,33 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE hr_salary_advances\n            SET status = $3, approved_amount = $4::NUMERIC, decision_reason = $5,\n                approved_by_account_id = $6, approved_at = CURRENT_TIMESTAMP,\n                version = version + 1, updated_at = CURRENT_TIMESTAMP\n            WHERE tenant_id = $1 AND id = $2 AND status = 'requested'\n            RETURNING id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "hr_salary_advances",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Numeric",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ddf9ad6e2c4801d8eddc9040358c7d90e2818dba3fcc090dae2b4c22dc24d3bb"
+}

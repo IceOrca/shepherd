@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT set_config('app.revision_actor_id', $1, TRUE) AS \"context!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "context!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "1342316a5022710622b6471fabfdb9b80eb011393dcd2afe3ba983188178e601"
+}
