@@ -18,12 +18,12 @@ use crate::{
 };
 
 use super::{
-    super::core::StaffingError,
     core::{
         OwnStaffingAssignment, OwnStaffingAssignmentCursor, OwnStaffingAssignmentPage, ShiftWorkActionInput,
         ShiftWorkSession,
     },
 };
+use crate::business::staffing::StaffingErr;
 
 #[derive(Debug, Deserialize)]
 struct OwnAssignmentPageQuery {
@@ -94,7 +94,7 @@ async fn list_own_assignments(
     Query(query): Query<OwnAssignmentPageQuery>,
 ) -> Result<Json<OwnStaffingAssignmentPageResponse>, StatusCode> {
     require_permission(&user, "business.staffing_work.self.read")?;
-    let limit: u16 = resolve_limit(&context.list_pagination, query.limit)?;
+    let limit: u16 = resolve_limit(&context.pagination, query.limit)?;
     let cursor: Option<OwnStaffingAssignmentCursor> = decode_cursor(query.cursor.as_deref())?;
     debug!(
         operation = "list_own_staffing_assignments",
@@ -107,7 +107,7 @@ async fn list_own_assignments(
         .staffing_work
         .list_own_assignments(user.tenant_id, user.account_id, i64::from(limit), cursor)
         .await
-        .map_err(|error: StaffingError| staffing_work_status("list own assignments", &user, error))?;
+        .map_err(|error: StaffingErr| staffing_work_status("list own assignments", &user, error))?;
     debug!(
         operation = "list_own_staffing_assignments",
         tenant_id = %user.tenant_id,
@@ -146,7 +146,7 @@ async fn start(
         .staffing_work
         .start(user.tenant_id, assignment_id, user.account_id, input)
         .await
-        .map_err(|error: StaffingError| staffing_work_status("start assignment work", &user, error))?;
+        .map_err(|error: StaffingErr| staffing_work_status("start assignment work", &user, error))?;
     context.notifications.wake();
     info!(
         operation = "start_staffing_work",
@@ -181,7 +181,7 @@ async fn end(
         .staffing_work
         .end(user.tenant_id, assignment_id, user.account_id, input)
         .await
-        .map_err(|error: StaffingError| staffing_work_status("end assignment work", &user, error))?;
+        .map_err(|error: StaffingErr| staffing_work_status("end assignment work", &user, error))?;
     context.notifications.wake();
     info!(
         operation = "end_staffing_work",
@@ -241,13 +241,13 @@ fn require_permission(user: &AuthedUser, permission: &str) -> Result<(), StatusC
     }
 }
 
-fn staffing_work_status(operation: &str, user: &AuthedUser, error: StaffingError) -> StatusCode {
+fn staffing_work_status(operation: &str, user: &AuthedUser, error: StaffingErr) -> StatusCode {
     let status: StatusCode = match &error {
-        StaffingError::NotFound => StatusCode::NOT_FOUND,
-        StaffingError::Conflict => StatusCode::CONFLICT,
-        StaffingError::InvalidInput(_) => StatusCode::BAD_REQUEST,
-        StaffingError::MissingStaffingRate => StatusCode::UNPROCESSABLE_ENTITY,
-        StaffingError::BackendUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+        StaffingErr::NotFound => StatusCode::NOT_FOUND,
+        StaffingErr::Conflict => StatusCode::CONFLICT,
+        StaffingErr::InvalidInput(_) => StatusCode::BAD_REQUEST,
+        StaffingErr::MissingStaffingRate => StatusCode::UNPROCESSABLE_ENTITY,
+        StaffingErr::BackendUnavailable => StatusCode::SERVICE_UNAVAILABLE,
     };
 
     if status.is_server_error() {

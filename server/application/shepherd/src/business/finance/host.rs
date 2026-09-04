@@ -264,7 +264,7 @@ async fn list_expenses(
     Query(query): Query<ExpensePageQuery>,
 ) -> Result<Json<ExpensePageRsp>, StatusCode> {
     require_any_permission(&user, &["business.expenses.self.read", "business.expenses.read"])?;
-    let limit: u16 = resolve_limit(&context.list_pagination, query.limit)?;
+    let limit: u16 = resolve_limit(&context.pagination, query.limit)?;
     let cursor: Option<ExpenseCursor> = decode_cursor(query.cursor.as_deref())?;
     let page: ExpensePage = context
         .core
@@ -386,7 +386,7 @@ async fn list_expense_revisions(
     Query(query): Query<FinanceCursorQuery>,
 ) -> Result<Json<ExpenseRevisionPageRsp>, StatusCode> {
     require_any_permission(&user, &["business.expenses.self.read", "business.expenses.read"])?;
-    let limit: u16 = resolve_limit(&context.list_pagination, query.limit)?;
+    let limit: u16 = resolve_limit(&context.pagination, query.limit)?;
     let cursor: Option<RevisionCursor> = decode_cursor(query.cursor.as_deref())?;
     let page: ExpenseRevisionPage = context
         .core
@@ -465,7 +465,7 @@ async fn list_salary_advances(
     Query(query): Query<SalaryAdvancePageQuery>,
 ) -> Result<Json<SalaryAdvancePageResponse>, StatusCode> {
     require_any_permission(&user, &["hr.salary_advances.self.read", "hr.salary_advances.read"])?;
-    let limit: u16 = resolve_limit(&context.list_pagination, query.limit)?;
+    let limit: u16 = resolve_limit(&context.pagination, query.limit)?;
     let cursor: Option<SalaryAdvanceCursor> = decode_cursor(query.cursor.as_deref())?;
     let page: SalaryAdvancePage = context
         .core
@@ -588,7 +588,7 @@ async fn list_salary_advance_revisions(
     Query(query): Query<FinanceCursorQuery>,
 ) -> Result<Json<SalaryAdvanceRevisionPageResponse>, StatusCode> {
     require_any_permission(&user, &["hr.salary_advances.self.read", "hr.salary_advances.read"])?;
-    let limit: u16 = resolve_limit(&context.list_pagination, query.limit)?;
+    let limit: u16 = resolve_limit(&context.pagination, query.limit)?;
     let cursor: Option<RevisionCursor> = decode_cursor(query.cursor.as_deref())?;
     let page: SalaryAdvanceRevisionPage = context
         .core

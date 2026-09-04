@@ -1,5 +1,5 @@
 use std::{collections::BTreeSet, sync::Arc};
-
+use std::ops::{Deref, DerefMut};
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use infra_postgres::{DatabaseAdapter, TenantDbErr, TenantTransaction};
@@ -7,32 +7,17 @@ use sqlx::postgres::PgQueryResult;
 use tracing::{debug, error, info, trace, warn};
 use uuid::Uuid;
 
-use super::super::core::{ManualRateOverride, ReconcileCollection, ReconcileStatus};
+use super::super::{ManualRateOverride, ReconcileCollection, ReconcileStatus};
 use super::core::{
     UrgentCustomerCursor, UrgentCustomerPage, UrgentCustomerWorkRecord, UrgentCustomerWorkRecordInput,
     UrgentEmployeeCursor, UrgentEmployeePage, UrgentOwnWorkCursor, UrgentOwnWorkPage, UrgentReconcileCursor,
     UrgentReconcilePage, UrgentTeamWorkPage, UrgentWorkActionSource, UrgentWorkCustomer, UrgentWorkEmployee,
-    UrgentWorkEndInput, UrgentWorkError, UrgentWorkItem, UrgentWorkManualInput, UrgentWorkReconcile,
-    UrgentWorkReconcileInput, UrgentWorkRepo, UrgentWorkStartInput, UrgentWorkStatus, UrgentWorkSubmissionKind,
+    UrgentWorkEndInput, UrgentStaffingErr, UrgentWorkItem, UrgentWorkManualInput, UrgentWorkReconcile,
+    UrgentWorkReconcileInput, UrgentWorkStartInput, UrgentWorkStatus, UrgentWorkSubmissionKind,
 };
 
-pub struct UrgentWorkDb {
+pub struct UrgentStaffingRepo {
     db: Arc<DatabaseAdapter>,
-}
-
-impl UrgentWorkDb {
-    pub fn new_arc(db: Arc<DatabaseAdapter>) -> Arc<Self> {
-        Arc::new(Self { db })
-    }
-
-    async fn begin_tenant(&self, tenant_id: Uuid) -> Result<TenantTransaction, UrgentWorkError> {
-        debug!(operation = "urgent_work.begin_tenant", tenant_id = %tenant_id, "Opening urgent-work tenant transaction");
-        let result: Result<TenantTransaction, TenantDbErr> = self.db.begin_tenant(tenant_id).await;
-        result.map_err(|database_error: TenantDbErr| {
-            error!(operation = "urgent_work.begin_tenant", tenant_id = %tenant_id, reason = %database_error, "Opening urgent-work tenant transaction failed");
-            UrgentWorkError::BackendUnavailable
-        })
-    }
 }
 
 #[derive(Debug)]
@@ -132,11 +117,11 @@ struct WorkItemRow {
 }
 
 impl TryFrom<WorkItemRow> for UrgentWorkItem {
-    type Error = UrgentWorkError;
+    type Error = UrgentStaffingErr;
 
     fn try_from(row: WorkItemRow) -> Result<Self, Self::Error> {
         let end_source: Option<UrgentWorkActionSource> = match row.end_source.as_deref() {
-            Some(code) => Some(UrgentWorkActionSource::from_code(code).ok_or(UrgentWorkError::BackendUnavailable)?),
+            Some(code) => Some(UrgentWorkActionSource::from_code(code).ok_or(UrgentStaffingErr::BackendUnavailable)?),
             None => None,
         };
         Ok(Self {
@@ -149,16 +134,16 @@ impl TryFrom<WorkItemRow> for UrgentWorkItem {
             claimed_customer_id: row.claimed_customer_id,
             customer_name: row.customer_name,
             submission_kind: UrgentWorkSubmissionKind::from_code(&row.submission_kind)
-                .ok_or(UrgentWorkError::BackendUnavailable)?,
+                .ok_or(UrgentStaffingErr::BackendUnavailable)?,
             staff_note: row.staff_note,
-            status: UrgentWorkStatus::from_code(&row.status).ok_or(UrgentWorkError::BackendUnavailable)?,
+            status: UrgentWorkStatus::from_code(&row.status).ok_or(UrgentStaffingErr::BackendUnavailable)?,
             started_at: row.started_at,
             ended_at: row.ended_at,
             worked_seconds: row.worked_seconds,
             started_by_account_id: row.started_by_account_id,
             started_by_username: row.started_by_username,
             start_source: UrgentWorkActionSource::from_code(&row.start_source)
-                .ok_or(UrgentWorkError::BackendUnavailable)?,
+                .ok_or(UrgentStaffingErr::BackendUnavailable)?,
             ended_by_account_id: row.ended_by_account_id,
             ended_by_username: row.ended_by_username,
             end_source,
@@ -287,21 +272,33 @@ struct ResolvedRateRow {
     hourly_rate: String,
 }
 
-#[async_trait]
-impl UrgentWorkRepo for UrgentWorkDb {
-    async fn list_customers(
+impl UrgentStaffingRepo {
+    pub fn new_arc(db: Arc<DatabaseAdapter>) -> Arc<Self> {
+        Arc::new(Self { db })
+    }
+
+    pub async fn begin_tenant(&self, tenant_id: Uuid) -> Result<TenantTransaction, UrgentStaffingErr> {
+        trace!(operation = "urgent_staffing.begin_tenant", tenant_id = %tenant_id, "Opening urgent-work tenant tran");
+        let result: Result<TenantTransaction, TenantDbErr> = self.db.begin_tenant(tenant_id).await;
+        result.map_err(|database_error: TenantDbErr| {
+            error!(operation = "urgent_staffing.begin_tenant", tenant_id = %tenant_id, reason = %database_error, "Opening urgent-work tenant tran failed");
+            UrgentStaffingErr::BackendUnavailable
+        })
+    }
+
+    pub async fn list_selectable_customers(
         &self,
         tenant_id: Uuid,
         search: Option<&str>,
         limit: i64,
         cursor: Option<&UrgentCustomerCursor>,
-    ) -> Result<UrgentCustomerPage, UrgentWorkError> {
+    ) -> Result<UrgentCustomerPage, UrgentStaffingErr> {
         let search: Option<String> = search.map(str::to_owned);
-        let cursor_name: Option<String> = cursor.map(|value| value.name.clone());
-        let cursor_id: Option<Uuid> = cursor.map(|value| value.customer_id);
+        let cursor_name: Option<String> = cursor.map(|value: &UrgentCustomerCursor| value.name.clone());
+        let cursor_id: Option<Uuid> = cursor.map(|value: &UrgentCustomerCursor| value.customer_id);
         let rows: Vec<CustomerRow> = self
             .db
-            .tran_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
+            .tran_with_tenant(tenant_id, async move |conn: &mut sqlx::PgConnection| {
                 sqlx::query_as!(
                     CustomerRow,
                     r#"
@@ -320,12 +317,13 @@ impl UrgentWorkRepo for UrgentWorkDb {
                     cursor_id,
                     limit + 1,
                 )
-                .fetch_all(connection)
+                .fetch_all(conn)
                 .await
             })
             .await
-            .map_err(|error: TenantDbErr| tenant_runner_failure("list urgent customers", tenant_id, error))?;
+            .map_err(|err: TenantDbErr| tenant_tran_failure("list urgent customers", tenant_id, err))?;
         let mut items: Vec<UrgentWorkCustomer> = rows.into_iter().map(UrgentWorkCustomer::from).collect();
+
         let has_more: bool = items.len() > limit as usize;
         items.truncate(limit as usize);
         let next_cursor: Option<UrgentCustomerCursor> =
@@ -340,21 +338,21 @@ impl UrgentWorkRepo for UrgentWorkDb {
         Ok(UrgentCustomerPage { items, next_cursor })
     }
 
-    async fn list_employees(
+    pub async fn list_clockable_employees(
         &self,
         tenant_id: Uuid,
         actor_account_id: Uuid,
         search: Option<&str>,
         limit: i64,
         cursor: Option<&UrgentEmployeeCursor>,
-    ) -> Result<UrgentEmployeePage, UrgentWorkError> {
+    ) -> Result<UrgentEmployeePage, UrgentStaffingErr> {
         let search: Option<String> = search.map(str::to_owned);
         let cursor_self: Option<bool> = cursor.map(|value| value.is_self);
         let cursor_name: Option<String> = cursor.map(|value| value.name.clone());
         let cursor_id: Option<Uuid> = cursor.map(|value| value.employee_id);
         let rows: Vec<EmployeeRow> = self
             .db
-            .tran_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
+            .tran_with_tenant(tenant_id, async move |conn: &mut sqlx::PgConnection| {
                 sqlx::query_as!(
                     EmployeeRow,
                     r#"
@@ -401,11 +399,12 @@ impl UrgentWorkRepo for UrgentWorkDb {
                     cursor_id,
                     limit + 1,
                 )
-                .fetch_all(connection)
+                .fetch_all(conn)
                 .await
             })
             .await
-            .map_err(|error: TenantDbErr| tenant_runner_failure("list urgent employees", tenant_id, error))?;
+            .map_err(|err: TenantDbErr| tenant_tran_failure("list urgent employees", tenant_id, err))?;
+
         let mut items: Vec<UrgentWorkEmployee> = rows.into_iter().map(UrgentWorkEmployee::from).collect();
         let has_more: bool = items.len() > limit as usize;
         items.truncate(limit as usize);
@@ -413,7 +412,7 @@ impl UrgentWorkRepo for UrgentWorkDb {
             has_more
                 .then(|| items.last())
                 .flatten()
-                .map(|item| UrgentEmployeeCursor {
+                .map(|item: &UrgentWorkEmployee| UrgentEmployeeCursor {
                     is_self: item.is_self,
                     name: item.display_name.to_lowercase(),
                     employee_id: item.employee_id,
@@ -421,22 +420,22 @@ impl UrgentWorkRepo for UrgentWorkDb {
         Ok(UrgentEmployeePage { items, next_cursor })
     }
 
-    async fn list_own_work(
+    pub async fn list_own_work(
         &self,
         tenant_id: Uuid,
         actor_account_id: Uuid,
         limit: i64,
         cursor: Option<&UrgentOwnWorkCursor>,
-    ) -> Result<UrgentOwnWorkPage, UrgentWorkError> {
+    ) -> Result<UrgentOwnWorkPage, UrgentStaffingErr> {
         let cursor_active: Option<bool> = cursor.map(|value: &UrgentOwnWorkCursor| value.active);
         let cursor_started_at: Option<DateTime<Utc>> = cursor.map(|value: &UrgentOwnWorkCursor| value.started_at);
         let cursor_report_id: Option<Uuid> = cursor.map(|value: &UrgentOwnWorkCursor| value.report_id);
         let query_limit: i64 = limit + 1;
         let mut rows: Vec<WorkItemRow> = self
             .db
-            .tran_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
+            .tran_with_tenant(tenant_id, async move |conn: &mut sqlx::PgConnection| {
                 load_own_work_items(
-                    connection,
+                    conn,
                     tenant_id,
                     actor_account_id,
                     cursor_active,
@@ -447,7 +446,8 @@ impl UrgentWorkRepo for UrgentWorkDb {
                 .await
             })
             .await
-            .map_err(|error: TenantDbErr| tenant_runner_failure("list own urgent work", tenant_id, error))?;
+            .map_err(|err: TenantDbErr| tenant_tran_failure("list own urgent work", tenant_id, err))?;
+
         let has_more: bool = rows.len() > limit as usize;
         rows.truncate(limit as usize);
         let next_cursor: Option<UrgentOwnWorkCursor> = if has_more {
@@ -462,25 +462,25 @@ impl UrgentWorkRepo for UrgentWorkDb {
         let items: Vec<UrgentWorkItem> = rows
             .into_iter()
             .map(UrgentWorkItem::try_from)
-            .collect::<Result<Vec<UrgentWorkItem>, UrgentWorkError>>()?;
+            .collect::<Result<Vec<UrgentWorkItem>, UrgentStaffingErr>>()?;
         Ok(UrgentOwnWorkPage { items, next_cursor })
     }
 
-    async fn list_team_work(
+    pub async fn list_team_work(
         &self,
         tenant_id: Uuid,
         actor_account_id: Uuid,
         limit: i64,
         cursor: Option<&UrgentOwnWorkCursor>,
-    ) -> Result<UrgentTeamWorkPage, UrgentWorkError> {
+    ) -> Result<UrgentTeamWorkPage, UrgentStaffingErr> {
         let cursor_active: Option<bool> = cursor.map(|value| value.active);
         let cursor_started_at: Option<DateTime<Utc>> = cursor.map(|value| value.started_at);
         let cursor_report_id: Option<Uuid> = cursor.map(|value| value.report_id);
         let mut rows: Vec<WorkItemRow> = self
             .db
-            .tran_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
+            .tran_with_tenant(tenant_id, async move |conn: &mut sqlx::PgConnection| {
                 load_work_items(
-                    connection,
+                    conn,
                     tenant_id,
                     actor_account_id,
                     cursor_active,
@@ -491,7 +491,8 @@ impl UrgentWorkRepo for UrgentWorkDb {
                 .await
             })
             .await
-            .map_err(|error: TenantDbErr| tenant_runner_failure("list team urgent work", tenant_id, error))?;
+            .map_err(|err: TenantDbErr| tenant_tran_failure("list team urgent work", tenant_id, err))?;
+
         let has_more: bool = rows.len() > limit as usize;
         rows.truncate(limit as usize);
         let next_cursor: Option<UrgentOwnWorkCursor> =
@@ -507,7 +508,8 @@ impl UrgentWorkRepo for UrgentWorkDb {
         Ok(UrgentTeamWorkPage { items, next_cursor })
     }
 
-    async fn start(
+    #[allow(clippy::too_many_arguments)]
+    pub async fn start(
         &self,
         tenant_id: Uuid,
         actor_account_id: Uuid,
@@ -516,8 +518,8 @@ impl UrgentWorkRepo for UrgentWorkDb {
         report_ids: &[Uuid],
         session_ids: &[Uuid],
         input: &UrgentWorkStartInput,
-    ) -> Result<Vec<UrgentWorkItem>, UrgentWorkError> {
-        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+    ) -> Result<Vec<UrgentWorkItem>, UrgentStaffingErr> {
+        let mut tran: TenantTransaction = self.begin_tenant(tenant_id).await?;
         // Locking the actor before reading the idempotency record serializes
         // concurrent deliveries from the same device/account.
         let actor_employee: Option<IdRow> = sqlx::query_as!(
@@ -526,22 +528,22 @@ impl UrgentWorkRepo for UrgentWorkDb {
             SELECT employee.id
             FROM hr_employees AS employee
             JOIN accounts AS account
-              ON account.tenant_id = employee.tenant_id
-             AND account.id = employee.account_id
+                ON account.tenant_id = employee.tenant_id
+                AND account.id = employee.account_id
             WHERE employee.tenant_id = $1
-              AND employee.account_id = $2
-              AND employee.status = 'active'
-              AND account.status = 'active'
+                AND employee.account_id = $2
+                AND employee.status = 'active'
+                AND account.status = 'active'
             FOR UPDATE OF employee
             FOR SHARE OF account
             "#,
             tenant_id,
             actor_account_id,
         )
-        .fetch_optional(transaction.connection())
+        .fetch_optional(tran.connection())
         .await
-        .map_err(|error: sqlx::Error| database_failure("resolve urgent actor employee", tenant_id, error))?;
-        let actor_employee_id: Uuid = actor_employee.ok_or(UrgentWorkError::Forbidden)?.id;
+        .map_err(|err: sqlx::Error| database_failure("resolve urgent actor employee", tenant_id, err))?;
+        let actor_employee_id: Uuid = actor_employee.ok_or(UrgentStaffingErr::Forbidden)?.id;
         let existing_batch: Option<ExistingBatchRow> = sqlx::query_as!(
             ExistingBatchRow,
             r#"
@@ -553,23 +555,22 @@ impl UrgentWorkRepo for UrgentWorkDb {
             actor_account_id,
             input.idempotency_key,
         )
-        .fetch_optional(transaction.connection())
+        .fetch_optional(tran.connection())
         .await
-        .map_err(|error: sqlx::Error| database_failure("find urgent start idempotency batch", tenant_id, error))?;
+        .map_err(|err: sqlx::Error| database_failure("find urgent start idempotency batch", tenant_id, err))?;
         if let Some(existing) = existing_batch {
             if existing.claimed_customer_id != input.customer_id {
-                return Err(UrgentWorkError::Conflict);
+                return Err(UrgentStaffingErr::Conflict);
             }
-            let rows: Vec<WorkItemRow> = load_batch_items(&mut transaction, tenant_id, existing.id).await?;
+            let rows: Vec<WorkItemRow> = load_batch_items(&mut tran, tenant_id, existing.id).await?;
             let existing_employee_ids: BTreeSet<Uuid> = rows.iter().map(|row: &WorkItemRow| row.employee_id).collect();
             let requested_employee_ids: BTreeSet<Uuid> = input.employee_ids.iter().copied().collect();
             if existing_employee_ids != requested_employee_ids {
-                return Err(UrgentWorkError::Conflict);
+                return Err(UrgentStaffingErr::Conflict);
             }
-            transaction
-                .commit()
+            tran.commit()
                 .await
-                .map_err(|error: sqlx::Error| tenant_failure("commit idempotent urgent start", tenant_id, error))?;
+                .map_err(|err: sqlx::Error| tenant_failure("commit idempotent urgent start", tenant_id, err))?;
             return rows.into_iter().map(UrgentWorkItem::try_from).collect();
         }
 
@@ -589,11 +590,11 @@ impl UrgentWorkRepo for UrgentWorkDb {
             tenant_id,
             input.customer_id,
         )
-        .fetch_optional(transaction.connection())
+        .fetch_optional(tran.connection())
         .await
-        .map_err(|error: sqlx::Error| database_failure("validate urgent customer", tenant_id, error))?;
+        .map_err(|err: sqlx::Error| database_failure("validate urgent customer", tenant_id, err))?;
         if customer_id.is_none() {
-            return Err(UrgentWorkError::NotFound);
+            return Err(UrgentStaffingErr::NotFound);
         }
 
         let target_ids: Vec<IdRow> = sqlx::query_as!(
@@ -621,22 +622,22 @@ impl UrgentWorkRepo for UrgentWorkDb {
             tenant_id,
             input.employee_ids.as_slice(),
         )
-        .fetch_all(transaction.connection())
+        .fetch_all(tran.connection())
         .await
-        .map_err(|error: sqlx::Error| database_failure("lock urgent target employees", tenant_id, error))?;
+        .map_err(|err: sqlx::Error| database_failure("lock urgent target employees", tenant_id, err))?;
         if target_ids.len() != input.employee_ids.len()
             || report_ids.len() != target_ids.len()
             || session_ids.len() != target_ids.len()
         {
             warn!(
-                operation = "urgent_work.start",
+                operation = "urgent_staffing.start",
                 tenant_id = %tenant_id,
                 actor_account_id = %actor_account_id,
                 requested_target_count = input.employee_ids.len(),
                 eligible_target_count = target_ids.len(),
                 "Rejected urgent-work start because one or more targets are inactive or lack staff-clocking authorization"
             );
-            return Err(UrgentWorkError::InvalidInput(
+            return Err(UrgentStaffingErr::InvalidInput(
                 "one or more urgent-work employees are unavailable or not authorized for staff clocking",
             ));
         }
@@ -646,7 +647,7 @@ impl UrgentWorkRepo for UrgentWorkDb {
             .iter()
             .any(|employee_id: &Uuid| *employee_id != actor_employee_id);
         if has_peer && !allow_peer {
-            return Err(UrgentWorkError::Forbidden);
+            return Err(UrgentStaffingErr::Forbidden);
         }
         let actor_open_work: ExistsRow = sqlx::query_as!(
             ExistsRow,
@@ -664,11 +665,11 @@ impl UrgentWorkRepo for UrgentWorkDb {
             actor_employee_id,
             input.customer_id,
         )
-        .fetch_one(transaction.connection())
+        .fetch_one(tran.connection())
         .await
-        .map_err(|error: sqlx::Error| database_failure("validate urgent peer actor customer", tenant_id, error))?;
+        .map_err(|err: sqlx::Error| database_failure("validate urgent peer actor customer", tenant_id, err))?;
         if !includes_actor && !actor_open_work.exists {
-            return Err(UrgentWorkError::InvalidInput(
+            return Err(UrgentStaffingErr::InvalidInput(
                 "the first urgent-work batch must include the acting employee",
             ));
         }
@@ -685,9 +686,9 @@ impl UrgentWorkRepo for UrgentWorkDb {
             input.customer_id,
             input.idempotency_key,
         )
-        .execute(transaction.connection())
+        .execute(tran.connection())
         .await
-        .map_err(|error: sqlx::Error| mutation_failure("insert urgent start batch", tenant_id, error))?;
+        .map_err(|err: sqlx::Error| mutation_failure("insert urgent start batch", tenant_id, err))?;
         trace!(tenant_id = %tenant_id, batch_id = %batch_id, rows_affected = batch_insert.rows_affected(), "Urgent-work start batch inserted");
 
         let targets: std::iter::Zip<
@@ -712,9 +713,9 @@ impl UrgentWorkRepo for UrgentWorkDb {
                 input.customer_id,
                 actor_account_id,
             )
-            .execute(transaction.connection())
+            .execute(tran.connection())
             .await
-            .map_err(|error: sqlx::Error| mutation_failure("insert urgent work report", tenant_id, error))?;
+            .map_err(|err: sqlx::Error| mutation_failure("insert urgent work report", tenant_id, err))?;
             let session_insert: PgQueryResult = sqlx::query!(
                 r#"
                 INSERT INTO business_urgent_work_sessions (
@@ -733,12 +734,12 @@ impl UrgentWorkRepo for UrgentWorkDb {
                 actor_account_id,
                 source,
             )
-            .execute(transaction.connection())
+            .execute(tran.connection())
             .await
-            .map_err(|error: sqlx::Error| mutation_failure("insert urgent work session", tenant_id, error))?;
+            .map_err(|err: sqlx::Error| mutation_failure("insert urgent work session", tenant_id, err))?;
             trace!(tenant_id = %tenant_id, report_id = %report_id, session_id = %session_id, report_rows = report_insert.rows_affected(), session_rows = session_insert.rows_affected(), source, "Urgent-work evidence inserted");
             enqueue_notification(
-                &mut transaction,
+                &mut tran,
                 tenant_id,
                 "staffing.urgent_work_started",
                 session_id,
@@ -747,24 +748,23 @@ impl UrgentWorkRepo for UrgentWorkDb {
             .await?;
         }
 
-        let rows: Vec<WorkItemRow> = load_batch_items(&mut transaction, tenant_id, batch_id).await?;
-        transaction
-            .commit()
+        let rows: Vec<WorkItemRow> = load_batch_items(&mut tran, tenant_id, batch_id).await?;
+        tran.commit()
             .await
-            .map_err(|error: sqlx::Error| tenant_failure("commit urgent start", tenant_id, error))?;
+            .map_err(|err: sqlx::Error| tenant_failure("commit urgent start", tenant_id, err))?;
         info!(tenant_id = %tenant_id, batch_id = %batch_id, report_count = rows.len(), "Urgent-work batch committed");
         rows.into_iter().map(UrgentWorkItem::try_from).collect()
     }
 
-    async fn end(
+    pub async fn end(
         &self,
         tenant_id: Uuid,
         actor_account_id: Uuid,
         allow_peer: bool,
         report_id: Uuid,
         input: &UrgentWorkEndInput,
-    ) -> Result<UrgentWorkItem, UrgentWorkError> {
-        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+    ) -> Result<UrgentWorkItem, UrgentStaffingErr> {
+        let mut tran: TenantTransaction = self.begin_tenant(tenant_id).await?;
         let context: EndContextRow = sqlx::query_as!(
             EndContextRow,
             r#"
@@ -779,20 +779,19 @@ impl UrgentWorkRepo for UrgentWorkDb {
             tenant_id,
             report_id,
         )
-        .fetch_optional(transaction.connection())
+        .fetch_optional(tran.connection())
         .await
-        .map_err(|error: sqlx::Error| database_failure("lock urgent end context", tenant_id, error))?
-        .ok_or(UrgentWorkError::NotFound)?;
+        .map_err(|err: sqlx::Error| database_failure("lock urgent end context", tenant_id, err))?
+        .ok_or(UrgentStaffingErr::NotFound)?;
         let existing: Option<WorkItemRow> =
-            load_by_end_key(&mut transaction, tenant_id, actor_account_id, input.idempotency_key).await?;
+            load_by_end_key(&mut tran, tenant_id, actor_account_id, input.idempotency_key).await?;
         if let Some(row) = existing {
             if row.report_id != report_id {
-                return Err(UrgentWorkError::Conflict);
+                return Err(UrgentStaffingErr::Conflict);
             }
-            transaction
-                .commit()
+            tran.commit()
                 .await
-                .map_err(|error: sqlx::Error| tenant_failure("commit idempotent urgent end", tenant_id, error))?;
+                .map_err(|err: sqlx::Error| tenant_failure("commit idempotent urgent end", tenant_id, err))?;
             return UrgentWorkItem::try_from(row);
         }
         let report_status: UrgentWorkStatus = UrgentWorkStatus::from_code(&context.report_status).ok_or_else(|| {
@@ -803,10 +802,10 @@ impl UrgentWorkRepo for UrgentWorkDb {
                 report_status = %context.report_status,
                 "Urgent-work report has an unsupported lifecycle status"
             );
-            UrgentWorkError::BackendUnavailable
+            UrgentStaffingErr::BackendUnavailable
         })?;
         if report_status != UrgentWorkStatus::Active {
-            return Err(UrgentWorkError::Conflict);
+            return Err(UrgentStaffingErr::Conflict);
         }
         let actor_employee: Option<IdRow> = sqlx::query_as!(
             IdRow,
@@ -814,14 +813,14 @@ impl UrgentWorkRepo for UrgentWorkDb {
             tenant_id,
             actor_account_id,
         )
-        .fetch_optional(transaction.connection())
+        .fetch_optional(tran.connection())
         .await
-        .map_err(|error: sqlx::Error| database_failure("resolve urgent end actor", tenant_id, error))?;
-        let actor_employee_id: Uuid = actor_employee.ok_or(UrgentWorkError::Forbidden)?.id;
+        .map_err(|err: sqlx::Error| database_failure("resolve urgent end actor", tenant_id, err))?;
+        let actor_employee_id: Uuid = actor_employee.ok_or(UrgentStaffingErr::Forbidden)?.id;
         let is_self: bool = actor_employee_id == context.employee_id;
         if !is_self {
             if !allow_peer {
-                return Err(UrgentWorkError::Forbidden);
+                return Err(UrgentStaffingErr::Forbidden);
             }
             let actor_shared_customer: ExistsRow = sqlx::query_as!(
                 ExistsRow,
@@ -844,11 +843,11 @@ impl UrgentWorkRepo for UrgentWorkDb {
                 context.claimed_customer_id,
                 context.started_at,
             )
-            .fetch_one(transaction.connection())
+            .fetch_one(tran.connection())
             .await
-            .map_err(|error: sqlx::Error| database_failure("validate urgent end peer customer", tenant_id, error))?;
+            .map_err(|err: sqlx::Error| database_failure("validate urgent end peer customer", tenant_id, err))?;
             if !actor_shared_customer.exists {
-                return Err(UrgentWorkError::Forbidden);
+                return Err(UrgentStaffingErr::Forbidden);
             }
         }
         let source: &str = if is_self { "self" } else { "peer" };
@@ -869,41 +868,40 @@ impl UrgentWorkRepo for UrgentWorkDb {
             input.location.accuracy_meters,
             source,
         )
-        .execute(transaction.connection())
+        .execute(tran.connection())
         .await
-        .map_err(|error: sqlx::Error| mutation_failure("end urgent work session", tenant_id, error))?;
+        .map_err(|err: sqlx::Error| mutation_failure("end urgent work session", tenant_id, err))?;
         if session_update.rows_affected() != 1 {
-            return Err(UrgentWorkError::Conflict);
+            return Err(UrgentStaffingErr::Conflict);
         }
         let report_update: PgQueryResult = sqlx::query!(
             "UPDATE business_urgent_work_reports SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE tenant_id = $1 AND id = $2 AND status = 'active'",
             tenant_id,
             report_id,
         )
-        .execute(transaction.connection())
+        .execute(tran.connection())
         .await
-        .map_err(|error: sqlx::Error| mutation_failure("complete urgent work report", tenant_id, error))?;
+        .map_err(|err: sqlx::Error| mutation_failure("complete urgent work report", tenant_id, err))?;
         if report_update.rows_affected() != 1 {
-            return Err(UrgentWorkError::Conflict);
+            return Err(UrgentStaffingErr::Conflict);
         }
-        let row: WorkItemRow = load_work_item(&mut transaction, tenant_id, report_id).await?;
+        let row: WorkItemRow = load_work_item(&mut tran, tenant_id, report_id).await?;
         enqueue_notification(
-            &mut transaction,
+            &mut tran,
             tenant_id,
             "staffing.urgent_work_ended",
             row.report_id,
             row.report_id,
         )
         .await?;
-        transaction
-            .commit()
+        tran.commit()
             .await
-            .map_err(|error: sqlx::Error| tenant_failure("commit urgent end", tenant_id, error))?;
+            .map_err(|err: sqlx::Error| tenant_failure("commit urgent end", tenant_id, err))?;
         info!(tenant_id = %tenant_id, actor_account_id = %actor_account_id, report_id = %report_id, source, "Urgent-work end committed");
         UrgentWorkItem::try_from(row)
     }
 
-    async fn submit_manual(
+    pub async fn submit_manual(
         &self,
         tenant_id: Uuid,
         actor_account_id: Uuid,
@@ -911,8 +909,8 @@ impl UrgentWorkRepo for UrgentWorkDb {
         report_id: Uuid,
         session_id: Uuid,
         input: &UrgentWorkManualInput,
-    ) -> Result<UrgentWorkItem, UrgentWorkError> {
-        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+    ) -> Result<UrgentWorkItem, UrgentStaffingErr> {
+        let mut tran: TenantTransaction = self.begin_tenant(tenant_id).await?;
         let actor_employee: Option<IdRow> = sqlx::query_as!(
             IdRow,
             r#"
@@ -932,10 +930,10 @@ impl UrgentWorkRepo for UrgentWorkDb {
             tenant_id,
             actor_account_id,
         )
-        .fetch_optional(transaction.connection())
+        .fetch_optional(tran.connection())
         .await
-        .map_err(|error: sqlx::Error| database_failure("resolve manual urgent-work employee", tenant_id, error))?;
-        let employee_id: Uuid = actor_employee.ok_or(UrgentWorkError::Forbidden)?.id;
+        .map_err(|err: sqlx::Error| database_failure("resolve manual urgent-work employee", tenant_id, err))?;
+        let employee_id: Uuid = actor_employee.ok_or(UrgentStaffingErr::Forbidden)?.id;
 
         let existing_batch: Option<ExistingBatchRow> = sqlx::query_as!(
             ExistingBatchRow,
@@ -948,14 +946,12 @@ impl UrgentWorkRepo for UrgentWorkDb {
             actor_account_id,
             input.idempotency_key,
         )
-        .fetch_optional(transaction.connection())
+        .fetch_optional(tran.connection())
         .await
-        .map_err(|error: sqlx::Error| {
-            database_failure("find manual urgent-work idempotency batch", tenant_id, error)
-        })?;
+        .map_err(|err: sqlx::Error| database_failure("find manual urgent-work idempotency batch", tenant_id, err))?;
         if let Some(existing_batch) = existing_batch {
             if existing_batch.claimed_customer_id != input.customer_id {
-                return Err(UrgentWorkError::Conflict);
+                return Err(UrgentStaffingErr::Conflict);
             }
             let existing: Option<ExistingManualRow> = sqlx::query_as!(
                 ExistingManualRow,
@@ -972,20 +968,20 @@ impl UrgentWorkRepo for UrgentWorkDb {
                 existing_batch.id,
                 employee_id,
             )
-            .fetch_optional(transaction.connection())
+            .fetch_optional(tran.connection())
             .await
-            .map_err(|error: sqlx::Error| database_failure("load idempotent manual urgent work", tenant_id, error))?;
-            let existing: ExistingManualRow = existing.ok_or(UrgentWorkError::Conflict)?;
+            .map_err(|err: sqlx::Error| database_failure("load idempotent manual urgent work", tenant_id, err))?;
+            let existing: ExistingManualRow = existing.ok_or(UrgentStaffingErr::Conflict)?;
             if existing.started_at != input.started_at
                 || existing.ended_at != input.ended_at
                 || existing.staff_note != input.note
             {
-                return Err(UrgentWorkError::Conflict);
+                return Err(UrgentStaffingErr::Conflict);
             }
-            let row: WorkItemRow = load_work_item(&mut transaction, tenant_id, existing.report_id).await?;
-            transaction.commit().await.map_err(|error: sqlx::Error| {
-                tenant_failure("commit idempotent manual urgent work", tenant_id, error)
-            })?;
+            let row: WorkItemRow = load_work_item(&mut tran, tenant_id, existing.report_id).await?;
+            tran.commit()
+                .await
+                .map_err(|err: sqlx::Error| tenant_failure("commit idempotent manual urgent work", tenant_id, err))?;
             return UrgentWorkItem::try_from(row);
         }
 
@@ -1020,11 +1016,11 @@ impl UrgentWorkRepo for UrgentWorkDb {
             input.started_at,
             input.ended_at,
         )
-        .fetch_one(transaction.connection())
+        .fetch_one(tran.connection())
         .await
-        .map_err(|error: sqlx::Error| database_failure("validate manual urgent-work interval", tenant_id, error))?;
+        .map_err(|err: sqlx::Error| database_failure("validate manual urgent-work interval", tenant_id, err))?;
         if overlaps_existing_staff_evidence {
-            return Err(UrgentWorkError::Conflict);
+            return Err(UrgentStaffingErr::Conflict);
         }
 
         let customer_id: Option<Uuid> = sqlx::query_scalar!(
@@ -1048,11 +1044,11 @@ impl UrgentWorkRepo for UrgentWorkDb {
             input.customer_id,
             employee_id,
         )
-        .fetch_optional(transaction.connection())
+        .fetch_optional(tran.connection())
         .await
-        .map_err(|error: sqlx::Error| database_failure("validate manual urgent-work customer", tenant_id, error))?;
+        .map_err(|err: sqlx::Error| database_failure("validate manual urgent-work customer", tenant_id, err))?;
         if customer_id.is_none() {
-            return Err(UrgentWorkError::NotFound);
+            return Err(UrgentStaffingErr::NotFound);
         }
 
         sqlx::query!(
@@ -1067,9 +1063,9 @@ impl UrgentWorkRepo for UrgentWorkDb {
             input.customer_id,
             input.idempotency_key,
         )
-        .execute(transaction.connection())
+        .execute(tran.connection())
         .await
-        .map_err(|error: sqlx::Error| mutation_failure("insert manual urgent-work batch", tenant_id, error))?;
+        .map_err(|err: sqlx::Error| mutation_failure("insert manual urgent-work batch", tenant_id, err))?;
         sqlx::query!(
             r#"
             INSERT INTO business_urgent_work_reports (
@@ -1085,9 +1081,9 @@ impl UrgentWorkRepo for UrgentWorkDb {
             actor_account_id,
             input.note,
         )
-        .execute(transaction.connection())
+        .execute(tran.connection())
         .await
-        .map_err(|error: sqlx::Error| mutation_failure("insert manual urgent-work report", tenant_id, error))?;
+        .map_err(|err: sqlx::Error| mutation_failure("insert manual urgent-work report", tenant_id, err))?;
         sqlx::query!(
             r#"
             INSERT INTO business_urgent_work_sessions (
@@ -1105,34 +1101,33 @@ impl UrgentWorkRepo for UrgentWorkDb {
             input.idempotency_key,
             actor_account_id,
         )
-        .execute(transaction.connection())
+        .execute(tran.connection())
         .await
-        .map_err(|error: sqlx::Error| mutation_failure("insert manual urgent-work session", tenant_id, error))?;
+        .map_err(|err: sqlx::Error| mutation_failure("insert manual urgent-work session", tenant_id, err))?;
         enqueue_notification(
-            &mut transaction,
+            &mut tran,
             tenant_id,
             "staffing.urgent_work_manually_declared",
             session_id,
             report_id,
         )
         .await?;
-        let row: WorkItemRow = load_work_item(&mut transaction, tenant_id, report_id).await?;
-        transaction
-            .commit()
+        let row: WorkItemRow = load_work_item(&mut tran, tenant_id, report_id).await?;
+        tran.commit()
             .await
-            .map_err(|error: sqlx::Error| tenant_failure("commit manual urgent work", tenant_id, error))?;
+            .map_err(|err: sqlx::Error| tenant_failure("commit manual urgent work", tenant_id, err))?;
         info!(tenant_id = %tenant_id, actor_account_id = %actor_account_id, report_id = %report_id, "Manual urgent-work declaration committed");
         UrgentWorkItem::try_from(row)
     }
 
-    async fn cancel(
+    pub async fn cancel(
         &self,
         tenant_id: Uuid,
         actor_account_id: Uuid,
         report_id: Uuid,
         reason: &str,
-    ) -> Result<(), UrgentWorkError> {
-        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+    ) -> Result<(), UrgentStaffingErr> {
+        let mut tran: TenantTransaction = self.begin_tenant(tenant_id).await?;
         let context = sqlx::query!(
             r#"
             SELECT report.status,
@@ -1154,12 +1149,12 @@ impl UrgentWorkRepo for UrgentWorkDb {
             tenant_id,
             report_id,
         )
-        .fetch_optional(transaction.connection())
+        .fetch_optional(tran.connection())
         .await
-        .map_err(|error| database_failure("lock urgent work for cancellation", tenant_id, error))?
-        .ok_or(UrgentWorkError::NotFound)?;
+        .map_err(|err: sqlx::Error| database_failure("lock urgent work for cancellation", tenant_id, err))?
+        .ok_or(UrgentStaffingErr::NotFound)?;
         if context.status != "completed" || context.ended_at.is_none() || context.has_assignment {
-            return Err(UrgentWorkError::Conflict);
+            return Err(UrgentStaffingErr::Conflict);
         }
 
         let updated: PgQueryResult = sqlx::query!(
@@ -1179,20 +1174,20 @@ impl UrgentWorkRepo for UrgentWorkDb {
             reason,
             actor_account_id,
         )
-        .execute(transaction.connection())
+        .execute(tran.connection())
         .await
-        .map_err(|error| mutation_failure("cancel urgent work report", tenant_id, error))?;
+        .map_err(|err| mutation_failure("cancel urgent work report", tenant_id, err))?;
         if updated.rows_affected() != 1 {
-            return Err(UrgentWorkError::Conflict);
+            return Err(UrgentStaffingErr::Conflict);
         }
-        transaction
-            .commit()
+        tran.commit()
             .await
-            .map_err(|error| database_failure("commit urgent work cancellation", tenant_id, error))?;
+            .map_err(|err| database_failure("commit urgent work cancellation", tenant_id, err))?;
         Ok(())
     }
 
-    async fn list_reconciliations(
+    #[allow(clippy::too_many_arguments)]
+    pub async fn list_reconciliations(
         &self,
         tenant_id: Uuid,
         customer_id: Option<Uuid>,
@@ -1201,16 +1196,16 @@ impl UrgentWorkRepo for UrgentWorkDb {
         period_end: Option<DateTime<Utc>>,
         limit: i64,
         cursor: Option<&UrgentReconcileCursor>,
-    ) -> Result<UrgentReconcilePage, UrgentWorkError> {
+    ) -> Result<UrgentReconcilePage, UrgentStaffingErr> {
         let cursor_active: Option<bool> = cursor.map(|value: &UrgentReconcileCursor| value.active);
         let cursor_started_at: Option<DateTime<Utc>> = cursor.map(|value: &UrgentReconcileCursor| value.started_at);
         let cursor_report_id: Option<Uuid> = cursor.map(|value: &UrgentReconcileCursor| value.report_id);
         let query_limit: i64 = limit + 1;
         let mut rows: Vec<ReconcileRow> = self
             .db
-            .tran_with_tenant(tenant_id, async move |connection: &mut sqlx::PgConnection| {
+            .tran_with_tenant(tenant_id, async move |conn: &mut sqlx::PgConnection| {
                 load_reconciliation_rows(
-                    connection,
+                    conn,
                     tenant_id,
                     ReconcileRowQuery {
                         report_id: None,
@@ -1227,7 +1222,7 @@ impl UrgentWorkRepo for UrgentWorkDb {
                 .await
             })
             .await
-            .map_err(|error: TenantDbErr| tenant_runner_failure("list urgent reconciliations", tenant_id, error))?;
+            .map_err(|err: TenantDbErr| tenant_tran_failure("list urgent reconciliations", tenant_id, err))?;
         let has_more: bool = rows.len() > limit as usize;
         rows.truncate(limit as usize);
         let next_cursor: Option<UrgentReconcileCursor> = if has_more {
@@ -1242,11 +1237,11 @@ impl UrgentWorkRepo for UrgentWorkDb {
         let items: Vec<UrgentWorkReconcile> = rows
             .into_iter()
             .map(reconciliation_from_row)
-            .collect::<Result<Vec<UrgentWorkReconcile>, UrgentWorkError>>()?;
+            .collect::<Result<Vec<UrgentWorkReconcile>, UrgentStaffingErr>>()?;
         Ok(UrgentReconcilePage { items, next_cursor })
     }
 
-    async fn upsert_customer_record(
+    pub async fn upsert_customer_record(
         &self,
         tenant_id: Uuid,
         actor_account_id: Uuid,
@@ -1254,21 +1249,21 @@ impl UrgentWorkRepo for UrgentWorkDb {
         report_id: Uuid,
         input: &UrgentCustomerWorkRecordInput,
         allow_terminal_correction: bool,
-    ) -> Result<UrgentCustomerWorkRecord, UrgentWorkError> {
-        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+    ) -> Result<UrgentCustomerWorkRecord, UrgentStaffingErr> {
+        let mut tran: TenantTransaction = self.begin_tenant(tenant_id).await?;
         let status: Option<String> = sqlx::query_scalar!(
             "SELECT status FROM business_urgent_work_reports WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
             tenant_id,
             report_id,
         )
-        .fetch_optional(transaction.connection())
+        .fetch_optional(tran.connection())
         .await
-        .map_err(|error| database_failure("lock urgent customer evidence report", tenant_id, error))?;
+        .map_err(|err| database_failure("lock urgent customer evidence report", tenant_id, err))?;
         match status.as_deref() {
-            None => return Err(UrgentWorkError::NotFound),
+            None => return Err(UrgentStaffingErr::NotFound),
             Some("completed") => {}
             Some("reconciled") if allow_terminal_correction => {}
-            Some(_) => return Err(UrgentWorkError::Conflict),
+            Some(_) => return Err(UrgentStaffingErr::Conflict),
         }
         if status.as_deref() == Some("reconciled") {
             let dates_open: bool = sqlx::query_scalar!(
@@ -1291,11 +1286,11 @@ impl UrgentWorkRepo for UrgentWorkDb {
                 input.confirmed_started_at,
                 input.confirmed_customer_id,
             )
-            .fetch_one(transaction.connection())
+            .fetch_one(tran.connection())
             .await
-            .map_err(|error| database_failure("validate urgent evidence periods", tenant_id, error))?;
+            .map_err(|err| database_failure("validate urgent evidence periods", tenant_id, err))?;
             if !dates_open {
-                return Err(UrgentWorkError::Conflict);
+                return Err(UrgentStaffingErr::Conflict);
             }
         }
         let result: PgQueryResult = sqlx::query!(
@@ -1327,21 +1322,20 @@ impl UrgentWorkRepo for UrgentWorkDb {
             input.notes,
             actor_account_id,
         )
-        .execute(transaction.connection())
+        .execute(tran.connection())
         .await
-        .map_err(|error: sqlx::Error| mutation_failure("upsert urgent customer evidence", tenant_id, error))?;
+        .map_err(|err: sqlx::Error| mutation_failure("upsert urgent customer evidence", tenant_id, err))?;
         if result.rows_affected() != 1 {
-            return Err(UrgentWorkError::Conflict);
+            return Err(UrgentStaffingErr::Conflict);
         }
-        let row: CustomerRecordRow = load_customer_record(&mut transaction, tenant_id, report_id).await?;
-        transaction
-            .commit()
+        let row: CustomerRecordRow = load_customer_record(&mut tran, tenant_id, report_id).await?;
+        tran.commit()
             .await
-            .map_err(|error: sqlx::Error| tenant_failure("commit urgent customer evidence", tenant_id, error))?;
+            .map_err(|err: sqlx::Error| tenant_failure("commit urgent customer evidence", tenant_id, err))?;
         Ok(row.into())
     }
 
-    async fn reconcile(
+    pub async fn reconcile(
         &self,
         tenant_id: Uuid,
         actor_account_id: Uuid,
@@ -1349,7 +1343,7 @@ impl UrgentWorkRepo for UrgentWorkDb {
         assignment_id: Uuid,
         report_id: Uuid,
         input: &UrgentWorkReconcileInput,
-    ) -> Result<UrgentWorkReconcile, UrgentWorkError> {
+    ) -> Result<UrgentWorkReconcile, UrgentStaffingErr> {
         reconcile_report(
             self,
             tenant_id,
@@ -1362,7 +1356,7 @@ impl UrgentWorkRepo for UrgentWorkDb {
         .await
     }
 
-    async fn accept_staff_record(
+    pub async fn accept_staff_record(
         &self,
         tenant_id: Uuid,
         actor_account_id: Uuid,
@@ -1370,8 +1364,8 @@ impl UrgentWorkRepo for UrgentWorkDb {
         assignment_id: Uuid,
         report_id: Uuid,
         job_id: Uuid,
-    ) -> Result<UrgentWorkReconcile, UrgentWorkError> {
-        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+    ) -> Result<UrgentWorkReconcile, UrgentStaffingErr> {
+        let mut tran: TenantTransaction = self.begin_tenant(tenant_id).await?;
         let staff = sqlx::query!(
             r#"
             SELECT report.status, report.claimed_customer_id,
@@ -1391,24 +1385,24 @@ impl UrgentWorkRepo for UrgentWorkDb {
             tenant_id,
             report_id,
         )
-        .fetch_optional(transaction.connection())
+        .fetch_optional(tran.connection())
         .await
-        .map_err(|error| database_failure("lock urgent staff evidence acceptance", tenant_id, error))?
-        .ok_or(UrgentWorkError::NotFound)?;
+        .map_err(|err| database_failure("lock urgent staff evidence acceptance", tenant_id, err))?
+        .ok_or(UrgentStaffingErr::NotFound)?;
         if staff.status != "completed" {
-            return Err(UrgentWorkError::Conflict);
+            return Err(UrgentStaffingErr::Conflict);
         }
-        let ended_at: DateTime<Utc> = staff.ended_at.ok_or(UrgentWorkError::Conflict)?;
+        let ended_at: DateTime<Utc> = staff.ended_at.ok_or(UrgentStaffingErr::Conflict)?;
         let worked_seconds: i64 = staff
             .worked_seconds
             .filter(|value| *value > 0)
-            .ok_or(UrgentWorkError::Conflict)?;
+            .ok_or(UrgentStaffingErr::Conflict)?;
         let evidence_matches: bool = staff.confirmed_customer_id == Some(staff.claimed_customer_id)
             && staff.confirmed_started_at == Some(staff.started_at)
             && staff.confirmed_ended_at == Some(ended_at)
             && staff.confirmed_worked_seconds == Some(worked_seconds);
         if !evidence_matches {
-            return Err(UrgentWorkError::Conflict);
+            return Err(UrgentStaffingErr::Conflict);
         }
         let input: UrgentWorkReconcileInput = UrgentWorkReconcileInput {
             final_customer_id: staff.claimed_customer_id,
@@ -1418,7 +1412,7 @@ impl UrgentWorkRepo for UrgentWorkDb {
             manual_rate: None,
         };
         let reconciliation: UrgentWorkReconcile = reconcile_report_in_transaction(
-            &mut transaction,
+            &mut tran,
             tenant_id,
             actor_account_id,
             shift_id,
@@ -1427,17 +1421,16 @@ impl UrgentWorkRepo for UrgentWorkDb {
             &input,
         )
         .await?;
-        transaction
-            .commit()
+        tran.commit()
             .await
-            .map_err(|error| tenant_failure("commit accepted urgent staff evidence", tenant_id, error))?;
+            .map_err(|err| tenant_failure("commit accepted urgent staff evidence", tenant_id, err))?;
         info!(tenant_id = %tenant_id, report_id = %report_id, assignment_id = %assignment_id, "Urgent staff evidence accepted atomically");
         Ok(reconciliation)
     }
 }
 
 async fn load_own_work_items(
-    connection: &mut sqlx::PgConnection,
+    conn: &mut sqlx::PgConnection,
     tenant_id: Uuid,
     actor_account_id: Uuid,
     cursor_active: Option<bool>,
@@ -1488,12 +1481,12 @@ async fn load_own_work_items(
         cursor_report_id,
         limit,
     )
-    .fetch_all(connection)
+    .fetch_all(conn)
     .await
 }
 
 async fn load_work_items(
-    connection: &mut sqlx::PgConnection,
+    conn: &mut sqlx::PgConnection,
     tenant_id: Uuid,
     actor_account_id: Uuid,
     cursor_active: Option<bool>,
@@ -1531,7 +1524,7 @@ async fn load_work_items(
         LEFT JOIN business_shift_assignments AS assignment
             ON assignment.tenant_id = report.tenant_id AND assignment.urgent_work_report_id = report.id
         WHERE report.tenant_id = $1
-          AND report.claimed_customer_id IN (
+            AND report.claimed_customer_id IN (
                   SELECT actor_report.claimed_customer_id
                   FROM business_urgent_work_reports AS actor_report
                   INNER JOIN hr_employees AS actor_employee
@@ -1540,9 +1533,9 @@ async fn load_work_items(
                   WHERE actor_report.tenant_id = $1 AND actor_employee.account_id = $2
                     AND actor_report.status <> 'cancelled'
                     AND actor_report.created_at >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
-              )
-          AND ($3::BOOLEAN IS NULL
-               OR ((report.status = 'active'), session.started_at, report.id)
+            )
+            AND ($3::BOOLEAN IS NULL
+                OR ((report.status = 'active'), session.started_at, report.id)
                   < ($3, $4::TIMESTAMPTZ, $5::UUID))
         ORDER BY (report.status = 'active') DESC, session.started_at DESC, report.id DESC
         LIMIT $6
@@ -1554,15 +1547,15 @@ async fn load_work_items(
         cursor_report_id,
         limit,
     )
-    .fetch_all(connection)
+    .fetch_all(conn)
     .await
 }
 
 async fn load_batch_items(
-    transaction: &mut TenantTransaction,
+    tran: &mut TenantTransaction,
     tenant_id: Uuid,
     batch_id: Uuid,
-) -> Result<Vec<WorkItemRow>, UrgentWorkError> {
+) -> Result<Vec<WorkItemRow>, UrgentStaffingErr> {
     sqlx::query_as!(
         WorkItemRow,
         r#"
@@ -1598,16 +1591,16 @@ async fn load_batch_items(
         tenant_id,
         batch_id,
     )
-    .fetch_all(transaction.connection())
+    .fetch_all(tran.connection())
     .await
-    .map_err(|error: sqlx::Error| database_failure("load urgent batch items", tenant_id, error))
+    .map_err(|err: sqlx::Error| database_failure("load urgent batch items", tenant_id, err))
 }
 
 async fn load_work_item(
-    transaction: &mut TenantTransaction,
+    tran: &mut TenantTransaction,
     tenant_id: Uuid,
     report_id: Uuid,
-) -> Result<WorkItemRow, UrgentWorkError> {
+) -> Result<WorkItemRow, UrgentStaffingErr> {
     sqlx::query_as!(
         WorkItemRow,
         r#"
@@ -1642,18 +1635,18 @@ async fn load_work_item(
         tenant_id,
         report_id,
     )
-    .fetch_optional(transaction.connection())
+    .fetch_optional(tran.connection())
     .await
-    .map_err(|error: sqlx::Error| database_failure("load urgent work item", tenant_id, error))?
-    .ok_or(UrgentWorkError::NotFound)
+    .map_err(|err: sqlx::Error| database_failure("load urgent work item", tenant_id, err))?
+    .ok_or(UrgentStaffingErr::NotFound)
 }
 
 async fn load_by_end_key(
-    transaction: &mut TenantTransaction,
+    tran: &mut TenantTransaction,
     tenant_id: Uuid,
     actor_account_id: Uuid,
     idempotency_key: Uuid,
-) -> Result<Option<WorkItemRow>, UrgentWorkError> {
+) -> Result<Option<WorkItemRow>, UrgentStaffingErr> {
     sqlx::query_as!(
         WorkItemRow,
         r#"
@@ -1690,16 +1683,16 @@ async fn load_by_end_key(
         actor_account_id,
         idempotency_key,
     )
-    .fetch_optional(transaction.connection())
+    .fetch_optional(tran.connection())
     .await
-    .map_err(|error: sqlx::Error| database_failure("load idempotent urgent end", tenant_id, error))
+    .map_err(|err: sqlx::Error| database_failure("load idempotent urgent end", tenant_id, err))
 }
 
 async fn load_customer_record(
-    transaction: &mut TenantTransaction,
+    tran: &mut TenantTransaction,
     tenant_id: Uuid,
     report_id: Uuid,
-) -> Result<CustomerRecordRow, UrgentWorkError> {
+) -> Result<CustomerRecordRow, UrgentStaffingErr> {
     sqlx::query_as!(
         CustomerRecordRow,
         r#"
@@ -1716,14 +1709,14 @@ async fn load_customer_record(
         tenant_id,
         report_id,
     )
-    .fetch_optional(transaction.connection())
+    .fetch_optional(tran.connection())
     .await
-    .map_err(|error: sqlx::Error| database_failure("load urgent customer evidence", tenant_id, error))?
-    .ok_or(UrgentWorkError::NotFound)
+    .map_err(|err: sqlx::Error| database_failure("load urgent customer evidence", tenant_id, err))?
+    .ok_or(UrgentStaffingErr::NotFound)
 }
 
 async fn load_reconciliation_rows(
-    connection: &mut sqlx::PgConnection,
+    conn: &mut sqlx::PgConnection,
     tenant_id: Uuid,
     query: ReconcileRowQuery,
 ) -> Result<Vec<ReconcileRow>, sqlx::Error> {
@@ -1814,17 +1807,17 @@ async fn load_reconciliation_rows(
         query.period_end,
         query.limit,
     )
-    .fetch_all(connection)
+    .fetch_all(conn)
     .await
 }
 
-fn reconciliation_from_row(row: ReconcileRow) -> Result<UrgentWorkReconcile, UrgentWorkError> {
+fn reconciliation_from_row(row: ReconcileRow) -> Result<UrgentWorkReconcile, UrgentStaffingErr> {
     let report_status: UrgentWorkStatus =
-        UrgentWorkStatus::from_code(&row.report_status).ok_or(UrgentWorkError::BackendUnavailable)?;
+        UrgentWorkStatus::from_code(&row.report_status).ok_or(UrgentStaffingErr::BackendUnavailable)?;
     let start_source: UrgentWorkActionSource =
-        UrgentWorkActionSource::from_code(&row.start_source).ok_or(UrgentWorkError::BackendUnavailable)?;
+        UrgentWorkActionSource::from_code(&row.start_source).ok_or(UrgentStaffingErr::BackendUnavailable)?;
     let end_source: Option<UrgentWorkActionSource> = match row.end_source.as_deref() {
-        Some(code) => Some(UrgentWorkActionSource::from_code(code).ok_or(UrgentWorkError::BackendUnavailable)?),
+        Some(code) => Some(UrgentWorkActionSource::from_code(code).ok_or(UrgentStaffingErr::BackendUnavailable)?),
         None => None,
     };
     let customer_record: Option<UrgentCustomerWorkRecord> = match (
@@ -1857,7 +1850,7 @@ fn reconciliation_from_row(row: ReconcileRow) -> Result<UrgentWorkReconcile, Urg
             updated_at,
         }),
         (None, None, None, None, None, None, None) => None,
-        _ => return Err(UrgentWorkError::BackendUnavailable),
+        _ => return Err(UrgentStaffingErr::BackendUnavailable),
     };
     let staff_worked_seconds: i64 = row.worked_seconds.unwrap_or(0);
     let reconciliation_status: ReconcileStatus = if report_status == UrgentWorkStatus::Reconciled {
@@ -1892,7 +1885,7 @@ fn reconciliation_from_row(row: ReconcileRow) -> Result<UrgentWorkReconcile, Urg
             claimed_customer_id: row.claimed_customer_id,
             customer_name: row.customer_name,
             submission_kind: UrgentWorkSubmissionKind::from_code(&row.submission_kind)
-                .ok_or(UrgentWorkError::BackendUnavailable)?,
+                .ok_or(UrgentStaffingErr::BackendUnavailable)?,
             staff_note: row.staff_note,
             status: report_status,
             started_at: row.started_at,
@@ -1920,18 +1913,18 @@ fn reconciliation_from_row(row: ReconcileRow) -> Result<UrgentWorkReconcile, Urg
     })
 }
 
-async fn reconcile_report(
-    provider: &UrgentWorkDb,
+pub async fn reconcile_report(
+    provider: &UrgentStaffingRepo,
     tenant_id: Uuid,
     actor_account_id: Uuid,
     shift_id: Uuid,
     assignment_id: Uuid,
     report_id: Uuid,
     input: &UrgentWorkReconcileInput,
-) -> Result<UrgentWorkReconcile, UrgentWorkError> {
-    let mut transaction: TenantTransaction = provider.begin_tenant(tenant_id).await?;
+) -> Result<UrgentWorkReconcile, UrgentStaffingErr> {
+    let mut tran: TenantTransaction = provider.begin_tenant(tenant_id).await?;
     let reconciliation: UrgentWorkReconcile = reconcile_report_in_transaction(
-        &mut transaction,
+        &mut tran,
         tenant_id,
         actor_account_id,
         shift_id,
@@ -1940,35 +1933,34 @@ async fn reconcile_report(
         input,
     )
     .await?;
-    transaction
-        .commit()
+    tran.commit()
         .await
-        .map_err(|error: sqlx::Error| tenant_failure("commit urgent reconciliation", tenant_id, error))?;
+        .map_err(|err: sqlx::Error| tenant_failure("commit urgent reconciliation", tenant_id, err))?;
     info!(tenant_id = %tenant_id, report_id = %report_id, assignment_id = %assignment_id, "Urgent reconciliation committed");
     Ok(reconciliation)
 }
 
-async fn reconcile_report_in_transaction(
-    transaction: &mut TenantTransaction,
+pub async fn reconcile_report_in_transaction(
+    tran: &mut TenantTransaction,
     tenant_id: Uuid,
     actor_account_id: Uuid,
     shift_id: Uuid,
     assignment_id: Uuid,
     report_id: Uuid,
     input: &UrgentWorkReconcileInput,
-) -> Result<UrgentWorkReconcile, UrgentWorkError> {
+) -> Result<UrgentWorkReconcile, UrgentStaffingErr> {
     let status: Option<String> = sqlx::query_scalar!(
         "SELECT status FROM business_urgent_work_reports WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
         tenant_id,
         report_id,
     )
-    .fetch_optional(transaction.connection())
+    .fetch_optional(tran.connection())
     .await
-    .map_err(|error| database_failure("lock urgent report for reconciliation", tenant_id, error))?;
+    .map_err(|err: sqlx::Error| database_failure("lock urgent report for reconciliation", tenant_id, err))?;
     match status.as_deref() {
-        None => return Err(UrgentWorkError::NotFound),
+        None => return Err(UrgentStaffingErr::NotFound),
         Some("completed") => {}
-        Some(_) => return Err(UrgentWorkError::Conflict),
+        Some(_) => return Err(UrgentStaffingErr::Conflict),
     }
     let context: ReconcileContextRow = sqlx::query_as!(
         ReconcileContextRow,
@@ -1998,10 +1990,10 @@ async fn reconcile_report_in_transaction(
         report_id,
         input.final_customer_id,
     )
-    .fetch_optional(transaction.connection())
+    .fetch_optional(tran.connection())
     .await
-    .map_err(|error: sqlx::Error| database_failure("lock urgent reconciliation", tenant_id, error))?
-    .ok_or(UrgentWorkError::NotFound)?;
+    .map_err(|err: sqlx::Error| database_failure("lock urgent reconciliation", tenant_id, err))?
+    .ok_or(UrgentStaffingErr::NotFound)?;
     let report_status: UrgentWorkStatus = UrgentWorkStatus::from_code(&context.report_status).ok_or_else(|| {
         error!(
             operation = "reconcile_urgent_work",
@@ -2010,25 +2002,25 @@ async fn reconcile_report_in_transaction(
             report_status = %context.report_status,
             "Urgent-work report has an unsupported lifecycle status"
         );
-        UrgentWorkError::BackendUnavailable
+        UrgentStaffingErr::BackendUnavailable
     })?;
     if report_status != UrgentWorkStatus::Completed {
-        return Err(UrgentWorkError::Conflict);
+        return Err(UrgentStaffingErr::Conflict);
     }
-    let _staff_ended_at: DateTime<Utc> = context.staff_ended_at.ok_or(UrgentWorkError::Conflict)?;
-    let staff_worked_seconds: i64 = context.staff_worked_seconds.ok_or(UrgentWorkError::Conflict)?;
+    let _staff_ended_at: DateTime<Utc> = context.staff_ended_at.ok_or(UrgentStaffingErr::Conflict)?;
+    let staff_worked_seconds: i64 = context.staff_worked_seconds.ok_or(UrgentStaffingErr::Conflict)?;
     let confirmed_customer_id: Uuid = context
         .confirmed_customer_id
-        .ok_or(UrgentWorkError::InvalidInput("customer evidence is required"))?;
+        .ok_or(UrgentStaffingErr::InvalidInput("customer evidence is required"))?;
     let confirmed_started_at: DateTime<Utc> = context
         .confirmed_started_at
-        .ok_or(UrgentWorkError::InvalidInput("customer evidence is required"))?;
+        .ok_or(UrgentStaffingErr::InvalidInput("customer evidence is required"))?;
     let confirmed_ended_at: DateTime<Utc> = context
         .confirmed_ended_at
-        .ok_or(UrgentWorkError::InvalidInput("customer evidence is required"))?;
+        .ok_or(UrgentStaffingErr::InvalidInput("customer evidence is required"))?;
     let confirmed_worked_seconds: i64 = context
         .confirmed_worked_seconds
-        .ok_or(UrgentWorkError::InvalidInput("customer evidence is required"))?;
+        .ok_or(UrgentStaffingErr::InvalidInput("customer evidence is required"))?;
     let overlaps_existing_assignment: bool = sqlx::query_scalar!(
         r#"
         SELECT EXISTS (
@@ -2049,13 +2041,13 @@ async fn reconcile_report_in_transaction(
         confirmed_ended_at,
         confirmed_started_at,
     )
-    .fetch_one(transaction.connection())
+    .fetch_one(tran.connection())
     .await
-    .map_err(|error| database_failure("validate urgent reconciliation assignment overlap", tenant_id, error))?;
+    .map_err(|err| database_failure("validate urgent reconciliation assignment overlap", tenant_id, err))?;
     if overlaps_existing_assignment {
-        return Err(UrgentWorkError::Conflict);
+        return Err(UrgentStaffingErr::Conflict);
     }
-    let customer_time_zone: String = context.customer_time_zone.ok_or(UrgentWorkError::NotFound)?;
+    let customer_time_zone: String = context.customer_time_zone.ok_or(UrgentStaffingErr::NotFound)?;
     let has_discrepancy: bool = context.claimed_customer_id != confirmed_customer_id
         || input.final_customer_id != context.claimed_customer_id
         || input.final_customer_id != confirmed_customer_id
@@ -2065,7 +2057,7 @@ async fn reconcile_report_in_transaction(
         || input.worked_seconds != staff_worked_seconds
         || input.worked_seconds != confirmed_worked_seconds;
     if has_discrepancy && input.adjustment_reason.is_none() {
-        return Err(UrgentWorkError::InvalidInput(
+        return Err(UrgentStaffingErr::InvalidInput(
             "customer or time discrepancies require an adjustment reason",
         ));
     }
@@ -2075,11 +2067,11 @@ async fn reconcile_report_in_transaction(
         tenant_id,
         input.job_id,
     )
-    .fetch_one(transaction.connection())
+    .fetch_one(tran.connection())
     .await
-    .map_err(|error: sqlx::Error| database_failure("validate urgent reconciliation job", tenant_id, error))?;
+    .map_err(|err: sqlx::Error| database_failure("validate urgent reconciliation job", tenant_id, err))?;
     if !job.exists {
-        return Err(UrgentWorkError::NotFound);
+        return Err(UrgentStaffingErr::NotFound);
     }
     let work_date_row: WorkDateRow = sqlx::query_as!(
         WorkDateRow,
@@ -2087,19 +2079,19 @@ async fn reconcile_report_in_transaction(
         confirmed_started_at,
         customer_time_zone,
     )
-    .fetch_one(transaction.connection())
+    .fetch_one(tran.connection())
     .await
-    .map_err(|error: sqlx::Error| database_failure("derive urgent local work date", tenant_id, error))?;
+    .map_err(|err: sqlx::Error| database_failure("derive urgent local work date", tenant_id, err))?;
     let work_date: NaiveDate = work_date_row.work_date;
     let financial_period_open: bool =
         sqlx::query_scalar("SELECT shepherd_financial_date_is_open_for_update($1, shepherd_current_branch_id(), $2)")
             .bind(tenant_id)
             .bind(work_date)
-            .fetch_one(transaction.connection())
+            .fetch_one(tran.connection())
             .await
-            .map_err(|error| database_failure("validate urgent reconciliation period", tenant_id, error))?;
+            .map_err(|err| database_failure("validate urgent reconciliation period", tenant_id, err))?;
     if !financial_period_open {
-        return Err(UrgentWorkError::Conflict);
+        return Err(UrgentStaffingErr::Conflict);
     }
 
     // This client treats every authorized staff member as staffing-eligible. Keep
@@ -2156,10 +2148,10 @@ async fn reconcile_report_in_transaction(
                     context.employee_id,
                     work_date,
                 )
-                .fetch_optional(transaction.connection())
+                .fetch_optional(tran.connection())
                 .await
-                .map_err(|error: sqlx::Error| database_failure("resolve urgent customer bill rate", tenant_id, error))?
-                .ok_or(UrgentWorkError::MissingStaffingRate)?;
+                .map_err(|err: sqlx::Error| database_failure("resolve urgent customer bill rate", tenant_id, err))?
+                .ok_or(UrgentStaffingErr::MissingStaffingRate)?;
                 let worker_pay_rate: ResolvedRateRow = sqlx::query_as!(
                     ResolvedRateRow,
                     r#"
@@ -2185,20 +2177,20 @@ async fn reconcile_report_in_transaction(
                     context.employee_id,
                     work_date,
                 )
-                .fetch_optional(transaction.connection())
+                .fetch_optional(tran.connection())
                 .await
-                .map_err(|error: sqlx::Error| database_failure("resolve urgent worker pay rate", tenant_id, error))?
-                .ok_or(UrgentWorkError::MissingStaffingRate)?;
+                .map_err(|err: sqlx::Error| database_failure("resolve urgent worker pay rate", tenant_id, err))?
+                .ok_or(UrgentStaffingErr::MissingStaffingRate)?;
                 if customer_bill_rate.currency != worker_pay_rate.currency {
                     warn!(
-                        operation = "urgent_work.reconcile",
+                        operation = "urgent_staffing.reconcile",
                         tenant_id = %tenant_id,
                         report_id = %report_id,
                         customer_bill_currency = %customer_bill_rate.currency,
                         worker_pay_currency = %worker_pay_rate.currency,
                         "Urgent customer bill and worker pay rates use different currencies"
                     );
-                    return Err(UrgentWorkError::InvalidInput(
+                    return Err(UrgentStaffingErr::InvalidInput(
                         "customer bill and worker pay rates must use the same currency",
                     ));
                 }
@@ -2233,9 +2225,9 @@ async fn reconcile_report_in_transaction(
         confirmed_ended_at,
         actor_account_id,
     )
-    .execute(transaction.connection())
+    .execute(tran.connection())
     .await
-    .map_err(|error: sqlx::Error| mutation_failure("create reconciled urgent shift", tenant_id, error))?;
+    .map_err(|err: sqlx::Error| mutation_failure("create reconciled urgent shift", tenant_id, err))?;
     let assignment_insert: PgQueryResult = sqlx::query!(
         r#"
         INSERT INTO business_shift_assignments (
@@ -2273,9 +2265,9 @@ async fn reconcile_report_in_transaction(
         input.adjustment_reason,
         actor_account_id,
     )
-    .execute(transaction.connection())
+    .execute(tran.connection())
     .await
-    .map_err(|error: sqlx::Error| mutation_failure("create reconciled urgent assignment", tenant_id, error))?;
+    .map_err(|err: sqlx::Error| mutation_failure("create reconciled urgent assignment", tenant_id, err))?;
     let copied_record_id: Uuid = Uuid::new_v4();
     let customer_copy: PgQueryResult = sqlx::query!(
         r#"
@@ -2295,23 +2287,23 @@ async fn reconcile_report_in_transaction(
         context.customer_notes,
         actor_account_id,
     )
-    .execute(transaction.connection())
+    .execute(tran.connection())
     .await
-    .map_err(|error: sqlx::Error| mutation_failure("link urgent customer evidence to assignment", tenant_id, error))?;
+    .map_err(|err: sqlx::Error| mutation_failure("link urgent customer evidence to assignment", tenant_id, err))?;
     let report_update: PgQueryResult = sqlx::query!(
         "UPDATE business_urgent_work_reports SET status = 'reconciled', updated_at = CURRENT_TIMESTAMP WHERE tenant_id = $1 AND id = $2 AND status = 'completed'",
         tenant_id,
         report_id,
     )
-    .execute(transaction.connection())
+    .execute(tran.connection())
     .await
-    .map_err(|error: sqlx::Error| mutation_failure("finalize urgent work report", tenant_id, error))?;
+    .map_err(|err: sqlx::Error| mutation_failure("finalize urgent work report", tenant_id, err))?;
     if report_update.rows_affected() != 1 {
-        return Err(UrgentWorkError::Conflict);
+        return Err(UrgentStaffingErr::Conflict);
     }
     trace!(tenant_id = %tenant_id, report_id = %report_id, shift_id = %shift_id, assignment_id = %assignment_id, shift_rows = shift_insert.rows_affected(), assignment_rows = assignment_insert.rows_affected(), customer_rows = customer_copy.rows_affected(), "Urgent work converted to approved staffing snapshot");
     let mut rows: Vec<ReconcileRow> = load_reconciliation_rows(
-        transaction.connection(),
+        tran.connection(),
         tenant_id,
         ReconcileRowQuery {
             report_id: Some(report_id),
@@ -2326,18 +2318,18 @@ async fn reconcile_report_in_transaction(
         },
     )
     .await
-    .map_err(|error: sqlx::Error| database_failure("load reconciled urgent work", tenant_id, error))?;
-    let row: ReconcileRow = rows.pop().ok_or(UrgentWorkError::BackendUnavailable)?;
+    .map_err(|err: sqlx::Error| database_failure("load reconciled urgent work", tenant_id, err))?;
+    let row: ReconcileRow = rows.pop().ok_or(UrgentStaffingErr::BackendUnavailable)?;
     reconciliation_from_row(row)
 }
 
-async fn enqueue_notification(
-    transaction: &mut TenantTransaction,
+pub async fn enqueue_notification(
+    tran: &mut TenantTransaction,
     tenant_id: Uuid,
     event_type: &str,
     aggregate_id: Uuid,
     report_id: Uuid,
-) -> Result<(), UrgentWorkError> {
+) -> Result<(), UrgentStaffingErr> {
     let result: PgQueryResult = sqlx::query!(
         r#"
         INSERT INTO notification_outbox (
@@ -2354,45 +2346,45 @@ async fn enqueue_notification(
         aggregate_id,
         report_id,
     )
-    .execute(transaction.connection())
+    .execute(tran.connection())
     .await
-    .map_err(|error: sqlx::Error| database_failure("enqueue urgent work notification", tenant_id, error))?;
+    .map_err(|err: sqlx::Error| database_failure("enqueue urgent work notification", tenant_id, err))?;
     trace!(tenant_id = %tenant_id, report_id = %report_id, event_type, destination_count = result.rows_affected(), "Urgent-work notifications enqueued");
     Ok(())
 }
 
-fn tenant_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> UrgentWorkError {
-    error!(operation, tenant_id = %tenant_id, reason = %error, "Urgent-work tenant db operation failed");
-    UrgentWorkError::BackendUnavailable
+fn tenant_failure(op: &str, tenant_id: Uuid, err: sqlx::Error) -> UrgentStaffingErr {
+    error!(op, tenant_id = %tenant_id, reason = %err, "Urgent-work tenant db operation failed");
+    UrgentStaffingErr::BackendUnavailable
 }
 
-fn tenant_runner_failure(operation: &str, tenant_id: Uuid, error: TenantDbErr) -> UrgentWorkError {
-    error!(operation, tenant_id = %tenant_id, reason = %error, "Urgent-work automatic tenant operation failed");
-    UrgentWorkError::BackendUnavailable
+fn tenant_tran_failure(op: &str, tenant_id: Uuid, err: TenantDbErr) -> UrgentStaffingErr {
+    error!(op, tenant_id = %tenant_id, reason = %err, "Urgent-work automatic tenant operation failed");
+    UrgentStaffingErr::BackendUnavailable
 }
 
-fn database_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> UrgentWorkError {
-    error!(operation, tenant_id = %tenant_id, reason = %error, "Urgent-work db operation failed");
-    UrgentWorkError::BackendUnavailable
+fn database_failure(op: &str, tenant_id: Uuid, err: sqlx::Error) -> UrgentStaffingErr {
+    error!(op, tenant_id = %tenant_id, reason = %err, "Urgent-work db operation failed");
+    UrgentStaffingErr::BackendUnavailable
 }
 
-fn mutation_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> UrgentWorkError {
-    let mapped: UrgentWorkError = match &error {
-        sqlx::Error::Database(database_error) if database_error.is_unique_violation() => UrgentWorkError::Conflict,
+fn mutation_failure(op: &str, tenant_id: Uuid, err: sqlx::Error) -> UrgentStaffingErr {
+    let mapped: UrgentStaffingErr = match &err {
+        sqlx::Error::Database(database_error) if database_error.is_unique_violation() => UrgentStaffingErr::Conflict,
         sqlx::Error::Database(database_error) if database_error.code().as_deref() == Some("55000") => {
-            UrgentWorkError::Conflict
+            UrgentStaffingErr::Conflict
         }
         sqlx::Error::Database(database_error)
             if database_error.is_check_violation() || database_error.is_foreign_key_violation() =>
         {
-            UrgentWorkError::InvalidInput("urgent work violates a db constraint")
+            UrgentStaffingErr::InvalidInput("urgent work violates a db constraint")
         }
-        _ => UrgentWorkError::BackendUnavailable,
+        _ => UrgentStaffingErr::BackendUnavailable,
     };
-    if matches!(mapped, UrgentWorkError::BackendUnavailable) {
-        error!(operation, tenant_id = %tenant_id, reason = %error, "Urgent-work mutation failed unexpectedly");
+    if matches!(mapped, UrgentStaffingErr::BackendUnavailable) {
+        error!(op, tenant_id = %tenant_id, reason = %err, "Urgent-work mutation failed unexpectedly");
     } else {
-        warn!(operation, tenant_id = %tenant_id, reason = %error, "Urgent-work mutation rejected by db invariant");
+        warn!(op, tenant_id = %tenant_id, reason = %err, "Urgent-work mutation rejected by db invariant");
     }
     mapped
 }

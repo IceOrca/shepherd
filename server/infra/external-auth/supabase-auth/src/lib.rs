@@ -51,7 +51,7 @@ struct AdminTokenClaims<'a> {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum ConfigError {
+pub enum ConfigErr {
     #[error("AUTH_ADMIN_URL is required")]
     MissingUrl,
     #[error("{0} is required")]
@@ -119,13 +119,13 @@ impl SupabaseAuthUserList {
 }
 
 impl SupabaseAuthAdmin {
-    pub fn from_env() -> Result<Arc<Self>, ConfigError> {
+    pub fn from_env() -> Result<Arc<Self>, ConfigErr> {
         debug!("Loading Supabase Auth identity administration configuration");
-        let raw_url: String = required_env("AUTH_ADMIN_URL").ok_or(ConfigError::MissingUrl)?;
+        let raw_url: String = required_env("AUTH_ADMIN_URL").ok_or(ConfigErr::MissingUrl)?;
         let parsed_url: Url = Url::parse(&raw_url)
-            .map_err(|configuration_error: url::ParseError| ConfigError::InvalidUrl(configuration_error.to_string()))?;
+            .map_err(|configuration_error: url::ParseError| ConfigErr::InvalidUrl(configuration_error.to_string()))?;
         if !matches!(parsed_url.scheme(), "http" | "https") || parsed_url.host_str().is_none() {
-            return Err(ConfigError::UnsupportedUrl);
+            return Err(ConfigErr::UnsupportedUrl);
         }
         let timeout_secs: u64 =
             std::env::var("AUTH_ADMIN_HTTP_TIMEOUT_SECS").map_or(Ok(DEFAULT_HTTP_TIMEOUT_SECS), |value: String| {
@@ -133,12 +133,12 @@ impl SupabaseAuthAdmin {
                     .parse::<u64>()
                     .ok()
                     .filter(|parsed_value: &u64| *parsed_value > 0)
-                    .ok_or(ConfigError::InvalidTimeout)
+                    .ok_or(ConfigErr::InvalidTimeout)
             })?;
         let client: reqwest::Client = reqwest::Client::builder()
             .timeout(Duration::from_secs(timeout_secs))
             .build()
-            .map_err(ConfigError::Client)?;
+            .map_err(ConfigErr::Client)?;
         let admin_token_signer: AdminTokenSigner = AdminTokenSigner::from_env()?;
         let service: Arc<Self> = Arc::new(Self {
             client,
@@ -303,22 +303,22 @@ impl ExtAuthAdmin for SupabaseAuthAdmin {
 }
 
 impl AdminTokenSigner {
-    fn from_env() -> Result<Self, ConfigError> {
+    fn from_env() -> Result<Self, ConfigErr> {
         let algorithm: String = required_admin_env("AUTH_ADMIN_JWT_ALGORITHM")?;
         if algorithm != "ES256" {
-            return Err(ConfigError::InvalidAdminAlgorithm);
+            return Err(ConfigErr::InvalidAdminAlgorithm);
         }
         let expiry_secs: i64 = required_admin_env("AUTH_ADMIN_JWT_EXPIRY_SECS")?
             .parse::<i64>()
             .ok()
             .filter(|value: &i64| (1..=3600).contains(value))
-            .ok_or(ConfigError::InvalidAdminTokenExpiry)?;
+            .ok_or(ConfigErr::InvalidAdminTokenExpiry)?;
         let private_key_base64: String = required_admin_env("AUTH_ADMIN_JWT_PRIVATE_KEY_BASE64")?;
         let private_key_pem: Vec<u8> = STANDARD
             .decode(private_key_base64)
-            .map_err(ConfigError::InvalidAdminPrivateKeyEncoding)?;
+            .map_err(ConfigErr::InvalidAdminPrivateKeyEncoding)?;
         let encoding_key: EncodingKey =
-            EncodingKey::from_ec_pem(&private_key_pem).map_err(ConfigError::InvalidAdminPrivateKey)?;
+            EncodingKey::from_ec_pem(&private_key_pem).map_err(ConfigErr::InvalidAdminPrivateKey)?;
         Ok(Self {
             encoding_key,
             key_id: required_admin_env("AUTH_ADMIN_JWT_KEY_ID")?,
@@ -444,8 +444,8 @@ fn required_env(name: &str) -> Option<String> {
         .filter(|value: &String| !value.is_empty())
 }
 
-fn required_admin_env(name: &'static str) -> Result<String, ConfigError> {
-    required_env(name).ok_or(ConfigError::MissingSetting(name))
+fn required_admin_env(name: &'static str) -> Result<String, ConfigErr> {
+    required_env(name).ok_or(ConfigErr::MissingSetting(name))
 }
 
 #[cfg(test)]

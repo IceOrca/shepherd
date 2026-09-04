@@ -13,26 +13,13 @@ use super::{
     super::core::FinanceError,
     core::{
         EmployeeSalaryConfig, EmployeeSalaryConfigCursor, EmployeeSalaryConfigPage, EmployeeSalaryRateInput,
-        FinancialPeriodChangeInput, FinancialPeriodState, FinancialPeriodStatus, FinancialReportingRepo,
-        OperatingFinancialLine, OperatingFinancialReport, PayrollLine, PayrollReport,
+        FinancialPeriodChangeInput, FinancialPeriodState, FinancialPeriodStatus, OperatingFinancialLine,
+        OperatingFinancialReport, PayrollLine, PayrollReport,
     },
 };
 
-pub struct FinancialReportingDb {
+pub struct FinancialReportRepo {
     db: Arc<DatabaseAdapter>,
-}
-
-impl FinancialReportingDb {
-    pub fn new_arc(db: Arc<DatabaseAdapter>) -> Arc<Self> {
-        Arc::new(Self { db })
-    }
-
-    async fn begin_tenant(&self, tenant_id: Uuid) -> Result<TenantTransaction, FinanceError> {
-        self.db.begin_tenant(tenant_id).await.map_err(|error: TenantDbErr| {
-            error!(tenant_id = %tenant_id, reason = %error, "Financial reporting tenant transaction failed");
-            FinanceError::BackendUnavailable
-        })
-    }
 }
 
 #[derive(FromRow)]
@@ -580,9 +567,19 @@ fn map_sqlx(error: sqlx::Error) -> FinanceError {
     FinanceError::BackendUnavailable
 }
 
-#[async_trait]
-impl FinancialReportingRepo for FinancialReportingDb {
-    async fn list_financial_periods(
+impl FinancialReportRepo {
+    pub fn new_arc(db: Arc<DatabaseAdapter>) -> Arc<Self> {
+        Arc::new(Self { db })
+    }
+
+    async fn begin_tenant(&self, tenant_id: Uuid) -> Result<TenantTransaction, FinanceError> {
+        self.db.begin_tenant(tenant_id).await.map_err(|error: TenantDbErr| {
+            error!(tenant_id = %tenant_id, reason = %error, "Financial reporting tenant transaction failed");
+            FinanceError::BackendUnavailable
+        })
+    }
+
+    pub async fn list_financial_periods(
         &self,
         tenant_id: Uuid,
         start_date: NaiveDate,
@@ -629,7 +626,7 @@ impl FinancialReportingRepo for FinancialReportingDb {
         Ok(result)
     }
 
-    async fn change_financial_period(
+    pub async fn change_financial_period(
         &self,
         tenant_id: Uuid,
         actor_account_id: Uuid,
@@ -1022,7 +1019,7 @@ impl FinancialReportingRepo for FinancialReportingDb {
         Ok(result)
     }
 
-    async fn list_salary_configurations(
+    pub async fn list_salary_configurations(
         &self,
         tenant_id: Uuid,
         search: Option<&str>,
@@ -1097,7 +1094,7 @@ impl FinancialReportingRepo for FinancialReportingDb {
         Ok(EmployeeSalaryConfigPage { items, next_cursor })
     }
 
-    async fn create_salary_rate(
+    pub async fn create_salary_rate(
         &self,
         tenant_id: Uuid,
         actor_account_id: Uuid,
@@ -1185,7 +1182,7 @@ impl FinancialReportingRepo for FinancialReportingDb {
         Ok(result)
     }
 
-    async fn operating_report(
+    pub async fn operating_report(
         &self,
         tenant_id: Uuid,
         start_date: NaiveDate,
@@ -1211,7 +1208,7 @@ impl FinancialReportingRepo for FinancialReportingDb {
         })
     }
 
-    async fn payroll_report(
+    pub async fn payroll_report(
         &self,
         tenant_id: Uuid,
         start_date: NaiveDate,

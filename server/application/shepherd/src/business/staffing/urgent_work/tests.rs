@@ -12,21 +12,20 @@ use uuid::Uuid;
 
 use super::{
     core::{
-        UrgentCustomerWorkRecordInput, UrgentWorkActionSource, UrgentWorkEndInput, UrgentWorkError,
-        UrgentWorkLocationInput, UrgentWorkManualInput, UrgentWorkReconcileInput, UrgentWorkService,
+        UrgentCustomerWorkRecordInput, UrgentWorkActionSource, UrgentWorkEndInput, UrgentStaffingErr,
+        UrgentWorkLocationInput, UrgentWorkManualInput, UrgentWorkReconcileInput, UrgentStaffingService,
         UrgentWorkStartInput, UrgentWorkStatus, UrgentWorkSubmissionKind,
     },
-    database::UrgentWorkDb,
+    database::UrgentStaffingRepo,
 };
 use crate::business::staffing::{
-    core::{
-        CustomerWorkRecordInput, ManualRateOverride, ReconcileStatus, ShiftAssignmentStatus, StaffingError,
-        StaffingService,
-    },
-    database::StaffingDb,
-    work_session::{
+    CustomerWorkRecordInput, ManualRateOverride, ReconcileStatus, StaffingErr,
+    planned_work::core::ShiftAssignmentStatus,
+    planned_work::core::PlannedStaffingService,
+    planned_work::database::PlannedStaffingRepo,
+    planned_work::work_session::{
         core::{ShiftWorkActionInput, StaffingWorkService},
-        database::StaffingWorkDb,
+        database::StaffingWorkRepo,
     },
 };
 
@@ -242,16 +241,16 @@ impl Fixture {
         })
     }
 
-    fn urgent_service(&self) -> Arc<UrgentWorkService> {
-        UrgentWorkService::new_arc(UrgentWorkDb::new_arc(Arc::clone(&self.database)))
+    fn urgent_service(&self) -> Arc<UrgentStaffingService> {
+        UrgentStaffingService::new_arc(UrgentStaffingRepo::new_arc(Arc::clone(&self.database)))
     }
 
     fn planned_service(&self) -> Arc<StaffingWorkService> {
-        StaffingWorkService::new_arc(StaffingWorkDb::new_arc(Arc::clone(&self.database)))
+        StaffingWorkService::new_arc(StaffingWorkRepo::new_arc(Arc::clone(&self.database)))
     }
 
-    fn staffing_service(&self) -> Arc<StaffingService> {
-        StaffingService::new_arc(StaffingDb::new_arc(Arc::clone(&self.database)))
+    fn staffing_service(&self) -> Arc<PlannedStaffingService> {
+        PlannedStaffingService::new_arc(PlannedStaffingRepo::new_arc(Arc::clone(&self.database)))
     }
 
     async fn age_urgent_report(&self, _report_id: Uuid) -> Result<(), Box<dyn Error>> {
@@ -370,7 +369,7 @@ impl Fixture {
 
     async fn cleanup(self) -> TestResult {
         tracing::debug!(
-            operation = "urgent_work.test_fixture_cleanup",
+            operation = "urgent_staffing.test_fixture_cleanup",
             tenant_id = %self.tenant_id,
             "Removing isolated urgent-work test tenant and dependent data"
         );
@@ -533,7 +532,7 @@ impl Fixture {
             .execute(self.database.global_pool())
             .await?;
         tracing::debug!(
-            operation = "urgent_work.test_fixture_cleanup",
+            operation = "urgent_staffing.test_fixture_cleanup",
             tenant_id = %self.tenant_id,
             outbox_rows = outbox_delete.rows_affected(),
             destination_rows = destination_delete.rows_affected(),
@@ -587,8 +586,8 @@ fn start_input(fixture: &Fixture, employee_ids: Vec<Uuid>, idempotency_key: Uuid
     }
 }
 
-fn require_urgent<T>(result: Result<T, UrgentWorkError>) -> Result<T, Box<dyn Error>> {
-    result.map_err(|operation_error: UrgentWorkError| {
+fn require_urgent<T>(result: Result<T, UrgentStaffingErr>) -> Result<T, Box<dyn Error>> {
+    result.map_err(|operation_error: UrgentStaffingErr| {
         Box::<dyn Error>::from(io::Error::other(format!(
             "urgent-work operation failed: {operation_error:?}"
         )))
@@ -605,14 +604,14 @@ fn urgent_location_is_optional_and_validated_when_present() {
         longitude: None,
         accuracy_meters: None,
     };
-    assert!(matches!(incomplete.validate(), Err(UrgentWorkError::InvalidInput(_))));
+    assert!(matches!(incomplete.validate(), Err(UrgentStaffingErr::InvalidInput(_))));
 }
 
 #[tokio::test]
 async fn manual_self_declaration_is_immutable_idempotent_and_keyset_paginated() -> TestResult {
     let fixture: Fixture = Fixture::create().await?;
     let test_result: TestResult = infra_postgres::with_active_branch(fixture.branch_id, async {
-        let service: Arc<UrgentWorkService> = fixture.urgent_service();
+        let service: Arc<UrgentStaffingService> = fixture.urgent_service();
         let first_key: Uuid = Uuid::new_v4();
         let first_input: UrgentWorkManualInput = UrgentWorkManualInput {
             customer_id: fixture.customer_id,
@@ -645,7 +644,7 @@ async fn manual_self_declaration_is_immutable_idempotent_and_keyset_paginated() 
         assert_eq!(first.started_by_account_id, fixture.actor_account_id);
         assert_eq!(first.ended_by_account_id, Some(fixture.actor_account_id));
 
-        let conflicting: Result<super::core::UrgentWorkItem, UrgentWorkError> = service
+        let conflicting: Result<super::core::UrgentWorkItem, UrgentStaffingErr> = service
             .submit_manual(
                 fixture.tenant_id,
                 fixture.actor_account_id,
@@ -655,7 +654,7 @@ async fn manual_self_declaration_is_immutable_idempotent_and_keyset_paginated() 
                 },
             )
             .await;
-        assert!(matches!(conflicting, Err(UrgentWorkError::Conflict)));
+        assert!(matches!(conflicting, Err(UrgentStaffingErr::Conflict)));
 
         let second = require_urgent(
             service
@@ -721,7 +720,7 @@ async fn manual_self_declaration_is_immutable_idempotent_and_keyset_paginated() 
 async fn completed_urgent_work_cancellation_is_audited_and_terminal() -> TestResult {
     let fixture: Fixture = Fixture::create().await?;
     let test_result: TestResult = infra_postgres::with_active_branch(fixture.branch_id, async {
-        let service: Arc<UrgentWorkService> = fixture.urgent_service();
+        let service: Arc<UrgentStaffingService> = fixture.urgent_service();
         let report = require_urgent(
             service
                 .submit_manual(
@@ -798,7 +797,7 @@ async fn completed_urgent_work_cancellation_is_audited_and_terminal() -> TestRes
                 "Repeated cancellation".to_owned(),
             )
             .await;
-        assert!(matches!(repeated, Err(UrgentWorkError::Conflict)));
+        assert!(matches!(repeated, Err(UrgentStaffingErr::Conflict)));
         Ok(())
     })
     .await;
@@ -811,11 +810,11 @@ async fn completed_urgent_work_cancellation_is_audited_and_terminal() -> TestRes
 async fn peer_targets_require_effective_staff_clocking_permission() -> TestResult {
     let fixture: Fixture = Fixture::create().await?;
     let test_result: TestResult = infra_postgres::with_active_branch(fixture.branch_id, async {
-        let service: Arc<UrgentWorkService> = fixture.urgent_service();
+        let service: Arc<UrgentStaffingService> = fixture.urgent_service();
         let employees: Vec<super::core::UrgentWorkEmployee> = service
-            .list_employees(fixture.tenant_id, fixture.actor_account_id, None, 100, None)
+            .list_clockable_employees(fixture.tenant_id, fixture.actor_account_id, None, 100, None)
             .await
-            .map_err(|operation_error: UrgentWorkError| {
+            .map_err(|operation_error: UrgentStaffingErr| {
                 io::Error::other(format!("urgent employee list failed: {operation_error:?}"))
             })?
             .items;
@@ -828,7 +827,7 @@ async fn peer_targets_require_effective_staff_clocking_permission() -> TestResul
         assert!(listed_employee_ids.contains(&fixture.peer_employee_id));
         assert!(!listed_employee_ids.contains(&fixture.coordinator_employee_id));
 
-        let result: Result<Vec<super::core::UrgentWorkItem>, UrgentWorkError> = service
+        let result: Result<Vec<super::core::UrgentWorkItem>, UrgentStaffingErr> = service
             .start(
                 fixture.tenant_id,
                 fixture.actor_account_id,
@@ -840,7 +839,7 @@ async fn peer_targets_require_effective_staff_clocking_permission() -> TestResul
                 ),
             )
             .await;
-        assert!(matches!(result, Err(UrgentWorkError::InvalidInput(_))));
+        assert!(matches!(result, Err(UrgentStaffingErr::InvalidInput(_))));
         Ok(())
     })
     .await;
@@ -853,7 +852,7 @@ async fn peer_targets_require_effective_staff_clocking_permission() -> TestResul
 async fn concurrent_peer_lifecycle_is_idempotent_and_preserves_provenance() -> TestResult {
     let fixture: Fixture = Fixture::create().await?;
     let test_result: TestResult = infra_postgres::with_active_branch(fixture.branch_id, async {
-        let service: Arc<UrgentWorkService> = fixture.urgent_service();
+        let service: Arc<UrgentStaffingService> = fixture.urgent_service();
         let start_key: Uuid = Uuid::new_v4();
         let input: UrgentWorkStartInput = start_input(
             &fixture,
@@ -887,7 +886,7 @@ async fn concurrent_peer_lifecycle_is_idempotent_and_preserves_provenance() -> T
         assert_eq!(actor_work.start_source, UrgentWorkActionSource::SelfReported);
         assert_eq!(peer_work.start_source, UrgentWorkActionSource::Peer);
 
-        let changed_delivery: Result<Vec<super::core::UrgentWorkItem>, UrgentWorkError> = service
+        let changed_delivery: Result<Vec<super::core::UrgentWorkItem>, UrgentStaffingErr> = service
             .start(
                 fixture.tenant_id,
                 fixture.actor_account_id,
@@ -895,7 +894,7 @@ async fn concurrent_peer_lifecycle_is_idempotent_and_preserves_provenance() -> T
                 start_input(&fixture, vec![fixture.actor_employee_id], start_key),
             )
             .await;
-        assert!(matches!(changed_delivery, Err(UrgentWorkError::Conflict)));
+        assert!(matches!(changed_delivery, Err(UrgentStaffingErr::Conflict)));
 
         fixture.age_urgent_report(actor_work.report_id).await?;
         fixture.age_urgent_report(peer_work.report_id).await?;
@@ -924,7 +923,7 @@ async fn concurrent_peer_lifecycle_is_idempotent_and_preserves_provenance() -> T
         assert_eq!(first_ended.report_id, second_ended.report_id);
         assert_eq!(first_ended.end_source, Some(UrgentWorkActionSource::Peer));
 
-        let reused_end_key: Result<super::core::UrgentWorkItem, UrgentWorkError> = service
+        let reused_end_key: Result<super::core::UrgentWorkItem, UrgentStaffingErr> = service
             .end(
                 fixture.tenant_id,
                 fixture.actor_account_id,
@@ -936,7 +935,7 @@ async fn concurrent_peer_lifecycle_is_idempotent_and_preserves_provenance() -> T
                 },
             )
             .await;
-        assert!(matches!(reused_end_key, Err(UrgentWorkError::Conflict)));
+        assert!(matches!(reused_end_key, Err(UrgentStaffingErr::Conflict)));
         let actor_ended: super::core::UrgentWorkItem = require_urgent(
             service
                 .end(
@@ -965,7 +964,7 @@ async fn concurrent_peer_lifecycle_is_idempotent_and_preserves_provenance() -> T
 async fn urgent_open_work_blocks_a_planned_session_for_the_same_employee() -> TestResult {
     let fixture: Fixture = Fixture::create().await?;
     let test_result: TestResult = infra_postgres::with_active_branch(fixture.branch_id, async {
-        let urgent_service: Arc<UrgentWorkService> = fixture.urgent_service();
+        let urgent_service: Arc<UrgentStaffingService> = fixture.urgent_service();
         let started: Vec<super::core::UrgentWorkItem> = require_urgent(
             urgent_service
                 .start(
@@ -982,22 +981,24 @@ async fn urgent_open_work_blocks_a_planned_session_for_the_same_employee() -> Te
         )?;
         assert_eq!(started.len(), 2);
 
-        let planned_result: Result<crate::business::staffing::work_session::core::ShiftWorkSession, StaffingError> =
-            fixture
-                .planned_service()
-                .start(
-                    fixture.tenant_id,
-                    fixture.planned_assignment_id,
-                    fixture.peer_account_id,
-                    ShiftWorkActionInput {
-                        idempotency_key: Uuid::new_v4(),
-                        latitude: None,
-                        longitude: None,
-                        accuracy_meters: None,
-                    },
-                )
-                .await;
-        assert!(matches!(planned_result, Err(StaffingError::Conflict)));
+        let planned_result: Result<
+            crate::business::staffing::planned_work::work_session::core::ShiftWorkSession,
+            StaffingErr,
+        > = fixture
+            .planned_service()
+            .start(
+                fixture.tenant_id,
+                fixture.planned_assignment_id,
+                fixture.peer_account_id,
+                ShiftWorkActionInput {
+                    idempotency_key: Uuid::new_v4(),
+                    latitude: None,
+                    longitude: None,
+                    accuracy_meters: None,
+                },
+            )
+            .await;
+        assert!(matches!(planned_result, Err(StaffingErr::Conflict)));
         Ok(())
     })
     .await;
@@ -1010,7 +1011,7 @@ async fn urgent_open_work_blocks_a_planned_session_for_the_same_employee() -> Te
 async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -> TestResult {
     let fixture: Fixture = Fixture::create().await?;
     let test_result: TestResult = infra_postgres::with_active_branch(fixture.branch_id, async {
-        let service: Arc<UrgentWorkService> = fixture.urgent_service();
+        let service: Arc<UrgentStaffingService> = fixture.urgent_service();
         let started: Vec<super::core::UrgentWorkItem> = require_urgent(
             service
                 .start(
@@ -1069,7 +1070,7 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
                 .list_reconciliations(
                     fixture.tenant_id,
                     None,
-                    crate::business::staffing::core::ReconcileCollection::Pending,
+                    crate::business::staffing::ReconcileCollection::Pending,
                     None,
                     None,
                     reconciliation_page_size()?,
@@ -1084,7 +1085,7 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
             .ok_or_else(|| io::Error::other("urgent reconciliation missing"))?;
         assert_eq!(report.reconciliation_status, ReconcileStatus::Discrepancy);
 
-        let rejected: Result<super::core::UrgentWorkReconcile, UrgentWorkError> = service
+        let rejected: Result<super::core::UrgentWorkReconcile, UrgentStaffingErr> = service
             .reconcile(
                 fixture.tenant_id,
                 fixture.actor_account_id,
@@ -1103,7 +1104,7 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
                 },
             )
             .await;
-        assert!(matches!(rejected, Err(UrgentWorkError::InvalidInput(_))));
+        assert!(matches!(rejected, Err(UrgentStaffingErr::InvalidInput(_))));
 
         require_urgent(
             service
@@ -1122,7 +1123,7 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
                 )
                 .await,
         )?;
-        let customer_rejected: Result<super::core::UrgentWorkReconcile, UrgentWorkError> = service
+        let customer_rejected: Result<super::core::UrgentWorkReconcile, UrgentStaffingErr> = service
             .reconcile(
                 fixture.tenant_id,
                 fixture.actor_account_id,
@@ -1141,7 +1142,7 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
                 },
             )
             .await;
-        assert!(matches!(customer_rejected, Err(UrgentWorkError::InvalidInput(_))));
+        assert!(matches!(customer_rejected, Err(UrgentStaffingErr::InvalidInput(_))));
 
         require_urgent(
             service
@@ -1202,19 +1203,19 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
         assert!(snapshot.worker_amount.is_some());
         assert!(snapshot.profit_consistent);
 
-        let planned_reconciliations: crate::business::staffing::core::StaffingReconcilePage =
-            crate::business::staffing::core::StaffingRepo::list_reconciliations(
-                &*StaffingDb::new_arc(Arc::clone(&fixture.database)),
+        let planned_reconciliations: crate::business::staffing::planned_work::core::StaffingReconcilePage =
+            crate::business::staffing::planned_work::database::PlannedStaffingRepo::list_reconciliations(
+                &PlannedStaffingRepo::new_arc(Arc::clone(&fixture.database)),
                 fixture.tenant_id,
                 None,
-                crate::business::staffing::core::ReconcileCollection::Pending,
+                crate::business::staffing::ReconcileCollection::Pending,
                 None,
                 None,
                 reconciliation_page_size()?,
                 None,
             )
             .await
-            .map_err(|operation_error: StaffingError| {
+            .map_err(|operation_error: StaffingErr| {
                 io::Error::other(format!("planned reconciliation list failed: {operation_error:?}"))
             })?;
         assert_eq!(planned_reconciliations.items.len(), 1);
@@ -1222,7 +1223,7 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
             planned_reconciliations
                 .items
                 .first()
-                .map(|item: &crate::business::staffing::core::StaffingReconcile| item.assignment_id),
+                .map(|item: &crate::business::staffing::planned_work::core::StaffingReconcile| item.assignment_id),
             Some(fixture.planned_assignment_id)
         );
         Ok(())
@@ -1237,7 +1238,7 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
 async fn urgent_accept_staff_record_requires_exact_customer_evidence_and_preserves_history() -> TestResult {
     let fixture: Fixture = Fixture::create().await?;
     let test_result: TestResult = infra_postgres::with_active_branch(fixture.branch_id, async {
-        let service: Arc<UrgentWorkService> = fixture.urgent_service();
+        let service: Arc<UrgentStaffingService> = fixture.urgent_service();
         let started: Vec<super::core::UrgentWorkItem> = require_urgent(
             service
                 .start(
@@ -1268,10 +1269,10 @@ async fn urgent_accept_staff_record_requires_exact_customer_evidence_and_preserv
                 .await,
         )?;
 
-        let missing_evidence: Result<super::core::UrgentWorkReconcile, UrgentWorkError> = service
+        let missing_evidence: Result<super::core::UrgentWorkReconcile, UrgentStaffingErr> = service
             .accept_staff_record(fixture.tenant_id, fixture.actor_account_id, report_id, fixture.job_id)
             .await;
-        assert!(matches!(missing_evidence, Err(UrgentWorkError::Conflict)));
+        assert!(matches!(missing_evidence, Err(UrgentStaffingErr::Conflict)));
         assert_eq!(fixture.urgent_customer_history_count(report_id).await?, 0);
 
         let ended_at: chrono::DateTime<chrono::Utc> = ended
@@ -1303,10 +1304,10 @@ async fn urgent_accept_staff_record_requires_exact_customer_evidence_and_preserv
         assert_eq!(accepted.reconciliation_status, ReconcileStatus::Reconciled);
         assert_eq!(fixture.urgent_customer_history_count(report_id).await?, 0);
 
-        let repeated: Result<super::core::UrgentWorkReconcile, UrgentWorkError> = service
+        let repeated: Result<super::core::UrgentWorkReconcile, UrgentStaffingErr> = service
             .accept_staff_record(fixture.tenant_id, fixture.actor_account_id, report_id, fixture.job_id)
             .await;
-        assert!(matches!(repeated, Err(UrgentWorkError::Conflict)));
+        assert!(matches!(repeated, Err(UrgentStaffingErr::Conflict)));
         assert_eq!(fixture.urgent_customer_history_count(report_id).await?, 0);
         Ok(())
     })
@@ -1321,8 +1322,8 @@ async fn planned_accept_staff_record_requires_exact_customer_evidence_and_preser
     let fixture: Fixture = Fixture::create().await?;
     let test_result: TestResult = infra_postgres::with_active_branch(fixture.branch_id, async {
         let work_service: Arc<StaffingWorkService> = fixture.planned_service();
-        let staffing_service: Arc<StaffingService> = fixture.staffing_service();
-        let _started: crate::business::staffing::work_session::core::ShiftWorkSession = work_service
+        let staffing_service: Arc<PlannedStaffingService> = fixture.staffing_service();
+        let _started: crate::business::staffing::planned_work::work_session::core::ShiftWorkSession = work_service
             .start(
                 fixture.tenant_id,
                 fixture.planned_assignment_id,
@@ -1335,11 +1336,11 @@ async fn planned_accept_staff_record_requires_exact_customer_evidence_and_preser
                 },
             )
             .await
-            .map_err(|operation_error: StaffingError| {
+            .map_err(|operation_error: StaffingErr| {
                 io::Error::other(format!("planned work start failed: {operation_error:?}"))
             })?;
         fixture.age_planned_assignment().await?;
-        let ended: crate::business::staffing::work_session::core::ShiftWorkSession = work_service
+        let ended: crate::business::staffing::planned_work::work_session::core::ShiftWorkSession = work_service
             .end(
                 fixture.tenant_id,
                 fixture.planned_assignment_id,
@@ -1352,11 +1353,11 @@ async fn planned_accept_staff_record_requires_exact_customer_evidence_and_preser
                 },
             )
             .await
-            .map_err(|operation_error: StaffingError| {
+            .map_err(|operation_error: StaffingErr| {
                 io::Error::other(format!("planned work end failed: {operation_error:?}"))
             })?;
 
-        let missing_evidence: Result<crate::business::staffing::core::ShiftAssignment, StaffingError> =
+        let missing_evidence: Result<crate::business::staffing::planned_work::core::ShiftAssignment, StaffingErr> =
             staffing_service
                 .accept_staff_work_record(
                     fixture.tenant_id,
@@ -1364,7 +1365,7 @@ async fn planned_accept_staff_record_requires_exact_customer_evidence_and_preser
                     fixture.actor_account_id,
                 )
                 .await;
-        assert!(matches!(missing_evidence, Err(StaffingError::Conflict)));
+        assert!(matches!(missing_evidence, Err(StaffingErr::Conflict)));
         assert_eq!(fixture.planned_customer_history_count().await?, 0);
 
         let ended_at: chrono::DateTime<chrono::Utc> = ended
@@ -1385,30 +1386,31 @@ async fn planned_accept_staff_record_requires_exact_customer_evidence_and_preser
                 false,
             )
             .await
-            .map_err(|operation_error: StaffingError| {
+            .map_err(|operation_error: StaffingErr| {
                 io::Error::other(format!("planned customer evidence failed: {operation_error:?}"))
             })?;
-        let accepted: crate::business::staffing::core::ShiftAssignment = staffing_service
+        let accepted: crate::business::staffing::planned_work::core::ShiftAssignment = staffing_service
             .accept_staff_work_record(
                 fixture.tenant_id,
                 fixture.planned_assignment_id,
                 fixture.actor_account_id,
             )
             .await
-            .map_err(|operation_error: StaffingError| {
+            .map_err(|operation_error: StaffingErr| {
                 io::Error::other(format!("planned staff evidence acceptance failed: {operation_error:?}"))
             })?;
         assert_eq!(accepted.status, ShiftAssignmentStatus::Approved);
         assert_eq!(fixture.planned_customer_history_count().await?, 0);
 
-        let repeated: Result<crate::business::staffing::core::ShiftAssignment, StaffingError> = staffing_service
-            .accept_staff_work_record(
-                fixture.tenant_id,
-                fixture.planned_assignment_id,
-                fixture.actor_account_id,
-            )
-            .await;
-        assert!(matches!(repeated, Err(StaffingError::Conflict)));
+        let repeated: Result<crate::business::staffing::planned_work::core::ShiftAssignment, StaffingErr> =
+            staffing_service
+                .accept_staff_work_record(
+                    fixture.tenant_id,
+                    fixture.planned_assignment_id,
+                    fixture.actor_account_id,
+                )
+                .await;
+        assert!(matches!(repeated, Err(StaffingErr::Conflict)));
         assert_eq!(fixture.planned_customer_history_count().await?, 0);
         Ok(())
     })

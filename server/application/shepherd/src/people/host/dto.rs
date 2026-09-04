@@ -1,6 +1,6 @@
 use chrono::NaiveDate;
 use serde::Deserialize;
-use crate::features::people::core::{EmployeeCitizenIdInput, EmployeeInput, EmployeeStatus, Gender};
+use crate::people::core::{EmployeeCitizenIdInput, EmployeeInput, EmployeeStatus, Gender};
 use ts_rs::TS;
 use uuid::Uuid;
 

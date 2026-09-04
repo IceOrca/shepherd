@@ -7,7 +7,8 @@ use tracing::{debug, error, info, trace, warn};
 use ts_rs::TS;
 use uuid::Uuid;
 
-use super::super::core::{ManualRateOverride, ReconcileCollection, ReconcileStatus};
+use super::super::{ManualRateOverride, ReconcileCollection, ReconcileStatus};
+use super::database::UrgentStaffingRepo;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -182,7 +183,7 @@ pub struct UrgentWorkLocationInput {
 }
 
 impl UrgentWorkLocationInput {
-    pub fn validate(&self) -> Result<(), UrgentWorkError> {
+    pub fn validate(&self) -> Result<(), UrgentStaffingErr> {
         match (self.latitude, self.longitude) {
             (None, None) if self.accuracy_meters.is_none() => Ok(()),
             (Some(latitude), Some(longitude))
@@ -196,7 +197,7 @@ impl UrgentWorkLocationInput {
             {
                 Ok(())
             }
-            _ => Err(UrgentWorkError::InvalidInput("urgent-work location is invalid")),
+            _ => Err(UrgentStaffingErr::InvalidInput("urgent-work location is invalid")),
         }
     }
 }
@@ -258,7 +259,7 @@ pub struct UrgentWorkReconcileInput {
 }
 
 #[derive(Debug)]
-pub enum UrgentWorkError {
+pub enum UrgentStaffingErr {
     NotFound,
     Forbidden,
     Conflict,
@@ -267,166 +268,62 @@ pub enum UrgentWorkError {
     BackendUnavailable,
 }
 
-#[async_trait]
-pub trait UrgentWorkRepo {
-    async fn list_customers(
-        &self,
-        tenant_id: Uuid,
-        search: Option<&str>,
-        limit: i64,
-        cursor: Option<&UrgentCustomerCursor>,
-    ) -> Result<UrgentCustomerPage, UrgentWorkError>;
-    async fn list_employees(
-        &self,
-        tenant_id: Uuid,
-        actor_account_id: Uuid,
-        search: Option<&str>,
-        limit: i64,
-        cursor: Option<&UrgentEmployeeCursor>,
-    ) -> Result<UrgentEmployeePage, UrgentWorkError>;
-    async fn list_own_work(
-        &self,
-        tenant_id: Uuid,
-        actor_account_id: Uuid,
-        limit: i64,
-        cursor: Option<&UrgentOwnWorkCursor>,
-    ) -> Result<UrgentOwnWorkPage, UrgentWorkError>;
-    async fn list_team_work(
-        &self,
-        tenant_id: Uuid,
-        actor_account_id: Uuid,
-        limit: i64,
-        cursor: Option<&UrgentOwnWorkCursor>,
-    ) -> Result<UrgentTeamWorkPage, UrgentWorkError>;
-    #[allow(clippy::too_many_arguments)]
-    async fn start(
-        &self,
-        tenant_id: Uuid,
-        actor_account_id: Uuid,
-        allow_peer: bool,
-        batch_id: Uuid,
-        report_ids: &[Uuid],
-        session_ids: &[Uuid],
-        input: &UrgentWorkStartInput,
-    ) -> Result<Vec<UrgentWorkItem>, UrgentWorkError>;
-    async fn end(
-        &self,
-        tenant_id: Uuid,
-        actor_account_id: Uuid,
-        allow_peer: bool,
-        report_id: Uuid,
-        input: &UrgentWorkEndInput,
-    ) -> Result<UrgentWorkItem, UrgentWorkError>;
-    #[allow(clippy::too_many_arguments)]
-    async fn submit_manual(
-        &self,
-        tenant_id: Uuid,
-        actor_account_id: Uuid,
-        batch_id: Uuid,
-        report_id: Uuid,
-        session_id: Uuid,
-        input: &UrgentWorkManualInput,
-    ) -> Result<UrgentWorkItem, UrgentWorkError>;
-    async fn cancel(
-        &self,
-        tenant_id: Uuid,
-        actor_account_id: Uuid,
-        report_id: Uuid,
-        reason: &str,
-    ) -> Result<(), UrgentWorkError>;
-    #[allow(clippy::too_many_arguments)]
-    async fn list_reconciliations(
-        &self,
-        tenant_id: Uuid,
-        customer_id: Option<Uuid>,
-        collection: ReconcileCollection,
-        period_start: Option<DateTime<Utc>>,
-        period_end: Option<DateTime<Utc>>,
-        limit: i64,
-        cursor: Option<&UrgentReconcileCursor>,
-    ) -> Result<UrgentReconcilePage, UrgentWorkError>;
-    async fn upsert_customer_record(
-        &self,
-        tenant_id: Uuid,
-        actor_account_id: Uuid,
-        record_id: Uuid,
-        report_id: Uuid,
-        input: &UrgentCustomerWorkRecordInput,
-        allow_terminal_correction: bool,
-    ) -> Result<UrgentCustomerWorkRecord, UrgentWorkError>;
-    async fn reconcile(
-        &self,
-        tenant_id: Uuid,
-        actor_account_id: Uuid,
-        shift_id: Uuid,
-        assignment_id: Uuid,
-        report_id: Uuid,
-        input: &UrgentWorkReconcileInput,
-    ) -> Result<UrgentWorkReconcile, UrgentWorkError>;
-    #[allow(clippy::too_many_arguments)]
-    async fn accept_staff_record(
-        &self,
-        tenant_id: Uuid,
-        actor_account_id: Uuid,
-        shift_id: Uuid,
-        assignment_id: Uuid,
-        report_id: Uuid,
-        job_id: Uuid,
-    ) -> Result<UrgentWorkReconcile, UrgentWorkError>;
+pub struct UrgentStaffingService {
+    repo: Arc<UrgentStaffingRepo>,
 }
 
-pub type DynUrgentWorkRepo = Arc<dyn UrgentWorkRepo + Send + Sync>;
-
-pub struct UrgentWorkService {
-    repo: DynUrgentWorkRepo,
-}
-
-impl UrgentWorkService {
-    pub fn new_arc(repo: DynUrgentWorkRepo) -> Arc<Self> {
+impl UrgentStaffingService {
+    pub fn new_arc(repo: Arc<UrgentStaffingRepo>) -> Arc<Self> {
         Arc::new(Self { repo })
     }
 
-    pub async fn list_customers(
+    pub async fn list_selectable_customers(
         &self,
         tenant_id: Uuid,
         search: Option<String>,
         limit: i64,
         cursor: Option<UrgentCustomerCursor>,
-    ) -> Result<UrgentCustomerPage, UrgentWorkError> {
+    ) -> Result<UrgentCustomerPage, UrgentStaffingErr> {
         if limit <= 0 {
-            return Err(UrgentWorkError::InvalidInput(
+            return Err(UrgentStaffingErr::InvalidInput(
                 "urgent customer page size must be positive",
             ));
         }
-        debug!(operation = "urgent_work.list_customers", tenant_id = %tenant_id, "Urgent-work operation accepted");
-        let result: Result<UrgentCustomerPage, UrgentWorkError> = self
+        debug!(operation = "urgent_staffing.list_selectable_customers", tenant_id = %tenant_id, "Urgent-work operation accepted");
+        let result: Result<UrgentCustomerPage, UrgentStaffingErr> = self
             .repo
-            .list_customers(tenant_id, search.as_deref(), limit, cursor.as_ref())
+            .list_selectable_customers(tenant_id, search.as_deref(), limit, cursor.as_ref())
             .await;
-        log_result("urgent_work.list_customers", tenant_id, None, None, &result);
+        log_result(
+            "urgent_staffing.list_selectable_customers",
+            tenant_id,
+            None,
+            None,
+            &result,
+        );
         result
     }
 
-    pub async fn list_employees(
+    pub async fn list_clockable_employees(
         &self,
         tenant_id: Uuid,
         actor_account_id: Uuid,
         search: Option<String>,
         limit: i64,
         cursor: Option<UrgentEmployeeCursor>,
-    ) -> Result<UrgentEmployeePage, UrgentWorkError> {
+    ) -> Result<UrgentEmployeePage, UrgentStaffingErr> {
         if limit <= 0 {
-            return Err(UrgentWorkError::InvalidInput(
+            return Err(UrgentStaffingErr::InvalidInput(
                 "urgent employee page size must be positive",
             ));
         }
-        debug!(operation = "urgent_work.list_employees", tenant_id = %tenant_id, actor_account_id = %actor_account_id, "Urgent-work operation accepted");
-        let result: Result<UrgentEmployeePage, UrgentWorkError> = self
+        debug!(operation = "urgent_staffing.list_clockable_employees", tenant_id = %tenant_id, actor_account_id = %actor_account_id, "Urgent-work operation accepted");
+        let result: Result<UrgentEmployeePage, UrgentStaffingErr> = self
             .repo
-            .list_employees(tenant_id, actor_account_id, search.as_deref(), limit, cursor.as_ref())
+            .list_clockable_employees(tenant_id, actor_account_id, search.as_deref(), limit, cursor.as_ref())
             .await;
         log_result(
-            "urgent_work.list_employees",
+            "urgent_staffing.list_clockable_employees",
             tenant_id,
             Some(actor_account_id),
             None,
@@ -441,17 +338,23 @@ impl UrgentWorkService {
         actor_account_id: Uuid,
         limit: i64,
         cursor: Option<UrgentOwnWorkCursor>,
-    ) -> Result<UrgentOwnWorkPage, UrgentWorkError> {
+    ) -> Result<UrgentOwnWorkPage, UrgentStaffingErr> {
         if limit <= 0 {
-            return Err(UrgentWorkError::InvalidInput(
+            return Err(UrgentStaffingErr::InvalidInput(
                 "urgent own-work page size must be positive",
             ));
         }
-        let result: Result<UrgentOwnWorkPage, UrgentWorkError> = self
+        let result: Result<UrgentOwnWorkPage, UrgentStaffingErr> = self
             .repo
             .list_own_work(tenant_id, actor_account_id, limit, cursor.as_ref())
             .await;
-        log_result("urgent_work.list_own", tenant_id, Some(actor_account_id), None, &result);
+        log_result(
+            "urgent_staffing.list_own",
+            tenant_id,
+            Some(actor_account_id),
+            None,
+            &result,
+        );
         result
     }
 
@@ -461,18 +364,18 @@ impl UrgentWorkService {
         actor_account_id: Uuid,
         limit: i64,
         cursor: Option<UrgentOwnWorkCursor>,
-    ) -> Result<UrgentTeamWorkPage, UrgentWorkError> {
+    ) -> Result<UrgentTeamWorkPage, UrgentStaffingErr> {
         if limit <= 0 {
-            return Err(UrgentWorkError::InvalidInput(
+            return Err(UrgentStaffingErr::InvalidInput(
                 "urgent team-work page size must be positive",
             ));
         }
-        let result: Result<UrgentTeamWorkPage, UrgentWorkError> = self
+        let result: Result<UrgentTeamWorkPage, UrgentStaffingErr> = self
             .repo
             .list_team_work(tenant_id, actor_account_id, limit, cursor.as_ref())
             .await;
         log_result(
-            "urgent_work.list_team",
+            "urgent_staffing.list_team",
             tenant_id,
             Some(actor_account_id),
             None,
@@ -487,14 +390,16 @@ impl UrgentWorkService {
         actor_account_id: Uuid,
         allow_peer: bool,
         mut input: UrgentWorkStartInput,
-    ) -> Result<Vec<UrgentWorkItem>, UrgentWorkError> {
+    ) -> Result<Vec<UrgentWorkItem>, UrgentStaffingErr> {
         input.location.validate()?;
         if input.customer_id.is_nil() || input.employee_ids.is_empty() || input.employee_ids.len() > 50 {
-            return Err(UrgentWorkError::InvalidInput("urgent-work start selection is invalid"));
+            return Err(UrgentStaffingErr::InvalidInput(
+                "urgent-work start selection is invalid",
+            ));
         }
         let employee_ids: BTreeSet<Uuid> = input.employee_ids.into_iter().collect();
         if employee_ids.iter().any(Uuid::is_nil) {
-            return Err(UrgentWorkError::InvalidInput(
+            return Err(UrgentStaffingErr::InvalidInput(
                 "urgent-work employee selection is invalid",
             ));
         }
@@ -503,8 +408,8 @@ impl UrgentWorkService {
         let batch_id: Uuid = Uuid::new_v4();
         let report_ids: Vec<Uuid> = (0..target_count).map(|_index: usize| Uuid::new_v4()).collect();
         let session_ids: Vec<Uuid> = (0..target_count).map(|_index: usize| Uuid::new_v4()).collect();
-        trace!(operation = "urgent_work.start", tenant_id = %tenant_id, actor_account_id = %actor_account_id, customer_id = %input.customer_id, target_count, allow_peer, "Validated urgent-work batch without logging location coordinates");
-        let result: Result<Vec<UrgentWorkItem>, UrgentWorkError> = self
+        trace!(operation = "urgent_staffing.start", tenant_id = %tenant_id, actor_account_id = %actor_account_id, customer_id = %input.customer_id, target_count, allow_peer, "Validated urgent-work batch without logging location coordinates");
+        let result: Result<Vec<UrgentWorkItem>, UrgentStaffingErr> = self
             .repo
             .start(
                 tenant_id,
@@ -517,7 +422,7 @@ impl UrgentWorkService {
             )
             .await;
         log_result(
-            "urgent_work.start",
+            "urgent_staffing.start",
             tenant_id,
             Some(actor_account_id),
             Some(batch_id),
@@ -533,17 +438,17 @@ impl UrgentWorkService {
         allow_peer: bool,
         report_id: Uuid,
         input: UrgentWorkEndInput,
-    ) -> Result<UrgentWorkItem, UrgentWorkError> {
+    ) -> Result<UrgentWorkItem, UrgentStaffingErr> {
         input.location.validate()?;
         if report_id.is_nil() {
-            return Err(UrgentWorkError::InvalidInput("urgent-work report ID is invalid"));
+            return Err(UrgentStaffingErr::InvalidInput("urgent-work report ID is invalid"));
         }
-        let result: Result<UrgentWorkItem, UrgentWorkError> = self
+        let result: Result<UrgentWorkItem, UrgentStaffingErr> = self
             .repo
             .end(tenant_id, actor_account_id, allow_peer, report_id, &input)
             .await;
         log_result(
-            "urgent_work.end",
+            "urgent_staffing.end",
             tenant_id,
             Some(actor_account_id),
             Some(report_id),
@@ -557,13 +462,13 @@ impl UrgentWorkService {
         tenant_id: Uuid,
         actor_account_id: Uuid,
         mut input: UrgentWorkManualInput,
-    ) -> Result<UrgentWorkItem, UrgentWorkError> {
+    ) -> Result<UrgentWorkItem, UrgentStaffingErr> {
         if input.customer_id.is_nil()
             || input.idempotency_key.is_nil()
             || input.ended_at <= input.started_at
             || input.ended_at > Utc::now() + chrono::Duration::minutes(5)
         {
-            return Err(UrgentWorkError::InvalidInput(
+            return Err(UrgentStaffingErr::InvalidInput(
                 "manual urgent-work declaration is invalid",
             ));
         }
@@ -573,10 +478,10 @@ impl UrgentWorkService {
             .map(|note: String| note.trim().to_owned())
             .filter(|note: &String| !note.is_empty());
         if input.note.as_deref().is_some_and(|note: &str| note.len() > 1000) {
-            return Err(UrgentWorkError::InvalidInput("manual urgent-work note is invalid"));
+            return Err(UrgentStaffingErr::InvalidInput("manual urgent-work note is invalid"));
         }
         let report_id: Uuid = Uuid::new_v4();
-        let result: Result<UrgentWorkItem, UrgentWorkError> = self
+        let result: Result<UrgentWorkItem, UrgentStaffingErr> = self
             .repo
             .submit_manual(
                 tenant_id,
@@ -588,7 +493,7 @@ impl UrgentWorkService {
             )
             .await;
         log_result(
-            "urgent_work.submit_manual",
+            "urgent_staffing.submit_manual",
             tenant_id,
             Some(actor_account_id),
             Some(report_id),
@@ -603,19 +508,19 @@ impl UrgentWorkService {
         actor_account_id: Uuid,
         report_id: Uuid,
         reason: String,
-    ) -> Result<(), UrgentWorkError> {
+    ) -> Result<(), UrgentStaffingErr> {
         if report_id.is_nil() {
-            return Err(UrgentWorkError::InvalidInput("urgent-work report ID is invalid"));
+            return Err(UrgentStaffingErr::InvalidInput("urgent-work report ID is invalid"));
         }
         let reason: String = reason.trim().to_owned();
         if !(3..=500).contains(&reason.chars().count()) {
-            return Err(UrgentWorkError::InvalidInput(
+            return Err(UrgentStaffingErr::InvalidInput(
                 "urgent-work cancellation reason is invalid",
             ));
         }
         let result = self.repo.cancel(tenant_id, actor_account_id, report_id, &reason).await;
         log_result(
-            "urgent_work.cancel",
+            "urgent_staffing.cancel",
             tenant_id,
             Some(actor_account_id),
             Some(report_id),
@@ -634,20 +539,20 @@ impl UrgentWorkService {
         period_end: Option<DateTime<Utc>>,
         limit: i64,
         cursor: Option<UrgentReconcileCursor>,
-    ) -> Result<UrgentReconcilePage, UrgentWorkError> {
+    ) -> Result<UrgentReconcilePage, UrgentStaffingErr> {
         if limit <= 0 {
-            return Err(UrgentWorkError::InvalidInput(
+            return Err(UrgentStaffingErr::InvalidInput(
                 "urgent reconciliation page size must be positive",
             ));
         }
         if collection == ReconcileCollection::Confirmed
             && !matches!((period_start, period_end), (Some(start), Some(end)) if end > start)
         {
-            return Err(UrgentWorkError::InvalidInput(
+            return Err(UrgentStaffingErr::InvalidInput(
                 "confirmed reconciliation period is invalid",
             ));
         }
-        let result: Result<UrgentReconcilePage, UrgentWorkError> = self
+        let result: Result<UrgentReconcilePage, UrgentStaffingErr> = self
             .repo
             .list_reconciliations(
                 tenant_id,
@@ -659,7 +564,7 @@ impl UrgentWorkService {
                 cursor.as_ref(),
             )
             .await;
-        log_result("urgent_work.list_reconciliations", tenant_id, None, None, &result);
+        log_result("urgent_staffing.list_reconciliations", tenant_id, None, None, &result);
         result
     }
 
@@ -670,9 +575,9 @@ impl UrgentWorkService {
         report_id: Uuid,
         input: UrgentCustomerWorkRecordInput,
         allow_terminal_correction: bool,
-    ) -> Result<UrgentCustomerWorkRecord, UrgentWorkError> {
+    ) -> Result<UrgentCustomerWorkRecord, UrgentStaffingErr> {
         if input.confirmed_customer_id.is_nil() || input.confirmed_ended_at <= input.confirmed_started_at {
-            return Err(UrgentWorkError::InvalidInput("urgent customer evidence is invalid"));
+            return Err(UrgentStaffingErr::InvalidInput("urgent customer evidence is invalid"));
         }
         if input
             .customer_reference
@@ -680,12 +585,12 @@ impl UrgentWorkService {
             .is_some_and(|value: &str| value.len() > 200)
             || input.notes.as_deref().is_some_and(|value: &str| value.len() > 1000)
         {
-            return Err(UrgentWorkError::InvalidInput(
+            return Err(UrgentStaffingErr::InvalidInput(
                 "urgent customer evidence text is invalid",
             ));
         }
         let record_id: Uuid = Uuid::new_v4();
-        let result: Result<UrgentCustomerWorkRecord, UrgentWorkError> = self
+        let result: Result<UrgentCustomerWorkRecord, UrgentStaffingErr> = self
             .repo
             .upsert_customer_record(
                 tenant_id,
@@ -697,7 +602,7 @@ impl UrgentWorkService {
             )
             .await;
         log_result(
-            "urgent_work.upsert_customer_record",
+            "urgent_staffing.upsert_customer_record",
             tenant_id,
             Some(actor_account_id),
             Some(report_id),
@@ -712,9 +617,9 @@ impl UrgentWorkService {
         actor_account_id: Uuid,
         report_id: Uuid,
         mut input: UrgentWorkReconcileInput,
-    ) -> Result<UrgentWorkReconcile, UrgentWorkError> {
+    ) -> Result<UrgentWorkReconcile, UrgentStaffingErr> {
         if input.final_customer_id.is_nil() || input.job_id.is_nil() || input.worked_seconds <= 0 {
-            return Err(UrgentWorkError::InvalidInput(
+            return Err(UrgentStaffingErr::InvalidInput(
                 "urgent reconciliation values are invalid",
             ));
         }
@@ -728,7 +633,9 @@ impl UrgentWorkService {
             .as_deref()
             .is_some_and(|reason: &str| !(3..=500).contains(&reason.len()))
         {
-            return Err(UrgentWorkError::InvalidInput("urgent reconciliation reason is invalid"));
+            return Err(UrgentStaffingErr::InvalidInput(
+                "urgent reconciliation reason is invalid",
+            ));
         }
         if let Some(manual_rate) = input.manual_rate.as_mut() {
             manual_rate.reason = manual_rate.reason.trim().to_owned();
@@ -736,12 +643,12 @@ impl UrgentWorkService {
         }
         let shift_id: Uuid = Uuid::new_v4();
         let assignment_id: Uuid = Uuid::new_v4();
-        let result: Result<UrgentWorkReconcile, UrgentWorkError> = self
+        let result: Result<UrgentWorkReconcile, UrgentStaffingErr> = self
             .repo
             .reconcile(tenant_id, actor_account_id, shift_id, assignment_id, report_id, &input)
             .await;
         log_result(
-            "urgent_work.reconcile",
+            "urgent_staffing.reconcile",
             tenant_id,
             Some(actor_account_id),
             Some(report_id),
@@ -756,11 +663,11 @@ impl UrgentWorkService {
         actor_account_id: Uuid,
         report_id: Uuid,
         job_id: Uuid,
-    ) -> Result<UrgentWorkReconcile, UrgentWorkError> {
+    ) -> Result<UrgentWorkReconcile, UrgentStaffingErr> {
         if job_id.is_nil() {
-            return Err(UrgentWorkError::InvalidInput("urgent reconciliation job is invalid"));
+            return Err(UrgentStaffingErr::InvalidInput("urgent reconciliation job is invalid"));
         }
-        let result: Result<UrgentWorkReconcile, UrgentWorkError> = self
+        let result: Result<UrgentWorkReconcile, UrgentStaffingErr> = self
             .repo
             .accept_staff_record(
                 tenant_id,
@@ -772,7 +679,7 @@ impl UrgentWorkService {
             )
             .await;
         log_result(
-            "urgent_work.accept_staff_record",
+            "urgent_staffing.accept_staff_record",
             tenant_id,
             Some(actor_account_id),
             Some(report_id),
@@ -782,7 +689,7 @@ impl UrgentWorkService {
     }
 }
 
-fn validate_manual_rate(rate: &ManualRateOverride) -> Result<(), UrgentWorkError> {
+fn validate_manual_rate(rate: &ManualRateOverride) -> Result<(), UrgentStaffingErr> {
     let reason_valid: bool = (3..=500).contains(&rate.reason.len()) && rate.reason == rate.reason.trim();
     let currency_valid: bool =
         rate.currency.len() == 3 && rate.currency.bytes().all(|byte: u8| byte.is_ascii_uppercase());
@@ -791,7 +698,7 @@ fn validate_manual_rate(rate: &ManualRateOverride) -> Result<(), UrgentWorkError
     if reason_valid && currency_valid && bill_rate_valid && worker_rate_valid {
         Ok(())
     } else {
-        Err(UrgentWorkError::InvalidInput("urgent manual rate is invalid"))
+        Err(UrgentStaffingErr::InvalidInput("urgent manual rate is invalid"))
     }
 }
 
@@ -821,13 +728,13 @@ fn log_result<T>(
     tenant_id: Uuid,
     actor_account_id: Option<Uuid>,
     resource_id: Option<Uuid>,
-    result: &Result<T, UrgentWorkError>,
+    result: &Result<T, UrgentStaffingErr>,
 ) {
     match result {
         Ok(_) => {
             info!(operation, tenant_id = %tenant_id, actor_account_id = ?actor_account_id, resource_id = ?resource_id, "Urgent-work operation completed")
         }
-        Err(UrgentWorkError::BackendUnavailable) => {
+        Err(UrgentStaffingErr::BackendUnavailable) => {
             error!(operation, tenant_id = %tenant_id, actor_account_id = ?actor_account_id, resource_id = ?resource_id, "Urgent-work backend operation failed")
         }
         Err(operation_error) => {

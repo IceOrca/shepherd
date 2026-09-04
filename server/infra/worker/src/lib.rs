@@ -11,7 +11,7 @@ mod state;
 pub use asynchronous::AsyncWorker;
 pub use blocking::BlockingWorker;
 pub use error::{WorkerClosed, WorkerTimeout};
-pub use queue::{QueueConfig, QueueConfigError, QueueShutdownMode, TaskSender};
+pub use queue::{QueueConfig, QueueCfgErr, QueueShutdownMode, TaskSender};
 
 use tokio_util::sync::CancellationToken;
 

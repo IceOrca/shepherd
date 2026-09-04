@@ -7,6 +7,9 @@ use thiserror::Error;
 use ts_rs::TS;
 use uuid::Uuid;
 
+use tracing::{debug, error, info, trace, warn};
+use super::database::FinanceRepo;
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ExpenseFundingSource {
@@ -388,119 +391,12 @@ pub enum FinanceError {
     BackendUnavailable,
 }
 
-#[async_trait]
-pub trait FinanceRepo: Send + Sync {
-    async fn list_expense_categories(&self, tenant_id: Uuid) -> Result<Vec<ExpenseCategory>, FinanceError>;
-    async fn list_expenses(
-        &self,
-        tenant_id: Uuid,
-        actor_account_id: Uuid,
-        can_read_all: bool,
-        query: &ExpenseListQuery,
-    ) -> Result<ExpensePage, FinanceError>;
-    async fn create_expense(
-        &self,
-        tenant_id: Uuid,
-        actor_account_id: Uuid,
-        can_submit_for_others: bool,
-        idempotency_key: Uuid,
-        input: &ExpenseClaimInput,
-    ) -> Result<ExpenseClaim, FinanceError>;
-    async fn correct_expense(
-        &self,
-        tenant_id: Uuid,
-        expense_id: Uuid,
-        actor_account_id: Uuid,
-        can_correct_confirmed: bool,
-        idempotency_key: Uuid,
-        input: &ExpenseCorrectionInput,
-    ) -> Result<ExpenseClaim, FinanceError>;
-    async fn list_expense_revisions(
-        &self,
-        tenant_id: Uuid,
-        expense_id: Uuid,
-        actor_account_id: Uuid,
-        can_read_all: bool,
-        limit: i64,
-        cursor: Option<&RevisionCursor>,
-    ) -> Result<ExpenseRevisionPage, FinanceError>;
-    async fn decide_expense(
-        &self,
-        tenant_id: Uuid,
-        expense_id: Uuid,
-        command: &FinancialDecisionCommand,
-    ) -> Result<ExpenseClaim, FinanceError>;
-    async fn reimburse_expense(
-        &self,
-        tenant_id: Uuid,
-        expense_id: Uuid,
-        actor_account_id: Uuid,
-        idempotency_key: Uuid,
-        input: &FinancialSettlementInput,
-    ) -> Result<ExpenseClaim, FinanceError>;
-    async fn list_salary_advances(
-        &self,
-        tenant_id: Uuid,
-        actor_account_id: Uuid,
-        can_read_all: bool,
-        query: &SalaryAdvanceListQuery,
-    ) -> Result<SalaryAdvancePage, FinanceError>;
-    async fn create_salary_advance(
-        &self,
-        tenant_id: Uuid,
-        actor_account_id: Uuid,
-        can_request_for_others: bool,
-        idempotency_key: Uuid,
-        input: &SalaryAdvanceInput,
-    ) -> Result<SalaryAdvance, FinanceError>;
-    async fn correct_salary_advance(
-        &self,
-        tenant_id: Uuid,
-        advance_id: Uuid,
-        actor_account_id: Uuid,
-        can_correct_confirmed: bool,
-        idempotency_key: Uuid,
-        input: &SalaryAdvanceCorrectionInput,
-    ) -> Result<SalaryAdvance, FinanceError>;
-    async fn list_salary_advance_revisions(
-        &self,
-        tenant_id: Uuid,
-        advance_id: Uuid,
-        actor_account_id: Uuid,
-        can_read_all: bool,
-        limit: i64,
-        cursor: Option<&RevisionCursor>,
-    ) -> Result<SalaryAdvanceRevisionPage, FinanceError>;
-    async fn decide_salary_advance(
-        &self,
-        tenant_id: Uuid,
-        advance_id: Uuid,
-        command: &FinancialDecisionCommand,
-    ) -> Result<SalaryAdvance, FinanceError>;
-    async fn disburse_salary_advance(
-        &self,
-        tenant_id: Uuid,
-        advance_id: Uuid,
-        actor_account_id: Uuid,
-        idempotency_key: Uuid,
-        reference: &str,
-    ) -> Result<SalaryAdvance, FinanceError>;
-    async fn recover_salary_advance(
-        &self,
-        tenant_id: Uuid,
-        advance_id: Uuid,
-        actor_account_id: Uuid,
-        idempotency_key: Uuid,
-        input: &SalaryAdvanceRecoveryInput,
-    ) -> Result<SalaryAdvance, FinanceError>;
-}
-
 pub struct FinanceService {
-    repo: Arc<dyn FinanceRepo>,
+    repo: Arc<FinanceRepo>,
 }
 
 impl FinanceService {
-    pub fn new_arc(repo: Arc<dyn FinanceRepo>) -> Arc<Self> {
+    pub fn new_arc(repo: Arc<FinanceRepo>) -> Arc<Self> {
         Arc::new(Self { repo })
     }
 

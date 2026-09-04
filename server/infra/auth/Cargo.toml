@@ -42,6 +42,7 @@ uuid = { workspace = true, optional = true }
 infra-kernel = { workspace = true, features = ["debugging"] }
 infra-postgres = { workspace = true, optional = true }
 infra-redis = { workspace = true, optional = true }
+cfg-if = { workspace = true }
 
 [lints]
 workspace = true

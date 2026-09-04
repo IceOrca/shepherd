@@ -48,6 +48,8 @@ services:
       context: ./server
       dockerfile: Dockerfile.prod
       target: runner
+      args:
+        SHEPHERD_CARGO_FEATURES: ${SHEPHERD_CARGO_FEATURES:-}
     image: iceorca/shepherd-srv:0.1.0
     restart: unless-stopped
     command: [ "/app/shepherd-srv" ]
@@ -101,6 +103,7 @@ services:
       target: builder
       args:
         VITE_SHEPHERD_AUTH_URL: ${AUTH_PUBLIC_URL_PROD:?required}
+        VITE_PLANNED_STAFFING_ENABLED: ${VITE_PLANNED_STAFFING_ENABLED:-false}
     image: iceorca/shepherd-cli-builder:0.1.0
     restart: unless-stopped
     command: [ "npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "${FRONTEND_PROD_PORT:-4173}" ]

@@ -45,7 +45,7 @@ passphrase-hash = { version = "*" }
 validator = { version = "*", features = ["derive"] }
 tracing = { version = "*" }
 tracing-subscriber = { version = "*", features = ["env-filter", "fmt", "registry"] }
-sqlx = { version = "*", default-features = false, features = ["runtime-tokio", "postgres", "tls-rustls", "macros", "chrono", "uuid"] }
+sqlx = { version = "*", default-features = false, features = ["runtime-tokio", "postgres", "tls-rustls", "macros", "chrono", "uuid", "bigdecimal"] }
 dotenvy = { version = "*" }
 parking_lot = { version = "*" }
 base64 = { version = "*" }
@@ -65,6 +65,8 @@ time = { version = "*", features = ["parsing", "macros"] }
 ts-rs = { version = "*", features = ["chrono-impl", "uuid-impl"] }
 calamine = { version = "*" }
 rust_xlsxwriter = { version = "*", features = ["chrono"] }
+bigdecimal = { version = "*" }
+
 # reusable infra crates
 infra-kernel = { path = "infra/kernel" }
 infra-auth = { path = "infra/auth" }

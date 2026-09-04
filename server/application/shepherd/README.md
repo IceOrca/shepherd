@@ -14,6 +14,21 @@ Employee-profile and internal-attendance capabilities remain under `src/features
 Rates store customer billing and worker pay independently. Assignments snapshot both values so later agreement changes
 cannot rewrite approved work or future payroll inputs.
 
+Within staffing, `staffing/{core,database,host}.rs` owns shared
+customer/job/Staff/rate catalogs and formal assignment-result correction.
+`staffing/urgent_work/` owns urgent evidence and reconciliation.
+`staffing/planned_work/` owns planned shifts, assignments, planned customer
+evidence/reconciliation, and the nested planned Staff work-session module. Do
+not copy generic list/create/update operations into either workflow module;
+urgent-specific employee/customer selectors are distinct projections because
+they enforce urgent authorization and work-context rules.
+
+The Cargo feature `planned-staffing` is empty by default and controls mounting
+all planned routes. The runtime crate forwards the feature to the application
+crate. A default build keeps general staffing, urgent work, finance, payroll,
+exports, and formal reconciliation correction active. Planned schema and
+migrations are unconditional and must not be removed or feature-gated.
+
 ## Feature Layout
 
 Each feature follows the same layer-second layout:
@@ -63,7 +78,7 @@ Supervisors record independent customer-confirmed customer and time, then reconc
 
 Reconciliation compares exact timestamps, duration, and customer. It atomically creates a completed formal shift and an approved assignment linked to the urgent report, preserving billing, worker-pay, margin, and future payroll input snapshots.
 
-Authed employees use:
+With the `planned-staffing` Cargo feature enabled, authed employees use:
 
 - `GET /api/business/staffing/assignments/me`
 - `POST /api/business/staffing/assignments/{assignment_id}/start`
@@ -72,14 +87,12 @@ Authed employees use:
 All start and end operations require an `Idempotency-Key` UUID header. The server owns timestamps and queues notifications in the same transaction. Planned work derives employee/customer from the assignment; urgent work fixes the selected active customer and selected employees in its accepted batch. GPS fields remain in the contract and schema but are discarded while `STAFFING_GPS_ENABLED=false` (the development default).
 
 For optional planned work, supervisors create customer shifts and can assign active Staff whose other staffing assignments do not overlap.
-The current client treats every active Staff member as eligible for every staffing job. Customer confirmation or bill time is stored separately from staff work sessions. An assignment
-can be finalized only after both sources exist; mismatched time or any final override requires an adjustment reason. The finalized
-worker-pay snapshot is the authoritative input for a future aligned payroll flow.
+The current client treats every active Staff member as eligible for every staffing job. Customer confirmation or bill time is stored separately from staff work sessions. An assignment can be finalized only after both sources exist; mismatched time or any final override requires an adjustment reason. The finalized worker-pay snapshot is the authoritative input for a future aligned payroll flow.
 
 Supervisor endpoints include:
 
 - `GET /api/business/staffing/shifts/{shift_id}/candidates`
-- `GET /api/business/staffing/reconciliations`
+- `GET /api/business/staffing/assignments/reconciliations`
 - `PUT /api/business/staffing/assignments/{assignment_id}/customer-record`
 - `POST /api/business/staffing/assignments/{assignment_id}/reconcile`
 

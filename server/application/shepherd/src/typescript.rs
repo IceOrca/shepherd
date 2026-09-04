@@ -10,16 +10,23 @@ use crate::{
         UpdateAccessControlRoleRequest, UpdateAccountAccessRequest, TenantMembershipSummary,
     },
     business::staffing::{
-        core::{
-            BusinessRecordStatus, Customer, CustomerWorkRecord, RateSource, ReconcileStatus, ReconciliationRevision,
-            ShiftAssignment, ShiftAssignmentStatus, StaffingCandidate, StaffingJob, StaffingPriceSet, StaffingRate,
-            StaffingRateKind, StaffingReconcile, StaffingShift, StaffingShiftStatus, StaffingStaff,
-        },
+        {ReconcileStatus, ReconciliationRevision, ManualRateOverrideRequest},
         host::{
-            CustomerPageResponse, CustomerUpsertRequest, CustomerWorkRecordUpsertReq, ManualRateOverrideRequest,
-            ReconciliationCorrectionReq, ShiftAssignmentApproveRequest, ShiftAssignmentCreateRequest,
-            StaffingCancellationRequest, StaffingPriceSetRequest, StaffingRatePageResponse, StaffingReconcilePageRsp,
-            StaffingShiftCreateRequest, StaffingStaffPageResponse,
+            CustomerPageResponse, CustomerUpsertRequest, ReconciliationCorrectionReq, StaffingPriceSetRequest,
+            StaffingRatePageResponse, StaffingStaffPageResponse,
+        },
+        planned_work::core::{
+            BusinessRecordStatus, Customer, CustomerWorkRecord, RateSource, ShiftAssignment, ShiftAssignmentStatus,
+            StaffingCandidate, StaffingJob, StaffingPriceSet, StaffingRate, StaffingRateKind, StaffingReconcile,
+            StaffingShift, StaffingShiftStatus, StaffingStaff,
+        },
+        planned_work::host::{
+            CustomerWorkRecordUpsertReq, ShiftAssignmentApproveRequest, ShiftAssignmentCreateRequest,
+            StaffingCancellationRequest, StaffingReconcilePageRsp, StaffingShiftCreateRequest,
+        },
+        planned_work::work_session::{
+            core::{OwnStaffingAssignment, ShiftWorkSession},
+            host::{OwnStaffingAssignmentPageResponse, ShiftWorkActionRequest},
         },
         urgent_work::{
             core::{
@@ -31,10 +38,6 @@ use crate::{
                 UrgentOwnWorkPageRsp, UrgentReconcileRsp, UrgentWorkCancellationReq, UrgentWorkManualReq,
                 UrgentWorkReconcileReq, UrgentWorkStartReq,
             },
-        },
-        work_session::{
-            core::{OwnStaffingAssignment, ShiftWorkSession},
-            host::{OwnStaffingAssignmentPageResponse, ShiftWorkActionRequest},
         },
     },
     business::finance::{
@@ -60,19 +63,17 @@ use crate::{
             },
         },
     },
-    features::{
-        branch::core::BranchSummary,
-        people::{
-            core::{AttendanceSession, Employee, EmployeeSensitiveProfile, EmployeeStatus, Gender},
-            host::handler::{AttendancePageResponse, EmployeePageResponse},
-            host::dto::{AttendanceCheckInRequest, EmployeeCitizenIdUpdateRequest, EmployeeUpsertRequest},
-        },
+    branch::core::BranchSummary,
+    people::{
+        core::{AttendanceSession, Employee, EmployeeSensitiveProfile, EmployeeStatus, Gender},
+        host::handler::{AttendancePageResponse, EmployeePageResponse},
+        host::dto::{AttendanceCheckInRequest, EmployeeCitizenIdUpdateRequest, EmployeeUpsertRequest},
     },
 };
 
 pub fn contract() -> String {
-    let config = Config::new().with_large_int("number");
-    let mut output = String::new();
+    let config: Config = Config::new().with_large_int("number");
+    let mut output: String = String::new();
 
     push::<RoleCode>(&mut output, &config);
     push::<PermissionCode>(&mut output, &config);

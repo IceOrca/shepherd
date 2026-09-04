@@ -4,9 +4,10 @@ use std::{net::SocketAddr, path::Path, time::Duration};
 
 use infra_kernel::debug::Debugging;
 use tokio::signal;
-use tracing::{error, info, warn};
+use tracing::{error, warn, info, debug, trace};
 
 const DEFAULT_WORKER_SHUTDOWN_TIMEOUT_SECS: u64 = 60;
+use tokio::net::TcpListener;
 
 #[tokio::main]
 async fn main() {
@@ -26,17 +27,18 @@ async fn main() {
 
     let address: String = format!("{}:{}", host.ip, host.port);
     let result: Result<(), std::io::Error> = axum::serve(
-        tokio::net::TcpListener::bind(&address)
+        TcpListener::bind(&address)
             .await
             .unwrap_or_else(|error: std::io::Error| panic!("failed to bind server to {address}: {error}")),
         router.into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown_signal())
     .await;
-    if let Err(timeout_error) = worker.shutdown_with_timeout(worker_shutdown_timeout).await {
+
+    if let Err(timeout_err) = worker.shutdown_with_timeout(worker_shutdown_timeout).await {
         error!(
-            timeout_ms = timeout_error.timeout().as_millis(),
-            error = %timeout_error,
+            timeout_ms = timeout_err.timeout().as_millis(),
+            error = %timeout_err,
             "Background worker graceful shutdown timed out; remaining asynchronous tasks will be aborted with the runtime"
         );
     } else {
@@ -96,7 +98,8 @@ async fn shutdown_signal() {
 
     #[cfg(unix)]
     {
-        let mut terminate: signal::unix::Signal = signal::unix::signal(signal::unix::SignalKind::terminate())
+        use signal::unix;
+        let mut terminate: unix::Signal = unix::signal(unix::SignalKind::terminate())
             .unwrap_or_else(|error: std::io::Error| panic!("failed to install SIGTERM handler: {error}"));
         tokio::select! {
             _ = ctrl_c => info!("Ctrl+C received, shutting down gracefully"),

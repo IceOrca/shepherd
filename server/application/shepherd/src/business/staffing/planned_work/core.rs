@@ -7,7 +7,7 @@ use ts_rs::TS;
 use uuid::Uuid;
 use tracing::{debug, error, info, trace, warn};
 
-use super::database::StaffingRepo;
+use super::database::PlannedStaffingRepo;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -374,272 +374,365 @@ pub struct CustomerWorkRecord {
     pub updated_at: DateTime<Utc>,
 }
 
-use super::{
+use super::super::{
     StaffingErr, ReconcileStatus, StaffingEligibilityInput, StaffingPriceSetInput, StaffingShiftInput,
-    ShiftAssignmentInput, CustomerWorkRecordInput, StaffingReconcileCursor, ReconciliationCorrectionInput,
-    ReconciliationRevision, ReconcileCollection,
+    ShiftAssignmentInput, CustomerWorkRecordInput, StaffingReconcileCursor, ReconcileCollection,
 };
 
-pub struct StaffingService {
-    repo: Arc<StaffingRepo>,
+pub struct PlannedStaffingService {
+    repo: Arc<PlannedStaffingRepo>,
 }
-impl StaffingService {
-    pub fn new_arc(repo: Arc<StaffingRepo>) -> Arc<Self> {
+impl PlannedStaffingService {
+    pub fn new_arc(repo: Arc<PlannedStaffingRepo>) -> Arc<Self> {
         Arc::new(Self { repo })
     }
 
-    pub async fn list_customers(
-        &self,
-        tenant_id: Uuid,
-        search: Option<String>,
-        limit: i64,
-        cursor: Option<CustomerCursor>,
-    ) -> Result<CustomerPage, StaffingErr> {
-        if limit <= 0 {
-            return Err(StaffingErr::InvalidInput("customer page size must be positive"));
-        }
-        debug!(operation = "list_customers", tenant_id = %tenant_id, "Staffing service operation accepted");
-        let result: Result<CustomerPage, StaffingErr> = self
-            .repo
-            .list_customers(tenant_id, search.as_deref(), limit, cursor.as_ref())
-            .await;
-        log_staffing_operation("list_customers", tenant_id, None, None, &result);
-        result
-    }
-
-    pub async fn list_jobs(
+    pub async fn list_shifts(
         &self,
         tenant_id: Uuid,
         limit: i64,
-        cursor: Option<NameCodeCursor>,
-    ) -> Result<StaffingJobPage, StaffingErr> {
+        cursor: Option<StaffingShiftCursor>,
+    ) -> Result<StaffingShiftPage, StaffingErr> {
         if limit <= 0 {
-            return Err(StaffingErr::InvalidInput("staffing job page size must be positive"));
+            return Err(StaffingErr::InvalidInput("staffing shift page size must be positive"));
         }
-        debug!(operation = "list_staffing_jobs", tenant_id = %tenant_id, "Staffing service operation accepted");
-        let result: Result<KeysetPage<StaffingJob, NameCodeCursor>, StaffingErr> =
-            self.repo.list_jobs(tenant_id, limit, cursor.as_ref()).await;
-        log_staffing_operation("list_staffing_jobs", tenant_id, None, None, &result);
+        debug!(operation = "list_staffing_shifts", tenant_id = %tenant_id, "Staffing service operation accepted");
+        let result = self.repo.list_shifts(tenant_id, limit, cursor.as_ref()).await;
+        log_staffing_operation("list_staffing_shifts", tenant_id, None, None, &result);
         result
     }
 
-    pub async fn create_customer(
+    pub async fn create_shift(
         &self,
         tenant_id: Uuid,
-        input: CustomerInput,
+        input: StaffingShiftInput,
         audit_account_id: Uuid,
-    ) -> Result<Customer, StaffingErr> {
-        let customer_id: Uuid = Uuid::new_v4();
+    ) -> Result<StaffingShift, StaffingErr> {
+        let shift_id: Uuid = Uuid::new_v4();
         trace!(
-            operation = "create_customer",
+            operation = "create_staffing_shift",
             tenant_id = %tenant_id,
             audit_account_id = %audit_account_id,
-            customer_id = %customer_id,
-            "Validating staffing customer creation"
+            shift_id = %shift_id,
+            customer_id = ?input.customer_id,
+            job_id = %input.job_id,
+            required_workers = input.required_workers,
+            "Validating staffing shift creation"
         );
-        validate_identity(&input.code, &input.name)?;
-        validate_customer_location(&input)?;
-        let result: Result<Customer, StaffingErr> = self
+        if input.ends_at <= input.starts_at || input.required_workers <= 0 {
+            return Err(StaffingErr::InvalidInput("staffing shift schedule is invalid"));
+        }
+        let result: Result<StaffingShift, StaffingErr> = self
             .repo
-            .create_customer(tenant_id, customer_id, &input, audit_account_id)
+            .create_shift(tenant_id, shift_id, &input, audit_account_id)
             .await;
         log_staffing_operation(
-            "create_customer",
+            "create_staffing_shift",
             tenant_id,
             Some(audit_account_id),
-            Some(customer_id),
+            Some(shift_id),
             &result,
         );
         result
     }
 
-    pub async fn update_customer(
+    pub async fn cancel_shift(
         &self,
         tenant_id: Uuid,
-        customer_id: Uuid,
-        input: CustomerInput,
+        shift_id: Uuid,
+        reason: String,
         audit_account_id: Uuid,
-    ) -> Result<Customer, StaffingErr> {
-        trace!(
-            operation = "update_customer",
-            tenant_id = %tenant_id,
-            audit_account_id = %audit_account_id,
-            customer_id = %customer_id,
-            "Validating staffing customer update"
-        );
-        if customer_id.is_nil() {
-            warn!(
-                operation = "update_customer",
-                tenant_id = %tenant_id,
-                audit_account_id = %audit_account_id,
-                "Rejected staffing customer update with a nil customer id"
-            );
-            return Err(StaffingErr::InvalidInput("customer id is invalid"));
-        }
-        validate_identity(&input.code, &input.name)?;
-        validate_customer_location(&input)?;
-        let result: Result<Customer, StaffingErr> = self
+    ) -> Result<(), StaffingErr> {
+        let reason: String = normalize_cancellation_reason(reason)?;
+        let result = self
             .repo
-            .update_customer(tenant_id, customer_id, &input, audit_account_id)
+            .cancel_shift(tenant_id, shift_id, &reason, audit_account_id)
             .await;
         log_staffing_operation(
-            "update_customer",
+            "cancel_staffing_shift",
             tenant_id,
             Some(audit_account_id),
-            Some(customer_id),
+            Some(shift_id),
             &result,
         );
         result
     }
 
-    pub async fn list_rates(
+    pub async fn list_shift_assignments(
         &self,
         tenant_id: Uuid,
-        customer_id: Option<Uuid>,
+        shift_id: Uuid,
         limit: i64,
-        cursor: Option<StaffingRateCursor>,
-    ) -> Result<StaffingRatePage, StaffingErr> {
+        cursor: Option<ShiftAssignmentCursor>,
+    ) -> Result<ShiftAssignmentPage, StaffingErr> {
         if limit <= 0 {
-            return Err(StaffingErr::InvalidInput("staffing rate page size must be positive"));
-        }
-        debug!(operation = "list_rates", tenant_id = %tenant_id, "Staffing service operation accepted");
-        let result: Result<StaffingRatePage, StaffingErr> = self
-            .repo
-            .list_rates(tenant_id, customer_id, limit, cursor.as_ref())
-            .await;
-        log_staffing_operation("list_rates", tenant_id, None, None, &result);
-        result
-    }
-
-    pub async fn list_staff(
-        &self,
-        tenant_id: Uuid,
-        search: Option<String>,
-        limit: i64,
-        cursor: Option<StaffingStaffCursor>,
-    ) -> Result<StaffingStaffPage, StaffingErr> {
-        if limit <= 0 {
-            return Err(StaffingErr::InvalidInput("staffing staff page size must be positive"));
-        }
-        debug!(operation = "list_staffing_staff", tenant_id = %tenant_id, "Staffing service operation accepted");
-        let result: Result<StaffingStaffPage, StaffingErr> = self
-            .repo
-            .list_staff(tenant_id, search.as_deref(), limit, cursor.as_ref())
-            .await;
-        log_staffing_operation("list_staffing_staff", tenant_id, None, None, &result);
-        result
-    }
-
-    pub async fn set_prices(
-        &self,
-        tenant_id: Uuid,
-        input: StaffingPriceSetInput,
-        audit_account_id: Uuid,
-    ) -> Result<StaffingPriceSet, StaffingErr> {
-        if input.customer_id.is_nil() || input.employee_id.is_some_and(|id: Uuid| id.is_nil()) {
-            return Err(StaffingErr::InvalidInput("staffing price scope is invalid"));
-        }
-        validate_currency(&input.currency)?;
-        validate_positive_decimal(&input.customer_hourly_rate)?;
-        validate_positive_decimal(&input.worker_hourly_rate)?;
-        let result: Result<StaffingPriceSet, StaffingErr> =
-            self.repo.set_prices(tenant_id, &input, audit_account_id).await;
-        log_staffing_operation(
-            "set_staffing_prices",
-            tenant_id,
-            Some(audit_account_id),
-            input.employee_id,
-            &result,
-        );
-        result
-    }
-
-    pub async fn list_eligibilities(
-        &self,
-        tenant_id: Uuid,
-        limit: i64,
-        cursor: Option<StaffingEligibilityCursor>,
-    ) -> Result<StaffingEligibilityPage, StaffingErr> {
-        if limit <= 0 {
-            return Err(StaffingErr::InvalidInput(
-                "staffing eligibility page size must be positive",
-            ));
+            return Err(StaffingErr::InvalidInput("assignment page size must be positive"));
         }
         debug!(
-            operation = "list_staffing_eligibilities",
+            operation = "list_shift_assignments",
             tenant_id = %tenant_id,
+            shift_id = %shift_id,
             "Staffing service operation accepted"
         );
-        let result = self.repo.list_eligibilities(tenant_id, limit, cursor.as_ref()).await;
-        log_staffing_operation("list_staffing_eligibilities", tenant_id, None, None, &result);
+        let result = self
+            .repo
+            .list_shift_assignments(tenant_id, shift_id, limit, cursor.as_ref())
+            .await;
+        log_staffing_operation("list_shift_assignments", tenant_id, None, Some(shift_id), &result);
         result
     }
 
-    pub async fn create_eligibility(
+    pub async fn list_shift_candidates(
         &self,
         tenant_id: Uuid,
-        mut input: StaffingEligibilityInput,
-        audit_account_id: Uuid,
-    ) -> Result<StaffingEligibility, StaffingErr> {
-        let eligibility_id: Uuid = Uuid::new_v4();
-        input.notes = input
-            .notes
-            .take()
-            .map(|notes: String| notes.trim().to_owned())
-            .filter(|notes: &String| !notes.is_empty());
-        if input.employee_id.is_nil() || input.job_id.is_nil() {
-            return Err(StaffingErr::InvalidInput(
-                "staffing eligibility employee and job are required",
-            ));
-        }
-        if input
-            .effective_to
-            .is_some_and(|date: NaiveDate| date < input.effective_from)
-        {
-            return Err(StaffingErr::InvalidInput("staffing eligibility date range is invalid"));
-        }
-        if input.notes.as_deref().is_some_and(|notes: &str| notes.len() > 1000) {
-            return Err(StaffingErr::InvalidInput("staffing eligibility notes are invalid"));
+        shift_id: Uuid,
+        search: Option<String>,
+        limit: i64,
+        cursor: Option<StaffingCandidateCursor>,
+    ) -> Result<StaffingCandidatePage, StaffingErr> {
+        if limit <= 0 {
+            return Err(StaffingErr::InvalidInput("candidate page size must be positive"));
         }
         debug!(
-            operation = "create_staffing_eligibility",
+            operation = "list_shift_candidates",
             tenant_id = %tenant_id,
-            eligibility_id = %eligibility_id,
-            employee_id = %input.employee_id,
-            job_id = %input.job_id,
-            effective_from = %input.effective_from,
-            effective_to = ?input.effective_to,
-            audit_account_id = %audit_account_id,
-            "Creating effective-dated staffing eligibility"
+            shift_id = %shift_id,
+            "Staffing service operation accepted"
         );
-        let result: Result<StaffingEligibility, StaffingErr> = self
+        let result = self
             .repo
-            .create_eligibility(tenant_id, eligibility_id, &input, audit_account_id)
+            .list_shift_candidates(tenant_id, shift_id, search.as_deref(), limit, cursor.as_ref())
+            .await;
+        log_staffing_operation("list_shift_candidates", tenant_id, None, Some(shift_id), &result);
+        result
+    }
+
+    pub async fn create_shift_assignment(
+        &self,
+        tenant_id: Uuid,
+        shift_id: Uuid,
+        mut input: ShiftAssignmentInput,
+        audit_account_id: Uuid,
+    ) -> Result<ShiftAssignment, StaffingErr> {
+        let assignment_id: Uuid = Uuid::new_v4();
+        trace!(
+            operation = "create_shift_assignment",
+            tenant_id = %tenant_id,
+            audit_account_id = %audit_account_id,
+            shift_id = %shift_id,
+            assignment_id = %assignment_id,
+            employee_id = %input.employee_id,
+            has_manual_rate = input.manual_rate.is_some(),
+            "Validating staffing shift assignment"
+        );
+        if let Some(manual_rate) = input.manual_rate.as_mut() {
+            manual_rate.reason = manual_rate.reason.trim().to_owned();
+            if !(3..=500).contains(&manual_rate.reason.len()) {
+                return Err(StaffingErr::InvalidInput("manual staffing rate reason is invalid"));
+            }
+            validate_currency(&manual_rate.currency)?;
+            validate_positive_decimal(&manual_rate.bill_hourly_rate)?;
+            validate_positive_decimal(&manual_rate.worker_hourly_rate)?;
+        }
+        let result: Result<ShiftAssignment, StaffingErr> = self
+            .repo
+            .create_shift_assignment(tenant_id, assignment_id, shift_id, &input, audit_account_id)
             .await;
         log_staffing_operation(
-            "create_staffing_eligibility",
+            "create_shift_assignment",
             tenant_id,
             Some(audit_account_id),
-            Some(eligibility_id),
+            Some(assignment_id),
             &result,
         );
         result
     }
 
-    pub async fn correct_reconciliation(
+    pub async fn cancel_shift_assignment(
         &self,
         tenant_id: Uuid,
         assignment_id: Uuid,
-        input: ReconciliationCorrectionInput,
+        reason: String,
         audit_account_id: Uuid,
-    ) -> Result<ReconciliationRevision, StaffingErr> {
-        if input.worked_seconds <= 0 || input.correction_reason.trim().len() < 3 || input.correction_reason.len() > 1000
-        {
-            return Err(StaffingErr::InvalidInput("reconciliation correction is invalid"));
+    ) -> Result<(), StaffingErr> {
+        let reason: String = normalize_cancellation_reason(reason)?;
+        let result = self
+            .repo
+            .cancel_shift_assignment(tenant_id, assignment_id, &reason, audit_account_id)
+            .await;
+        log_staffing_operation(
+            "cancel_staffing_shift_assignment",
+            tenant_id,
+            Some(audit_account_id),
+            Some(assignment_id),
+            &result,
+        );
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn approve_shift_assignment(
+        &self,
+        tenant_id: Uuid,
+        assignment_id: Uuid,
+        worked_seconds: Option<i64>,
+        adjustment_reason: Option<String>,
+        final_customer_id: Option<Uuid>,
+        final_job_id: Option<Uuid>,
+        audit_account_id: Uuid,
+    ) -> Result<ShiftAssignment, StaffingErr> {
+        trace!(
+            operation = "approve_shift_assignment",
+            tenant_id = %tenant_id,
+            audit_account_id = %audit_account_id,
+            assignment_id = %assignment_id,
+            has_worked_seconds_override = worked_seconds.is_some(),
+            has_adjustment_reason = adjustment_reason.is_some(),
+            "Validating staffing reconciliation approval"
+        );
+        validate_approval_input(worked_seconds, adjustment_reason.as_deref())?;
+        if final_customer_id.is_some_and(|value| value.is_nil()) || final_job_id.is_some_and(|value| value.is_nil()) {
+            return Err(StaffingErr::InvalidInput("final customer or job is invalid"));
         }
-        self.repo
-            .correct_reconciliation(tenant_id, assignment_id, &input, audit_account_id)
-            .await
+        if (final_customer_id.is_some() || final_job_id.is_some()) && adjustment_reason.is_none() {
+            return Err(StaffingErr::InvalidInput(
+                "a final customer or job override requires an adjustment reason",
+            ));
+        }
+        let result: Result<ShiftAssignment, StaffingErr> = self
+            .repo
+            .approve_shift_assignment(
+                tenant_id,
+                assignment_id,
+                worked_seconds,
+                adjustment_reason,
+                final_customer_id,
+                final_job_id,
+                audit_account_id,
+            )
+            .await;
+        log_staffing_operation(
+            "approve_shift_assignment",
+            tenant_id,
+            Some(audit_account_id),
+            Some(assignment_id),
+            &result,
+        );
+        result
+    }
+
+    pub async fn accept_staff_work_record(
+        &self,
+        tenant_id: Uuid,
+        assignment_id: Uuid,
+        audit_account_id: Uuid,
+    ) -> Result<ShiftAssignment, StaffingErr> {
+        trace!(
+            operation = "accept_staff_work_record",
+            tenant_id = %tenant_id,
+            audit_account_id = %audit_account_id,
+            assignment_id = %assignment_id,
+            "Finalizing an exact staff and customer evidence match in one transaction"
+        );
+        let result: Result<ShiftAssignment, StaffingErr> = self
+            .repo
+            .accept_staff_work_record(tenant_id, assignment_id, audit_account_id)
+            .await;
+        log_staffing_operation(
+            "accept_staff_work_record",
+            tenant_id,
+            Some(audit_account_id),
+            Some(assignment_id),
+            &result,
+        );
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn list_reconciliations(
+        &self,
+        tenant_id: Uuid,
+        customer_id: Option<Uuid>,
+        collection: ReconcileCollection,
+        period_start: Option<DateTime<Utc>>,
+        period_end: Option<DateTime<Utc>>,
+        limit: i64,
+        cursor: Option<StaffingReconcileCursor>,
+    ) -> Result<StaffingReconcilePage, StaffingErr> {
+        if limit <= 0 {
+            return Err(StaffingErr::InvalidInput("reconciliation page size must be positive"));
+        }
+        if collection == ReconcileCollection::Confirmed
+            && !matches!((period_start, period_end), (Some(start), Some(end)) if end > start)
+        {
+            return Err(StaffingErr::InvalidInput("confirmed reconciliation period is invalid"));
+        }
+        debug!(operation = "list_staffing_reconciliations", tenant_id = %tenant_id, "Staffing service operation accepted");
+        let result: Result<StaffingReconcilePage, StaffingErr> = self
+            .repo
+            .list_reconciliations(
+                tenant_id,
+                customer_id,
+                collection,
+                period_start,
+                period_end,
+                limit,
+                cursor.as_ref(),
+            )
+            .await;
+        log_staffing_operation("list_staffing_reconciliations", tenant_id, None, None, &result);
+        result
+    }
+
+    pub async fn upsert_customer_work_record(
+        &self,
+        tenant_id: Uuid,
+        assignment_id: Uuid,
+        input: CustomerWorkRecordInput,
+        audit_account_id: Uuid,
+        allow_terminal_correction: bool,
+    ) -> Result<CustomerWorkRecord, StaffingErr> {
+        let record_id: Uuid = Uuid::new_v4();
+        trace!(
+            operation = "upsert_customer_work_record",
+            tenant_id = %tenant_id,
+            audit_account_id = %audit_account_id,
+            assignment_id = %assignment_id,
+            record_id = %record_id,
+            has_customer_reference = input.customer_reference.is_some(),
+            has_notes = input.notes.is_some(),
+            "Validating independent customer staffing evidence"
+        );
+        if input.confirmed_ended_at <= input.confirmed_started_at {
+            return Err(StaffingErr::InvalidInput("customer work record schedule is invalid"));
+        }
+        if input
+            .customer_reference
+            .as_deref()
+            .is_some_and(|value: &str| value.len() > 200)
+            || input.notes.as_deref().is_some_and(|value: &str| value.len() > 1000)
+        {
+            return Err(StaffingErr::InvalidInput("customer work record text is invalid"));
+        }
+        let result: Result<CustomerWorkRecord, StaffingErr> = self
+            .repo
+            .upsert_customer_work_record(
+                tenant_id,
+                record_id,
+                assignment_id,
+                &input,
+                audit_account_id,
+                allow_terminal_correction,
+            )
+            .await;
+        log_staffing_operation(
+            "upsert_customer_work_record",
+            tenant_id,
+            Some(audit_account_id),
+            Some(assignment_id),
+            &result,
+        );
+        result
     }
 }
 

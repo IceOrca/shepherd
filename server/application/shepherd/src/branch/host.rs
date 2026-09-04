@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::{Extension, Json, Router, extract::State, http::StatusCode, routing::get};
 use tracing::{error, warn, info, debug, trace};
-use crate::features::branch::core::{BranchSummary, BranchErr};
+use crate::branch::core::{BranchSummary, BranchErr};
 
 use crate::{AppContext, auth::AuthedUser};
 
@@ -11,16 +11,16 @@ pub fn routes() -> Router<Arc<AppContext>> {
 }
 
 pub async fn list_branches(
-    State(host): State<Arc<AppContext>>,
+    State(ctx): State<Arc<AppContext>>,
     Extension(user): Extension<AuthedUser>,
 ) -> Result<Json<Vec<BranchSummary>>, StatusCode> {
     require_permission(&user, "business.branches.read")?;
-    let mut branches: Vec<BranchSummary> = host
+    let mut branches: Vec<BranchSummary> = ctx
         .core
         .branch
         .list_active_branches(user.tenant_id)
         .await
-        .map_err(|error| business_status("list branches", &user, error))?;
+        .map_err(|err: BranchErr| business_status("list branches", &user, err))?;
     branches.retain(|branch: &BranchSummary| user.branch_ids.contains(&branch.id));
     debug!(
         operation = "branch.list_accessible_branches",
@@ -45,13 +45,13 @@ fn require_permission(user: &AuthedUser, permission: &str) -> Result<(), StatusC
     }
 }
 
-fn business_status(operation: &str, user: &AuthedUser, error: BranchErr) -> StatusCode {
-    let status = match error {
+fn business_status(op: &str, user: &AuthedUser, err: BranchErr) -> StatusCode {
+    let status: StatusCode = match err {
         BranchErr::BackendUnavailable => StatusCode::SERVICE_UNAVAILABLE,
     };
     error!(
         "Business location request failed: operation={} tenant_id={} account_id={} status={}",
-        operation, user.tenant_id, user.account_id, status
+        op, user.tenant_id, user.account_id, status
     );
     status
 }

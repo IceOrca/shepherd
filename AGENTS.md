@@ -41,7 +41,26 @@ The primary, urgent/unplanned business workflow is:
 
 If Staff forgot live Start or Finish, an active Staff account may instead submit one completed missed-attendance declaration for itself. The Staff selects an active customer from its branch, enters start/end instants and an optional note, and sends an idempotency key. The server revalidates the account/employee/customer scope, stores `submission_kind = manual`, stores `created_at` as the server-owned submission instant, and inserts the claimed interval atomically as immutable Staff evidence. This path cannot select a coworker, cannot create customer evidence, and cannot approve, bill, or pay the work. It enters the same urgent reconciliation queue as live evidence.
 
-The optional planned workflow remains supported. A supervisor may create a shift, inspect suitability and availability, assign staff up to capacity, and let each assigned employee start and finish the assignment. In planned mode, the customer derives from the assignment; staff do not choose it.
+The optional planned workflow remains supported as an opt-in build capability. A supervisor may create a shift, inspect suitability and availability, assign staff up to capacity, and let each assigned employee start and finish the assignment. In planned mode, the customer derives from the assignment; staff do not choose it.
+
+Planned staffing is disabled by default. The Rust application and runtime expose
+the Cargo feature `planned-staffing`; only builds with that feature mount
+planned shift, planned assignment, planned customer-evidence/reconciliation,
+and planned Staff start/finish APIs. The frontend independently uses
+`VITE_PLANNED_STAFFING_ENABLED=true` to expose **Ca kế hoạch của tôi**,
+**Điều phối ca**, the planned reconciliation route/mode, dashboard requests,
+and planned-only permission choices. Server and browser flags must be enabled
+together. With both defaults unchanged, direct planned URLs are unavailable and
+the browser makes no planned dashboard requests.
+
+Do not conditionally remove or skip planned-work migrations. Planned tables,
+constraints, audit history, and seed-compatible schema remain installed so the
+capability can be enabled later without a data-model fork. Shared staffing
+catalogs (branches, customers, jobs, Staff, and rates), urgent work, formal
+assignment reconciliation corrections, finance, payroll, and exports remain
+enabled. Urgent reconciliation creates the same formal assignment/revision
+snapshots consumed by those shared operations, so assignment-derived reporting
+must never be classified as planned-only.
 
 Coordination result pages for `tenant_owner`, `executive_manager`, `branch_manager`, and `supervisor` provide independent **All branches / one branch** and **All customers / one customer** filters. The result branch filter is not the active write branch and must never weaken RLS. Multi-branch views fan out into bounded requests for the account's PostgreSQL-authorized branch IDs, each carrying its explicit validated `X-Branch-Id`, then aggregate the results in the frontend. A selected customer is constrained to the selected branch scope. Mutations from an aggregated result must use the authoritative branch attached to that result rather than the globally active write branch.
 
@@ -290,12 +309,19 @@ HR and business are sibling domains with a close relationship; neither is nested
 
 Never introduce `/api/hr/business/...`. Frontend calls must use the same `/api` paths. Caddy should proxy `/api/*`; route ownership remains in Axum.
 
-Staffing code follows `host -> core <- database`:
+Staffing code follows `host -> core -> database` (like MVC architecture):
 
-- `core.rs`: domain types, repository traits, validation, and services without Axum or SQLx.
+- `core.rs`: domain types, repository traits, validation, and services without Axum or SQLx query.
 - `database.rs`: PostgreSQL/SQLx repository implementation and tenant transactions.
-- `work_session/`: employee-owned start/finish behavior separated from supervisor staffing coordination.
+- `planned_work/`: opt-in planned scheduling, assignment, planned customer evidence, and its nested employee work-session behavior.
 - `urgent_work/`: default staff-selected-customer and peer start/finish evidence plus supervisor reconciliation into formal snapshots.
+
+Keep generic operations in the owning general module rather than cloning them
+into each workflow. `staffing` owns shared customer/job/Staff/rate catalogs
+and formal reconciliation correction; `branch` owns branch listing and
+maintenance. Urgent customer/employee selection projections may remain in
+`urgent_work` only where they apply urgent-specific authorization,
+same-customer context, or open-work eligibility.
 
 Important staffing APIs include:
 
@@ -322,7 +348,7 @@ Important staffing APIs include:
 - `GET /api/business/staffing/assignments/me`
 - `POST /api/business/staffing/assignments/{assignment_id}/start`
 - `POST /api/business/staffing/assignments/{assignment_id}/end`
-- `GET /api/business/staffing/reconciliations`
+- `GET /api/business/staffing/assignments/reconciliations`
 - `PUT /api/business/staffing/assignments/{assignment_id}/customer-record`
 - `POST /api/business/staffing/assignments/{assignment_id}/reconcile`
 - `POST /api/business/staffing/assignments/{assignment_id}/accept-staff-record`

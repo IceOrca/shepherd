@@ -16,7 +16,7 @@ const REPORT_EXPORT_BURST_ENV: &str = "HTTP_RATE_LIMIT_FINANCE_EXPORT_BURST";
 pub enum AppRouteGroup {
     Identity,
     Administration,
-    HumanResources,
+    PeopleOperations,
     Operations,
     ReportExport,
 }
@@ -37,7 +37,7 @@ pub fn policy(group: AppRouteGroup) -> RateLimitPolicy {
             1_000,
             20,
         ),
-        AppRouteGroup::HumanResources => (
+        AppRouteGroup::PeopleOperations => (
             "shepherd-human-resources",
             HR_REPLENISH_MILLIS_ENV,
             HR_BURST_ENV,
@@ -71,7 +71,7 @@ mod tests {
         let groups = [
             AppRouteGroup::Identity,
             AppRouteGroup::Administration,
-            AppRouteGroup::HumanResources,
+            AppRouteGroup::PeopleOperations,
             AppRouteGroup::Operations,
             AppRouteGroup::ReportExport,
         ];

@@ -3,78 +3,20 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use tracing::{error, warn, info, debug, trace};
-use crate::features::people::core::{
+use crate::people::core::{
     AttendanceCursor, AttendancePage, AttendanceSession, Employee, EmployeeCitizenIdInput, EmployeeCursor,
-    EmployeeInput, EmployeePage, EmployeeSensitiveProfile, EmployeeStatus, Gender, HrError, PeopleRepo,
+    EmployeeInput, EmployeePage, EmployeeSensitiveProfile, EmployeeStatus, Gender, PeopleOpsErr,
 };
-use crate::features::people::security::{CitizenIdProtector, ProtectedCitizenId};
+use crate::people::security::{CitizenIdProtector, ProtectedCitizenId};
 use uuid::Uuid;
 
 use infra_postgres::{DatabaseAdapter, TenantDbErr, TenantTransaction};
 use sqlx::PgConnection;
+use super::security::CitizenIdProtectErr;
 
-pub struct PeopleDb {
+pub struct PeopleRepo {
     db: Arc<DatabaseAdapter>,
     citizen_id_protector: CitizenIdProtector,
-}
-
-impl PeopleDb {
-    pub fn new_arc(db: Arc<DatabaseAdapter>) -> Arc<Self> {
-        let citizen_id_protector: CitizenIdProtector = CitizenIdProtector::from_env()
-            .unwrap_or_else(|error| panic!("employee citizen-ID protection configuration is invalid: {error}"));
-        Arc::new(Self {
-            db,
-            citizen_id_protector,
-        })
-    }
-
-    async fn begin_active_tenant(&self, tenant_id: Uuid) -> Result<TenantTransaction, HrError> {
-        self.db.begin_tenant(tenant_id).await.map_err(|error| {
-            error!("HR tenant transaction failed: tenant_id={} error={}", tenant_id, error);
-            HrError::BackendUnavailable
-        })
-    }
-
-    fn sensitive_profile(
-        &self,
-        tenant_id: Uuid,
-        row: EmployeeSensitiveRow,
-    ) -> Result<EmployeeSensitiveProfile, HrError> {
-        let citizen_id: Option<String> = match (
-            row.citizen_id_country_code.as_deref(),
-            row.citizen_id_key_id.as_deref(),
-            row.citizen_id_ciphertext.as_deref(),
-        ) {
-            (None, None, None) => None,
-            (Some(country_code), Some(key_id), Some(ciphertext)) => Some(
-                self.citizen_id_protector
-                    .reveal(tenant_id, country_code, key_id, ciphertext)
-                    .map_err(|error| {
-                        error!(
-                            tenant_id = %tenant_id,
-                            employee_id = %row.employee_id,
-                            reason = %error,
-                            "Employee citizen ID could not be decrypted"
-                        );
-                        HrError::BackendUnavailable
-                    })?,
-            ),
-            _ => {
-                error!(
-                    tenant_id = %tenant_id,
-                    employee_id = %row.employee_id,
-                    "Employee citizen-ID storage is internally inconsistent"
-                );
-                return Err(HrError::BackendUnavailable);
-            }
-        };
-        Ok(EmployeeSensitiveProfile {
-            employee_id: row.employee_id,
-            citizen_id_country_code: row.citizen_id_country_code,
-            citizen_id,
-            version: row.version,
-        })
-    }
 }
 
 #[derive(Debug)]
@@ -118,7 +60,7 @@ struct EmployeeSensitiveUpdateRow {
 }
 
 impl TryFrom<EmployeeRow> for Employee {
-    type Error = HrError;
+    type Error = PeopleOpsErr;
 
     fn try_from(row: EmployeeRow) -> Result<Self, Self::Error> {
         Ok(Self {
@@ -132,13 +74,13 @@ impl TryFrom<EmployeeRow> for Employee {
             legal_last_name: row.legal_last_name,
             personal_phone_e164: row.personal_phone_e164,
             gender: match row.gender.as_deref() {
-                Some(code) => Some(Gender::from_code(code).ok_or(HrError::BackendUnavailable)?),
+                Some(code) => Some(Gender::from_code(code).ok_or(PeopleOpsErr::BackendUnavailable)?),
                 None => None,
             },
             citizen_id_country_code: row.citizen_id_country_code,
             citizen_id_last4: row.citizen_id_last4,
             profile_complete: row.profile_complete,
-            status: EmployeeStatus::from_code(&row.status).ok_or(HrError::BackendUnavailable)?,
+            status: EmployeeStatus::from_code(&row.status).ok_or(PeopleOpsErr::BackendUnavailable)?,
             hire_date: row.hire_date,
             termination_date: row.termination_date,
             version: row.version,
@@ -175,15 +117,73 @@ impl From<AttendanceSessionRow> for AttendanceSession {
     }
 }
 
-#[async_trait]
-impl PeopleRepo for PeopleDb {
-    async fn list_employees(
+impl PeopleRepo {
+    pub fn new_arc(db: Arc<DatabaseAdapter>) -> Arc<Self> {
+        let citizen_id_protector: CitizenIdProtector =
+            CitizenIdProtector::from_env().unwrap_or_else(|err: CitizenIdProtectErr| {
+                panic!("employee citizen-ID protection configuration is invalid: {err}")
+            });
+        Arc::new(Self {
+            db,
+            citizen_id_protector,
+        })
+    }
+
+    pub async fn begin_active_tenant(&self, tenant_id: Uuid) -> Result<TenantTransaction, PeopleOpsErr> {
+        self.db.begin_tenant(tenant_id).await.map_err(|err: TenantDbErr| {
+            error!("HR tenant transaction failed: tenant_id={} err={}", tenant_id, err);
+            PeopleOpsErr::BackendUnavailable
+        })
+    }
+
+    fn sensitive_profile(
+        &self,
+        tenant_id: Uuid,
+        row: EmployeeSensitiveRow,
+    ) -> Result<EmployeeSensitiveProfile, PeopleOpsErr> {
+        let citizen_id: Option<String> = match (
+            row.citizen_id_country_code.as_deref(),
+            row.citizen_id_key_id.as_deref(),
+            row.citizen_id_ciphertext.as_deref(),
+        ) {
+            (None, None, None) => None,
+            (Some(country_code), Some(key_id), Some(ciphertext)) => Some(
+                self.citizen_id_protector
+                    .reveal(tenant_id, country_code, key_id, ciphertext)
+                    .map_err(|err: CitizenIdProtectErr| {
+                        error!(
+                            tenant_id = %tenant_id,
+                            employee_id = %row.employee_id,
+                            reason = %err,
+                            "Employee citizen ID could not be decrypted"
+                        );
+                        PeopleOpsErr::BackendUnavailable
+                    })?,
+            ),
+            _ => {
+                error!(
+                    tenant_id = %tenant_id,
+                    employee_id = %row.employee_id,
+                    "Employee citizen-ID storage is internally inconsistent"
+                );
+                return Err(PeopleOpsErr::BackendUnavailable);
+            }
+        };
+        Ok(EmployeeSensitiveProfile {
+            employee_id: row.employee_id,
+            citizen_id_country_code: row.citizen_id_country_code,
+            citizen_id,
+            version: row.version,
+        })
+    }
+
+    pub async fn list_employees(
         &self,
         tenant_id: Uuid,
         search: Option<&str>,
         limit: i64,
         cursor: Option<&EmployeeCursor>,
-    ) -> Result<EmployeePage, HrError> {
+    ) -> Result<EmployeePage, PeopleOpsErr> {
         let normalized_search: Option<String> = search.map(str::to_owned);
         let cursor_name: Option<String> = cursor.map(|value: &EmployeeCursor| value.normalized_display_name.clone());
         let cursor_code: Option<String> = cursor.map(|value: &EmployeeCursor| value.employee_code.clone());
@@ -191,7 +191,7 @@ impl PeopleRepo for PeopleDb {
         let query_limit: i64 = limit + 1;
         let mut rows: Vec<EmployeeRow> = self
             .db
-            .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            .tran_with_tenant(tenant_id, async move |conn: &mut PgConnection| {
                 sqlx::query_as!(
                     EmployeeRow,
                     r#"
@@ -219,11 +219,12 @@ impl PeopleRepo for PeopleDb {
                     cursor_id,
                     query_limit,
                 )
-                .fetch_all(connection)
+                .fetch_all(conn)
                 .await
             })
             .await
-            .map_err(|error: TenantDbErr| tenant_database_failure("list employees", tenant_id, error))?;
+            .map_err(|err: TenantDbErr| tenant_database_failure("list employees", tenant_id, err))?;
+
         let has_more: bool = rows.len() > limit as usize;
         rows.truncate(limit as usize);
         let next_cursor: Option<EmployeeCursor> = if has_more {
@@ -239,41 +240,45 @@ impl PeopleRepo for PeopleDb {
         let items: Vec<Employee> = rows
             .into_iter()
             .map(Employee::try_from)
-            .collect::<Result<Vec<Employee>, HrError>>()?;
+            .collect::<Result<Vec<Employee>, PeopleOpsErr>>()?;
         Ok(EmployeePage { items, next_cursor })
     }
 
-    async fn find_employee(&self, tenant_id: Uuid, employee_id: Uuid) -> Result<Option<Employee>, HrError> {
+    pub async fn find_employee(&self, tenant_id: Uuid, employee_id: Uuid) -> Result<Option<Employee>, PeopleOpsErr> {
         let row: Option<EmployeeRow> = self
             .db
-            .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            .tran_with_tenant(tenant_id, async move |conn: &mut PgConnection| {
                 sqlx::query_as!(
                     EmployeeRow,
                     r#"
                     SELECT id, branch_id, account_id, employee_code, display_name,
-                           legal_first_name, legal_middle_name, legal_last_name,
-                           personal_phone_e164, gender,
-                           citizen_id_country_code, citizen_id_last4,
-                           (legal_first_name IS NOT NULL AND legal_last_name IS NOT NULL) AS "profile_complete!",
-                           status, hire_date, termination_date, version, created_at, updated_at
+                        legal_first_name, legal_middle_name, legal_last_name,
+                        personal_phone_e164, gender,
+                        citizen_id_country_code, citizen_id_last4,
+                        (legal_first_name IS NOT NULL AND legal_last_name IS NOT NULL) AS "profile_complete!",
+                        status, hire_date, termination_date, version, created_at, updated_at
                     FROM hr_employees
                     WHERE tenant_id = $1 AND id = $2
                     "#,
                     tenant_id,
                     employee_id,
                 )
-                .fetch_optional(connection)
+                .fetch_optional(conn)
                 .await
             })
             .await
-            .map_err(|error: TenantDbErr| tenant_database_failure("find employee", tenant_id, error))?;
+            .map_err(|err: TenantDbErr| tenant_database_failure("find employee", tenant_id, err))?;
         row.map(Employee::try_from).transpose()
     }
 
-    async fn find_employee_by_account(&self, tenant_id: Uuid, account_id: Uuid) -> Result<Option<Employee>, HrError> {
+    pub async fn find_employee_by_account(
+        &self,
+        tenant_id: Uuid,
+        account_id: Uuid,
+    ) -> Result<Option<Employee>, PeopleOpsErr> {
         let row: Option<EmployeeRow> = self
             .db
-            .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            .tran_with_tenant(tenant_id, async move |conn: &mut PgConnection| {
                 sqlx::query_as!(
                     EmployeeRow,
                     r#"
@@ -289,25 +294,25 @@ impl PeopleRepo for PeopleDb {
                     tenant_id,
                     account_id,
                 )
-                .fetch_optional(connection)
+                .fetch_optional(conn)
                 .await
             })
             .await
-            .map_err(|error: TenantDbErr| tenant_database_failure("find employee by account", tenant_id, error))?;
+            .map_err(|err: TenantDbErr| tenant_database_failure("find employee by account", tenant_id, err))?;
         row.map(Employee::try_from).transpose()
     }
 
-    async fn create_employee(
+    pub async fn create_employee(
         &self,
         tenant_id: Uuid,
         branch_id: Uuid,
         employee_id: Uuid,
         input: &EmployeeInput,
         audit_account_id: Uuid,
-    ) -> Result<Employee, HrError> {
+    ) -> Result<Employee, PeopleOpsErr> {
         let row: EmployeeRow = self
             .db
-            .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            .tran_with_tenant(tenant_id, async move |conn: &mut PgConnection| {
                 sqlx::query_as!(
                     EmployeeRow,
                     r#"
@@ -346,11 +351,11 @@ impl PeopleRepo for PeopleDb {
                     input.termination_date,
                     audit_account_id,
                 )
-                .fetch_one(connection)
+                .fetch_one(conn)
                 .await
             })
             .await
-            .map_err(|error: TenantDbErr| tenant_mutation_failure("create employee", tenant_id, error))?;
+            .map_err(|err: TenantDbErr| tenant_mutation_failure("create employee", tenant_id, err))?;
         info!(
             "Employee created: tenant_id={} employee_id={} employee_code={} linked_account_id={:?} audit_account_id={}",
             tenant_id, employee_id, input.employee_code, input.account_id, audit_account_id
@@ -358,17 +363,17 @@ impl PeopleRepo for PeopleDb {
         Employee::try_from(row)
     }
 
-    async fn update_employee(
+    pub async fn update_employee(
         &self,
         tenant_id: Uuid,
         employee_id: Uuid,
         input: &EmployeeInput,
         audit_account_id: Uuid,
-    ) -> Result<Employee, HrError> {
-        let expected_version: i64 = input
-            .expected_version
-            .ok_or(HrError::InvalidInput("employee update requires an expected version"))?;
-        let mut transaction = self.begin_active_tenant(tenant_id).await?;
+    ) -> Result<Employee, PeopleOpsErr> {
+        let expected_version: i64 = input.expected_version.ok_or(PeopleOpsErr::InvalidInput(
+            "employee update requires an expected version",
+        ))?;
+        let mut transaction: TenantTransaction = self.begin_active_tenant(tenant_id).await?;
         let row: Option<EmployeeRow> = sqlx::query_as!(
             EmployeeRow,
             r#"
@@ -389,11 +394,11 @@ impl PeopleRepo for PeopleDb {
                 updated_by_account_id = $14
             WHERE tenant_id = $1 AND id = $2 AND version = $15
             RETURNING id, branch_id, account_id, employee_code, display_name,
-                      legal_first_name, legal_middle_name, legal_last_name,
-                      personal_phone_e164, gender,
-                      citizen_id_country_code, citizen_id_last4,
-                      (legal_first_name IS NOT NULL AND legal_last_name IS NOT NULL) AS "profile_complete!",
-                      status, hire_date, termination_date, version, created_at, updated_at
+                legal_first_name, legal_middle_name, legal_last_name,
+                personal_phone_e164, gender,
+                citizen_id_country_code, citizen_id_last4,
+                (legal_first_name IS NOT NULL AND legal_last_name IS NOT NULL) AS "profile_complete!",
+                status, hire_date, termination_date, version, created_at, updated_at
             "#,
             tenant_id,
             employee_id,
@@ -413,12 +418,13 @@ impl PeopleRepo for PeopleDb {
         )
         .fetch_optional(transaction.connection())
         .await
-        .map_err(|error| mutation_failure("update employee", tenant_id, error))?;
-        let row: EmployeeRow = row.ok_or(HrError::Conflict)?;
+        .map_err(|err: sqlx::Error| mutation_failure("update employee", tenant_id, err))?;
+
+        let row: EmployeeRow = row.ok_or(PeopleOpsErr::Conflict)?;
         transaction
             .commit()
             .await
-            .map_err(|error| database_failure("commit employee update", tenant_id, error))?;
+            .map_err(|err: sqlx::Error| database_failure("commit employee update", tenant_id, err))?;
         info!(
             "Employee updated: tenant_id={} employee_id={} status={} audit_account_id={}",
             tenant_id,
@@ -429,14 +435,14 @@ impl PeopleRepo for PeopleDb {
         Employee::try_from(row)
     }
 
-    async fn find_employee_sensitive_profile(
+    pub async fn find_employee_sensitive_profile(
         &self,
         tenant_id: Uuid,
         employee_id: Uuid,
-    ) -> Result<Option<EmployeeSensitiveProfile>, HrError> {
+    ) -> Result<Option<EmployeeSensitiveProfile>, PeopleOpsErr> {
         let row: Option<EmployeeSensitiveRow> = self
             .db
-            .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            .tran_with_tenant(tenant_id, async move |conn: &mut PgConnection| {
                 sqlx::query_as!(
                     EmployeeSensitiveRow,
                     r#"
@@ -448,25 +454,23 @@ impl PeopleRepo for PeopleDb {
                     tenant_id,
                     employee_id,
                 )
-                .fetch_optional(connection)
+                .fetch_optional(conn)
                 .await
             })
             .await
-            .map_err(|error: TenantDbErr| {
-                tenant_database_failure("find sensitive employee profile", tenant_id, error)
-            })?;
+            .map_err(|err: TenantDbErr| tenant_database_failure("find sensitive employee profile", tenant_id, err))?;
         row.map(|sensitive_row: EmployeeSensitiveRow| self.sensitive_profile(tenant_id, sensitive_row))
             .transpose()
     }
 
-    async fn find_employee_sensitive_profile_by_account(
+    pub async fn find_employee_sensitive_profile_by_account(
         &self,
         tenant_id: Uuid,
         account_id: Uuid,
-    ) -> Result<Option<EmployeeSensitiveProfile>, HrError> {
+    ) -> Result<Option<EmployeeSensitiveProfile>, PeopleOpsErr> {
         let row: Option<EmployeeSensitiveRow> = self
             .db
-            .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            .tran_with_tenant(tenant_id, async move |conn: &mut PgConnection| {
                 sqlx::query_as!(
                     EmployeeSensitiveRow,
                     r#"
@@ -478,42 +482,44 @@ impl PeopleRepo for PeopleDb {
                     tenant_id,
                     account_id,
                 )
-                .fetch_optional(connection)
+                .fetch_optional(conn)
                 .await
             })
             .await
-            .map_err(|error: TenantDbErr| {
-                tenant_database_failure("find own sensitive employee profile", tenant_id, error)
+            .map_err(|err: TenantDbErr| {
+                tenant_database_failure("find own sensitive employee profile", tenant_id, err)
             })?;
         row.map(|sensitive_row: EmployeeSensitiveRow| self.sensitive_profile(tenant_id, sensitive_row))
             .transpose()
     }
 
-    async fn update_employee_citizen_id(
+    pub async fn update_employee_citizen_id(
         &self,
         tenant_id: Uuid,
         employee_id: Uuid,
         input: &EmployeeCitizenIdInput,
         audit_account_id: Uuid,
-    ) -> Result<EmployeeSensitiveProfile, HrError> {
+    ) -> Result<EmployeeSensitiveProfile, PeopleOpsErr> {
+        use crate::people::security::CitizenIdProtectErr;
         let protected: Option<ProtectedCitizenId> =
             match (input.citizen_id_country_code.as_deref(), input.citizen_id.as_deref()) {
                 (Some(country_code), Some(citizen_id)) => Some(
                     self.citizen_id_protector
                         .protect(tenant_id, country_code, citizen_id)
-                        .map_err(|error| {
+                        .map_err(|err: CitizenIdProtectErr| {
                             error!(
                                 tenant_id = %tenant_id,
                                 employee_id = %employee_id,
-                                reason = %error,
+                                reason = %err,
                                 "Employee citizen ID could not be encrypted"
                             );
-                            HrError::BackendUnavailable
+                            PeopleOpsErr::BackendUnavailable
                         })?,
                 ),
                 (None, None) => None,
-                _ => return Err(HrError::InvalidInput("citizen ID input is inconsistent")),
+                _ => return Err(PeopleOpsErr::InvalidInput("citizen ID input is inconsistent")),
             };
+
         let mut transaction: TenantTransaction = self.begin_active_tenant(tenant_id).await?;
         let current: Option<EmployeeSensitiveUpdateRow> = sqlx::query_as!(
             EmployeeSensitiveUpdateRow,
@@ -528,10 +534,11 @@ impl PeopleRepo for PeopleDb {
         )
         .fetch_optional(transaction.connection())
         .await
-        .map_err(|error| database_failure("lock employee citizen ID", tenant_id, error))?;
-        let current: EmployeeSensitiveUpdateRow = current.ok_or(HrError::NotFound)?;
+        .map_err(|err: sqlx::Error| database_failure("lock employee citizen ID", tenant_id, err))?;
+
+        let current: EmployeeSensitiveUpdateRow = current.ok_or(PeopleOpsErr::NotFound)?;
         if current.version != input.expected_version {
-            return Err(HrError::Conflict);
+            return Err(PeopleOpsErr::Conflict);
         }
         let action: &str = match (current.citizen_id_last4.is_some(), protected.is_some()) {
             (false, true) => "set",
@@ -579,8 +586,9 @@ impl PeopleRepo for PeopleDb {
         )
         .fetch_optional(transaction.connection())
         .await
-        .map_err(|error| mutation_failure("update employee citizen ID", tenant_id, error))?
-        .ok_or(HrError::Conflict)?;
+        .map_err(|err| mutation_failure("update employee citizen ID", tenant_id, err))?
+        .ok_or(PeopleOpsErr::Conflict)?;
+
         sqlx::query!(
             r#"
             INSERT INTO hr_employee_sensitive_audit_log (
@@ -603,11 +611,11 @@ impl PeopleRepo for PeopleDb {
         )
         .execute(transaction.connection())
         .await
-        .map_err(|error| database_failure("audit employee citizen ID update", tenant_id, error))?;
+        .map_err(|err: sqlx::Error| database_failure("audit employee citizen ID update", tenant_id, err))?;
         transaction
             .commit()
             .await
-            .map_err(|error| database_failure("commit employee citizen ID update", tenant_id, error))?;
+            .map_err(|err: sqlx::Error| database_failure("commit employee citizen ID update", tenant_id, err))?;
         info!(
             tenant_id = %tenant_id,
             employee_id = %employee_id,
@@ -623,19 +631,19 @@ impl PeopleRepo for PeopleDb {
         })
     }
 
-    async fn list_attendance_sessions(
+    pub async fn list_attendance_sessions(
         &self,
         tenant_id: Uuid,
         employee_id: Uuid,
         limit: i64,
         cursor: Option<&AttendanceCursor>,
-    ) -> Result<AttendancePage, HrError> {
+    ) -> Result<AttendancePage, PeopleOpsErr> {
         let cursor_check_in_at: Option<DateTime<Utc>> = cursor.map(|value: &AttendanceCursor| value.check_in_at);
         let cursor_id: Option<Uuid> = cursor.map(|value: &AttendanceCursor| value.attendance_session_id);
         let query_limit: i64 = limit + 1;
         let result: (bool, Vec<AttendanceSessionRow>) = self
             .db
-            .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            .tran_with_tenant(tenant_id, async move |conn: &mut PgConnection| {
                 let employee_exists: bool = sqlx::query_scalar!(
                     r#"SELECT EXISTS (
                         SELECT 1 FROM hr_employees WHERE tenant_id = $1 AND id = $2
@@ -643,7 +651,7 @@ impl PeopleRepo for PeopleDb {
                     tenant_id,
                     employee_id,
                 )
-                .fetch_one(&mut *connection)
+                .fetch_one(&mut *conn)
                 .await?;
                 let rows: Vec<AttendanceSessionRow> = sqlx::query_as!(
                     AttendanceSessionRow,
@@ -662,17 +670,15 @@ impl PeopleRepo for PeopleDb {
                     cursor_id,
                     query_limit,
                 )
-                .fetch_all(connection)
+                .fetch_all(conn)
                 .await?;
                 Ok((employee_exists, rows))
             })
             .await
-            .map_err(|error: TenantDbErr| {
-                tenant_database_failure("list employee attendance sessions", tenant_id, error)
-            })?;
+            .map_err(|err: TenantDbErr| tenant_database_failure("list employee attendance sessions", tenant_id, err))?;
         let (employee_exists, mut rows): (bool, Vec<AttendanceSessionRow>) = result;
         if !employee_exists {
-            return Err(HrError::NotFound);
+            return Err(PeopleOpsErr::NotFound);
         }
         let has_more: bool = rows.len() > limit as usize;
         rows.truncate(limit as usize);
@@ -688,17 +694,17 @@ impl PeopleRepo for PeopleDb {
         Ok(AttendancePage { items, next_cursor })
     }
 
-    async fn check_in(
+    pub async fn check_in(
         &self,
         tenant_id: Uuid,
         attendance_session_id: Uuid,
         employee_id: Uuid,
         account_id: Uuid,
         branch_id: Uuid,
-    ) -> Result<AttendanceSession, HrError> {
+    ) -> Result<AttendanceSession, PeopleOpsErr> {
         let row: Option<AttendanceSessionRow> = self
             .db
-            .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            .tran_with_tenant(tenant_id, async move |conn: &mut PgConnection| {
                 sqlx::query_as!(
                     AttendanceSessionRow,
                     r#"
@@ -724,12 +730,12 @@ impl PeopleRepo for PeopleDb {
                     account_id,
                     branch_id,
                 )
-                .fetch_optional(connection)
+                .fetch_optional(conn)
                 .await
             })
             .await
-            .map_err(|error: TenantDbErr| tenant_mutation_failure("check in employee", tenant_id, error))?;
-        let row: AttendanceSessionRow = row.ok_or(HrError::NotFound)?;
+            .map_err(|err: TenantDbErr| tenant_mutation_failure("check in employee", tenant_id, err))?;
+        let row: AttendanceSessionRow = row.ok_or(PeopleOpsErr::NotFound)?;
         info!(
             "Employee checked in: tenant_id={} employee_id={} attendance_session_id={} account_id={} branch_id={}",
             tenant_id, employee_id, attendance_session_id, account_id, branch_id
@@ -737,15 +743,15 @@ impl PeopleRepo for PeopleDb {
         Ok(row.into())
     }
 
-    async fn check_out(
+    pub async fn check_out(
         &self,
         tenant_id: Uuid,
         employee_id: Uuid,
         account_id: Uuid,
-    ) -> Result<AttendanceSession, HrError> {
+    ) -> Result<AttendanceSession, PeopleOpsErr> {
         let row: Option<AttendanceSessionRow> = self
             .db
-            .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            .tran_with_tenant(tenant_id, async move |conn: &mut PgConnection| {
                 sqlx::query_as!(
                     AttendanceSessionRow,
                     r#"
@@ -768,12 +774,12 @@ impl PeopleRepo for PeopleDb {
                     employee_id,
                     account_id,
                 )
-                .fetch_optional(connection)
+                .fetch_optional(conn)
                 .await
             })
             .await
-            .map_err(|error: TenantDbErr| tenant_mutation_failure("check out employee", tenant_id, error))?;
-        let row: AttendanceSessionRow = row.ok_or(HrError::NotFound)?;
+            .map_err(|err: TenantDbErr| tenant_mutation_failure("check out employee", tenant_id, err))?;
+        let row: AttendanceSessionRow = row.ok_or(PeopleOpsErr::NotFound)?;
         info!(
             "Employee checked out: tenant_id={} employee_id={} attendance_session_id={} account_id={}",
             tenant_id, employee_id, row.id, account_id
@@ -782,46 +788,47 @@ impl PeopleRepo for PeopleDb {
     }
 }
 
-fn database_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> HrError {
+fn database_failure(operation: &str, tenant_id: Uuid, err: sqlx::Error) -> PeopleOpsErr {
     error!(
-        "HR db operation failed: operation={} tenant_id={} error={}",
-        operation, tenant_id, error
+        "HR db operation failed: operation={} tenant_id={} err={}",
+        operation, tenant_id, err
     );
-    HrError::BackendUnavailable
+    PeopleOpsErr::BackendUnavailable
 }
 
-fn tenant_database_failure(operation: &str, tenant_id: Uuid, error: TenantDbErr) -> HrError {
+fn tenant_database_failure(operation: &str, tenant_id: Uuid, err: TenantDbErr) -> PeopleOpsErr {
     error!(
         operation,
         tenant_id = %tenant_id,
-        reason = %error,
+        reason = %err,
         "HR automatic tenant operation failed"
     );
-    HrError::BackendUnavailable
+    PeopleOpsErr::BackendUnavailable
 }
 
-fn tenant_mutation_failure(operation: &str, tenant_id: Uuid, error: TenantDbErr) -> HrError {
-    match error {
+fn tenant_mutation_failure(operation: &str, tenant_id: Uuid, err: TenantDbErr) -> PeopleOpsErr {
+    match err {
         TenantDbErr::Sqlx(sqlx_error) => mutation_failure(operation, tenant_id, sqlx_error),
         tenant_error => tenant_database_failure(operation, tenant_id, tenant_error),
     }
 }
 
-fn mutation_failure(operation: &str, tenant_id: Uuid, error: sqlx::Error) -> HrError {
-    let mapped = error
-        .as_database_error()
-        .map_or(HrError::BackendUnavailable, |database_error| {
-            if database_error.is_unique_violation() {
-                HrError::Conflict
-            } else if database_error.is_foreign_key_violation() || database_error.is_check_violation() {
-                HrError::InvalidInput("a referenced HR record is invalid")
+fn mutation_failure(operation: &str, tenant_id: Uuid, err: sqlx::Error) -> PeopleOpsErr {
+    let mapped: PeopleOpsErr = err.as_database_error().map_or(
+        PeopleOpsErr::BackendUnavailable,
+        |db_err: &dyn sqlx::error::DatabaseError| {
+            if db_err.is_unique_violation() {
+                PeopleOpsErr::Conflict
+            } else if db_err.is_foreign_key_violation() || db_err.is_check_violation() {
+                PeopleOpsErr::InvalidInput("a referenced HR record is invalid")
             } else {
-                HrError::BackendUnavailable
+                PeopleOpsErr::BackendUnavailable
             }
-        });
+        },
+    );
     error!(
-        "HR mutation failed: operation={} tenant_id={} mapped_error={:?} error={}",
-        operation, tenant_id, mapped, error
+        "HR mutation failed: operation={} tenant_id={} mapped_error={:?} err={}",
+        operation, tenant_id, mapped, err
     );
     mapped
 }

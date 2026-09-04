@@ -1072,7 +1072,7 @@ async fn seed_staffing_business(
                 AT TIME ZONE 'Asia/Ho_Chi_Minh',
             ((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Ho_Chi_Minh')::DATE + TIME '00:00')
                 AT TIME ZONE 'Asia/Ho_Chi_Minh',
-            1, 'completed', 'Ca đã đối soát mẫu dùng cho báo cáo lương và tài chính', $6, $6
+            1, 'in_progress', 'Ca đã đối soát mẫu dùng cho báo cáo lương và tài chính', $6, $6
         )
         ON CONFLICT (id) DO NOTHING
         "#,
@@ -1091,13 +1091,11 @@ async fn seed_staffing_business(
         INSERT INTO business_shift_assignments (
             id, tenant_id, branch_id, shift_id, employee_id,
             customer_bill_rate_id, worker_pay_rate_id, rate_source, currency,
-            bill_hourly_rate_snapshot, worker_hourly_rate_snapshot, status,
-            worked_seconds, customer_amount, worker_amount, margin_amount,
-            approved_at, approved_by_account_id, created_by_account_id
+            bill_hourly_rate_snapshot, worker_hourly_rate_snapshot,
+            created_by_account_id
         ) VALUES (
             $1, $2, $3, $4, $5, $6, $7, 'configured', 'VND',
-            150000, 120000, 'approved', 21600, 900000, 720000, 180000,
-            CURRENT_TIMESTAMP, $8, $8
+            150000, 120000, $8
         )
         ON CONFLICT (id) DO NOTHING
         "#,
@@ -1161,6 +1159,39 @@ async fn seed_staffing_business(
         branch_id,
         completed_assignment_id,
         karaoke_a_id,
+        owner_account_id,
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    sqlx::query!(
+        r#"
+        UPDATE business_shift_assignments
+        SET status = 'approved',
+            worked_seconds = 21600,
+            observed_worked_seconds = 21600,
+            customer_amount = 900000,
+            worker_amount = 720000,
+            margin_amount = 180000,
+            approved_at = CURRENT_TIMESTAMP,
+            approved_by_account_id = $3
+        WHERE tenant_id = $1 AND id = $2 AND status = 'assigned'
+        "#,
+        tenant_id,
+        completed_assignment_id,
+        owner_account_id,
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(io::Error::other)?;
+    sqlx::query!(
+        r#"
+        UPDATE business_staffing_shifts
+        SET status = 'completed', updated_by_account_id = $3
+        WHERE tenant_id = $1 AND id = $2 AND status = 'in_progress'
+        "#,
+        tenant_id,
+        completed_shift_id,
         owner_account_id,
     )
     .execute(transaction.connection())

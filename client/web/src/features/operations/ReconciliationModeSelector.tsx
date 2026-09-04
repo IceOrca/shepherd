@@ -1,10 +1,15 @@
 import { ClipboardCheck } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { PLANNED_STAFFING_ENABLED } from "../../shared/lib/features";
 
 export type ReconciliationMode = "urgent" | "planned";
 
 export function ReconciliationModeSelector({ mode }: { mode: ReconciliationMode }): React.JSX.Element {
   const navigate: ReturnType<typeof useNavigate> = useNavigate();
+
+  if (!PLANNED_STAFFING_ENABLED) {
+    return <></>;
+  }
 
   return (
     <section className="panel p-4 sm:p-5">

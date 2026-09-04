@@ -15,6 +15,7 @@ import { UrgentReconciliationPage } from "../features/operations/UrgentReconcili
 import { UrgentWorkPage } from "../features/operations/UrgentWorkPage";
 import { EmployeesPage } from "../features/people/EmployeesPage";
 import { OperationsLayout } from "../layouts/OperationsLayout";
+import { PLANNED_STAFFING_ENABLED } from "../shared/lib/features";
 
 const FinancialOperationsPage = lazy(async () => {
   const module = await import("../features/finance/FinancialOperationsPage");
@@ -92,15 +93,21 @@ export function AppRouter() {
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<OperationsOverviewPage />} />
           <Route path="/operations/work" element={<UrgentWorkPage />} />
-          <Route path="/operations/my-shifts" element={<MyAssignmentsPage />} />
-          <Route path="/operations/shifts" element={<PermissionGate anyPermission={["business.shifts.read"]}><ShiftCoordinationPage /></PermissionGate>} />
+          {PLANNED_STAFFING_ENABLED ? (
+            <Route path="/operations/my-shifts" element={<MyAssignmentsPage />} />
+          ) : null}
+          {PLANNED_STAFFING_ENABLED ? (
+            <Route path="/operations/shifts" element={<PermissionGate anyPermission={["business.shifts.read"]}><ShiftCoordinationPage /></PermissionGate>} />
+          ) : null}
           <Route path="/operations/customers" element={<PermissionGate anyPermission={["business.customers.read"]}><CustomersPage /></PermissionGate>} />
           <Route path="/operations/employees" element={<PermissionGate anyPermission={["hr.employees.read"]}><EmployeesPage /></PermissionGate>} />
           <Route path="/operations/staffing-configuration" element={<PermissionGate anyPermission={["business.staffing_rates.read"]}><StaffingConfigurationPage /></PermissionGate>} />
           <Route path="/operations/finance" element={<DeferredPage><FinancialOperationsPage /></DeferredPage>} />
           <Route path="/operations/payroll-accounting" element={<PermissionGate anyPermission={["finance.operating_reports.read", "hr.payroll.read", "hr.salary_rates.read"]}><DeferredPage><PayrollAccountingPage /></DeferredPage></PermissionGate>} />
           <Route path="/operations/reconciliation" element={<PermissionGate anyPermission={["business.reconciliation.read"]}><UrgentReconciliationPage /></PermissionGate>} />
-          <Route path="/operations/reconciliation/planned" element={<PermissionGate anyPermission={["business.reconciliation.read"]}><ReconciliationPage /></PermissionGate>} />
+          {PLANNED_STAFFING_ENABLED ? (
+            <Route path="/operations/reconciliation/planned" element={<PermissionGate anyPermission={["business.reconciliation.read"]}><ReconciliationPage /></PermissionGate>} />
+          ) : null}
           <Route path="/admin/auth-users" element={<AuthUsersPage />} />
           <Route path="/admin/access-control" element={<AccessControlPage />} />
           <Route path="/admin/*" element={<Navigate to="/admin/access-control" replace />} />

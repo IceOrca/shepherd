@@ -8,9 +8,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use tracing::{error, warn, info, debug, trace};
-use crate::features::people::core::{
+use crate::people::core::{
     AttendanceCursor, AttendancePage, AttendanceSession, Employee, EmployeeCursor, EmployeePage,
-    EmployeeSensitiveProfile, HrError,
+    EmployeeSensitiveProfile, PeopleOpsErr,
 };
 use uuid::Uuid;
 
@@ -51,14 +51,14 @@ pub async fn list_employees(
     Query(query): Query<PeoplePageQuery>,
 ) -> Result<Json<EmployeePageResponse>, StatusCode> {
     require_permission(&user, "hr.employees.read")?;
-    let limit: u16 = resolve_limit(&host.list_pagination, query.limit)?;
+    let limit: u16 = resolve_limit(&host.pagination, query.limit)?;
     let cursor: Option<EmployeeCursor> = decode_cursor(query.cursor.as_deref())?;
     let page: EmployeePage = host
         .core
         .people
         .list_employees(user.tenant_id, normalize_search(query.search), i64::from(limit), cursor)
         .await
-        .map_err(|error| hr_status("list employees", &user, error))?;
+        .map_err(|err: PeopleOpsErr| hr_status("list employees", &user, err))?;
     let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
     Ok(Json(EmployeePageResponse {
         has_more: next_cursor.is_some(),
@@ -80,7 +80,7 @@ pub async fn create_employee(
         .people
         .create_employee(user.tenant_id, branch_id, payload.into(), user.account_id)
         .await
-        .map_err(|error| hr_status("create employee", &user, error))?;
+        .map_err(|err: PeopleOpsErr| hr_status("create employee", &user, err))?;
     Ok((StatusCode::CREATED, Json(employee)))
 }
 
@@ -93,7 +93,7 @@ pub async fn get_own_employee_citizen_id(
         .people
         .find_employee_sensitive_profile_by_account(user.tenant_id, user.account_id)
         .await
-        .map_err(|error| hr_status("find own employee citizen ID", &user, error))?
+        .map_err(|err: PeopleOpsErr| hr_status("find own employee citizen ID", &user, err))?
         .map(Json)
         .ok_or(StatusCode::NOT_FOUND)
 }
@@ -107,7 +107,7 @@ pub async fn get_own_employee(
         .people
         .find_employee_by_account(user.tenant_id, user.account_id)
         .await
-        .map_err(|error| hr_status("find own employee", &user, error))?
+        .map_err(|err: PeopleOpsErr| hr_status("find own employee", &user, err))?
         .map(Json)
         .ok_or(StatusCode::NOT_FOUND)
 }
@@ -123,16 +123,16 @@ pub async fn list_own_attendance_sessions(
         .people
         .find_employee_by_account(user.tenant_id, user.account_id)
         .await
-        .map_err(|error| hr_status("find employee for own attendance", &user, error))?
+        .map_err(|err: PeopleOpsErr| hr_status("find employee for own attendance", &user, err))?
         .ok_or(StatusCode::NOT_FOUND)?;
-    let limit: u16 = resolve_limit(&host.list_pagination, query.limit)?;
+    let limit: u16 = resolve_limit(&host.pagination, query.limit)?;
     let cursor: Option<AttendanceCursor> = decode_cursor(query.cursor.as_deref())?;
     let page: AttendancePage = host
         .core
         .people
         .list_attendance_sessions(user.tenant_id, employee.id, i64::from(limit), cursor)
         .await
-        .map_err(|error| hr_status("list own attendance sessions", &user, error))?;
+        .map_err(|err: PeopleOpsErr| hr_status("list own attendance sessions", &user, err))?;
     let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
     Ok(Json(AttendancePageResponse {
         has_more: next_cursor.is_some(),
@@ -153,14 +153,14 @@ pub async fn check_in(
         .people
         .find_employee_by_account(user.tenant_id, user.account_id)
         .await
-        .map_err(|error| hr_status("find employee for check in", &user, error))?
+        .map_err(|err: PeopleOpsErr| hr_status("find employee for check in", &user, err))?
         .ok_or(StatusCode::NOT_FOUND)?;
     let session: AttendanceSession = host
         .core
         .people
         .check_in(user.tenant_id, employee.id, user.account_id, request.branch_id)
         .await
-        .map_err(|error| hr_status("check in", &user, error))?;
+        .map_err(|err: PeopleOpsErr| hr_status("check in", &user, err))?;
     Ok((StatusCode::CREATED, Json(session)))
 }
 
@@ -174,14 +174,14 @@ pub async fn check_out(
         .people
         .find_employee_by_account(user.tenant_id, user.account_id)
         .await
-        .map_err(|error| hr_status("find employee for check out", &user, error))?
+        .map_err(|err: PeopleOpsErr| hr_status("find employee for check out", &user, err))?
         .ok_or(StatusCode::NOT_FOUND)?;
     host.core
         .people
         .check_out(user.tenant_id, employee.id, user.account_id)
         .await
         .map(Json)
-        .map_err(|error| hr_status("check out", &user, error))
+        .map_err(|err: PeopleOpsErr| hr_status("check out", &user, err))
 }
 
 pub async fn get_employee(
@@ -194,7 +194,7 @@ pub async fn get_employee(
         .people
         .find_employee(user.tenant_id, employee_id)
         .await
-        .map_err(|error| hr_status("find employee", &user, error))?
+        .map_err(|err: PeopleOpsErr| hr_status("find employee", &user, err))?
         .map(Json)
         .ok_or(StatusCode::NOT_FOUND)
 }
@@ -206,14 +206,14 @@ pub async fn list_employee_attendance_sessions(
     Query(query): Query<PeoplePageQuery>,
 ) -> Result<Json<AttendancePageResponse>, StatusCode> {
     require_permission(&user, "hr.attendance.read")?;
-    let limit: u16 = resolve_limit(&host.list_pagination, query.limit)?;
+    let limit: u16 = resolve_limit(&host.pagination, query.limit)?;
     let cursor: Option<AttendanceCursor> = decode_cursor(query.cursor.as_deref())?;
     let page: AttendancePage = host
         .core
         .people
         .list_attendance_sessions(user.tenant_id, employee_id, i64::from(limit), cursor)
         .await
-        .map_err(|error| hr_status("list employee attendance sessions", &user, error))?;
+        .map_err(|err: PeopleOpsErr| hr_status("list employee attendance sessions", &user, err))?;
     let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
     Ok(Json(AttendancePageResponse {
         has_more: next_cursor.is_some(),
@@ -235,7 +235,7 @@ pub async fn update_employee(
         .update_employee(user.tenant_id, employee_id, payload.into(), user.account_id)
         .await
         .map(Json)
-        .map_err(|error| hr_status("update employee", &user, error))
+        .map_err(|err: PeopleOpsErr| hr_status("update employee", &user, err))
 }
 
 pub async fn get_employee_citizen_id(
@@ -248,7 +248,7 @@ pub async fn get_employee_citizen_id(
         .people
         .find_employee_sensitive_profile(user.tenant_id, employee_id)
         .await
-        .map_err(|error| hr_status("find employee citizen ID", &user, error))?
+        .map_err(|err: PeopleOpsErr| hr_status("find employee citizen ID", &user, err))?
         .map(Json)
         .ok_or(StatusCode::NOT_FOUND)
 }
@@ -265,7 +265,7 @@ pub async fn update_employee_citizen_id(
         .update_employee_citizen_id(user.tenant_id, employee_id, payload.into(), user.account_id)
         .await
         .map(Json)
-        .map_err(|error| hr_status("update employee citizen ID", &user, error))
+        .map_err(|err: PeopleOpsErr| hr_status("update employee citizen ID", &user, err))
 }
 
 pub(crate) fn require_permission(user: &AuthedUser, permission: &str) -> Result<(), StatusCode> {
@@ -280,18 +280,18 @@ pub(crate) fn require_permission(user: &AuthedUser, permission: &str) -> Result<
     }
 }
 
-pub(crate) fn hr_status(operation: &str, user: &AuthedUser, error: HrError) -> StatusCode {
-    let status = match error {
-        HrError::NotFound => StatusCode::NOT_FOUND,
-        HrError::Conflict => StatusCode::CONFLICT,
-        HrError::InvalidInput(reason) => {
+pub(crate) fn hr_status(operation: &str, user: &AuthedUser, err: PeopleOpsErr) -> StatusCode {
+    let status: StatusCode = match err {
+        PeopleOpsErr::NotFound => StatusCode::NOT_FOUND,
+        PeopleOpsErr::Conflict => StatusCode::CONFLICT,
+        PeopleOpsErr::InvalidInput(reason) => {
             info!(
                 "HR input rejected: operation={} tenant_id={} account_id={} reason={}",
                 operation, user.tenant_id, user.account_id, reason
             );
             StatusCode::BAD_REQUEST
         }
-        HrError::BackendUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+        PeopleOpsErr::BackendUnavailable => StatusCode::SERVICE_UNAVAILABLE,
     };
     if status == StatusCode::SERVICE_UNAVAILABLE {
         error!(

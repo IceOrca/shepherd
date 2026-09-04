@@ -5,6 +5,8 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use uuid::Uuid;
+use tracing::{debug, error, info, trace, warn};
+use super::database::PeopleRepo;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -157,88 +159,19 @@ pub struct EmployeeCitizenIdInput {
 }
 
 #[derive(Debug)]
-pub enum HrError {
+pub enum PeopleOpsErr {
     NotFound,
     Conflict,
     InvalidInput(&'static str),
     BackendUnavailable,
 }
 
-#[async_trait]
-pub trait PeopleRepo {
-    async fn list_employees(
-        &self,
-        tenant_id: Uuid,
-        search: Option<&str>,
-        limit: i64,
-        cursor: Option<&EmployeeCursor>,
-    ) -> Result<EmployeePage, HrError>;
-    async fn find_employee(&self, tenant_id: Uuid, employee_id: Uuid) -> Result<Option<Employee>, HrError>;
-    async fn find_employee_by_account(&self, tenant_id: Uuid, account_id: Uuid) -> Result<Option<Employee>, HrError>;
-    async fn create_employee(
-        &self,
-        tenant_id: Uuid,
-        branch_id: Uuid,
-        employee_id: Uuid,
-        input: &EmployeeInput,
-        audit_account_id: Uuid,
-    ) -> Result<Employee, HrError>;
-    async fn update_employee(
-        &self,
-        tenant_id: Uuid,
-        employee_id: Uuid,
-        input: &EmployeeInput,
-        audit_account_id: Uuid,
-    ) -> Result<Employee, HrError>;
-    async fn find_employee_sensitive_profile(
-        &self,
-        tenant_id: Uuid,
-        employee_id: Uuid,
-    ) -> Result<Option<EmployeeSensitiveProfile>, HrError>;
-    async fn find_employee_sensitive_profile_by_account(
-        &self,
-        tenant_id: Uuid,
-        account_id: Uuid,
-    ) -> Result<Option<EmployeeSensitiveProfile>, HrError>;
-    async fn update_employee_citizen_id(
-        &self,
-        tenant_id: Uuid,
-        employee_id: Uuid,
-        input: &EmployeeCitizenIdInput,
-        audit_account_id: Uuid,
-    ) -> Result<EmployeeSensitiveProfile, HrError>;
-
-    async fn list_attendance_sessions(
-        &self,
-        tenant_id: Uuid,
-        employee_id: Uuid,
-        limit: i64,
-        cursor: Option<&AttendanceCursor>,
-    ) -> Result<AttendancePage, HrError>;
-    async fn check_in(
-        &self,
-        tenant_id: Uuid,
-        attendance_session_id: Uuid,
-        employee_id: Uuid,
-        account_id: Uuid,
-        branch_id: Uuid,
-    ) -> Result<AttendanceSession, HrError>;
-    async fn check_out(
-        &self,
-        tenant_id: Uuid,
-        employee_id: Uuid,
-        account_id: Uuid,
-    ) -> Result<AttendanceSession, HrError>;
-}
-
-pub type DynPeopleRepo = Arc<dyn PeopleRepo + Send + Sync>;
-
 pub struct PeopleService {
-    repo: DynPeopleRepo,
+    repo: Arc<PeopleRepo>,
 }
 
 impl PeopleService {
-    pub fn new_arc(repo: DynPeopleRepo) -> Arc<Self> {
+    pub fn new_arc(repo: Arc<PeopleRepo>) -> Arc<Self> {
         Arc::new(Self { repo })
     }
 
@@ -248,16 +181,16 @@ impl PeopleService {
         search: Option<String>,
         limit: i64,
         cursor: Option<EmployeeCursor>,
-    ) -> Result<EmployeePage, HrError> {
+    ) -> Result<EmployeePage, PeopleOpsErr> {
         if limit <= 0 {
-            return Err(HrError::InvalidInput("employee page size must be positive"));
+            return Err(PeopleOpsErr::InvalidInput("employee page size must be positive"));
         }
         self.repo
             .list_employees(tenant_id, search.as_deref(), limit, cursor.as_ref())
             .await
     }
 
-    pub async fn find_employee(&self, tenant_id: Uuid, employee_id: Uuid) -> Result<Option<Employee>, HrError> {
+    pub async fn find_employee(&self, tenant_id: Uuid, employee_id: Uuid) -> Result<Option<Employee>, PeopleOpsErr> {
         self.repo.find_employee(tenant_id, employee_id).await
     }
 
@@ -265,7 +198,7 @@ impl PeopleService {
         &self,
         tenant_id: Uuid,
         account_id: Uuid,
-    ) -> Result<Option<Employee>, HrError> {
+    ) -> Result<Option<Employee>, PeopleOpsErr> {
         self.repo.find_employee_by_account(tenant_id, account_id).await
     }
 
@@ -275,7 +208,7 @@ impl PeopleService {
         branch_id: Uuid,
         input: EmployeeInput,
         audit_account_id: Uuid,
-    ) -> Result<Employee, HrError> {
+    ) -> Result<Employee, PeopleOpsErr> {
         validate_employee(&input)?;
         self.repo
             .create_employee(tenant_id, branch_id, Uuid::new_v4(), &input, audit_account_id)
@@ -288,10 +221,10 @@ impl PeopleService {
         employee_id: Uuid,
         input: EmployeeInput,
         audit_account_id: Uuid,
-    ) -> Result<Employee, HrError> {
+    ) -> Result<Employee, PeopleOpsErr> {
         validate_employee(&input)?;
         if input.expected_version.is_none_or(|version: i64| version < 1) {
-            return Err(HrError::InvalidInput(
+            return Err(PeopleOpsErr::InvalidInput(
                 "employee update requires a positive expected version",
             ));
         }
@@ -304,7 +237,7 @@ impl PeopleService {
         &self,
         tenant_id: Uuid,
         employee_id: Uuid,
-    ) -> Result<Option<EmployeeSensitiveProfile>, HrError> {
+    ) -> Result<Option<EmployeeSensitiveProfile>, PeopleOpsErr> {
         self.repo.find_employee_sensitive_profile(tenant_id, employee_id).await
     }
 
@@ -312,7 +245,7 @@ impl PeopleService {
         &self,
         tenant_id: Uuid,
         account_id: Uuid,
-    ) -> Result<Option<EmployeeSensitiveProfile>, HrError> {
+    ) -> Result<Option<EmployeeSensitiveProfile>, PeopleOpsErr> {
         self.repo
             .find_employee_sensitive_profile_by_account(tenant_id, account_id)
             .await
@@ -324,7 +257,7 @@ impl PeopleService {
         employee_id: Uuid,
         input: EmployeeCitizenIdInput,
         audit_account_id: Uuid,
-    ) -> Result<EmployeeSensitiveProfile, HrError> {
+    ) -> Result<EmployeeSensitiveProfile, PeopleOpsErr> {
         validate_citizen_id_input(&input)?;
         self.repo
             .update_employee_citizen_id(tenant_id, employee_id, &input, audit_account_id)
@@ -337,9 +270,9 @@ impl PeopleService {
         employee_id: Uuid,
         limit: i64,
         cursor: Option<AttendanceCursor>,
-    ) -> Result<AttendancePage, HrError> {
+    ) -> Result<AttendancePage, PeopleOpsErr> {
         if limit <= 0 {
-            return Err(HrError::InvalidInput("attendance page size must be positive"));
+            return Err(PeopleOpsErr::InvalidInput("attendance page size must be positive"));
         }
         self.repo
             .list_attendance_sessions(tenant_id, employee_id, limit, cursor.as_ref())
@@ -352,7 +285,7 @@ impl PeopleService {
         employee_id: Uuid,
         account_id: Uuid,
         branch_id: Uuid,
-    ) -> Result<AttendanceSession, HrError> {
+    ) -> Result<AttendanceSession, PeopleOpsErr> {
         self.repo
             .check_in(tenant_id, Uuid::new_v4(), employee_id, account_id, branch_id)
             .await
@@ -363,12 +296,12 @@ impl PeopleService {
         tenant_id: Uuid,
         employee_id: Uuid,
         account_id: Uuid,
-    ) -> Result<AttendanceSession, HrError> {
+    ) -> Result<AttendanceSession, PeopleOpsErr> {
         self.repo.check_out(tenant_id, employee_id, account_id).await
     }
 }
 
-fn validate_employee(input: &EmployeeInput) -> Result<(), HrError> {
+fn validate_employee(input: &EmployeeInput) -> Result<(), PeopleOpsErr> {
     validate_code_and_name(&input.employee_code, &input.display_name)?;
     match (
         &input.legal_first_name,
@@ -381,7 +314,7 @@ fn validate_employee(input: &EmployeeInput) -> Result<(), HrError> {
                 && valid_person_name(last_name)
                 && middle_name.as_ref().is_none_or(|name: &String| valid_person_name(name)) => {}
         _ => {
-            return Err(HrError::InvalidInput(
+            return Err(PeopleOpsErr::InvalidInput(
                 "legal first and last names must be supplied together",
             ));
         }
@@ -392,7 +325,7 @@ fn validate_employee(input: &EmployeeInput) -> Result<(), HrError> {
             || !phone.bytes().skip(1).all(|byte: u8| byte.is_ascii_digit())
             || phone.as_bytes().get(1) == Some(&b'0')
     }) {
-        return Err(HrError::InvalidInput("personal phone must use E.164 format"));
+        return Err(PeopleOpsErr::InvalidInput("personal phone must use E.164 format"));
     }
     match input.status {
         EmployeeStatus::Terminated
@@ -400,20 +333,20 @@ fn validate_employee(input: &EmployeeInput) -> Result<(), HrError> {
                 .termination_date
                 .is_none_or(|termination_date| termination_date < input.hire_date) =>
         {
-            Err(HrError::InvalidInput(
+            Err(PeopleOpsErr::InvalidInput(
                 "terminated employees require a termination date on or after the hire date",
             ))
         }
         EmployeeStatus::Active | EmployeeStatus::OnLeave if input.termination_date.is_some() => Err(
-            HrError::InvalidInput("only terminated employees may have a termination date"),
+            PeopleOpsErr::InvalidInput("only terminated employees may have a termination date"),
         ),
         _ => Ok(()),
     }
 }
 
-fn validate_citizen_id_input(input: &EmployeeCitizenIdInput) -> Result<(), HrError> {
+fn validate_citizen_id_input(input: &EmployeeCitizenIdInput) -> Result<(), PeopleOpsErr> {
     if input.expected_version < 1 {
-        return Err(HrError::InvalidInput(
+        return Err(PeopleOpsErr::InvalidInput(
             "citizen ID update requires a positive expected version",
         ));
     }
@@ -426,7 +359,7 @@ fn validate_citizen_id_input(input: &EmployeeCitizenIdInput) -> Result<(), HrErr
         {
             Ok(())
         }
-        _ => Err(HrError::InvalidInput(
+        _ => Err(PeopleOpsErr::InvalidInput(
             "citizen ID and two-letter country code must be supplied or cleared together",
         )),
     }
@@ -447,7 +380,7 @@ fn valid_person_name(value: &str) -> bool {
     (1..=100).contains(&value.chars().count()) && value == value.trim()
 }
 
-pub(crate) fn validate_code_and_name(code: &str, name: &str) -> Result<(), HrError> {
+pub(crate) fn validate_code_and_name(code: &str, name: &str) -> Result<(), PeopleOpsErr> {
     let valid_code: bool = (2..=63).contains(&code.len())
         && code == code.trim()
         && code
@@ -462,10 +395,10 @@ pub(crate) fn validate_code_and_name(code: &str, name: &str) -> Result<(), HrErr
             .last()
             .is_some_and(|byte: &u8| byte.is_ascii_lowercase() || byte.is_ascii_digit());
     if !valid_code {
-        return Err(HrError::InvalidInput("code format is invalid"));
+        return Err(PeopleOpsErr::InvalidInput("code format is invalid"));
     }
     if !(1..=200).contains(&name.len()) || name != name.trim() {
-        return Err(HrError::InvalidInput("name format is invalid"));
+        return Err(PeopleOpsErr::InvalidInput("name format is invalid"));
     }
     Ok(())
 }
@@ -475,7 +408,7 @@ mod tests {
     use chrono::NaiveDate;
 
     use super::{
-        EmployeeCitizenIdInput, EmployeeInput, EmployeeStatus, Gender, HrError, validate_citizen_id_input,
+        EmployeeCitizenIdInput, EmployeeInput, EmployeeStatus, Gender, PeopleOpsErr, validate_citizen_id_input,
         validate_employee,
     };
 
@@ -501,7 +434,7 @@ mod tests {
         let mut input: EmployeeInput = active_employee();
         input.status = EmployeeStatus::Terminated;
 
-        assert!(matches!(validate_employee(&input), Err(HrError::InvalidInput(_))));
+        assert!(matches!(validate_employee(&input), Err(PeopleOpsErr::InvalidInput(_))));
     }
 
     #[test]
@@ -510,7 +443,7 @@ mod tests {
         let mut input: EmployeeInput = active_employee();
         input.termination_date = Some(date);
 
-        assert!(matches!(validate_employee(&input), Err(HrError::InvalidInput(_))));
+        assert!(matches!(validate_employee(&input), Err(PeopleOpsErr::InvalidInput(_))));
     }
 
     #[test]
@@ -518,7 +451,7 @@ mod tests {
         let mut input: EmployeeInput = active_employee();
         assert!(validate_employee(&input).is_ok());
         input.legal_last_name = None;
-        assert!(matches!(validate_employee(&input), Err(HrError::InvalidInput(_))));
+        assert!(matches!(validate_employee(&input), Err(PeopleOpsErr::InvalidInput(_))));
     }
 
     #[test]
@@ -535,7 +468,7 @@ mod tests {
         };
         assert!(matches!(
             validate_citizen_id_input(&invalid),
-            Err(HrError::InvalidInput(_))
+            Err(PeopleOpsErr::InvalidInput(_))
         ));
     }
 }

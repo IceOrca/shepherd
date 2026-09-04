@@ -16,7 +16,7 @@ pub struct RuntimeParts {
 
 pub async fn build() -> RuntimeParts {
     let auth_admin: Arc<supabase_auth::SupabaseAuthAdmin> = supabase_auth::SupabaseAuthAdmin::from_env()
-        .unwrap_or_else(|error: supabase_auth::ConfigError| {
+        .unwrap_or_else(|error: supabase_auth::ConfigErr| {
             panic!("failed to initialize Supabase Auth identity administration: {error}")
         });
     let infra: Arc<HostInfa> = HostInfa::new_arc(auth_admin).await;

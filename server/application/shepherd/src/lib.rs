@@ -2,11 +2,11 @@
 
 pub mod auth;
 mod auth_provisioning;
+pub mod branch;
 pub mod business;
-pub mod features;
-pub mod hr;
 pub mod notification;
 pub mod pagination;
+pub mod people;
 pub mod ratelimit;
 pub mod typescript;
 use tracing::{error, warn, info, debug, trace};
@@ -20,31 +20,31 @@ use infra_auth::AuthService;
 
 use business::staffing::{
     core::StaffingService,
-    database::StaffingDb,
-    urgent_work::{core::UrgentWorkService, database::UrgentWorkDb},
-    work_session::{core::StaffingWorkService, database::StaffingWorkDb},
+    database::StaffingRepo,
+    planned_work::core::PlannedStaffingService,
+    planned_work::database::PlannedStaffingRepo,
+    planned_work::work_session::{core::StaffingWorkService, database::StaffingWorkRepo},
+    urgent_work::{core::UrgentStaffingService, database::UrgentStaffingRepo},
 };
 use business::finance::{
     core::FinanceService,
-    database::FinanceDb,
-    reporting::{core::FinancialReportingService, database::FinancialReportingDb},
+    database::FinanceRepo,
+    reporting::{core::FinancialReportService, database::FinancialReportRepo},
 };
-use features::{
-    branch::{core::BranchService, database::BranchDb},
-    people::{core::PeopleService, database::PeopleDb},
-};
+use branch::{core::BranchService, database::BranchRepo};
+use people::{core::PeopleService, database::PeopleRepo};
 
 pub use infra_host::ratelimiting;
 
 #[derive(Clone, Debug)]
-pub struct ListPaginationConfig {
-    pub default_limit: u16,
-    pub minimum_limit: u16,
-    pub maximum_limit: u16,
+pub struct ListPaginationCfg {
+    pub def_limit: u16,
+    pub min_limit: u16,
+    pub max_limit: u16,
 }
 
 #[derive(Clone, Debug)]
-pub struct FinanceExportConfig {
+pub struct FinanceExportCfg {
     pub maximum_branches: usize,
     pub maximum_rows: usize,
     pub maximum_range_days: i64,
@@ -52,7 +52,7 @@ pub struct FinanceExportConfig {
     pub timeout_seconds: u64,
 }
 
-impl FinanceExportConfig {
+impl FinanceExportCfg {
     fn from_env() -> Result<Self, String> {
         Ok(Self {
             maximum_branches: usize::from(required_positive_u16("FINANCE_EXPORT_MAX_BRANCHES")?),
@@ -64,20 +64,20 @@ impl FinanceExportConfig {
     }
 }
 
-impl ListPaginationConfig {
+impl ListPaginationCfg {
     fn from_env() -> Result<Self, String> {
-        let default_limit: u16 = required_positive_u16("API_LIST_PAGE_SIZE_DEFAULT")?;
-        let minimum_limit: u16 = required_positive_u16("API_LIST_PAGE_SIZE_MIN")?;
-        let maximum_limit: u16 = required_positive_u16("API_LIST_PAGE_SIZE_MAX")?;
-        if minimum_limit > default_limit || default_limit > maximum_limit {
+        let def_limit: u16 = required_positive_u16("API_LIST_PAGE_SIZE_DEFAULT")?;
+        let min_limit: u16 = required_positive_u16("API_LIST_PAGE_SIZE_MIN")?;
+        let max_limit: u16 = required_positive_u16("API_LIST_PAGE_SIZE_MAX")?;
+        if min_limit > def_limit || def_limit > max_limit {
             return Err(
                 "API_LIST_PAGE_SIZE_MIN <= API_LIST_PAGE_SIZE_DEFAULT <= API_LIST_PAGE_SIZE_MAX is required".to_owned(),
             );
         }
         Ok(Self {
-            default_limit,
-            minimum_limit,
-            maximum_limit,
+            def_limit,
+            min_limit,
+            max_limit,
         })
     }
 }
@@ -112,31 +112,36 @@ fn required_positive_usize(name: &str) -> Result<usize, String> {
 pub struct ApplicationCore {
     pub branch: Arc<BranchService>,
     pub people: Arc<PeopleService>,
-    pub staffing: Arc<StaffingService>,
     pub finance: Arc<FinanceService>,
-    pub financial_reporting: Arc<FinancialReportingService>,
-    pub urgent_work: Arc<UrgentWorkService>,
+    pub financial_reporting: Arc<FinancialReportService>,
+    pub staffing: Arc<StaffingService>,
+    pub planned_staffing: Arc<PlannedStaffingService>,
+    pub urgent_staffing: Arc<UrgentStaffingService>,
     pub staffing_work: Arc<StaffingWorkService>,
 }
 
 impl ApplicationCore {
     pub fn new_arc(db: Arc<DatabaseAdapter>) -> Arc<Self> {
-        let branch: Arc<BranchService> = BranchService::new_arc(BranchDb::new_arc(Arc::clone(&db)));
-        let people: Arc<PeopleService> = PeopleService::new_arc(PeopleDb::new_arc(Arc::clone(&db)));
-        let staffing: Arc<StaffingService> = StaffingService::new_arc(StaffingDb::new_arc(Arc::clone(&db)));
-        let finance: Arc<FinanceService> = FinanceService::new_arc(FinanceDb::new_arc(Arc::clone(&db)));
-        let financial_reporting: Arc<FinancialReportingService> =
-            FinancialReportingService::new_arc(FinancialReportingDb::new_arc(Arc::clone(&db)));
-        let urgent_work: Arc<UrgentWorkService> = UrgentWorkService::new_arc(UrgentWorkDb::new_arc(Arc::clone(&db)));
-        let staffing_work: Arc<StaffingWorkService> = StaffingWorkService::new_arc(StaffingWorkDb::new_arc(db));
+        let branch: Arc<BranchService> = BranchService::new_arc(BranchRepo::new_arc(Arc::clone(&db)));
+        let people: Arc<PeopleService> = PeopleService::new_arc(PeopleRepo::new_arc(Arc::clone(&db)));
+        let staffing: Arc<StaffingService> = StaffingService::new_arc(StaffingRepo::new_arc(Arc::clone(&db)));
+        let planned_staffing: Arc<PlannedStaffingService> =
+            PlannedStaffingService::new_arc(PlannedStaffingRepo::new_arc(Arc::clone(&db)));
+        let finance: Arc<FinanceService> = FinanceService::new_arc(FinanceRepo::new_arc(Arc::clone(&db)));
+        let financial_reporting: Arc<FinancialReportService> =
+            FinancialReportService::new_arc(FinancialReportRepo::new_arc(Arc::clone(&db)));
+        let urgent_staffing: Arc<UrgentStaffingService> =
+            UrgentStaffingService::new_arc(UrgentStaffingRepo::new_arc(Arc::clone(&db)));
+        let staffing_work: Arc<StaffingWorkService> = StaffingWorkService::new_arc(StaffingWorkRepo::new_arc(db));
 
         Arc::new(Self {
             branch,
             people,
-            staffing,
             finance,
             financial_reporting,
-            urgent_work,
+            staffing,
+            planned_staffing,
+            urgent_staffing,
             staffing_work,
         })
     }
@@ -148,15 +153,15 @@ pub struct AppContext {
     pub db: Arc<DatabaseAdapter>,
     pub core: Arc<ApplicationCore>,
     pub notifications: Arc<notification::NotifyDispatcher>,
-    pub list_pagination: ListPaginationConfig,
-    pub finance_export: FinanceExportConfig,
+    pub pagination: ListPaginationCfg,
+    pub finance_export: FinanceExportCfg,
 }
 
 impl AppContext {
     pub fn new_arc(auth: Arc<AuthService>, db: Arc<DatabaseAdapter>) -> Arc<Self> {
-        let list_pagination: ListPaginationConfig = ListPaginationConfig::from_env()
+        let pagination: ListPaginationCfg = ListPaginationCfg::from_env()
             .unwrap_or_else(|error: String| panic!("invalid API list pagination configuration: {error}"));
-        let finance_export: FinanceExportConfig = FinanceExportConfig::from_env()
+        let finance_export: FinanceExportCfg = FinanceExportCfg::from_env()
             .unwrap_or_else(|error: String| panic!("invalid finance export configuration: {error}"));
         let notifications: Arc<notification::NotifyDispatcher> =
             notification::NotifyDispatcher::new_arc(Arc::clone(&db));
@@ -166,7 +171,7 @@ impl AppContext {
             db,
             core,
             notifications,
-            list_pagination,
+            pagination,
             finance_export,
         })
     }
@@ -189,65 +194,65 @@ pub fn routes(ctx: Arc<AppContext>) -> Router {
     let identity_routes: Router =
         authenticated_identity_routes(Arc::clone(&ctx), auth::identity_routes(Arc::clone(&ctx.auth)));
 
-    let auth_routes: Router = protected_app_layer(
+    let auth_routes: Router = ratelimit_route_layer(
         Arc::clone(&ctx),
         auth::routes(
             Arc::clone(&ctx.auth),
             infra_auth::ext_service::ListPaginationPolicy::try_new(
-                ctx.list_pagination.default_limit,
-                ctx.list_pagination.minimum_limit,
-                ctx.list_pagination.maximum_limit,
+                ctx.pagination.def_limit,
+                ctx.pagination.min_limit,
+                ctx.pagination.max_limit,
             )
             .unwrap_or_else(|error: String| panic!("invalid Auth list pagination configuration: {error}")),
         ),
         ratelimit::AppRouteGroup::Administration,
     );
-    let hr_routes: Router = protected_app_layer(
+    let people_routes: Router = ratelimit_route_layer(
         Arc::clone(&ctx),
-        hr::routes().with_state(Arc::clone(&ctx)),
-        ratelimit::AppRouteGroup::HumanResources,
+        people::host::routes().with_state(Arc::clone(&ctx)),
+        ratelimit::AppRouteGroup::PeopleOperations,
     );
-    let business_routes: Router = protected_app_layer(
+    let business_routes: Router = ratelimit_route_layer(
         Arc::clone(&ctx),
         business::routes().with_state(Arc::clone(&ctx)),
         ratelimit::AppRouteGroup::Operations,
     );
-    let business_export_routes: Router = protected_app_layer(
+    let business_export_routes: Router = ratelimit_route_layer(
         Arc::clone(&ctx),
         business::export_routes().with_state(Arc::clone(&ctx)),
         ratelimit::AppRouteGroup::ReportExport,
     );
 
-    Router::new().nest(
-        "/api",
+    let protected_routes: Router = auth::protected_layer(
+        Arc::clone(&ctx.auth),
         identity_routes.merge(merge_api_domains(
             auth_routes,
-            hr_routes,
+            people_routes,
             business_routes.merge(business_export_routes),
         )),
-    )
+    );
+
+    Router::new().nest("/api", protected_routes)
 }
 
 fn authenticated_identity_routes(ctx: Arc<AppContext>, routes: Router) -> Router {
     routes
-        .layer(ratelimiting::RateLimiter::protected_route_layer(ratelimit::policy(
+        .layer(ratelimiting::protected_route_layer(ratelimit::policy(
             ratelimit::AppRouteGroup::Identity,
         )))
         .route_layer(from_fn_with_state(Arc::clone(&ctx.auth), auth::require_authenticated))
 }
 
-fn merge_api_domains(auth_routes: Router, hr_routes: Router, business_routes: Router) -> Router {
+fn merge_api_domains(auth_routes: Router, people_routes: Router, business_routes: Router) -> Router {
     Router::new()
         .merge(auth_routes)
-        .merge(Router::new().nest("/hr", hr_routes))
+        .merge(Router::new().nest("/hr", people_routes))
         .merge(Router::new().nest("/business", business_routes))
 }
 
-fn protected_app_layer(ctx: Arc<AppContext>, routes: Router, rate_limit_group: ratelimit::AppRouteGroup) -> Router {
-    let router: Router = routes.layer(ratelimiting::RateLimiter::protected_route_layer(ratelimit::policy(
-        rate_limit_group,
-    )));
-    auth::protected_layer(Arc::clone(&ctx.auth), router)
+fn ratelimit_route_layer(ctx: Arc<AppContext>, routes: Router, ratelimit_grp: ratelimit::AppRouteGroup) -> Router {
+    let router: Router = routes.layer(ratelimiting::protected_route_layer(ratelimit::policy(ratelimit_grp)));
+    router
 }
 
 #[cfg(test)]
@@ -269,9 +274,9 @@ mod route_tests {
     #[tokio::test]
     async fn mounts_hr_and_business_as_sibling_api_domains() -> Result<(), Box<dyn std::error::Error>> {
         let auth_routes = Router::new().route("/me", get(endpoint));
-        let hr_routes = Router::new().route("/employees", get(endpoint));
+        let people_routes = Router::new().route("/employees", get(endpoint));
         let business_routes = Router::new().route("/customers", get(endpoint));
-        let app = Router::new().nest("/api", merge_api_domains(auth_routes, hr_routes, business_routes));
+        let app = Router::new().nest("/api", merge_api_domains(auth_routes, people_routes, business_routes));
 
         for path in ["/api/me", "/api/hr/employees", "/api/business/customers"] {
             let response = app

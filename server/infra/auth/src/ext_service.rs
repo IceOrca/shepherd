@@ -28,29 +28,29 @@ pub use service::OidcJwksVerifier;
 
 #[derive(Clone, Debug)]
 pub struct ListPaginationPolicy {
-    pub default_limit: u16,
-    pub minimum_limit: u16,
-    pub maximum_limit: u16,
+    pub def_limit: u16,
+    pub min_limit: u16,
+    pub max_limit: u16,
 }
 
 impl ListPaginationPolicy {
-    pub fn try_new(default_limit: u16, minimum_limit: u16, maximum_limit: u16) -> Result<Self, String> {
-        if minimum_limit == 0 || minimum_limit > default_limit || default_limit > maximum_limit {
+    pub fn try_new(def_limit: u16, min_limit: u16, max_limit: u16) -> Result<Self, String> {
+        if min_limit == 0 || min_limit > def_limit || def_limit > max_limit {
             return Err("list pagination requires 0 < minimum <= default <= maximum".to_owned());
         }
         Ok(Self {
-            default_limit,
-            minimum_limit,
-            maximum_limit,
+            def_limit,
+            min_limit,
+            max_limit,
         })
     }
 
     pub fn resolve(&self, requested: Option<u16>) -> Result<u16, String> {
-        let limit: u16 = requested.unwrap_or(self.default_limit);
-        if limit < self.minimum_limit || limit > self.maximum_limit {
+        let limit: u16 = requested.unwrap_or(self.def_limit);
+        if limit < self.min_limit || limit > self.max_limit {
             return Err(format!(
                 "limit must be between {} and {}",
-                self.minimum_limit, self.maximum_limit
+                self.min_limit, self.max_limit
             ));
         }
         Ok(limit)

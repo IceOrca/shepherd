@@ -16,6 +16,7 @@ import type {
   UrgentWorkCustomer,
 } from "../../api/generated/contracts";
 import { friendlyApiError } from "../../shared/api/client";
+import { PLANNED_STAFFING_ENABLED } from "../../shared/lib/features";
 import { useAuth } from "../auth/AuthProvider";
 import { listCustomersForBranch } from "./api";
 import {
@@ -79,7 +80,7 @@ export function OperationsScopeProvider({
   const permissions: PermissionCode[] = auth.profile?.permissions ?? [];
   const canReadResults: boolean =
     permissions.includes("business.reconciliation.read") ||
-    permissions.includes("business.shifts.read");
+    (PLANNED_STAFFING_ENABLED && permissions.includes("business.shifts.read"));
   const canFilterResults: boolean =
     role !== undefined && COORDINATION_ROLES.has(role) && canReadResults;
   const [selectedResultBranchId, setSelectedResultBranchId] = useState<string | null>(null);

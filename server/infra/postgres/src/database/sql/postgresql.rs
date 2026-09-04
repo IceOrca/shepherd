@@ -4,12 +4,11 @@ use sqlx::{
     ConnectOptions, PgConnection, PgPool, Postgres, Transaction,
     postgres::{PgConnectOptions, PgPoolOptions, PgQueryResult},
 };
-use thiserror::Error;
 use tracing::{error, warn, info, debug, trace};
 use uuid::Uuid;
 use tracing::log::LevelFilter;
 
-#[derive(Debug, Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum TenantDbErr {
     #[error("tenant registration conflicts with existing tenant: {0}")]
     RegistrationConflict(Uuid),

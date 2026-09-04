@@ -4,7 +4,7 @@ use axum::{
     Json, Router,
     body::Body,
     extract::Request,
-    http::{HeaderMap, StatusCode, header::RETRY_AFTER},
+    http::{HeaderMap, HeaderValue, StatusCode, header::RETRY_AFTER},
     response::{IntoResponse, Response},
 };
 use governor::middleware::StateInformationMiddleware;
@@ -131,108 +131,103 @@ impl RateLimiter {
     pub fn new_arc() -> Arc<Self> {
         Arc::new(Self)
     }
-
-    fn response_error_handler(error: GovernorError) -> Response {
-        match error {
-            GovernorError::TooManyRequests { wait_time, headers } => {
-                let retry_after: u64 = headers
-                    .as_ref()
-                    .and_then(|values: &HeaderMap| values.get(RETRY_AFTER))
-                    .and_then(|value| value.to_str().ok())
-                    .and_then(|value: &str| value.parse::<u64>().ok())
-                    .unwrap_or_else(|| {
-                        debug!(wait_time, "Rate limiter did not provide a Retry-After header");
-                        wait_time
-                    });
-                (
-                    StatusCode::TOO_MANY_REQUESTS,
-                    Json(serde_json::json!({
-                        "error": "Too Many Requests",
-                        "retry_after": retry_after
-                    })),
-                )
-                    .into_response()
-            }
-            GovernorError::UnableToExtractKey => {
-                error!("Rate-limit key extraction failed");
-                StatusCode::INTERNAL_SERVER_ERROR.into_response()
-            }
-            _ => {
-                error!("Unexpected rate-limit middleware failure");
-                (StatusCode::INTERNAL_SERVER_ERROR, "Rate limit error").into_response()
-            }
+}
+fn response_error_handler(error: GovernorError) -> Response {
+    match error {
+        GovernorError::TooManyRequests { wait_time, headers } => {
+            let retry_after: u64 = headers
+                .as_ref()
+                .and_then(|values: &HeaderMap| values.get(RETRY_AFTER))
+                .and_then(|value: &HeaderValue| value.to_str().ok())
+                .and_then(|value: &str| value.parse::<u64>().ok())
+                .unwrap_or_else(|| {
+                    debug!(wait_time, "Rate limiter did not provide a Retry-After header");
+                    wait_time
+                });
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(serde_json::json!({
+                    "error": "Too Many Requests",
+                    "retry_after": retry_after
+                })),
+            )
+                .into_response()
+        }
+        GovernorError::UnableToExtractKey => {
+            error!("Rate-limit key extraction failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+        _ => {
+            error!("Unexpected rate-limit middleware failure");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Rate limit error").into_response()
         }
     }
+}
 
-    fn public_route_config() -> Arc<GovernorConfig<OriginatorIpExtractor, StateInformationMiddleware>> {
-        let policy: RateLimitPolicy = RateLimitPolicy::from_env(
-            "public",
-            PUBLIC_REPLENISH_MILLIS_ENV,
-            PUBLIC_BURST_ENV,
-            DEFAULT_PUBLIC_REPLENISH_MILLIS,
-            DEFAULT_PUBLIC_BURST,
-        );
-        Arc::new(
-            GovernorConfigBuilder::default()
-                .period(policy.period())
-                .burst_size(policy.burst)
-                .key_extractor(OriginatorIpExtractor)
-                .use_headers()
-                .finish()
-                .expect("failed to build public rate limiter config"),
-        )
-    }
+fn public_route_config() -> Arc<GovernorConfig<OriginatorIpExtractor, StateInformationMiddleware>> {
+    let policy: RateLimitPolicy = RateLimitPolicy::from_env(
+        "public",
+        PUBLIC_REPLENISH_MILLIS_ENV,
+        PUBLIC_BURST_ENV,
+        DEFAULT_PUBLIC_REPLENISH_MILLIS,
+        DEFAULT_PUBLIC_BURST,
+    );
+    Arc::new(
+        GovernorConfigBuilder::default()
+            .period(policy.period())
+            .burst_size(policy.burst)
+            .key_extractor(OriginatorIpExtractor)
+            .use_headers()
+            .finish()
+            .expect("failed to build public rate limiter config"),
+    )
+}
 
-    pub fn public_route_layer() -> GovernorLayer<OriginatorIpExtractor, StateInformationMiddleware, Body> {
-        GovernorLayer::new(Self::public_route_config()).error_handler(Self::response_error_handler)
-    }
+fn protected_route_config(
+    policy: RateLimitPolicy,
+) -> Arc<GovernorConfig<PrincipalKeyExtractor, StateInformationMiddleware>> {
+    Arc::new(
+        GovernorConfigBuilder::default()
+            .period(policy.period())
+            .burst_size(policy.burst)
+            .key_extractor(PrincipalKeyExtractor)
+            .use_headers()
+            .finish()
+            .expect("failed to build protected rate limiter config"),
+    )
+}
 
-    fn protected_route_config(
-        policy: RateLimitPolicy,
-    ) -> Arc<GovernorConfig<PrincipalKeyExtractor, StateInformationMiddleware>> {
-        Arc::new(
-            GovernorConfigBuilder::default()
-                .period(policy.period())
-                .burst_size(policy.burst)
-                .key_extractor(PrincipalKeyExtractor)
-                .use_headers()
-                .finish()
-                .expect("failed to build protected rate limiter config"),
-        )
-    }
+pub fn protected_route_layer(
+    policy: RateLimitPolicy,
+) -> GovernorLayer<PrincipalKeyExtractor, StateInformationMiddleware, Body> {
+    GovernorLayer::new(protected_route_config(policy)).error_handler(response_error_handler)
+}
 
-    pub fn protected_route_layer(
-        policy: RateLimitPolicy,
-    ) -> GovernorLayer<PrincipalKeyExtractor, StateInformationMiddleware, Body> {
-        GovernorLayer::new(Self::protected_route_config(policy)).error_handler(Self::response_error_handler)
-    }
+fn public_route_strict_config() -> Arc<GovernorConfig<OriginatorIpExtractor, StateInformationMiddleware>> {
+    let policy: RateLimitPolicy = RateLimitPolicy::from_env(
+        "strict-public",
+        STRICT_REPLENISH_MILLIS_ENV,
+        STRICT_BURST_ENV,
+        DEFAULT_STRICT_REPLENISH_MILLIS,
+        DEFAULT_STRICT_BURST,
+    );
+    Arc::new(
+        GovernorConfigBuilder::default()
+            .period(policy.period())
+            .burst_size(policy.burst)
+            .key_extractor(OriginatorIpExtractor)
+            .use_headers()
+            .finish()
+            .expect("failed to build strict public rate limiter config"),
+    )
+}
 
-    fn public_route_strict_config() -> Arc<GovernorConfig<OriginatorIpExtractor, StateInformationMiddleware>> {
-        let policy: RateLimitPolicy = RateLimitPolicy::from_env(
-            "strict-public",
-            STRICT_REPLENISH_MILLIS_ENV,
-            STRICT_BURST_ENV,
-            DEFAULT_STRICT_REPLENISH_MILLIS,
-            DEFAULT_STRICT_BURST,
-        );
-        Arc::new(
-            GovernorConfigBuilder::default()
-                .period(policy.period())
-                .burst_size(policy.burst)
-                .key_extractor(OriginatorIpExtractor)
-                .use_headers()
-                .finish()
-                .expect("failed to build strict public rate limiter config"),
-        )
-    }
+pub fn public_route_strict_layer() -> GovernorLayer<OriginatorIpExtractor, StateInformationMiddleware, Body> {
+    GovernorLayer::new(public_route_strict_config()).error_handler(response_error_handler)
+}
 
-    pub fn public_route_strict_layer() -> GovernorLayer<OriginatorIpExtractor, StateInformationMiddleware, Body> {
-        GovernorLayer::new(Self::public_route_strict_config()).error_handler(Self::response_error_handler)
-    }
-
-    pub fn public_strict_layer(router: Router) -> Router {
-        router.layer(Self::public_route_strict_layer())
-    }
+pub fn public_strict_layer(router: Router) -> Router {
+    router.layer(public_route_strict_layer())
 }
 
 #[cfg(test)]
@@ -253,7 +248,8 @@ mod tests {
     use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder};
 
     use super::{
-        MAX_BURST, MAX_REPLENISH_MILLIS, PrincipalKeyExtractor, PrincipalRateLimitKey, RateLimitPolicy, RateLimiter,
+        response_error_handler, MAX_BURST, MAX_REPLENISH_MILLIS, PrincipalKeyExtractor, PrincipalRateLimitKey,
+        RateLimitPolicy, RateLimiter,
     };
 
     #[test]
@@ -288,7 +284,7 @@ mod tests {
                 .expect("test limiter config must be valid"),
         );
         let layer: GovernorLayer<PrincipalKeyExtractor, StateInformationMiddleware, Body> =
-            GovernorLayer::new(config).error_handler(RateLimiter::response_error_handler);
+            GovernorLayer::new(config).error_handler(response_error_handler);
         let app: Router = Router::new()
             .route("/", get(|| async { StatusCode::OK }))
             .layer(layer)

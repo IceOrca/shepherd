@@ -7,6 +7,7 @@ use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::auth::RoleCode;
+use super::database::FinancialReportRepo;
 
 use super::super::core::FinanceError;
 
@@ -142,60 +143,12 @@ pub struct PayrollReport {
     pub lines: Vec<PayrollLine>,
 }
 
-#[async_trait]
-pub trait FinancialReportingRepo: Send + Sync {
-    async fn list_financial_periods(
-        &self,
-        tenant_id: Uuid,
-        start_date: NaiveDate,
-        end_date: NaiveDate,
-    ) -> Result<Vec<FinancialPeriodState>, FinanceError>;
-
-    async fn change_financial_period(
-        &self,
-        tenant_id: Uuid,
-        actor_account_id: Uuid,
-        idempotency_key: Uuid,
-        input: &FinancialPeriodChangeInput,
-    ) -> Result<FinancialPeriodState, FinanceError>;
-
-    async fn list_salary_configurations(
-        &self,
-        tenant_id: Uuid,
-        search: Option<&str>,
-        limit: i64,
-        cursor: Option<&EmployeeSalaryConfigCursor>,
-    ) -> Result<EmployeeSalaryConfigPage, FinanceError>;
-
-    async fn create_salary_rate(
-        &self,
-        tenant_id: Uuid,
-        actor_account_id: Uuid,
-        idempotency_key: Uuid,
-        input: &EmployeeSalaryRateInput,
-    ) -> Result<EmployeeSalaryConfig, FinanceError>;
-
-    async fn operating_report(
-        &self,
-        tenant_id: Uuid,
-        start_date: NaiveDate,
-        end_date: NaiveDate,
-    ) -> Result<OperatingFinancialReport, FinanceError>;
-
-    async fn payroll_report(
-        &self,
-        tenant_id: Uuid,
-        start_date: NaiveDate,
-        end_date: NaiveDate,
-    ) -> Result<PayrollReport, FinanceError>;
+pub struct FinancialReportService {
+    repo: Arc<FinancialReportRepo>,
 }
 
-pub struct FinancialReportingService {
-    repo: Arc<dyn FinancialReportingRepo>,
-}
-
-impl FinancialReportingService {
-    pub fn new_arc(repo: Arc<dyn FinancialReportingRepo>) -> Arc<Self> {
+impl FinancialReportService {
+    pub fn new_arc(repo: Arc<FinancialReportRepo>) -> Arc<Self> {
         Arc::new(Self { repo })
     }
 

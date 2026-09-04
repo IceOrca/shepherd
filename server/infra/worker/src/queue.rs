@@ -20,12 +20,12 @@ pub struct QueueConfig {
 }
 
 impl QueueConfig {
-    pub fn new(capacity: usize, concurrency: usize) -> Result<Self, QueueConfigError> {
+    pub fn new(capacity: usize, concurrency: usize) -> Result<Self, QueueCfgErr> {
         if capacity == 0 {
-            return Err(QueueConfigError::ZeroCapacity);
+            return Err(QueueCfgErr::ZeroCapacity);
         }
         if concurrency == 0 {
-            return Err(QueueConfigError::ZeroConcurrency);
+            return Err(QueueCfgErr::ZeroConcurrency);
         }
         Ok(Self {
             capacity,
@@ -74,12 +74,12 @@ impl Default for QueueConfig {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum QueueConfigError {
+pub enum QueueCfgErr {
     ZeroCapacity,
     ZeroConcurrency,
 }
 
-impl fmt::Display for QueueConfigError {
+impl fmt::Display for QueueCfgErr {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ZeroCapacity => formatter.write_str("queue capacity must be greater than zero"),
@@ -88,7 +88,7 @@ impl fmt::Display for QueueConfigError {
     }
 }
 
-impl Error for QueueConfigError {}
+impl Error for QueueCfgErr {}
 
 pub struct TaskSender<T> {
     sender: mpsc::Sender<T>,
@@ -149,11 +149,11 @@ pub(crate) fn bounded<T>(config: QueueConfig) -> (TaskSender<T>, mpsc::Receiver<
 
 #[cfg(test)]
 mod tests {
-    use super::{QueueConfig, QueueConfigError};
+    use super::{QueueConfig, QueueCfgErr};
 
     #[test]
     fn queue_config_rejects_zero_limits() {
-        assert_eq!(QueueConfig::new(0, 1), Err(QueueConfigError::ZeroCapacity));
-        assert_eq!(QueueConfig::new(1, 0), Err(QueueConfigError::ZeroConcurrency));
+        assert_eq!(QueueConfig::new(0, 1), Err(QueueCfgErr::ZeroCapacity));
+        assert_eq!(QueueConfig::new(1, 0), Err(QueueCfgErr::ZeroConcurrency));
     }
 }

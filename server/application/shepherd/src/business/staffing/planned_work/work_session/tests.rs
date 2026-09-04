@@ -9,18 +9,22 @@ use infra_postgres::DatabaseAdapter;
 use uuid::Uuid;
 
 use super::{
-    core::{ShiftWorkActionInput, ShiftWorkSession, StaffingWorkRepo},
-    database::StaffingWorkDb,
+    core::{ShiftWorkActionInput, ShiftWorkSession},
+    database::StaffingWorkRepo,
 };
 use crate::business::staffing::{
-    core::{ShiftAssignmentStatus, StaffingError, StaffingRepo},
-    database::StaffingDb,
+    {StaffingErr},
 };
+use crate::business::staffing::planned_work::{
+    core::{ShiftAssignmentStatus, StaffingShiftStatus},
+    database::PlannedStaffingRepo,
+};
+
 use crate::business::finance::{
     core::FinanceError,
     reporting::{
-        core::{FinancialPeriodChangeInput, FinancialPeriodStatus, FinancialReportingRepo},
-        database::FinancialReportingDb,
+        core::{FinancialPeriodChangeInput, FinancialPeriodStatus},
+        database::FinancialReportRepo,
     },
 };
 
@@ -184,16 +188,16 @@ impl Fixture {
         })
     }
 
-    fn work_provider(&self) -> Arc<StaffingWorkDb> {
-        StaffingWorkDb::new_arc(Arc::clone(&self.db))
+    fn work_provider(&self) -> Arc<StaffingWorkRepo> {
+        StaffingWorkRepo::new_arc(Arc::clone(&self.db))
     }
 
-    fn staffing_provider(&self) -> Arc<StaffingDb> {
-        StaffingDb::new_arc(Arc::clone(&self.db))
+    fn staffing_provider(&self) -> Arc<PlannedStaffingRepo> {
+        PlannedStaffingRepo::new_arc(Arc::clone(&self.db))
     }
 
-    fn financial_reporting_provider(&self) -> Arc<FinancialReportingDb> {
-        FinancialReportingDb::new_arc(Arc::clone(&self.db))
+    fn financial_reporting_provider(&self) -> Arc<FinancialReportRepo> {
+        FinancialReportRepo::new_arc(Arc::clone(&self.db))
     }
 
     async fn work_period_start(&self) -> Result<chrono::NaiveDate, Box<dyn Error>> {
@@ -509,17 +513,17 @@ fn located_input(latitude: f64, longitude: f64, accuracy_meters: f32) -> ShiftWo
     }
 }
 
-fn staffing_error(error: StaffingError) -> io::Error {
+fn staffing_error(error: StaffingErr) -> io::Error {
     io::Error::other(format!("staffing operation failed: {error:?}"))
 }
 
 fn one_success_one_conflict(
-    left: Result<ShiftWorkSession, StaffingError>,
-    right: Result<ShiftWorkSession, StaffingError>,
+    left: Result<ShiftWorkSession, StaffingErr>,
+    right: Result<ShiftWorkSession, StaffingErr>,
 ) -> Result<(ShiftWorkSession, bool), io::Error> {
     match (left, right) {
-        (Ok(session), Err(StaffingError::Conflict)) => Ok((session, true)),
-        (Err(StaffingError::Conflict), Ok(session)) => Ok((session, false)),
+        (Ok(session), Err(StaffingErr::Conflict)) => Ok((session, true)),
+        (Err(StaffingErr::Conflict), Ok(session)) => Ok((session, false)),
         (left, right) => Err(io::Error::other(format!(
             "expected one success and one conflict, got {left:?} and {right:?}"
         ))),
@@ -652,7 +656,7 @@ async fn regular_flow_supports_multiple_sessions_and_durable_outbox_events() -> 
                 &action_input(),
             )
             .await;
-        assert!(matches!(start_after_approval, Err(StaffingError::Conflict)));
+        assert!(matches!(start_after_approval, Err(StaffingErr::Conflict)));
 
         Ok(())
     })
@@ -677,7 +681,7 @@ async fn invalid_state_ownership_and_approval_transitions_are_rejected() -> Test
                 &action_input(),
             )
             .await;
-        assert!(matches!(premature_end, Err(StaffingError::Conflict)));
+        assert!(matches!(premature_end, Err(StaffingErr::Conflict)));
 
         let approval_without_work = staffing
             .approve_shift_assignment(
@@ -690,7 +694,7 @@ async fn invalid_state_ownership_and_approval_transitions_are_rejected() -> Test
                 fixture.account_id,
             )
             .await;
-        assert!(matches!(approval_without_work, Err(StaffingError::Conflict)));
+        assert!(matches!(approval_without_work, Err(StaffingErr::Conflict)));
 
         let wrong_account = Uuid::new_v4();
         let another_account_start = work
@@ -702,7 +706,7 @@ async fn invalid_state_ownership_and_approval_transitions_are_rejected() -> Test
                 &action_input(),
             )
             .await;
-        assert!(matches!(another_account_start, Err(StaffingError::NotFound)));
+        assert!(matches!(another_account_start, Err(StaffingErr::NotFound)));
         let another_account_assignments = work
             .list_own_assignments(fixture.tenant_id, wrong_account, 100, None)
             .await
@@ -731,7 +735,7 @@ async fn invalid_state_ownership_and_approval_transitions_are_rejected() -> Test
                 fixture.account_id,
             )
             .await;
-        assert!(matches!(approval_while_open, Err(StaffingError::Conflict)));
+        assert!(matches!(approval_while_open, Err(StaffingErr::Conflict)));
 
         let overlapping_start = work
             .start(
@@ -742,7 +746,7 @@ async fn invalid_state_ownership_and_approval_transitions_are_rejected() -> Test
                 &action_input(),
             )
             .await;
-        assert!(matches!(overlapping_start, Err(StaffingError::Conflict)));
+        assert!(matches!(overlapping_start, Err(StaffingErr::Conflict)));
 
         fixture.await_positive_duration().await;
         work.end(
@@ -762,7 +766,7 @@ async fn invalid_state_ownership_and_approval_transitions_are_rejected() -> Test
                 &action_input(),
             )
             .await;
-        assert!(matches!(repeated_end_with_new_key, Err(StaffingError::Conflict)));
+        assert!(matches!(repeated_end_with_new_key, Err(StaffingErr::Conflict)));
 
         fixture.record_matching_customer_evidence().await?;
         assert!(fixture.completed_session_rejects_rewrite().await?);
@@ -780,10 +784,7 @@ async fn invalid_state_ownership_and_approval_transitions_are_rejected() -> Test
                 fixture.account_id,
             )
             .await;
-        assert!(matches!(
-            conclusion_override_without_reason,
-            Err(StaffingError::Conflict)
-        ));
+        assert!(matches!(conclusion_override_without_reason, Err(StaffingErr::Conflict)));
 
         let override_without_reason = staffing
             .approve_shift_assignment(
@@ -796,7 +797,7 @@ async fn invalid_state_ownership_and_approval_transitions_are_rejected() -> Test
                 fixture.account_id,
             )
             .await;
-        assert!(matches!(override_without_reason, Err(StaffingError::Conflict)));
+        assert!(matches!(override_without_reason, Err(StaffingErr::Conflict)));
 
         let approved = staffing
             .approve_shift_assignment(
@@ -832,7 +833,7 @@ async fn invalid_state_ownership_and_approval_transitions_are_rejected() -> Test
                 fixture.account_id,
             )
             .await;
-        assert!(matches!(repeated_approval, Err(StaffingError::Conflict)));
+        assert!(matches!(repeated_approval, Err(StaffingErr::Conflict)));
 
         Ok(())
     })
@@ -955,7 +956,7 @@ async fn assignment_cancellation_before_work_is_audited_and_terminal() -> TestRe
                 fixture.account_id,
             )
             .await;
-        assert!(matches!(repeated, Err(StaffingError::Conflict)));
+        assert!(matches!(repeated, Err(StaffingErr::Conflict)));
 
         let start_after_cancel = fixture
             .work_provider()
@@ -967,7 +968,7 @@ async fn assignment_cancellation_before_work_is_audited_and_terminal() -> TestRe
                 &action_input(),
             )
             .await;
-        assert!(matches!(start_after_cancel, Err(StaffingError::Conflict)));
+        assert!(matches!(start_after_cancel, Err(StaffingErr::Conflict)));
         Ok(())
     })
     .await;

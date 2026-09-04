@@ -80,22 +80,20 @@ pub struct AuthedUser {
 }
 
 impl AuthedUser {
-    pub fn has_permission(&self, permission: &str) -> bool {
-        self.permissions
-            .iter()
-            .any(|current: &PermissionCode| current.as_str() == permission)
+    pub fn has_permission(&self, perm: &str) -> bool {
+        self.permissions.iter().any(|p: &PermissionCode| p.as_str() == perm)
     }
 
     /// Evaluates the effective permission set for an explicitly selected branch
     /// without changing the request's active write branch. Tenant-wide and
     /// matching branch grants apply, and any applicable deny wins.
-    pub fn has_permission_for_branch(&self, branch_id: Uuid, permission: &str) -> bool {
+    pub fn has_permission_for_branch(&self, branch_id: Uuid, perm: &str) -> bool {
         if !self.branch_ids.contains(&branch_id) {
             return false;
         }
         let mut allowed: bool = false;
         for grant in &self.authz_perms {
-            if grant.permission_code.as_str() != permission
+            if grant.permission_code.as_str() != perm
                 || (grant.branch_id.is_some() && grant.branch_id != Some(branch_id))
             {
                 continue;

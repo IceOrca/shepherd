@@ -33,6 +33,7 @@ import type { BranchSummary, TenantMembershipSummary } from "../api/generated/co
 import { friendlyApiError } from "../shared/api/client";
 import { formatToday, roleLabel } from "../shared/lib/format";
 import { useOnlineStatus } from "../shared/lib/useOnlineStatus";
+import { PLANNED_STAFFING_ENABLED } from "../shared/lib/features";
 
 interface NavigationItem {
   label: string;
@@ -40,6 +41,7 @@ interface NavigationItem {
   icon: typeof LayoutDashboard;
   permission?: string;
   anyPermissions?: string[];
+  plannedStaffing?: boolean;
   soon?: boolean;
 }
 
@@ -56,12 +58,14 @@ const navigation: NavigationItem[] = [
     to: "/operations/my-shifts",
     icon: CalendarClock,
     permission: "business.staffing_work.self.read",
+    plannedStaffing: true,
   },
   {
     label: "Điều phối ca",
     to: "/operations/shifts",
     icon: BriefcaseBusiness,
     permission: "business.shifts.read",
+    plannedStaffing: true,
   },
   {
     label: "Đối soát",
@@ -235,7 +239,8 @@ export function OperationsLayout() {
   }
 
   const visibleNavigation = navigation.filter((item: NavigationItem): boolean =>
-    (!item.permission || profile.permissions.includes(item.permission))
+    (!item.plannedStaffing || PLANNED_STAFFING_ENABLED)
+    && (!item.permission || profile.permissions.includes(item.permission))
     && (!item.anyPermissions
       || item.anyPermissions.some((permission: string): boolean => profile.permissions.includes(permission))),
   );

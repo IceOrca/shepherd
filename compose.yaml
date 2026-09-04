@@ -116,7 +116,7 @@ services:
       - cargo_registry:/usr/local/cargo/registry
       - cargo_git:/usr/local/cargo/git
       - server_target:/app/shepherd_server/target
-    command: [ "cargo", "run", "-p", "shepherd-runtime", "--bin", "shepherd-srv" ]
+    command: [ "cargo", "run", "-p", "shepherd-runtime", "--features=${SHEPHERD_CARGO_FEATURES:-}", "--bin", "shepherd-srv" ]
     depends_on:
       postgres-bootstrap:
         condition: service_completed_successfully
@@ -189,6 +189,7 @@ services:
       VITE_SHEPHERD_AUTH_DEV_PROXY_TARGET: http://supabase-auth:9999
       VITE_SHEPHERD_AUTH_URL: ${AUTH_PUBLIC_URL}
       VITE_STAFFING_GPS_ENABLED: "false"
+      VITE_PLANNED_STAFFING_ENABLED: ${VITE_PLANNED_STAFFING_ENABLED:-false}
     volumes:
       - ./client/web:/app/shepherd_client
       - client_node_modules:/app/shepherd_client/node_modules

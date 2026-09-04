@@ -13,8 +13,10 @@ RUN rustup component add clippy
 
 COPY . .
 ENV SQLX_OFFLINE=true
-RUN cargo clippy --all --workspace \
+ARG SHEPHERD_CARGO_FEATURES=""
+RUN cargo clippy --all --workspace --features="${SHEPHERD_CARGO_FEATURES}" \
     && cargo build --release -p shepherd-runtime \
+        --features="${SHEPHERD_CARGO_FEATURES}" \
         --bin shepherd-srv \
         --bin shepherd-tenant-bootstrap
 

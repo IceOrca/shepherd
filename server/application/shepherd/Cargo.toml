@@ -3,6 +3,10 @@ name = "shepherd"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+planned-staffing = []
+
 [[bin]]
 name = "shepherd-dev-db-seeding"
 path = "src/bin/dev_db_seeding.rs"
@@ -39,7 +43,8 @@ infra-auth = { path = "../../infra/auth", default-features = false, features = [
 infra-host.workspace = true
 infra-postgres.workspace = true
 infra-notifier.workspace = true
-
+bigdecimal.workspace = true
+ 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
 

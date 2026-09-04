@@ -19,14 +19,11 @@ use crate::{
     pagination::{decode_cursor, encode_cursor, normalize_search, resolve_limit},
 };
 
-use super::super::{
-    core::{ManualRateOverride, ReconcileCollection},
-    host::ManualRateOverrideRequest,
-};
+use super::super::{ManualRateOverride, ReconcileCollection, ManualRateOverrideRequest};
 use super::core::{
     UrgentCustomerCursor, UrgentCustomerPage, UrgentCustomerWorkRecord, UrgentCustomerWorkRecordInput,
     UrgentEmployeeCursor, UrgentEmployeePage, UrgentOwnWorkCursor, UrgentOwnWorkPage, UrgentReconcileCursor,
-    UrgentReconcilePage, UrgentTeamWorkPage, UrgentWorkEmployee, UrgentWorkEndInput, UrgentWorkError,
+    UrgentReconcilePage, UrgentTeamWorkPage, UrgentWorkEmployee, UrgentWorkEndInput, UrgentStaffingErr,
     UrgentWorkCustomer, UrgentWorkItem, UrgentWorkLocationInput, UrgentWorkManualInput, UrgentWorkReconcileInput,
     UrgentWorkReconcile, UrgentWorkStartInput,
 };
@@ -136,8 +133,8 @@ pub struct UrgentWorkCancellationReq {
 pub fn routes() -> Router<Arc<AppContext>> {
     info!("Configured urgent-first staffing routes");
     Router::new()
-        .route("/staffing/urgent-work/customers", get(list_customers))
-        .route("/staffing/urgent-work/employees", get(list_employees))
+        .route("/staffing/urgent-work/customers", get(list_selectable_customers))
+        .route("/staffing/urgent-work/employees", get(list_clockable_employees))
         .route("/staffing/urgent-work/me", get(list_own_work))
         .route("/staffing/urgent-work/team", get(list_team_work))
         .route("/staffing/urgent-work/start", post(start_work))
@@ -156,20 +153,20 @@ pub fn routes() -> Router<Arc<AppContext>> {
         )
 }
 
-async fn list_customers(
+async fn list_selectable_customers(
     State(ctx): State<Arc<AppContext>>,
     Extension(user): Extension<AuthedUser>,
     Query(query): Query<UrgentSelectorPageQuery>,
 ) -> Result<Json<UrgentListPageRsp<UrgentWorkCustomer>>, StatusCode> {
     require_any_permission(&user, &["business.urgent_work.read", "business.reconciliation.read"])?;
-    let limit: u16 = resolve_limit(&ctx.list_pagination, query.limit)?;
+    let limit: u16 = resolve_limit(&ctx.pagination, query.limit)?;
     let cursor: Option<UrgentCustomerCursor> = decode_cursor(query.cursor.as_deref())?;
     let page: UrgentCustomerPage = ctx
         .core
-        .urgent_work
-        .list_customers(user.tenant_id, normalize_search(query.search), i64::from(limit), cursor)
+        .urgent_staffing
+        .list_selectable_customers(user.tenant_id, normalize_search(query.search), i64::from(limit), cursor)
         .await
-        .map_err(|operation_error: UrgentWorkError| status("list urgent customers", &user, operation_error))?;
+        .map_err(|err: UrgentStaffingErr| status("list urgent customers", &user, err))?;
     let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
     debug!(tenant_id = %user.tenant_id, account_id = %user.account_id, customer_count = page.items.len(), "Urgent customer request completed");
     Ok(Json(UrgentListPageRsp {
@@ -180,18 +177,18 @@ async fn list_customers(
     }))
 }
 
-async fn list_employees(
+async fn list_clockable_employees(
     State(ctx): State<Arc<AppContext>>,
     Extension(user): Extension<AuthedUser>,
     Query(query): Query<UrgentSelectorPageQuery>,
 ) -> Result<Json<UrgentListPageRsp<UrgentWorkEmployee>>, StatusCode> {
     require_permission(&user, "business.urgent_work.read")?;
-    let limit: u16 = resolve_limit(&ctx.list_pagination, query.limit)?;
+    let limit: u16 = resolve_limit(&ctx.pagination, query.limit)?;
     let cursor: Option<UrgentEmployeeCursor> = decode_cursor(query.cursor.as_deref())?;
     let page: UrgentEmployeePage = ctx
         .core
-        .urgent_work
-        .list_employees(
+        .urgent_staffing
+        .list_clockable_employees(
             user.tenant_id,
             user.account_id,
             normalize_search(query.search),
@@ -199,7 +196,7 @@ async fn list_employees(
             cursor,
         )
         .await
-        .map_err(|operation_error: UrgentWorkError| status("list urgent employees", &user, operation_error))?;
+        .map_err(|err: UrgentStaffingErr| status("list urgent employees", &user, err))?;
     let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
     debug!(tenant_id = %user.tenant_id, account_id = %user.account_id, employee_count = page.items.len(), "Urgent employee request completed");
     Ok(Json(UrgentListPageRsp {
@@ -216,14 +213,14 @@ async fn list_own_work(
     Query(query): Query<UrgentOwnWorkPageQuery>,
 ) -> Result<Json<UrgentOwnWorkPageRsp>, StatusCode> {
     require_permission(&user, "business.urgent_work.read")?;
-    let limit: u16 = resolve_limit(&ctx.list_pagination, query.limit)?;
+    let limit: u16 = resolve_limit(&ctx.pagination, query.limit)?;
     let cursor: Option<UrgentOwnWorkCursor> = decode_cursor(query.cursor.as_deref())?;
     let page: UrgentOwnWorkPage = ctx
         .core
-        .urgent_work
+        .urgent_staffing
         .list_own_work(user.tenant_id, user.account_id, i64::from(limit), cursor)
         .await
-        .map_err(|operation_error: UrgentWorkError| status("list own urgent work", &user, operation_error))?;
+        .map_err(|err: UrgentStaffingErr| status("list own urgent work", &user, err))?;
     let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
     Ok(Json(UrgentOwnWorkPageRsp {
         has_more: next_cursor.is_some(),
@@ -239,14 +236,14 @@ async fn list_team_work(
     Query(query): Query<UrgentOwnWorkPageQuery>,
 ) -> Result<Json<UrgentListPageRsp<UrgentWorkItem>>, StatusCode> {
     require_permission(&user, "business.urgent_work.peer_manage")?;
-    let limit: u16 = resolve_limit(&ctx.list_pagination, query.limit)?;
+    let limit: u16 = resolve_limit(&ctx.pagination, query.limit)?;
     let cursor: Option<UrgentOwnWorkCursor> = decode_cursor(query.cursor.as_deref())?;
     let page: UrgentTeamWorkPage = ctx
         .core
-        .urgent_work
+        .urgent_staffing
         .list_team_work(user.tenant_id, user.account_id, i64::from(limit), cursor)
         .await
-        .map_err(|operation_error: UrgentWorkError| status("list urgent team work", &user, operation_error))?;
+        .map_err(|err: UrgentStaffingErr| status("list urgent team work", &user, err))?;
     let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
     Ok(Json(UrgentListPageRsp {
         has_more: next_cursor.is_some(),
@@ -277,10 +274,10 @@ async fn start_work(
     };
     let work: Vec<UrgentWorkItem> = ctx
         .core
-        .urgent_work
+        .urgent_staffing
         .start(user.tenant_id, user.account_id, allow_peer, input)
         .await
-        .map_err(|operation_error: UrgentWorkError| status("start urgent work", &user, operation_error))?;
+        .map_err(|err: UrgentStaffingErr| status("start urgent work", &user, err))?;
     ctx.notifications.wake();
     info!(tenant_id = %user.tenant_id, account_id = %user.account_id, report_count = work.len(), "Urgent-work start request completed");
     Ok((StatusCode::CREATED, Json(work)))
@@ -303,10 +300,10 @@ async fn end_work(
     };
     let work: UrgentWorkItem = ctx
         .core
-        .urgent_work
+        .urgent_staffing
         .end(user.tenant_id, user.account_id, allow_peer, report_id, input)
         .await
-        .map_err(|operation_error: UrgentWorkError| status("end urgent work", &user, operation_error))?;
+        .map_err(|err: UrgentStaffingErr| status("end urgent work", &user, err))?;
     ctx.notifications.wake();
     info!(tenant_id = %user.tenant_id, account_id = %user.account_id, report_id = %report_id, worked_seconds = ?work.worked_seconds, "Urgent-work end request completed");
     Ok(Json(work))
@@ -329,10 +326,10 @@ async fn submit_manual_work(
     };
     let work: UrgentWorkItem = ctx
         .core
-        .urgent_work
+        .urgent_staffing
         .submit_manual(user.tenant_id, user.account_id, input)
         .await
-        .map_err(|operation_error: UrgentWorkError| status("submit manual urgent work", &user, operation_error))?;
+        .map_err(|err: UrgentStaffingErr| status("submit manual urgent work", &user, err))?;
     ctx.notifications.wake();
     Ok((StatusCode::CREATED, Json(work)))
 }
@@ -345,10 +342,10 @@ async fn cancel_work(
 ) -> Result<StatusCode, StatusCode> {
     require_permission(&user, "business.urgent_work.reconcile")?;
     ctx.core
-        .urgent_work
+        .urgent_staffing
         .cancel(user.tenant_id, user.account_id, report_id, request.reason)
         .await
-        .map_err(|operation_error| status("cancel urgent work", &user, operation_error))?;
+        .map_err(|err| status("cancel urgent work", &user, err))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -358,9 +355,9 @@ async fn list_reconciliations(
     Query(query): Query<UrgentReconcilePageQuery>,
 ) -> Result<Json<UrgentReconcileRsp>, StatusCode> {
     require_permission(&user, "business.reconciliation.read")?;
-    let pagination = &ctx.list_pagination;
-    let limit: u16 = query.limit.unwrap_or(pagination.default_limit);
-    if !(pagination.minimum_limit..=pagination.maximum_limit).contains(&limit) {
+    let pagination = &ctx.pagination;
+    let limit: u16 = query.limit.unwrap_or(pagination.def_limit);
+    if !(pagination.min_limit..=pagination.max_limit).contains(&limit) {
         return Err(StatusCode::BAD_REQUEST);
     }
     let cursor: Option<UrgentReconcileCursor> = query
@@ -370,7 +367,7 @@ async fn list_reconciliations(
         .transpose()?;
     let page: UrgentReconcilePage = ctx
         .core
-        .urgent_work
+        .urgent_staffing
         .list_reconciliations(
             user.tenant_id,
             query.customer_id,
@@ -381,7 +378,7 @@ async fn list_reconciliations(
             cursor,
         )
         .await
-        .map_err(|operation_error: UrgentWorkError| status("list urgent reconciliations", &user, operation_error))?;
+        .map_err(|err: UrgentStaffingErr| status("list urgent reconciliations", &user, err))?;
     let next_cursor: Option<String> = page
         .next_cursor
         .as_ref()
@@ -425,7 +422,7 @@ async fn upsert_customer_record(
     };
     let record: UrgentCustomerWorkRecord = ctx
         .core
-        .urgent_work
+        .urgent_staffing
         .upsert_customer_record(
             user.tenant_id,
             user.account_id,
@@ -434,7 +431,7 @@ async fn upsert_customer_record(
             allow_terminal_correction,
         )
         .await
-        .map_err(|operation_error: UrgentWorkError| status("save urgent customer evidence", &user, operation_error))?;
+        .map_err(|err: UrgentStaffingErr| status("save urgent customer evidence", &user, err))?;
     Ok(Json(record))
 }
 
@@ -455,10 +452,10 @@ async fn reconcile(
     };
     let result: UrgentWorkReconcile = ctx
         .core
-        .urgent_work
+        .urgent_staffing
         .reconcile(user.tenant_id, user.account_id, report_id, input)
         .await
-        .map_err(|operation_error: UrgentWorkError| status("reconcile urgent work", &user, operation_error))?;
+        .map_err(|err: UrgentStaffingErr| status("reconcile urgent work", &user, err))?;
     Ok(Json(result))
 }
 
@@ -471,12 +468,10 @@ async fn accept_staff_record(
     require_permission(&user, "business.urgent_work.reconcile")?;
     let result: UrgentWorkReconcile = ctx
         .core
-        .urgent_work
+        .urgent_staffing
         .accept_staff_record(user.tenant_id, user.account_id, report_id, request.job_id)
         .await
-        .map_err(|operation_error: UrgentWorkError| {
-            status("accept urgent staff work record", &user, operation_error)
-        })?;
+        .map_err(|err: UrgentStaffingErr| status("accept urgent staff work record", &user, err))?;
     Ok(Json(result))
 }
 
@@ -540,15 +535,12 @@ fn require_permission(user: &AuthedUser, permission: &str) -> Result<(), StatusC
     }
 }
 
-fn require_any_permission(user: &AuthedUser, permissions: &[&str]) -> Result<(), StatusCode> {
-    if permissions
-        .iter()
-        .any(|permission: &&str| user.has_permission(permission))
-    {
+fn require_any_permission(user: &AuthedUser, perms: &[&str]) -> Result<(), StatusCode> {
+    if perms.iter().any(|p: &&str| user.has_permission(p)) {
         trace!(
             tenant_id = %user.tenant_id,
             account_id = %user.account_id,
-            permission_count = permissions.len(),
+            permission_count = perms.len(),
             "Urgent-work alternative permission set accepted"
         );
         Ok(())
@@ -556,26 +548,26 @@ fn require_any_permission(user: &AuthedUser, permissions: &[&str]) -> Result<(),
         warn!(
             tenant_id = %user.tenant_id,
             account_id = %user.account_id,
-            permission_count = permissions.len(),
+            permission_count = perms.len(),
             "Urgent-work alternative permission set rejected"
         );
         Err(StatusCode::FORBIDDEN)
     }
 }
 
-fn status(operation: &str, user: &AuthedUser, operation_error: UrgentWorkError) -> StatusCode {
-    let response_status: StatusCode = match operation_error {
-        UrgentWorkError::NotFound => StatusCode::NOT_FOUND,
-        UrgentWorkError::Forbidden => StatusCode::FORBIDDEN,
-        UrgentWorkError::Conflict => StatusCode::CONFLICT,
-        UrgentWorkError::InvalidInput(_) => StatusCode::UNPROCESSABLE_ENTITY,
-        UrgentWorkError::MissingStaffingRate => StatusCode::UNPROCESSABLE_ENTITY,
-        UrgentWorkError::BackendUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+fn status(operation: &str, user: &AuthedUser, err: UrgentStaffingErr) -> StatusCode {
+    let response_status: StatusCode = match err {
+        UrgentStaffingErr::NotFound => StatusCode::NOT_FOUND,
+        UrgentStaffingErr::Forbidden => StatusCode::FORBIDDEN,
+        UrgentStaffingErr::Conflict => StatusCode::CONFLICT,
+        UrgentStaffingErr::InvalidInput(_) => StatusCode::UNPROCESSABLE_ENTITY,
+        UrgentStaffingErr::MissingStaffingRate => StatusCode::UNPROCESSABLE_ENTITY,
+        UrgentStaffingErr::BackendUnavailable => StatusCode::SERVICE_UNAVAILABLE,
     };
     if response_status.is_server_error() {
-        error!(operation, tenant_id = %user.tenant_id, account_id = %user.account_id, status = %response_status, reason = ?operation_error, "Urgent-work request failed unexpectedly");
+        error!(operation, tenant_id = %user.tenant_id, account_id = %user.account_id, status = %response_status, reason = ?err, "Urgent-work request failed unexpectedly");
     } else {
-        warn!(operation, tenant_id = %user.tenant_id, account_id = %user.account_id, status = %response_status, reason = ?operation_error, "Urgent-work request rejected");
+        warn!(operation, tenant_id = %user.tenant_id, account_id = %user.account_id, status = %response_status, reason = ?err, "Urgent-work request rejected");
     }
     response_status
 }

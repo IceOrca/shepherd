@@ -14,6 +14,7 @@ import type { PermissionCode, StaffingShift, UrgentOwnWorkPageRsp, UrgentWorkIte
 import { useAuth } from "../auth/AuthProvider";
 import { friendlyApiError } from "../../shared/api/client";
 import { formatDateTime, formatDuration, shiftStatusLabel } from "../../shared/lib/format";
+import { PLANNED_STAFFING_ENABLED } from "../../shared/lib/features";
 import {
   listOwnUrgentWork,
   listStaffingShiftsForBranch,
@@ -130,7 +131,8 @@ export function OperationsOverviewPage(): React.JSX.Element {
   const auth: ReturnType<typeof useAuth> = useAuth();
   const scope: ReturnType<typeof useOperationsScope> = useOperationsScope();
   const permissions: PermissionCode[] = auth.profile?.permissions ?? [];
-  const canReadShifts: boolean = permissions.includes("business.shifts.read");
+  const canReadShifts: boolean =
+    PLANNED_STAFFING_ENABLED && permissions.includes("business.shifts.read");
   const canReadUrgentWork: boolean = permissions.includes("business.urgent_work.read");
 
   const shiftsQuery = useInfiniteQuery({

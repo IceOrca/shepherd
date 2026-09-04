@@ -3,6 +3,10 @@ name = "shepherd-runtime"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+planned-staffing = ["shepherd/planned-staffing"]
+
 [[bin]]
 name = "shepherd-srv"
 path = "src/bin/main.rs"

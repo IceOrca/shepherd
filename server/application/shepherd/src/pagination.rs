@@ -2,11 +2,11 @@ use axum::http::StatusCode;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Serialize, de::DeserializeOwned};
 
-use crate::ListPaginationConfig;
+use crate::ListPaginationCfg;
 
-pub fn resolve_limit(config: &ListPaginationConfig, requested: Option<u16>) -> Result<u16, StatusCode> {
-    let limit: u16 = requested.unwrap_or(config.default_limit);
-    if !(config.minimum_limit..=config.maximum_limit).contains(&limit) {
+pub fn resolve_limit(config: &ListPaginationCfg, requested: Option<u16>) -> Result<u16, StatusCode> {
+    let limit: u16 = requested.unwrap_or(config.def_limit);
+    if !(config.min_limit..=config.max_limit).contains(&limit) {
         return Err(StatusCode::BAD_REQUEST);
     }
     Ok(limit)

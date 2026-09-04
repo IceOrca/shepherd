@@ -29,7 +29,7 @@ pub struct ProtectedCitizenId {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum CitizenIdProtectionError {
+pub enum CitizenIdProtectErr {
     #[error("HR_CITIZEN_ID_ACTIVE_KEY_ID is required")]
     MissingActiveKeyId,
     #[error("HR_CITIZEN_ID_ENCRYPTION_KEYS_JSON is required")]
@@ -65,13 +65,13 @@ pub enum CitizenIdProtectionError {
 struct EncodedKeySet(HashMap<String, String>);
 
 impl CitizenIdProtector {
-    pub fn from_env() -> Result<Self, CitizenIdProtectionError> {
+    pub fn from_env() -> Result<Self, CitizenIdProtectErr> {
         let active_key_id: String =
-            required_env("HR_CITIZEN_ID_ACTIVE_KEY_ID").ok_or(CitizenIdProtectionError::MissingActiveKeyId)?;
-        let encoded_keys: String = required_env("HR_CITIZEN_ID_ENCRYPTION_KEYS_JSON")
-            .ok_or(CitizenIdProtectionError::MissingEncryptionKeys)?;
+            required_env("HR_CITIZEN_ID_ACTIVE_KEY_ID").ok_or(CitizenIdProtectErr::MissingActiveKeyId)?;
+        let encoded_keys: String =
+            required_env("HR_CITIZEN_ID_ENCRYPTION_KEYS_JSON").ok_or(CitizenIdProtectErr::MissingEncryptionKeys)?;
         let lookup_key: String =
-            required_env("HR_CITIZEN_ID_LOOKUP_KEY_BASE64").ok_or(CitizenIdProtectionError::MissingLookupKey)?;
+            required_env("HR_CITIZEN_ID_LOOKUP_KEY_BASE64").ok_or(CitizenIdProtectErr::MissingLookupKey)?;
         Self::new(&active_key_id, &encoded_keys, &lookup_key)
     }
 
@@ -79,33 +79,33 @@ impl CitizenIdProtector {
         active_key_id: &str,
         encoded_keys_json: &str,
         encoded_lookup_key: &str,
-    ) -> Result<Self, CitizenIdProtectionError> {
+    ) -> Result<Self, CitizenIdProtectErr> {
         if !valid_key_id(active_key_id) {
-            return Err(CitizenIdProtectionError::InvalidKeyId);
+            return Err(CitizenIdProtectErr::InvalidKeyId);
         }
         let EncodedKeySet(encoded_keys): EncodedKeySet =
-            serde_json::from_str(encoded_keys_json).map_err(CitizenIdProtectionError::InvalidEncryptionKeySet)?;
+            serde_json::from_str(encoded_keys_json).map_err(CitizenIdProtectErr::InvalidEncryptionKeySet)?;
         let mut encryption_keys: HashMap<String, [u8; AES_256_KEY_LENGTH]> = HashMap::with_capacity(encoded_keys.len());
         for (key_id, encoded_key) in encoded_keys {
             if !valid_key_id(&key_id) {
-                return Err(CitizenIdProtectionError::InvalidKeyId);
+                return Err(CitizenIdProtectErr::InvalidKeyId);
             }
             let decoded_key: Vec<u8> = STANDARD
                 .decode(encoded_key)
-                .map_err(|_error| CitizenIdProtectionError::InvalidEncryptionKey)?;
+                .map_err(|_error| CitizenIdProtectErr::InvalidEncryptionKey)?;
             let key: [u8; AES_256_KEY_LENGTH] = decoded_key
                 .try_into()
-                .map_err(|_value: Vec<u8>| CitizenIdProtectionError::InvalidEncryptionKey)?;
+                .map_err(|_value: Vec<u8>| CitizenIdProtectErr::InvalidEncryptionKey)?;
             encryption_keys.insert(key_id, key);
         }
         if !encryption_keys.contains_key(active_key_id) {
-            return Err(CitizenIdProtectionError::ActiveKeyMissing);
+            return Err(CitizenIdProtectErr::ActiveKeyMissing);
         }
         let lookup_key: Vec<u8> = STANDARD
             .decode(encoded_lookup_key)
-            .map_err(|_error| CitizenIdProtectionError::InvalidLookupKey)?;
+            .map_err(|_error| CitizenIdProtectErr::InvalidLookupKey)?;
         if lookup_key.len() < MIN_LOOKUP_KEY_LENGTH {
-            return Err(CitizenIdProtectionError::InvalidLookupKey);
+            return Err(CitizenIdProtectErr::InvalidLookupKey);
         }
         Ok(Self {
             active_key_id: active_key_id.to_owned(),
@@ -119,13 +119,13 @@ impl CitizenIdProtector {
         tenant_id: Uuid,
         country_code: &str,
         citizen_id: &str,
-    ) -> Result<ProtectedCitizenId, CitizenIdProtectionError> {
+    ) -> Result<ProtectedCitizenId, CitizenIdProtectErr> {
         let encryption_key: &[u8; AES_256_KEY_LENGTH] = self
             .encryption_keys
             .get(&self.active_key_id)
-            .ok_or(CitizenIdProtectionError::ActiveKeyMissing)?;
+            .ok_or(CitizenIdProtectErr::ActiveKeyMissing)?;
         let cipher: Aes256Gcm = Aes256Gcm::new_from_slice(encryption_key)
-            .map_err(|_error| CitizenIdProtectionError::InvalidEncryptionKey)?;
+            .map_err(|_error: sha2::digest::InvalidLength| CitizenIdProtectErr::InvalidEncryptionKey)?;
         let nonce: Nonce<<Aes256Gcm as AeadCore>::NonceSize> = Nonce::generate();
         let associated_data: Vec<u8> = associated_data(tenant_id, country_code);
         let encrypted: Vec<u8> = cipher
@@ -136,13 +136,13 @@ impl CitizenIdProtector {
                     aad: &associated_data,
                 },
             )
-            .map_err(|_error| CitizenIdProtectionError::Encrypt)?;
+            .map_err(|_error: aes_gcm::Error| CitizenIdProtectErr::Encrypt)?;
         let mut ciphertext: Vec<u8> = Vec::with_capacity(NONCE_LENGTH + encrypted.len());
         ciphertext.extend_from_slice(&nonce);
         ciphertext.extend_from_slice(&encrypted);
 
         let mut lookup_mac: Hmac<Sha256> = <Hmac<Sha256> as hmac::digest::KeyInit>::new_from_slice(&self.lookup_key)
-            .map_err(|_error| CitizenIdProtectionError::InvalidLookupKey)?;
+            .map_err(|_error: sha2::digest::InvalidLength| CitizenIdProtectErr::InvalidLookupKey)?;
         lookup_mac.update(&associated_data);
         lookup_mac.update(&[0]);
         lookup_mac.update(citizen_id.as_bytes());
@@ -170,19 +170,19 @@ impl CitizenIdProtector {
         country_code: &str,
         key_id: &str,
         ciphertext: &[u8],
-    ) -> Result<String, CitizenIdProtectionError> {
+    ) -> Result<String, CitizenIdProtectErr> {
         let (nonce_bytes, encrypted): (&[u8], &[u8]) = ciphertext
             .split_at_checked(NONCE_LENGTH)
-            .ok_or(CitizenIdProtectionError::InvalidCiphertext)?;
+            .ok_or(CitizenIdProtectErr::InvalidCiphertext)?;
         let nonce: Nonce<<Aes256Gcm as AeadCore>::NonceSize> = nonce_bytes
             .try_into()
-            .map_err(|_error| CitizenIdProtectionError::InvalidCiphertext)?;
+            .map_err(|_error| CitizenIdProtectErr::InvalidCiphertext)?;
         let encryption_key: &[u8; AES_256_KEY_LENGTH] = self
             .encryption_keys
             .get(key_id)
-            .ok_or(CitizenIdProtectionError::UnknownKey)?;
+            .ok_or(CitizenIdProtectErr::UnknownKey)?;
         let cipher: Aes256Gcm = Aes256Gcm::new_from_slice(encryption_key)
-            .map_err(|_error| CitizenIdProtectionError::InvalidEncryptionKey)?;
+            .map_err(|_error: sha2::digest::InvalidLength| CitizenIdProtectErr::InvalidEncryptionKey)?;
         let plaintext: Vec<u8> = cipher
             .decrypt(
                 &nonce,
@@ -191,8 +191,8 @@ impl CitizenIdProtector {
                     aad: &associated_data(tenant_id, country_code),
                 },
             )
-            .map_err(|_error| CitizenIdProtectionError::Decrypt)?;
-        String::from_utf8(plaintext).map_err(CitizenIdProtectionError::InvalidPlaintext)
+            .map_err(|_error| CitizenIdProtectErr::Decrypt)?;
+        String::from_utf8(plaintext).map_err(CitizenIdProtectErr::InvalidPlaintext)
     }
 }
 

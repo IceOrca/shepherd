@@ -409,7 +409,7 @@ async fn list_salary_configurations(
     Query(query): Query<SalaryConfigurationPageQuery>,
 ) -> Result<Json<EmployeeSalaryConfigPageRsp>, StatusCode> {
     require_permission(&user, "hr.salary_rates.read")?;
-    let limit: u16 = resolve_limit(&context.list_pagination, query.limit)?;
+    let limit: u16 = resolve_limit(&context.pagination, query.limit)?;
     let cursor: Option<EmployeeSalaryConfigCursor> = decode_cursor(query.cursor.as_deref())?;
     let page: EmployeeSalaryConfigPage = context
         .core

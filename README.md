@@ -29,8 +29,36 @@ The responsibility for producing staff-side work evidence moves to the staff:
 
 Urgent work without a pre-created shift is the default workflow because a
 customer may request workers immediately while a supervisor is already
-transporting them. Planned shifts remain an optional workflow when sufficient
-lead time exists.
+transporting them. Planned shifts remain preserved as an optional build
+capability when sufficient lead time exists, but are disabled by default.
+
+The default server build does not mount planned shift, assignment, planned
+evidence/reconciliation, or planned Staff clocking routes. Enable them with the
+Cargo feature `planned-staffing`. The browser uses the matching build flag
+`VITE_PLANNED_STAFFING_ENABLED=true`; otherwise it hides **Ca kế hoạch của
+tôi**, **Điều phối ca**, the planned reconciliation mode/route, planned
+dashboard queries, and planned-only permission choices. Enable both flags
+together:
+
+```bash
+SHEPHERD_CARGO_FEATURES=planned-staffing \
+VITE_PLANNED_STAFFING_ENABLED=true \
+docker compose up -d --build server client
+```
+
+Compose defaults both values to disabled. Production Docker builds accept the
+same `SHEPHERD_CARGO_FEATURES` and `VITE_PLANNED_STAFFING_ENABLED` build
+arguments. Planned database migrations always run and planned tables remain in
+the schema; feature selection changes executable/API/UI exposure, not stored
+data.
+
+Shared staffing catalogs and operations are not duplicated inside planned or
+urgent workflows. Branch operations stay under the branch module; customer,
+job, Staff, and rate operations plus formal assignment-result correction stay
+under general staffing. Urgent selection endpoints remain urgent-specific
+because they enforce peer authorization and current work context. Finance,
+payroll, and exports stay enabled because urgent reconciliation creates the
+same formal assignment and revision snapshots they consume.
 
 “Urgent” describes only how the work starts: no supervisor-created planned
 shift or assignment is required first. It does not create a separate class of
@@ -801,13 +829,13 @@ change the normalized code, name, optional billing email, and active/disabled
 status, workplace address, IANA time zone, and owning branch. Reconciliation-only users may load the active customer
 directory without receiving staff Start, Finish, or peer-clocking permission.
 
-The permission-driven `/operations/staffing-configuration` page manages the
-two staffing rate catalogs and effective employee service eligibility. Its API
-boundaries are `GET/POST /api/business/staffing/rates` and
-`GET/POST /api/business/staffing/eligibilities`. Use a new effective-dated
-row when pricing or suitability changes; historical assignment snapshots remain
-unchanged. Exact-scope active rate rows with the same priority may not have
-overlapping effective ranges.
+The permission-driven `/operations/staffing-configuration` page manages paired
+customer-bill and worker-pay rates. Its rate API boundaries are
+`GET/POST /api/business/staffing/rates`; the current client does not expose or
+enforce separate employee service eligibility. Use a new effective-dated row
+when pricing changes; historical assignment snapshots remain unchanged.
+Exact-scope active rate rows with the same priority may not have overlapping
+effective ranges.
 
 Development cache lifetime is configured with
 `AUTH_ACCOUNT_CACHE_TTL_SECS` (default `60`, allowed range `1..=3600`). The

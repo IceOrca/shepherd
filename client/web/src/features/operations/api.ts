@@ -292,7 +292,7 @@ export function listReconciliations(
   customerId: string | null = null,
 ): Promise<StaffingReconcilePageRsp> {
   return apiRequest<StaffingReconcilePageRsp>(
-    reconciliationPagePath("/api/business/staffing/reconciliations", cursor, customerId),
+    reconciliationPagePath("/api/business/staffing/assignments/reconciliations", cursor, customerId),
   );
 }
 
@@ -305,7 +305,7 @@ export function listReconciliationsForBranch(
   periodEnd: string | null = null,
 ): Promise<StaffingReconcilePageRsp> {
   return apiRequestForBranch<StaffingReconcilePageRsp>(
-    reconciliationPagePath("/api/business/staffing/reconciliations", cursor, customerId, collection, periodStart, periodEnd),
+    reconciliationPagePath("/api/business/staffing/assignments/reconciliations", cursor, customerId, collection, periodStart, periodEnd),
     branchId,
   );
 }

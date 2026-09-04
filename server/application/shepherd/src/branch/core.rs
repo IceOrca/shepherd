@@ -4,6 +4,8 @@ use async_trait::async_trait;
 use serde::Serialize;
 use ts_rs::TS;
 use uuid::Uuid;
+use tracing::{debug, error, info, trace, warn};
+use super::database::BranchRepo;
 
 #[derive(Clone, Debug, Serialize, TS)]
 pub struct BranchSummary {
@@ -18,19 +20,12 @@ pub enum BranchErr {
     BackendUnavailable,
 }
 
-#[async_trait]
-pub trait BranchRepo {
-    async fn list_active_branches(&self, tenant_id: Uuid) -> Result<Vec<BranchSummary>, BranchErr>;
-}
-
-pub type DynBranchRepo = Arc<dyn BranchRepo + Send + Sync>;
-
 pub struct BranchService {
-    repo: DynBranchRepo,
+    repo: Arc<BranchRepo>,
 }
 
 impl BranchService {
-    pub fn new_arc(repo: DynBranchRepo) -> Arc<Self> {
+    pub fn new_arc(repo: Arc<BranchRepo>) -> Arc<Self> {
         Arc::new(Self { repo })
     }
 

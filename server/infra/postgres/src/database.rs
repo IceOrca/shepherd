@@ -76,13 +76,13 @@ impl DatabaseAdapter {
     /// Runs one SQLx operation inside an automatically committed tenant-scoped
     /// transaction. Multi-step domain workflows that coordinate locks or map
     /// business errors should continue to use `begin_tenant` explicitly.
-    pub async fn tran_with_tenant<T, F>(&self, tenant_id: Uuid, operation: F) -> Result<T, TenantDbErr>
+    pub async fn tran_with_tenant<T, F>(&self, tenant_id: Uuid, op: F) -> Result<T, TenantDbErr>
     where
         T: Send,
         F: for<'connection> AsyncFnOnce(&'connection mut PgConnection) -> Result<T, sqlx::Error>,
     {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
-        let result: Result<T, sqlx::Error> = operation(transaction.connection()).await;
+        let result: Result<T, sqlx::Error> = op(transaction.connection()).await;
         match result {
             Ok(value) => {
                 transaction.commit().await?;

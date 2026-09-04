@@ -7,7 +7,9 @@ use ts_rs::TS;
 use uuid::Uuid;
 
 use tracing::{debug, error, info, trace, warn};
-use super::super::core::{ShiftAssignmentStatus, StaffingError};
+use crate::business::staffing::StaffingErr;
+use crate::business::staffing::planned_work::core::ShiftAssignmentStatus;
+use super::database::StaffingWorkRepo;
 
 #[derive(Clone, Debug, Serialize, TS)]
 pub struct ShiftWorkSession {
@@ -62,7 +64,7 @@ pub struct ShiftWorkActionInput {
 }
 
 impl ShiftWorkActionInput {
-    fn validate(&self) -> Result<(), StaffingError> {
+    fn validate(&self) -> Result<(), StaffingErr> {
         match (self.latitude, self.longitude) {
             (None, None) if self.accuracy_meters.is_none() => Ok(()),
             (Some(latitude), Some(longitude))
@@ -74,46 +76,16 @@ impl ShiftWorkActionInput {
             {
                 Ok(())
             }
-            _ => Err(StaffingError::InvalidInput("work-session location is invalid")),
+            _ => Err(StaffingErr::InvalidInput("work-session location is invalid")),
         }
     }
 }
 
-#[async_trait]
-pub trait StaffingWorkRepo {
-    async fn list_own_assignments(
-        &self,
-        tenant_id: Uuid,
-        account_id: Uuid,
-        limit: i64,
-        cursor: Option<&OwnStaffingAssignmentCursor>,
-    ) -> Result<OwnStaffingAssignmentPage, StaffingError>;
-
-    async fn start(
-        &self,
-        tenant_id: Uuid,
-        assignment_id: Uuid,
-        account_id: Uuid,
-        session_id: Uuid,
-        input: &ShiftWorkActionInput,
-    ) -> Result<ShiftWorkSession, StaffingError>;
-
-    async fn end(
-        &self,
-        tenant_id: Uuid,
-        assignment_id: Uuid,
-        account_id: Uuid,
-        input: &ShiftWorkActionInput,
-    ) -> Result<ShiftWorkSession, StaffingError>;
-}
-
-pub type DynStaffingWorkRepo = Arc<dyn StaffingWorkRepo + Send + Sync>;
-
 pub struct StaffingWorkService {
-    repo: DynStaffingWorkRepo,
+    repo: Arc<StaffingWorkRepo>,
 }
 impl StaffingWorkService {
-    pub fn new_arc(repo: DynStaffingWorkRepo) -> Arc<Self> {
+    pub fn new_arc(repo: Arc<StaffingWorkRepo>) -> Arc<Self> {
         Arc::new(Self { repo })
     }
 
@@ -123,9 +95,9 @@ impl StaffingWorkService {
         account_id: Uuid,
         limit: i64,
         cursor: Option<OwnStaffingAssignmentCursor>,
-    ) -> Result<OwnStaffingAssignmentPage, StaffingError> {
+    ) -> Result<OwnStaffingAssignmentPage, StaffingErr> {
         if limit <= 0 {
-            return Err(StaffingError::InvalidInput("own-assignment page size must be positive"));
+            return Err(StaffingErr::InvalidInput("own-assignment page size must be positive"));
         }
         debug!(
             operation = "list_own_staffing_assignments",
@@ -133,7 +105,7 @@ impl StaffingWorkService {
             account_id = %account_id,
             "Staffing-work service operation accepted"
         );
-        let result: Result<OwnStaffingAssignmentPage, StaffingError> = self
+        let result: Result<OwnStaffingAssignmentPage, StaffingErr> = self
             .repo
             .list_own_assignments(tenant_id, account_id, limit, cursor.as_ref())
             .await;
@@ -147,7 +119,7 @@ impl StaffingWorkService {
         assignment_id: Uuid,
         account_id: Uuid,
         input: ShiftWorkActionInput,
-    ) -> Result<ShiftWorkSession, StaffingError> {
+    ) -> Result<ShiftWorkSession, StaffingErr> {
         let session_id: Uuid = Uuid::new_v4();
         trace!(
             operation = "start_staffing_work",
@@ -159,7 +131,7 @@ impl StaffingWorkService {
             "Validating staffing-work start input without logging coordinates"
         );
         input.validate()?;
-        let result: Result<ShiftWorkSession, StaffingError> = self
+        let result: Result<ShiftWorkSession, StaffingErr> = self
             .repo
             .start(tenant_id, assignment_id, account_id, session_id, &input)
             .await;
@@ -179,7 +151,7 @@ impl StaffingWorkService {
         assignment_id: Uuid,
         account_id: Uuid,
         input: ShiftWorkActionInput,
-    ) -> Result<ShiftWorkSession, StaffingError> {
+    ) -> Result<ShiftWorkSession, StaffingErr> {
         trace!(
             operation = "end_staffing_work",
             tenant_id = %tenant_id,
@@ -189,7 +161,7 @@ impl StaffingWorkService {
             "Validating staffing-work end input without logging coordinates"
         );
         input.validate()?;
-        let result: Result<ShiftWorkSession, StaffingError> =
+        let result: Result<ShiftWorkSession, StaffingErr> =
             self.repo.end(tenant_id, assignment_id, account_id, &input).await;
         log_staffing_work_operation("end_staffing_work", tenant_id, account_id, Some(assignment_id), &result);
         result
@@ -201,7 +173,7 @@ fn log_staffing_work_operation<T>(
     tenant_id: Uuid,
     account_id: Uuid,
     assignment_id: Option<Uuid>,
-    result: &Result<T, StaffingError>,
+    result: &Result<T, StaffingErr>,
 ) {
     match result {
         Ok(_) => info!(
@@ -211,7 +183,7 @@ fn log_staffing_work_operation<T>(
             assignment_id = ?assignment_id,
             "Staffing-work service operation completed"
         ),
-        Err(StaffingError::BackendUnavailable) => error!(
+        Err(StaffingErr::BackendUnavailable) => error!(
             operation,
             tenant_id = %tenant_id,
             account_id = %account_id,
