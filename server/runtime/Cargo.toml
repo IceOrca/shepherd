@@ -6,6 +6,7 @@ edition.workspace = true
 [features]
 default = []
 planned-staffing = ["shepherd/planned-staffing"]
+hrm-attendance = ["shepherd/hrm-attendance"]
 
 [[bin]]
 name = "shepherd-srv"

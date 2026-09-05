@@ -562,6 +562,7 @@ async fn correct_salary_advance(
             user.tenant_id,
             advance_id,
             user.account_id,
+            user.has_permission("hr.salary_advances.manage"),
             user.has_permission("hr.salary_advances.correct"),
             idempotency_key(&headers, &user)?,
             SalaryAdvanceCorrectionInput {

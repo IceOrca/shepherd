@@ -262,7 +262,9 @@ impl FinancialReportRepo {
                    month.period_start::DATE AS "period_start!",
                    COALESCE(event.status, 'open') AS "status!",
                    COALESCE(event.revision_number, 0) AS "revision_number!",
-                   event.reason, account.username AS actor_username, event.occurred_at
+                   event.reason AS "reason?",
+                   account.username AS "actor_username?",
+                   event.occurred_at AS "occurred_at?"
             FROM generate_series(
                 date_trunc('month', $3::DATE),
                 date_trunc('month', $4::DATE),
@@ -917,5 +919,69 @@ impl FinancialReportRepo {
             end_date,
             lines,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{error::Error, sync::Arc};
+
+    use chrono::NaiveDate;
+    use infra_postgres::{DatabaseAdapter, with_active_branch};
+    use uuid::Uuid;
+
+    use super::FinancialReportRepo;
+    use crate::business::finance::reporting::core::FinancialPeriodStatus;
+
+    type TestResult = Result<(), Box<dyn Error>>;
+
+    #[tokio::test]
+    async fn open_financial_period_without_an_event_decodes_nullable_audit_fields() -> TestResult {
+        let database_url = std::env::var("DATABASE_URL")?;
+        let database = DatabaseAdapter::connect(&database_url).await?;
+        let tenant_id = Uuid::new_v4();
+        let branch_id = Uuid::new_v4();
+        let tenant_slug = format!("test-financial-period-{}", tenant_id.simple());
+        database
+            .provision_tenant(tenant_id, &tenant_slug, "Financial period query test")
+            .await?;
+        let mut setup = database.begin_tenant(tenant_id).await?;
+        sqlx::query!(
+            "INSERT INTO branches (id, tenant_id, code, name, time_zone) VALUES ($1, $2, 'test-branch', 'Test Branch', 'Asia/Bangkok')",
+            branch_id,
+            tenant_id,
+        )
+        .execute(setup.connection())
+        .await?;
+        setup.commit().await?;
+
+        let repo: Arc<FinancialReportRepo> = FinancialReportRepo::new_arc(Arc::clone(&database));
+        let period_start = NaiveDate::from_ymd_opt(2026, 9, 1).expect("static test date must be valid");
+        let result = with_active_branch(branch_id, async {
+            repo.list_financial_periods(tenant_id, period_start, period_start).await
+        })
+        .await;
+
+        let mut cleanup = database.begin_tenant(tenant_id).await?;
+        sqlx::query!(
+            "DELETE FROM branches WHERE tenant_id = $1 AND id = $2",
+            tenant_id,
+            branch_id
+        )
+        .execute(cleanup.connection())
+        .await?;
+        cleanup.commit().await?;
+        sqlx::query!("DELETE FROM tenants WHERE id = $1", tenant_id)
+            .execute(database.global_pool())
+            .await?;
+
+        let periods = result?;
+        assert_eq!(periods.len(), 1);
+        assert_eq!(periods[0].status, FinancialPeriodStatus::Open);
+        assert_eq!(periods[0].revision_number, 0);
+        assert!(periods[0].reason.is_none());
+        assert!(periods[0].actor_username.is_none());
+        assert!(periods[0].occurred_at.is_none());
+        Ok(())
     }
 }

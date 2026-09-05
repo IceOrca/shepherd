@@ -56,6 +56,8 @@ export type BranchUpdateRequest = { name: string, time_zone: string, status: str
 
 export type BranchPageResponse = { items: Array<Branch>, next_cursor: string | null, has_more: boolean, limit: number, };
 
+export type BranchSummaryPageResponse = { items: Array<BranchSummary>, next_cursor: string | null, has_more: boolean, limit: number, };
+
 export type BusinessRecordStatus = "active" | "disabled";
 
 export type StaffingShiftStatus = "open" | "filled" | "in_progress" | "completed" | "cancelled";
@@ -66,7 +68,7 @@ export type RateSource = "configured" | "manual";
 
 export type StaffingRateKind = "customer_bill" | "worker_pay";
 
-export type Customer = { id: string, code: string, name: string, address: string | null, time_zone: string, billing_email: string | null, status: BusinessRecordStatus, created_at: string, updated_at: string, };
+export type Customer = { id: string, code: string, name: string, address: string | null, time_zone: string, billing_email: string | null, status: BusinessRecordStatus, version: number, created_at: string, updated_at: string, };
 
 export type CustomerPageResponse = { items: Array<Customer>, next_cursor: string | null, has_more: boolean, limit: number, };
 
@@ -102,7 +104,7 @@ export type ReconciliationCorrectionReq = { expected_revision_id: string, worked
 
 export type ReconciliationRevision = { revision_id: string, assignment_id: string, revision_number: number, worked_seconds: number, correction_reason: string | null, recorded_at: string, };
 
-export type CustomerUpsertRequest = { code: string, name: string, address?: string | null, time_zone: string, billing_email?: string | null, status: BusinessRecordStatus, };
+export type CustomerUpsertRequest = { code: string, name: string, address?: string | null, time_zone: string, billing_email?: string | null, status: BusinessRecordStatus, expected_version?: number | null, };
 
 export type StaffingPriceSetRequest = { customer_id: string, employee_id?: string | null, currency: string, customer_hourly_rate: string, worker_hourly_rate: string, effective_from: string, };
 

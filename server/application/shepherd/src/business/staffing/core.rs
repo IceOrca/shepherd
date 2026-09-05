@@ -125,6 +125,7 @@ pub struct Customer {
     pub time_zone: String,
     pub billing_email: Option<String>,
     pub status: BusinessRecordStatus,
+    pub version: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -208,6 +209,7 @@ pub struct CustomerInput {
     pub time_zone: String,
     pub billing_email: Option<String>,
     pub status: BusinessRecordStatus,
+    pub expected_version: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize, TS)]
@@ -410,6 +412,7 @@ impl StaffingService {
     pub async fn list_jobs(
         &self,
         tenant_id: Uuid,
+        search: Option<String>,
         limit: i64,
         cursor: Option<NameCodeCursor>,
     ) -> Result<StaffingJobPage, StaffingErr> {
@@ -417,8 +420,10 @@ impl StaffingService {
             return Err(StaffingErr::InvalidInput("staffing job page size must be positive"));
         }
         debug!(operation = "list_staffing_jobs", tenant_id = %tenant_id, "Staffing service operation accepted");
-        let result: Result<KeysetPage<StaffingJob, NameCodeCursor>, StaffingErr> =
-            self.repo.list_jobs(tenant_id, limit, cursor.as_ref()).await;
+        let result: Result<KeysetPage<StaffingJob, NameCodeCursor>, StaffingErr> = self
+            .repo
+            .list_jobs(tenant_id, search.as_deref(), limit, cursor.as_ref())
+            .await;
         log_staffing_operation("list_staffing_jobs", tenant_id, None, None, &result);
         result
     }
@@ -478,6 +483,11 @@ impl StaffingService {
         }
         validate_identity(&input.code, &input.name)?;
         validate_customer_location(&input)?;
+        if !input.expected_version.is_some_and(|version: i64| version > 0) {
+            return Err(StaffingErr::InvalidInput(
+                "customer update requires a positive expected version",
+            ));
+        }
         let result: Result<Customer, StaffingErr> = self
             .repo
             .update_customer(tenant_id, customer_id, &input, audit_account_id)

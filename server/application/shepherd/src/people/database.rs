@@ -131,7 +131,7 @@ impl PeopleRepo {
 
     pub async fn begin_active_tenant(&self, tenant_id: Uuid) -> Result<TenantTransaction, PeopleOpsErr> {
         self.db.begin_tenant(tenant_id).await.map_err(|err: TenantDbErr| {
-            error!("HR tenant transaction failed: tenant_id={} err={}", tenant_id, err);
+            error!("HR tenant tran failed: tenant_id={} err={}", tenant_id, err);
             PeopleOpsErr::BackendUnavailable
         })
     }
@@ -373,7 +373,7 @@ impl PeopleRepo {
         let expected_version: i64 = input.expected_version.ok_or(PeopleOpsErr::InvalidInput(
             "employee update requires an expected version",
         ))?;
-        let mut transaction: TenantTransaction = self.begin_active_tenant(tenant_id).await?;
+        let mut tran: TenantTransaction = self.begin_active_tenant(tenant_id).await?;
         let row: Option<EmployeeRow> = sqlx::query_as!(
             EmployeeRow,
             r#"
@@ -416,13 +416,12 @@ impl PeopleRepo {
             audit_account_id,
             expected_version,
         )
-        .fetch_optional(transaction.connection())
+        .fetch_optional(tran.connection())
         .await
         .map_err(|err: sqlx::Error| mutation_failure("update employee", tenant_id, err))?;
 
         let row: EmployeeRow = row.ok_or(PeopleOpsErr::Conflict)?;
-        transaction
-            .commit()
+        tran.commit()
             .await
             .map_err(|err: sqlx::Error| database_failure("commit employee update", tenant_id, err))?;
         info!(
@@ -520,7 +519,7 @@ impl PeopleRepo {
                 _ => return Err(PeopleOpsErr::InvalidInput("citizen ID input is inconsistent")),
             };
 
-        let mut transaction: TenantTransaction = self.begin_active_tenant(tenant_id).await?;
+        let mut tran: TenantTransaction = self.begin_active_tenant(tenant_id).await?;
         let current: Option<EmployeeSensitiveUpdateRow> = sqlx::query_as!(
             EmployeeSensitiveUpdateRow,
             r#"
@@ -532,7 +531,7 @@ impl PeopleRepo {
             tenant_id,
             employee_id,
         )
-        .fetch_optional(transaction.connection())
+        .fetch_optional(tran.connection())
         .await
         .map_err(|err: sqlx::Error| database_failure("lock employee citizen ID", tenant_id, err))?;
 
@@ -584,9 +583,9 @@ impl PeopleRepo {
             audit_account_id,
             input.expected_version,
         )
-        .fetch_optional(transaction.connection())
+        .fetch_optional(tran.connection())
         .await
-        .map_err(|err| mutation_failure("update employee citizen ID", tenant_id, err))?
+        .map_err(|err: sqlx::Error| mutation_failure("update employee citizen ID", tenant_id, err))?
         .ok_or(PeopleOpsErr::Conflict)?;
 
         sqlx::query!(
@@ -609,11 +608,10 @@ impl PeopleRepo {
             new_last4,
             audit_account_id,
         )
-        .execute(transaction.connection())
+        .execute(tran.connection())
         .await
         .map_err(|err: sqlx::Error| database_failure("audit employee citizen ID update", tenant_id, err))?;
-        transaction
-            .commit()
+        tran.commit()
             .await
             .map_err(|err: sqlx::Error| database_failure("commit employee citizen ID update", tenant_id, err))?;
         info!(
@@ -631,6 +629,7 @@ impl PeopleRepo {
         })
     }
 
+    #[cfg(feature = "hrm-attendance")]
     pub async fn list_attendance_sessions(
         &self,
         tenant_id: Uuid,
@@ -694,6 +693,7 @@ impl PeopleRepo {
         Ok(AttendancePage { items, next_cursor })
     }
 
+    #[cfg(feature = "hrm-attendance")]
     pub async fn check_in(
         &self,
         tenant_id: Uuid,
@@ -743,6 +743,7 @@ impl PeopleRepo {
         Ok(row.into())
     }
 
+    #[cfg(feature = "hrm-attendance")]
     pub async fn check_out(
         &self,
         tenant_id: Uuid,
@@ -796,9 +797,9 @@ fn database_failure(operation: &str, tenant_id: Uuid, err: sqlx::Error) -> Peopl
     PeopleOpsErr::BackendUnavailable
 }
 
-fn tenant_database_failure(operation: &str, tenant_id: Uuid, err: TenantDbErr) -> PeopleOpsErr {
+fn tenant_database_failure(op: &str, tenant_id: Uuid, err: TenantDbErr) -> PeopleOpsErr {
     error!(
-        operation,
+        op,
         tenant_id = %tenant_id,
         reason = %err,
         "HR automatic tenant operation failed"
@@ -806,18 +807,18 @@ fn tenant_database_failure(operation: &str, tenant_id: Uuid, err: TenantDbErr) -
     PeopleOpsErr::BackendUnavailable
 }
 
-fn tenant_mutation_failure(operation: &str, tenant_id: Uuid, err: TenantDbErr) -> PeopleOpsErr {
+fn tenant_mutation_failure(op: &str, tenant_id: Uuid, err: TenantDbErr) -> PeopleOpsErr {
     match err {
-        TenantDbErr::Sqlx(sqlx_error) => mutation_failure(operation, tenant_id, sqlx_error),
-        tenant_error => tenant_database_failure(operation, tenant_id, tenant_error),
+        TenantDbErr::Sqlx(sqlx_error) => mutation_failure(op, tenant_id, sqlx_error),
+        tenant_error => tenant_database_failure(op, tenant_id, tenant_error),
     }
 }
 
-fn mutation_failure(operation: &str, tenant_id: Uuid, err: sqlx::Error) -> PeopleOpsErr {
+fn mutation_failure(op: &str, tenant_id: Uuid, err: sqlx::Error) -> PeopleOpsErr {
     let mapped: PeopleOpsErr = err.as_database_error().map_or(
         PeopleOpsErr::BackendUnavailable,
         |db_err: &dyn sqlx::error::DatabaseError| {
-            if db_err.is_unique_violation() {
+            if db_err.is_unique_violation() || db_err.code().as_deref() == Some("23505") {
                 PeopleOpsErr::Conflict
             } else if db_err.is_foreign_key_violation() || db_err.is_check_violation() {
                 PeopleOpsErr::InvalidInput("a referenced HR record is invalid")
@@ -828,7 +829,7 @@ fn mutation_failure(operation: &str, tenant_id: Uuid, err: sqlx::Error) -> Peopl
     );
     error!(
         "HR mutation failed: operation={} tenant_id={} mapped_error={:?} err={}",
-        operation, tenant_id, mapped, err
+        op, tenant_id, mapped, err
     );
     mapped
 }

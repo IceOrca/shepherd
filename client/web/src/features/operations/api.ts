@@ -1,5 +1,6 @@
 import type {
   BranchSummary,
+  BranchSummaryPageResponse,
   Customer,
   CustomerPageResponse,
   CustomerUpsertRequest,
@@ -78,8 +79,20 @@ export const operationsQueryKeys = {
   candidates: (shiftId: string) => ["operations", "shifts", shiftId, "candidates"] as const,
 };
 
-export function listBranches(): Promise<BranchSummary[]> {
-  return apiRequest<BranchSummary[]>("/api/business/branches");
+export async function listBranches(): Promise<BranchSummary[]> {
+  const branches: BranchSummary[] = [];
+  const seenCursors: Set<string> = new Set<string>();
+  let cursor: string | null = null;
+  do {
+    const page: BranchSummaryPageResponse = await apiRequest<BranchSummaryPageResponse>(
+      cursorPath("/api/business/branches", cursor),
+    );
+    branches.push(...page.items);
+    cursor = page.next_cursor;
+    if (cursor !== null && seenCursors.has(cursor)) throw new Error("Branch pagination cursor repeated");
+    if (cursor !== null) seenCursors.add(cursor);
+  } while (cursor !== null);
+  return branches;
 }
 
 export interface WorkActionInput {
@@ -146,16 +159,17 @@ export function updateCustomer(customerId: string, payload: CustomerUpsertReques
   });
 }
 
-export function listJobs(cursor: string | null = null): Promise<StaffingListPage<StaffingJob>> {
-  return apiRequest<StaffingListPage<StaffingJob>>(cursorPath("/api/business/staffing/jobs", cursor));
+export function listJobs(cursor: string | null = null, search = ""): Promise<StaffingListPage<StaffingJob>> {
+  return apiRequest<StaffingListPage<StaffingJob>>(cursorPath("/api/business/staffing/jobs", cursor, search));
 }
 
 export function listJobsForBranch(
   branchId: string,
   cursor: string | null = null,
+  search = "",
 ): Promise<StaffingListPage<StaffingJob>> {
   return apiRequestForBranch<StaffingListPage<StaffingJob>>(
-    cursorPath("/api/business/staffing/jobs", cursor),
+    cursorPath("/api/business/staffing/jobs", cursor, search),
     branchId,
   );
 }

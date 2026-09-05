@@ -14,7 +14,9 @@ use ts_rs::TS;
 use crate::{
     AppContext,
     auth::{AuthedUser, invalidate_tenant_accounts},
-    branch::core::{Branch, BranchCreateRequest, BranchCursor, BranchErr, BranchSummary, BranchUpdateRequest},
+    branch::core::{
+        Branch, BranchCreateRequest, BranchCursor, BranchErr, BranchSummary, BranchSummaryCursor, BranchUpdateRequest,
+    },
     pagination::{decode_cursor, encode_cursor, normalize_search, resolve_limit},
 };
 
@@ -36,6 +38,14 @@ pub struct BranchPageResponse {
     pub limit: u16,
 }
 
+#[derive(Debug, Serialize, TS)]
+pub struct BranchSummaryPageResponse {
+    pub items: Vec<BranchSummary>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+    pub limit: u16,
+}
+
 pub fn routes() -> Router<Arc<AppContext>> {
     Router::new()
         .route("/branches", get(list_branches).post(create_branch))
@@ -46,24 +56,38 @@ pub fn routes() -> Router<Arc<AppContext>> {
 async fn list_branches(
     State(ctx): State<Arc<AppContext>>,
     Extension(user): Extension<AuthedUser>,
-) -> Result<Json<Vec<BranchSummary>>, StatusCode> {
+    Query(query): Query<BranchPageQuery>,
+) -> Result<Json<BranchSummaryPageResponse>, StatusCode> {
     require_permission(&user, READ_PERMISSION)?;
-    let mut branches = ctx
+    let limit = resolve_limit(&ctx.pagination, query.limit)?;
+    let cursor: Option<BranchSummaryCursor> = decode_cursor(query.cursor.as_deref())?;
+    let page = ctx
         .core
         .branch
-        .list_active_branches(user.tenant_id)
+        .list_active_branches(
+            user.tenant_id,
+            user.branch_ids.clone(),
+            normalize_search(query.search),
+            i64::from(limit),
+            cursor,
+        )
         .await
         .map_err(|error: BranchErr| business_status("list branches", &user, error))?;
-    branches.retain(|branch: &BranchSummary| user.branch_ids.contains(&branch.id));
+    let next_cursor = encode_cursor(page.next_cursor.as_ref())?;
     debug!(
         operation = "branch.list_accessible",
         tenant_id = %user.tenant_id,
         account_id = %user.account_id,
         active_branch_id = ?user.active_branch_id,
-        branch_count = branches.len(),
+        branch_count = page.items.len(),
         "Returning only branches authorized for the current account"
     );
-    Ok(Json(branches))
+    Ok(Json(BranchSummaryPageResponse {
+        has_more: next_cursor.is_some(),
+        items: page.items,
+        next_cursor,
+        limit,
+    }))
 }
 
 async fn list_managed_branches(

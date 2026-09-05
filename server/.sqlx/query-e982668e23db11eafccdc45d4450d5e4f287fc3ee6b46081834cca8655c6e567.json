@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                    UPDATE business_customers\n                    SET code = $3,\n                        name = $4,\n                        address = $5,\n                        time_zone = $6,\n                        billing_email = $7,\n                        status = $8,\n                        updated_at = CURRENT_TIMESTAMP,\n                        updated_by_account_id = $9\n                    WHERE tenant_id = $1 AND id = $2\n                    RETURNING id, code, name, address, time_zone, billing_email, status, created_at, updated_at\n                    ",
+  "query": "\n                    SELECT id, code, name, address, time_zone, billing_email, status, version, created_at, updated_at\n                    FROM business_customers\n                    WHERE tenant_id = $1\n                      AND ($2::TEXT IS NULL\n                           OR lower(name) LIKE '%' || $2 || '%'\n                           OR lower(code) LIKE '%' || $2 || '%'\n                           OR lower(COALESCE(address, '')) LIKE '%' || $2 || '%'\n                           OR lower(COALESCE(billing_email, '')) LIKE '%' || $2 || '%')\n                      AND ($3::TEXT IS NULL OR (lower(name), code, id) > ($3, $4::TEXT, $5::UUID))\n                    ORDER BY lower(name), code, id\n                    LIMIT $6\n                    ",
   "describe": {
     "columns": [
       {
@@ -82,6 +82,17 @@
       },
       {
         "ordinal": 7,
+        "name": "version",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "business_customers",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -92,7 +103,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "updated_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -106,14 +117,11 @@
     "parameters": {
       "Left": [
         "Uuid",
+        "Text",
+        "Text",
+        "Text",
         "Uuid",
-        "Text",
-        "Text",
-        "Text",
-        "Text",
-        "Text",
-        "Text",
-        "Uuid"
+        "Int8"
       ]
     },
     "nullable": [
@@ -125,8 +133,9 @@
       true,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "b0c95fcdbcf001b5d685ce3db6f82391ad11a109eac724cf978db05c3aff3584"
+  "hash": "e982668e23db11eafccdc45d4450d5e4f287fc3ee6b46081834cca8655c6e567"
 }

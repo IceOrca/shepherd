@@ -63,6 +63,7 @@ struct Fixture {
     branch_id: Uuid,
     customer_id: Uuid,
     alternate_customer_id: Uuid,
+    disabled_customer_id: Uuid,
     job_id: Uuid,
     planned_assignment_id: Uuid,
 }
@@ -82,6 +83,7 @@ impl Fixture {
         let branch_id: Uuid = Uuid::new_v4();
         let customer_id: Uuid = Uuid::new_v4();
         let alternate_customer_id: Uuid = Uuid::new_v4();
+        let disabled_customer_id: Uuid = Uuid::new_v4();
         let job_id: Uuid = Uuid::new_v4();
         let planned_shift_id: Uuid = Uuid::new_v4();
         let planned_assignment_id: Uuid = Uuid::new_v4();
@@ -173,17 +175,19 @@ impl Fixture {
         sqlx::query!(
             r#"
             INSERT INTO business_customers (
-                id, tenant_id, branch_id, code, name, address, time_zone,
+                id, tenant_id, branch_id, code, name, address, time_zone, status,
                 created_by_account_id, updated_by_account_id
             ) VALUES
-                ($1, $3, $4, 'main-customer', 'Main Customer', 'Main address', 'Asia/Bangkok', $5, $5),
-                ($2, $3, $4, 'alternate-customer', 'Alternate Customer', 'Alternate address', 'Asia/Bangkok', $5, $5)
+                ($1, $3, $4, 'main-customer', 'Main Customer', 'Main address', 'Asia/Bangkok', 'active', $5, $5),
+                ($2, $3, $4, 'alternate-customer', 'Alternate Customer', 'Alternate address', 'Asia/Bangkok', 'active', $5, $5),
+                ($6, $3, $4, 'disabled-customer', 'Disabled Customer', 'Disabled address', 'Asia/Bangkok', 'disabled', $5, $5)
             "#,
             customer_id,
             alternate_customer_id,
             tenant_id,
             branch_id,
             actor_account_id,
+            disabled_customer_id,
         )
         .execute(setup.connection())
         .await?;
@@ -236,6 +240,7 @@ impl Fixture {
             branch_id,
             customer_id,
             alternate_customer_id,
+            disabled_customer_id,
             job_id,
             planned_assignment_id,
         })
@@ -896,6 +901,24 @@ async fn concurrent_peer_lifecycle_is_idempotent_and_preserves_provenance() -> T
             .await;
         assert!(matches!(changed_delivery, Err(UrgentStaffingErr::Conflict)));
 
+        let mut identity_change = fixture.database.begin_tenant(fixture.tenant_id).await?;
+        let identity_error = sqlx::query!(
+            "UPDATE hr_employees SET account_id = NULL WHERE tenant_id = $1 AND id = $2",
+            fixture.tenant_id,
+            fixture.actor_employee_id,
+        )
+        .execute(identity_change.connection())
+        .await
+        .expect_err("open urgent work must prevent employee account unlinking");
+        assert_eq!(
+            identity_error
+                .as_database_error()
+                .and_then(sqlx::error::DatabaseError::code)
+                .as_deref(),
+            Some("55000")
+        );
+        identity_change.rollback().await?;
+
         fixture.age_urgent_report(actor_work.report_id).await?;
         fixture.age_urgent_report(peer_work.report_id).await?;
         let end_key: Uuid = Uuid::new_v4();
@@ -1162,6 +1185,27 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
                 .await,
         )?;
         assert_eq!(fixture.urgent_customer_history_count(report_id).await?, 2);
+
+        let disabled_customer_rejected: Result<super::core::UrgentWorkReconcile, UrgentStaffingErr> = service
+            .reconcile(
+                fixture.tenant_id,
+                fixture.actor_account_id,
+                report_id,
+                UrgentWorkReconcileInput {
+                    final_customer_id: fixture.disabled_customer_id,
+                    job_id: fixture.job_id,
+                    worked_seconds,
+                    adjustment_reason: Some("customer is not active".to_owned()),
+                    manual_rate: Some(ManualRateOverride {
+                        reason: "isolated urgent reconciliation pricing".to_owned(),
+                        currency: "VND".to_owned(),
+                        bill_hourly_rate: "150000".to_owned(),
+                        worker_hourly_rate: "120000".to_owned(),
+                    }),
+                },
+            )
+            .await;
+        assert!(matches!(disabled_customer_rejected, Err(UrgentStaffingErr::NotFound)));
 
         let reconciled: super::core::UrgentWorkReconcile = require_urgent(
             service

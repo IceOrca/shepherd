@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT slug AS \"slug!\", status AS \"status!\" FROM tenants WHERE id = $1",
+  "query": "SELECT slug AS \"slug!\", status AS \"status!\" \n            FROM tenants \n            WHERE id = $1\n            ",
   "describe": {
     "columns": [
       {
@@ -36,5 +36,5 @@
       false
     ]
   },
-  "hash": "8a2facda85398b2ea1ef5fd78466ce1bbcdeaa234c073741104e7b7d74b2059d"
+  "hash": "adaf365d8f4bd6d95de533e859b36448d8ccf025f6fdcc3912afef5408cf73a3"
 }

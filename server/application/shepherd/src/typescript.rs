@@ -11,14 +11,17 @@ use crate::{
     },
     business::staffing::{
         {ReconcileStatus, ReconciliationRevision, ManualRateOverrideRequest},
+        core::{
+            BusinessRecordStatus, Customer, StaffingJob, StaffingPriceSet, StaffingRate, StaffingRateKind,
+            StaffingStaff,
+        },
         host::{
             CustomerPageResponse, CustomerUpsertRequest, ReconciliationCorrectionReq, StaffingPriceSetRequest,
             StaffingRatePageResponse, StaffingStaffPageResponse,
         },
         planned_work::core::{
-            BusinessRecordStatus, Customer, CustomerWorkRecord, RateSource, ShiftAssignment, ShiftAssignmentStatus,
-            StaffingCandidate, StaffingJob, StaffingPriceSet, StaffingRate, StaffingRateKind, StaffingReconcile,
-            StaffingShift, StaffingShiftStatus, StaffingStaff,
+            CustomerWorkRecord, RateSource, ShiftAssignment, ShiftAssignmentStatus, StaffingCandidate,
+            StaffingReconcile, StaffingShift, StaffingShiftStatus,
         },
         planned_work::host::{
             CustomerWorkRecordUpsertReq, ShiftAssignmentApproveRequest, ShiftAssignmentCreateRequest,
@@ -65,7 +68,7 @@ use crate::{
     },
     branch::{
         core::{Branch, BranchCreateRequest, BranchSummary, BranchUpdateRequest},
-        host::BranchPageResponse,
+        host::{BranchPageResponse, BranchSummaryPageResponse},
     },
     people::{
         core::{AttendanceSession, Employee, EmployeeSensitiveProfile, EmployeeStatus, Gender},
@@ -107,6 +110,7 @@ pub fn contract() -> String {
     push::<BranchCreateRequest>(&mut output, &config);
     push::<BranchUpdateRequest>(&mut output, &config);
     push::<BranchPageResponse>(&mut output, &config);
+    push::<BranchSummaryPageResponse>(&mut output, &config);
     push::<BusinessRecordStatus>(&mut output, &config);
     push::<StaffingShiftStatus>(&mut output, &config);
     push::<ShiftAssignmentStatus>(&mut output, &config);

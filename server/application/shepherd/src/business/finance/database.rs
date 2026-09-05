@@ -402,6 +402,10 @@ fn parse_optional_decimal(
     value.map(|item| parse_decimal(item, error_message)).transpose()
 }
 
+fn correction_allowed_for_status(status: &str, initial_status: &str, has_correction_permission: bool) -> bool {
+    status == initial_status || has_correction_permission
+}
+
 async fn commit(transaction: TenantTransaction) -> Result<(), FinanceError> {
     transaction.commit().await.map_err(|error: sqlx::Error| {
         error!(reason = %error, "Financial transaction commit failed");
@@ -671,10 +675,10 @@ impl FinanceRepo {
         if actor_account_id != locked.owner_account_id && !can_correct_confirmed {
             return Err(FinanceError::Forbidden);
         }
-        let preserve_approval: bool = locked.status == "approved" && can_correct_confirmed;
-        if locked.status == "approved" && !preserve_approval {
+        if !correction_allowed_for_status(&locked.status, "submitted", can_correct_confirmed) {
             return Err(FinanceError::Forbidden);
         }
+        let preserve_approval: bool = locked.status == "approved" && can_correct_confirmed;
         if preserve_approval && input.approved_amount.is_none() {
             return Err(FinanceError::InvalidInput(
                 "approved amount is required when correcting an approved expense",
@@ -1120,6 +1124,7 @@ impl FinanceRepo {
         tenant_id: Uuid,
         advance_id: Uuid,
         actor_account_id: Uuid,
+        can_manage_requested: bool,
         can_correct_confirmed: bool,
         idempotency_key: Uuid,
         input: &SalaryAdvanceCorrectionInput,
@@ -1177,14 +1182,14 @@ impl FinanceRepo {
         if locked.revision_id != input.expected_revision_id {
             return Err(FinanceError::Conflict);
         }
-        if actor_account_id != locked.owner_account_id && !can_correct_confirmed {
+        if actor_account_id != locked.owner_account_id && !can_manage_requested && !can_correct_confirmed {
+            return Err(FinanceError::Forbidden);
+        }
+        if !correction_allowed_for_status(&locked.status, "requested", can_correct_confirmed) {
             return Err(FinanceError::Forbidden);
         }
         let preserve_decision: bool =
             matches!(locked.status.as_str(), "approved" | "disbursed" | "recovered") && can_correct_confirmed;
-        if matches!(locked.status.as_str(), "approved" | "disbursed" | "recovered") && !preserve_decision {
-            return Err(FinanceError::Forbidden);
-        }
         if preserve_decision && input.approved_amount.is_none() {
             return Err(FinanceError::InvalidInput(
                 "approved amount is required when correcting an approved salary advance",
@@ -1517,5 +1522,22 @@ impl FinanceRepo {
         let result: SalaryAdvance = fetch_advance(&mut *connection, tenant_id, advance_id).await?;
         commit(transaction).await?;
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::correction_allowed_for_status;
+
+    #[test]
+    fn ordinary_finance_permissions_cannot_reopen_decided_records() {
+        assert!(correction_allowed_for_status("submitted", "submitted", false));
+        assert!(correction_allowed_for_status("requested", "requested", false));
+        for status in ["approved", "rejected", "cancelled", "disbursed", "recovered"] {
+            assert!(!correction_allowed_for_status(status, "submitted", false));
+            assert!(!correction_allowed_for_status(status, "requested", false));
+            assert!(correction_allowed_for_status(status, "submitted", true));
+            assert!(correction_allowed_for_status(status, "requested", true));
+        }
     }
 }

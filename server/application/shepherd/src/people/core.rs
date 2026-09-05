@@ -264,6 +264,7 @@ impl PeopleService {
             .await
     }
 
+    #[cfg(feature = "hrm-attendance")]
     pub async fn list_attendance_sessions(
         &self,
         tenant_id: Uuid,
@@ -279,6 +280,7 @@ impl PeopleService {
             .await
     }
 
+    #[cfg(feature = "hrm-attendance")]
     pub async fn check_in(
         &self,
         tenant_id: Uuid,
@@ -291,6 +293,7 @@ impl PeopleService {
             .await
     }
 
+    #[cfg(feature = "hrm-attendance")]
     pub async fn check_out(
         &self,
         tenant_id: Uuid,

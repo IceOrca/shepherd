@@ -3,11 +3,12 @@ use std::sync::Arc;
 use infra_postgres::{DatabaseAdapter, TenantDbErr};
 use serde_json::json;
 use sqlx::PgConnection;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, trace, warn};
 use uuid::Uuid;
 
 use crate::branch::core::{
-    Branch, BranchCreateRequest, BranchCursor, BranchErr, BranchPage, BranchSummary, BranchUpdateRequest,
+    Branch, BranchCreateRequest, BranchCursor, BranchErr, BranchPage, BranchSummary, BranchSummaryCursor,
+    BranchSummaryPage, BranchUpdateRequest,
 };
 
 const MANAGE_PERMISSION: &str = "business.branches.manage";
@@ -22,10 +23,22 @@ impl BranchRepo {
         Arc::new(Self { db })
     }
 
-    pub async fn list_active_branches(&self, tenant_id: Uuid) -> Result<Vec<BranchSummary>, BranchErr> {
-        let branches: Vec<BranchSummary> = self
+    pub async fn list_active_branches(
+        &self,
+        tenant_id: Uuid,
+        authorized_branch_ids: Vec<Uuid>,
+        search: Option<String>,
+        limit: i64,
+        cursor: Option<BranchSummaryCursor>,
+    ) -> Result<BranchSummaryPage, BranchErr> {
+        let cursor_name: Option<String> = cursor
+            .as_ref()
+            .map(|value: &BranchSummaryCursor| value.normalized_name.clone());
+        let cursor_code: Option<String> = cursor.as_ref().map(|value: &BranchSummaryCursor| value.code.clone());
+        let cursor_id: Option<Uuid> = cursor.as_ref().map(|value: &BranchSummaryCursor| value.id);
+        let mut branches: Vec<BranchSummary> = self
             .db
-            .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            .tran_with_tenant(tenant_id, async move |conn: &mut PgConnection| {
                 sqlx::query_as!(
                     BranchSummary,
                     r#"
@@ -33,22 +46,51 @@ impl BranchRepo {
                     FROM branches
                     WHERE tenant_id = $1
                       AND status = 'active'
-                    ORDER BY lower(name), code
+                      AND id = ANY($2)
+                      AND ($3::TEXT IS NULL
+                           OR lower(name) LIKE '%' || $3 || '%'
+                           OR lower(code) LIKE '%' || $3 || '%')
+                      AND ($4::TEXT IS NULL OR (lower(name), code, id) > ($4, $5, $6))
+                    ORDER BY lower(name), code, id
+                    LIMIT $7
                     "#,
                     tenant_id,
+                    &authorized_branch_ids,
+                    search,
+                    cursor_name,
+                    cursor_code,
+                    cursor_id,
+                    limit + 1,
                 )
-                .fetch_all(connection)
+                .fetch_all(conn)
                 .await
             })
             .await
-            .map_err(|error: TenantDbErr| database_failure("list active branches", tenant_id, error))?;
+            .map_err(|err: TenantDbErr| database_failure("list active branches", tenant_id, err))?;
+
+        let has_more: bool = branches.len() > usize::try_from(limit).unwrap_or(usize::MAX);
+        if has_more {
+            branches.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+        }
+        let next_cursor: Option<BranchSummaryCursor> = if has_more {
+            branches.last().map(|branch: &BranchSummary| BranchSummaryCursor {
+                normalized_name: branch.name.to_lowercase(),
+                code: branch.code.clone(),
+                id: branch.id,
+            })
+        } else {
+            None
+        };
         debug!(
             operation = "branch.list_active",
             tenant_id = %tenant_id,
             branch_count = branches.len(),
             "Active tenant branches loaded"
         );
-        Ok(branches)
+        Ok(BranchSummaryPage {
+            items: branches,
+            next_cursor,
+        })
     }
 
     pub async fn list_managed_branches(
@@ -59,12 +101,12 @@ impl BranchRepo {
         limit: i64,
         cursor: Option<BranchCursor>,
     ) -> Result<BranchPage, BranchErr> {
-        let cursor_code = cursor.as_ref().map(|value: &BranchCursor| value.code.clone());
-        let cursor_id = cursor.as_ref().map(|value: &BranchCursor| value.id);
-        let mut items = self
+        let cursor_code: Option<String> = cursor.as_ref().map(|value: &BranchCursor| value.code.clone());
+        let cursor_id: Option<Uuid> = cursor.as_ref().map(|value: &BranchCursor| value.id);
+        let mut items: Vec<Branch> = self
             .db
-            .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
-                require_tenant_permission(connection, tenant_id, actor_account_id).await?;
+            .tran_with_tenant(tenant_id, async move |conn: &mut PgConnection| {
+                require_manage_permission(conn, tenant_id, actor_account_id).await?;
                 sqlx::query_as!(
                     Branch,
                     r#"
@@ -89,16 +131,16 @@ impl BranchRepo {
                     cursor_code,
                     cursor_id,
                 )
-                .fetch_all(connection)
+                .fetch_all(conn)
                 .await
             })
             .await
-            .map_err(|error: TenantDbErr| mutation_failure("list managed branches", tenant_id, error))?;
-        let has_more = items.len() > usize::try_from(limit).unwrap_or(usize::MAX);
+            .map_err(|err: TenantDbErr| mutation_failure("list managed branches", tenant_id, err))?;
+        let has_more: bool = items.len() > usize::try_from(limit).unwrap_or(usize::MAX);
         if has_more {
             items.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
         }
-        let next_cursor = if has_more {
+        let next_cursor: Option<BranchCursor> = if has_more {
             items.last().map(|branch: &Branch| BranchCursor {
                 code: branch.code.clone(),
                 id: branch.id,
@@ -115,11 +157,11 @@ impl BranchRepo {
         actor_account_id: Uuid,
         request: BranchCreateRequest,
     ) -> Result<Branch, BranchErr> {
-        let branch_id = Uuid::new_v4();
+        let branch_id: Uuid = Uuid::new_v4();
         self.db
-            .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
-                require_tenant_permission(connection, tenant_id, actor_account_id).await?;
-                let inserted = sqlx::query_as!(
+            .tran_with_tenant(tenant_id, async move |conn: &mut PgConnection| {
+                require_manage_permission(conn, tenant_id, actor_account_id).await?;
+                let inserted: Branch = sqlx::query_as!(
                     Branch,
                     r#"
                     INSERT INTO branches (
@@ -136,9 +178,10 @@ impl BranchRepo {
                     request.time_zone,
                     actor_account_id,
                 )
-                .fetch_one(&mut *connection)
+                .fetch_one(&mut *conn)
                 .await?;
-                let after_value = json!({
+
+                let after_value: serde_json::Value = json!({
                     "id": inserted.id,
                     "code": inserted.code,
                     "name": inserted.name,
@@ -147,7 +190,7 @@ impl BranchRepo {
                     "version": inserted.version,
                 });
                 insert_audit(
-                    connection,
+                    conn,
                     tenant_id,
                     actor_account_id,
                     "branch.create",
@@ -159,7 +202,7 @@ impl BranchRepo {
                 Ok(inserted)
             })
             .await
-            .map_err(|error: TenantDbErr| mutation_failure("create branch", tenant_id, error))
+            .map_err(|err: TenantDbErr| mutation_failure("create branch", tenant_id, err))
     }
 
     pub async fn update_branch(
@@ -171,20 +214,24 @@ impl BranchRepo {
     ) -> Result<Branch, BranchErr> {
         let result: Option<Branch> = self
             .db
-            .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
-                require_tenant_permission(connection, tenant_id, actor_account_id).await?;
-                let before = sqlx::query_as!(
+            .tran_with_tenant(tenant_id, async move |conn: &mut PgConnection| {
+                require_manage_permission(conn, tenant_id, actor_account_id).await?;
+                let before: Option<Branch> = sqlx::query_as!(
                     Branch,
-                    "SELECT id, code, name, time_zone, status, version FROM branches WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
+                    r#"
+                    SELECT id, code, name, time_zone, status, version
+                    FROM branches
+                    WHERE tenant_id = $1 AND id = $2
+                    FOR UPDATE"#,
                     tenant_id,
                     branch_id,
                 )
-                .fetch_optional(&mut *connection)
+                .fetch_optional(&mut *conn)
                 .await?;
                 let Some(before) = before else {
                     return Ok(None);
                 };
-                let updated = sqlx::query_as!(
+                let updated: Option<Branch> = sqlx::query_as!(
                     Branch,
                     r#"
                     UPDATE branches
@@ -205,10 +252,11 @@ impl BranchRepo {
                     actor_account_id,
                     request.expected_version,
                 )
-                .fetch_optional(&mut *connection)
+                .fetch_optional(&mut *conn)
                 .await?;
+
                 if let Some(updated) = &updated {
-                    let before_value = json!({
+                    let before_value: serde_json::Value = json!({
                         "id": before.id,
                         "code": before.code,
                         "name": before.name,
@@ -216,7 +264,7 @@ impl BranchRepo {
                         "status": before.status,
                         "version": before.version,
                     });
-                    let after_value = json!({
+                    let after_value: serde_json::Value = json!({
                         "id": updated.id,
                         "code": updated.code,
                         "name": updated.name,
@@ -224,8 +272,9 @@ impl BranchRepo {
                         "status": updated.status,
                         "version": updated.version,
                     });
+
                     insert_audit(
-                        connection,
+                        conn,
                         tenant_id,
                         actor_account_id,
                         "branch.update",
@@ -235,27 +284,29 @@ impl BranchRepo {
                     )
                     .await?;
                 }
+
                 Ok(updated)
             })
             .await
-            .map_err(|error: TenantDbErr| mutation_failure("update branch", tenant_id, error))?;
+            .map_err(|err: TenantDbErr| mutation_failure("update branch", tenant_id, err))?;
         result.ok_or(BranchErr::Conflict)
     }
 }
 
-async fn require_tenant_permission(
-    connection: &mut PgConnection,
+async fn require_manage_permission(
+    conn: &mut PgConnection,
     tenant_id: Uuid,
     actor_account_id: Uuid,
 ) -> Result<(), sqlx::Error> {
-    let allowed = sqlx::query_scalar!(
+    let allowed: bool = sqlx::query_scalar!(
         r#"SELECT shepherd_account_has_tenant_permission($1, $2, $3) AS "allowed!""#,
         tenant_id,
         actor_account_id,
         MANAGE_PERMISSION,
     )
-    .fetch_one(connection)
+    .fetch_one(conn)
     .await?;
+
     if allowed {
         Ok(())
     } else {
@@ -264,7 +315,7 @@ async fn require_tenant_permission(
 }
 
 async fn insert_audit(
-    connection: &mut PgConnection,
+    conn: &mut PgConnection,
     tenant_id: Uuid,
     actor_account_id: Uuid,
     action: &str,
@@ -288,18 +339,18 @@ async fn insert_audit(
         before_value,
         after_value,
     )
-    .execute(connection)
+    .execute(conn)
     .await?;
     Ok(())
 }
 
-fn database_failure(operation: &str, tenant_id: Uuid, error: TenantDbErr) -> BranchErr {
-    error!(operation, tenant_id = %tenant_id, reason = %error, "Branch database query failed");
+fn database_failure(op: &str, tenant_id: Uuid, err: TenantDbErr) -> BranchErr {
+    error!(op, tenant_id = %tenant_id, reason = %err, "Branch database query failed");
     BranchErr::BackendUnavailable
 }
 
-fn mutation_failure(operation: &str, tenant_id: Uuid, error: TenantDbErr) -> BranchErr {
-    let mapped = match &error {
+fn mutation_failure(op: &str, tenant_id: Uuid, err: TenantDbErr) -> BranchErr {
+    let mapped: BranchErr = match &err {
         TenantDbErr::Sqlx(sqlx::Error::Protocol(message)) if message == TENANT_PERMISSION_REQUIRED => {
             BranchErr::Forbidden
         }
@@ -314,9 +365,9 @@ fn mutation_failure(operation: &str, tenant_id: Uuid, error: TenantDbErr) -> Bra
         _ => BranchErr::BackendUnavailable,
     };
     if matches!(mapped, BranchErr::BackendUnavailable) {
-        error!(operation, tenant_id = %tenant_id, reason = %error, "Branch mutation failed unexpectedly");
+        error!(op, tenant_id = %tenant_id, reason = %err, "Branch mutation failed unexpectedly");
     } else {
-        warn!(operation, tenant_id = %tenant_id, reason = %error, "Branch mutation rejected");
+        warn!(op, tenant_id = %tenant_id, reason = %err, "Branch mutation rejected");
     }
     mapped
 }

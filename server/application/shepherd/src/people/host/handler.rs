@@ -112,78 +112,6 @@ pub async fn get_own_employee(
         .ok_or(StatusCode::NOT_FOUND)
 }
 
-pub async fn list_own_attendance_sessions(
-    State(host): State<Arc<AppContext>>,
-    Extension(user): Extension<AuthedUser>,
-    Query(query): Query<PeoplePageQuery>,
-) -> Result<Json<AttendancePageResponse>, StatusCode> {
-    require_permission(&user, "hr.attendance.self.read")?;
-    let employee: Employee = host
-        .core
-        .people
-        .find_employee_by_account(user.tenant_id, user.account_id)
-        .await
-        .map_err(|err: PeopleOpsErr| hr_status("find employee for own attendance", &user, err))?
-        .ok_or(StatusCode::NOT_FOUND)?;
-    let limit: u16 = resolve_limit(&host.pagination, query.limit)?;
-    let cursor: Option<AttendanceCursor> = decode_cursor(query.cursor.as_deref())?;
-    let page: AttendancePage = host
-        .core
-        .people
-        .list_attendance_sessions(user.tenant_id, employee.id, i64::from(limit), cursor)
-        .await
-        .map_err(|err: PeopleOpsErr| hr_status("list own attendance sessions", &user, err))?;
-    let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
-    Ok(Json(AttendancePageResponse {
-        has_more: next_cursor.is_some(),
-        items: page.items,
-        next_cursor,
-        limit,
-    }))
-}
-
-pub async fn check_in(
-    State(host): State<Arc<AppContext>>,
-    Extension(user): Extension<AuthedUser>,
-    Json(request): Json<AttendanceCheckInRequest>,
-) -> Result<(StatusCode, Json<AttendanceSession>), StatusCode> {
-    require_permission(&user, "hr.attendance.self.manage")?;
-    let employee: Employee = host
-        .core
-        .people
-        .find_employee_by_account(user.tenant_id, user.account_id)
-        .await
-        .map_err(|err: PeopleOpsErr| hr_status("find employee for check in", &user, err))?
-        .ok_or(StatusCode::NOT_FOUND)?;
-    let session: AttendanceSession = host
-        .core
-        .people
-        .check_in(user.tenant_id, employee.id, user.account_id, request.branch_id)
-        .await
-        .map_err(|err: PeopleOpsErr| hr_status("check in", &user, err))?;
-    Ok((StatusCode::CREATED, Json(session)))
-}
-
-pub async fn check_out(
-    State(host): State<Arc<AppContext>>,
-    Extension(user): Extension<AuthedUser>,
-) -> Result<Json<AttendanceSession>, StatusCode> {
-    require_permission(&user, "hr.attendance.self.manage")?;
-    let employee: Employee = host
-        .core
-        .people
-        .find_employee_by_account(user.tenant_id, user.account_id)
-        .await
-        .map_err(|err: PeopleOpsErr| hr_status("find employee for check out", &user, err))?
-        .ok_or(StatusCode::NOT_FOUND)?;
-    host.core
-        .people
-        .check_out(user.tenant_id, employee.id, user.account_id)
-        .await
-        .map(Json)
-        .map_err(|err: PeopleOpsErr| hr_status("check out", &user, err))
-}
-
 pub async fn get_employee(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthedUser>,
@@ -197,30 +125,6 @@ pub async fn get_employee(
         .map_err(|err: PeopleOpsErr| hr_status("find employee", &user, err))?
         .map(Json)
         .ok_or(StatusCode::NOT_FOUND)
-}
-
-pub async fn list_employee_attendance_sessions(
-    State(host): State<Arc<AppContext>>,
-    Extension(user): Extension<AuthedUser>,
-    Path(employee_id): Path<Uuid>,
-    Query(query): Query<PeoplePageQuery>,
-) -> Result<Json<AttendancePageResponse>, StatusCode> {
-    require_permission(&user, "hr.attendance.read")?;
-    let limit: u16 = resolve_limit(&host.pagination, query.limit)?;
-    let cursor: Option<AttendanceCursor> = decode_cursor(query.cursor.as_deref())?;
-    let page: AttendancePage = host
-        .core
-        .people
-        .list_attendance_sessions(user.tenant_id, employee_id, i64::from(limit), cursor)
-        .await
-        .map_err(|err: PeopleOpsErr| hr_status("list employee attendance sessions", &user, err))?;
-    let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
-    Ok(Json(AttendancePageResponse {
-        has_more: next_cursor.is_some(),
-        items: page.items,
-        next_cursor,
-        limit,
-    }))
 }
 
 pub async fn update_employee(
@@ -266,6 +170,106 @@ pub async fn update_employee_citizen_id(
         .await
         .map(Json)
         .map_err(|err: PeopleOpsErr| hr_status("update employee citizen ID", &user, err))
+}
+
+#[cfg(feature = "hrm-attendance")]
+pub async fn list_own_attendance_sessions(
+    State(host): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthedUser>,
+    Query(query): Query<PeoplePageQuery>,
+) -> Result<Json<AttendancePageResponse>, StatusCode> {
+    require_permission(&user, "hr.attendance.self.read")?;
+    let employee: Employee = host
+        .core
+        .people
+        .find_employee_by_account(user.tenant_id, user.account_id)
+        .await
+        .map_err(|err: PeopleOpsErr| hr_status("find employee for own attendance", &user, err))?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let limit: u16 = resolve_limit(&host.pagination, query.limit)?;
+    let cursor: Option<AttendanceCursor> = decode_cursor(query.cursor.as_deref())?;
+    let page: AttendancePage = host
+        .core
+        .people
+        .list_attendance_sessions(user.tenant_id, employee.id, i64::from(limit), cursor)
+        .await
+        .map_err(|err: PeopleOpsErr| hr_status("list own attendance sessions", &user, err))?;
+    let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
+    Ok(Json(AttendancePageResponse {
+        has_more: next_cursor.is_some(),
+        items: page.items,
+        next_cursor,
+        limit,
+    }))
+}
+
+#[cfg(feature = "hrm-attendance")]
+pub async fn check_in(
+    State(host): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthedUser>,
+    Json(request): Json<AttendanceCheckInRequest>,
+) -> Result<(StatusCode, Json<AttendanceSession>), StatusCode> {
+    require_permission(&user, "hr.attendance.self.manage")?;
+    let employee: Employee = host
+        .core
+        .people
+        .find_employee_by_account(user.tenant_id, user.account_id)
+        .await
+        .map_err(|err: PeopleOpsErr| hr_status("find employee for check in", &user, err))?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let session: AttendanceSession = host
+        .core
+        .people
+        .check_in(user.tenant_id, employee.id, user.account_id, request.branch_id)
+        .await
+        .map_err(|err: PeopleOpsErr| hr_status("check in", &user, err))?;
+    Ok((StatusCode::CREATED, Json(session)))
+}
+
+#[cfg(feature = "hrm-attendance")]
+pub async fn check_out(
+    State(host): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthedUser>,
+) -> Result<Json<AttendanceSession>, StatusCode> {
+    require_permission(&user, "hr.attendance.self.manage")?;
+    let employee: Employee = host
+        .core
+        .people
+        .find_employee_by_account(user.tenant_id, user.account_id)
+        .await
+        .map_err(|err: PeopleOpsErr| hr_status("find employee for check out", &user, err))?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    host.core
+        .people
+        .check_out(user.tenant_id, employee.id, user.account_id)
+        .await
+        .map(Json)
+        .map_err(|err: PeopleOpsErr| hr_status("check out", &user, err))
+}
+
+#[cfg(feature = "hrm-attendance")]
+pub async fn list_employee_attendance_sessions(
+    State(host): State<Arc<AppContext>>,
+    Extension(user): Extension<AuthedUser>,
+    Path(employee_id): Path<Uuid>,
+    Query(query): Query<PeoplePageQuery>,
+) -> Result<Json<AttendancePageResponse>, StatusCode> {
+    require_permission(&user, "hr.attendance.read")?;
+    let limit: u16 = resolve_limit(&host.pagination, query.limit)?;
+    let cursor: Option<AttendanceCursor> = decode_cursor(query.cursor.as_deref())?;
+    let page: AttendancePage = host
+        .core
+        .people
+        .list_attendance_sessions(user.tenant_id, employee_id, i64::from(limit), cursor)
+        .await
+        .map_err(|err: PeopleOpsErr| hr_status("list employee attendance sessions", &user, err))?;
+    let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
+    Ok(Json(AttendancePageResponse {
+        has_more: next_cursor.is_some(),
+        items: page.items,
+        next_cursor,
+        limit,
+    }))
 }
 
 pub(crate) fn require_permission(user: &AuthedUser, permission: &str) -> Result<(), StatusCode> {

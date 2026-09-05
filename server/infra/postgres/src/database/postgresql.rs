@@ -27,7 +27,7 @@ pub enum TenantDbErr {
 /// One shared PostgreSQL pool for global and tenant-owned tables.
 ///
 /// Tenant-owned queries are exposed through `TenantTransaction`, which sets
-/// `app.tenant_id` transaction-locally before RLS-protected tables are used.
+/// `app.tenant_id` tran-locally before RLS-protected tables are used.
 #[derive(Clone)]
 pub struct PostgresCli {
     pool: PgPool,
@@ -48,7 +48,7 @@ impl PostgresCli {
         let warn_slow_time: Duration = Duration::from_secs(env_u64("DB_SLOW_QUERY_WARN_SECS", 2));
         // Shared tables have stable relation OIDs, so SQLx's prepared statement
         // cache can remain enabled. Tenant isolation is provided by row keys
-        // and transaction-local RLS context instead of search_path switching.
+        // and tran-local RLS context instead of search_path switching.
         let connect_options: PgConnectOptions = PgConnectOptions::from_str(database_url)?;
         let connect_options: PgConnectOptions = connect_options
             .log_statements(log_lvl)
@@ -57,25 +57,25 @@ impl PostgresCli {
             .max_connections(max_connections)
             .acquire_timeout(acquire_timeout)
             .after_connect(
-                move |connection: &mut PgConnection, _metadata: sqlx::pool::PoolConnectionMetadata| {
+                move |conn: &mut PgConnection, _metadata: sqlx::pool::PoolConnectionMetadata| {
                     Box::pin(async move {
                         sqlx::query_scalar!(
                             r#"SELECT set_config('statement_timeout', $1, false) AS "set_config!""#,
                             statement_timeout_ms.to_string(),
                         )
-                        .fetch_one(&mut *connection)
+                        .fetch_one(&mut *conn)
                         .await?;
                         sqlx::query_scalar!(
                             r#"SELECT set_config('lock_timeout', $1, false) AS "set_config!""#,
                             lock_timeout_ms.to_string(),
                         )
-                        .fetch_one(&mut *connection)
+                        .fetch_one(&mut *conn)
                         .await?;
                         sqlx::query_scalar!(
                             r#"SELECT set_config('idle_in_transaction_session_timeout', $1, false) AS "set_config!""#,
                             idle_in_transaction_timeout_ms.to_string(),
                         )
-                        .fetch_one(&mut *connection)
+                        .fetch_one(&mut *conn)
                         .await?;
                         Ok(())
                     })
@@ -85,8 +85,8 @@ impl PostgresCli {
 
         let pool: PgPool = tokio::time::timeout(connect_timeout, connect)
             .await
-            .map_err(|_| sqlx::Error::PoolTimedOut)??;
-        let client = Self { pool };
+            .map_err(|_err: tokio::time::error::Elapsed| sqlx::Error::PoolTimedOut)??;
+        let client: PostgresCli = Self { pool };
         client.ensure_rls_capable_role().await?;
         Ok(client)
     }
@@ -117,28 +117,33 @@ impl PostgresCli {
         tenant_id: Uuid,
         branch_id: Option<Uuid>,
     ) -> Result<TenantTransaction, TenantDbErr> {
-        let mut transaction: Transaction<'static, Postgres> = self.pool.begin().await?;
+        let mut tran: Transaction<'static, Postgres> = self.pool.begin().await?;
         let tenant_is_active: bool = sqlx::query_scalar!(
-            r#"SELECT EXISTS (SELECT 1 FROM tenants WHERE id = $1 AND status = 'active') AS "exists!""#,
+            r#"SELECT EXISTS 
+            (SELECT 1 
+            FROM tenants 
+            WHERE id = $1 AND status = 'active') AS "exists!"
+            "#,
             tenant_id,
         )
-        .fetch_one(&mut *transaction)
+        .fetch_one(&mut *tran)
         .await?;
         if !tenant_is_active {
             return Err(TenantDbErr::TenantInactive(tenant_id));
         }
 
-        // `true` makes the setting LOCAL to this transaction. Commit, rollback,
+        // `true` makes the setting LOCAL to this tran. Commit, rollback,
         // or drop therefore cannot leak a tenant context through the pool.
         sqlx::query_scalar!(
             r#"SELECT set_config('app.tenant_id', $1, true) AS "tenant_context!""#,
             tenant_id.to_string(),
         )
-        .fetch_one(&mut *transaction)
+        .fetch_one(&mut *tran)
         .await?;
+
         let effective_tenant_id: Option<Uuid> =
             sqlx::query_scalar!(r#"SELECT NULLIF(current_setting('app.tenant_id', true), '')::UUID AS "tenant_id?""#,)
-                .fetch_one(&mut *transaction)
+                .fetch_one(&mut *tran)
                 .await?;
         if effective_tenant_id != Some(tenant_id) {
             return Err(TenantDbErr::TenantContextMismatch {
@@ -152,11 +157,11 @@ impl PostgresCli {
             r#"SELECT set_config('app.branch_id', $1, true) AS "branch_context!""#,
             branch_context,
         )
-        .fetch_one(&mut *transaction)
+        .fetch_one(&mut *tran)
         .await?;
         let effective_branch_id: Option<Uuid> =
             sqlx::query_scalar!(r#"SELECT NULLIF(current_setting('app.branch_id', true), '')::UUID AS "branch_id?""#,)
-                .fetch_one(&mut *transaction)
+                .fetch_one(&mut *tran)
                 .await?;
         if let Some(expected_branch_id) = branch_id
             && effective_branch_id != Some(expected_branch_id)
@@ -176,67 +181,45 @@ impl PostgresCli {
         Ok(TenantTransaction {
             tenant_id,
             branch_id,
-            transaction,
+            tran,
         })
     }
 
-    /// Runs an SQLx-only op with transaction-local RLS context and owns
+    /// Runs an SQLx-only op with tran-local RLS context and owns
     /// the commit/rollback lifecycle. The callback must use the provided
-    /// connection so it cannot accidentally escape the tenant transaction.
-    pub async fn tran_with_tenant<T, F>(&self, tenant_id: Uuid, op: F) -> Result<T, TenantDbErr>
+    /// conn so it cannot accidentally escape the tenant tran.
+    pub(crate) async fn tran_with_tenant<T, F>(&self, tenant_id: Uuid, op: F) -> Result<T, TenantDbErr>
     where
         T: Send,
-        F: for<'connection> AsyncFnOnce(&'connection mut PgConnection) -> Result<T, sqlx::Error>,
+        F: for<'conn> AsyncFnOnce(&'conn mut PgConnection) -> Result<T, sqlx::Error>,
     {
-        trace!(
-            op = "postgres.tran_with_tenant",
-            tenant_id = %tenant_id,
-            "Starting tenant-scoped SQL op"
-        );
-        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
-        let operation_result: Result<T, sqlx::Error> = op(transaction.connection()).await;
-
-        match operation_result {
+        let mut tran: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        let result: Result<T, sqlx::Error> = op(tran.connection()).await;
+        match result {
             Ok(value) => {
-                transaction.commit().await.map_err(|commit_error: sqlx::Error| {
-                    error!(
-                        op = "postgres.tran_with_tenant",
-                        tenant_id = %tenant_id,
-                        error = %commit_error,
-                        "Tenant-scoped SQL op commit failed"
-                    );
-                    TenantDbErr::Sqlx(commit_error)
-                })?;
-                trace!(
-                    op = "postgres.tran_with_tenant",
-                    tenant_id = %tenant_id,
-                    "Tenant-scoped SQL op committed"
-                );
+                tran.commit().await?;
                 Ok(value)
             }
-            Err(operation_error) => {
-                if let Err(rollback_error) = transaction.rollback().await {
+            Err(error) => {
+                if let Err(rollback_error) = tran.rollback().await {
                     error!(
-                        op = "postgres.tran_with_tenant",
+                        operation = "database_adapter.tran_with_tenant",
                         tenant_id = %tenant_id,
-                        error = %rollback_error,
-                        "Tenant-scoped SQL op rollback failed"
+                        reason = %rollback_error,
+                        "Tenant/branch tran rollback failed"
                     );
                 }
-                error!(
-                    op = "postgres.tran_with_tenant",
-                    tenant_id = %tenant_id,
-                    error = %operation_error,
-                    "Tenant-scoped SQL op failed and was rolled back"
-                );
-                Err(TenantDbErr::Sqlx(operation_error))
+                Err(TenantDbErr::Sqlx(error))
             }
         }
     }
 
     pub(crate) async fn resolve_active_tenant_id(&self, tenant: &str) -> Result<Option<Uuid>, TenantDbErr> {
         let tenant_id: Option<Uuid> = sqlx::query_scalar!(
-            r#"SELECT id FROM tenants WHERE slug = $1 AND status = 'active'"#,
+            r#"SELECT id 
+            FROM tenants 
+            WHERE slug = $1 AND status = 'active'
+            "#,
             tenant,
         )
         .fetch_optional(&self.pool)
@@ -251,7 +234,10 @@ impl PostgresCli {
         display_name: &str,
     ) -> Result<(), TenantDbErr> {
         let existing = sqlx::query!(
-            r#"SELECT slug AS "slug!", status AS "status!" FROM tenants WHERE id = $1"#,
+            r#"SELECT slug AS "slug!", status AS "status!" 
+            FROM tenants 
+            WHERE id = $1
+            "#,
             tenant_id,
         )
         .fetch_optional(&self.pool)
@@ -312,7 +298,7 @@ impl PostgresCli {
 pub struct TenantTransaction {
     tenant_id: Uuid,
     branch_id: Option<Uuid>,
-    transaction: Transaction<'static, Postgres>,
+    tran: Transaction<'static, Postgres>,
 }
 
 impl TenantTransaction {
@@ -325,15 +311,15 @@ impl TenantTransaction {
     }
 
     pub fn connection(&mut self) -> &mut PgConnection {
-        &mut self.transaction
+        &mut self.tran
     }
 
     pub async fn commit(self) -> Result<(), sqlx::Error> {
-        self.transaction.commit().await
+        self.tran.commit().await
     }
 
     pub async fn rollback(self) -> Result<(), sqlx::Error> {
-        self.transaction.rollback().await
+        self.tran.rollback().await
     }
 }
 
@@ -374,7 +360,7 @@ mod tests {
             .await?;
 
         let inserted_account_id: Uuid = client
-            .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            .tran_with_tenant(tenant_id, async move |conn: &mut PgConnection| {
                 let inserted: TestIdRow = sqlx::query_as!(
                     TestIdRow,
                     r#"
@@ -385,7 +371,7 @@ mod tests {
                     committed_account_id,
                     tenant_id,
                 )
-                .fetch_one(&mut *connection)
+                .fetch_one(&mut *conn)
                 .await?;
                 sqlx::query!(
                     r#"
@@ -395,7 +381,7 @@ mod tests {
                     tenant_id,
                     committed_account_id,
                 )
-                .execute(connection)
+                .execute(conn)
                 .await?;
                 Ok(inserted.id)
             })
@@ -403,7 +389,7 @@ mod tests {
         assert_eq!(inserted_account_id, committed_account_id);
 
         let failed_operation: Result<(), TenantDbErr> = client
-            .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            .tran_with_tenant(tenant_id, async move |conn: &mut PgConnection| {
                 sqlx::query!(
                     r#"
                         INSERT INTO accounts (id, tenant_id, username, primary_role_code)
@@ -412,7 +398,7 @@ mod tests {
                     rolled_back_account_id,
                     tenant_id,
                 )
-                .execute(&mut *connection)
+                .execute(&mut *conn)
                 .await?;
                 Err(sqlx::Error::Protocol("force tenant op rollback".to_owned()))
             })
@@ -420,13 +406,13 @@ mod tests {
         assert!(failed_operation.is_err());
 
         let visible_account_rows: Vec<TestIdRow> = client
-            .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            .tran_with_tenant(tenant_id, async move |conn: &mut PgConnection| {
                 let account_rows: Vec<TestIdRow> = sqlx::query_as!(
                     TestIdRow,
                     r#"SELECT id FROM accounts WHERE id = ANY($1) ORDER BY id"#,
                     &[committed_account_id, rolled_back_account_id],
                 )
-                .fetch_all(connection)
+                .fetch_all(conn)
                 .await?;
                 Ok(account_rows)
             })
@@ -438,9 +424,9 @@ mod tests {
         assert_eq!(visible_account_ids, vec![committed_account_id]);
 
         client
-            .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            .tran_with_tenant(tenant_id, async move |conn: &mut PgConnection| {
                 sqlx::query!("DELETE FROM accounts WHERE tenant_id = $1", tenant_id)
-                    .execute(connection)
+                    .execute(conn)
                     .await?;
                 Ok(())
             })
@@ -547,7 +533,7 @@ mod tests {
             .ensure_tenant_registration(tenant_id, &tenant_slug, "Attendance test tenant")
             .await?;
 
-        let mut transaction: TenantTransaction = client.begin_tenant(tenant_id).await?;
+        let mut tran: TenantTransaction = client.begin_tenant(tenant_id).await?;
         sqlx::query!(
             r#"
             INSERT INTO accounts (id, tenant_id, username, primary_role_code)
@@ -556,7 +542,7 @@ mod tests {
             account_id,
             tenant_id,
         )
-        .execute(transaction.connection())
+        .execute(tran.connection())
         .await?;
         sqlx::query!(
             r#"
@@ -566,7 +552,7 @@ mod tests {
             branch_id,
             tenant_id,
         )
-        .execute(transaction.connection())
+        .execute(tran.connection())
         .await?;
         sqlx::query!(
             r#"
@@ -576,7 +562,7 @@ mod tests {
             tenant_id,
             account_id,
         )
-        .execute(transaction.connection())
+        .execute(tran.connection())
         .await?;
         sqlx::query!(
             r#"
@@ -590,7 +576,7 @@ mod tests {
             branch_id,
             account_id,
         )
-        .execute(transaction.connection())
+        .execute(tran.connection())
         .await?;
         sqlx::query!(
             r#"
@@ -605,11 +591,11 @@ mod tests {
             employee_id,
             account_id,
         )
-        .execute(transaction.connection())
+        .execute(tran.connection())
         .await?;
 
         sqlx::query!("SAVEPOINT duplicate_open_attendance_session")
-            .execute(transaction.connection())
+            .execute(tran.connection())
             .await?;
         let duplicate_open_session: Result<PgQueryResult, sqlx::Error> = sqlx::query!(
             r#"
@@ -622,14 +608,14 @@ mod tests {
             employee_id,
             account_id,
         )
-        .execute(transaction.connection())
+        .execute(tran.connection())
         .await;
         assert!(
             duplicate_open_session.is_err(),
             "an employee must have at most one open attendance session"
         );
         sqlx::query!("ROLLBACK TO SAVEPOINT duplicate_open_attendance_session")
-            .execute(transaction.connection())
+            .execute(tran.connection())
             .await?;
 
         let worked_seconds: i64 = sqlx::query_scalar!(
@@ -645,7 +631,7 @@ mod tests {
             first_session_id,
             account_id,
         )
-        .fetch_one(transaction.connection())
+        .fetch_one(tran.connection())
         .await?;
         assert!(
             worked_seconds >= 3_599,
@@ -663,7 +649,7 @@ mod tests {
             employee_id,
             account_id,
         )
-        .execute(transaction.connection())
+        .execute(tran.connection())
         .await?;
         let session_count: i64 = sqlx::query_scalar!(
             r#"
@@ -674,7 +660,7 @@ mod tests {
             tenant_id,
             employee_id,
         )
-        .fetch_one(transaction.connection())
+        .fetch_one(tran.connection())
         .await?;
         assert_eq!(session_count, 2, "a completed session must not block the next check in");
         let sessions_at_branch: i64 = sqlx::query_scalar!(
@@ -687,13 +673,13 @@ mod tests {
             employee_id,
             branch_id,
         )
-        .fetch_one(transaction.connection())
+        .fetch_one(tran.connection())
         .await?;
         assert_eq!(
             sessions_at_branch, session_count,
             "every attendance session must preserve its branch"
         );
-        transaction.rollback().await?;
+        tran.rollback().await?;
 
         sqlx::query!("DELETE FROM tenants WHERE id = $1", tenant_id)
             .execute(client.pool())

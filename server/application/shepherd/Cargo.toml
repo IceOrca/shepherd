@@ -6,6 +6,7 @@ edition.workspace = true
 [features]
 default = []
 planned-staffing = []
+hrm-attendance = []
 
 [[bin]]
 name = "shepherd-dev-db-seeding"

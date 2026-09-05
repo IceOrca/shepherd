@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                    SELECT id, code, name, address, time_zone, billing_email, status, created_at, updated_at\n                    FROM business_customers\n                    WHERE tenant_id = $1\n                      AND ($2::TEXT IS NULL\n                           OR lower(name) LIKE '%' || $2 || '%'\n                           OR lower(code) LIKE '%' || $2 || '%'\n                           OR lower(COALESCE(address, '')) LIKE '%' || $2 || '%'\n                           OR lower(COALESCE(billing_email, '')) LIKE '%' || $2 || '%')\n                      AND ($3::TEXT IS NULL OR (lower(name), code, id) > ($3, $4::TEXT, $5::UUID))\n                    ORDER BY lower(name), code, id\n                    LIMIT $6\n                    ",
+  "query": "\n                    INSERT INTO business_customers (\n                        id, tenant_id, code, name, address, time_zone, billing_email, status,\n                        created_by_account_id, updated_by_account_id\n                    )\n                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)\n                    RETURNING id, code, name, address, time_zone, billing_email, status, version, created_at, updated_at\n                    ",
   "describe": {
     "columns": [
       {
@@ -82,6 +82,17 @@
       },
       {
         "ordinal": 7,
+        "name": "version",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "business_customers",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -92,7 +103,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "updated_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -106,11 +117,14 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "Text",
-        "Text",
-        "Text",
         "Uuid",
-        "Int8"
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Uuid"
       ]
     },
     "nullable": [
@@ -122,8 +136,9 @@
       true,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "e84888a3e4ef79ada0b5d358302a4823cef4f02f71a1944b98475ade9645df6b"
+  "hash": "a4a289453d72a18deaa4806e70b00b3d214fd821c6d0788f4514b601761efbe6"
 }

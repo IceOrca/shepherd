@@ -49,6 +49,7 @@ function customerDraft(customer: Customer): CustomerUpsertRequest {
     time_zone: customer.time_zone,
     billing_email: customer.billing_email,
     status: customer.status,
+    expected_version: customer.version,
   };
 }
 

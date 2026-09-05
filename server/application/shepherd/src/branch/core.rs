@@ -14,6 +14,18 @@ pub struct BranchSummary {
     pub time_zone: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct BranchSummaryCursor {
+    pub normalized_name: String,
+    pub code: String,
+    pub id: Uuid,
+}
+
+pub struct BranchSummaryPage {
+    pub items: Vec<BranchSummary>,
+    pub next_cursor: Option<BranchSummaryCursor>,
+}
+
 #[derive(Clone, Debug, Serialize, TS)]
 pub struct Branch {
     pub id: Uuid,
@@ -67,8 +79,20 @@ impl BranchService {
         Arc::new(Self { repo })
     }
 
-    pub async fn list_active_branches(&self, tenant_id: Uuid) -> Result<Vec<BranchSummary>, BranchErr> {
-        self.repo.list_active_branches(tenant_id).await
+    pub async fn list_active_branches(
+        &self,
+        tenant_id: Uuid,
+        authorized_branch_ids: Vec<Uuid>,
+        search: Option<String>,
+        limit: i64,
+        cursor: Option<BranchSummaryCursor>,
+    ) -> Result<BranchSummaryPage, BranchErr> {
+        if limit <= 0 {
+            return Err(BranchErr::InvalidInput("branch page size must be positive"));
+        }
+        self.repo
+            .list_active_branches(tenant_id, authorized_branch_ids, search, limit, cursor)
+            .await
     }
 
     pub async fn list_managed_branches(
@@ -116,11 +140,11 @@ fn normalize_create_request(request: &mut BranchCreateRequest) -> Result<(), Bra
         || request.code.len() > 63
         || !request
             .code
-            .starts_with(|character: char| character.is_ascii_lowercase() || character.is_ascii_digit())
+            .starts_with(|character: char| -> bool { character.is_ascii_lowercase() || character.is_ascii_digit() })
         || !request
             .code
-            .ends_with(|character: char| character.is_ascii_lowercase() || character.is_ascii_digit())
-        || !request.code.chars().all(|character: char| {
+            .ends_with(|character: char| -> bool { character.is_ascii_lowercase() || character.is_ascii_digit() })
+        || !request.code.chars().all(|character: char| -> bool {
             character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-' || character == '_'
         })
     {

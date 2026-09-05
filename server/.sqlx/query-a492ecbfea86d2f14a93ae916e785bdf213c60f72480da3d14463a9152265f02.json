@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT EXISTS (SELECT 1 FROM tenants WHERE id = $1 AND status = 'active') AS \"exists!\"",
+  "query": "SELECT EXISTS \n            (SELECT 1 \n            FROM tenants \n            WHERE id = $1 AND status = 'active') AS \"exists!\"\n            ",
   "describe": {
     "columns": [
       {
@@ -19,5 +19,5 @@
       null
     ]
   },
-  "hash": "c3d0800c6c3efe19e7287e313fe9f5968da3e2e7af259d2f68616b9b91b9a2d0"
+  "hash": "a492ecbfea86d2f14a93ae916e785bdf213c60f72480da3d14463a9152265f02"
 }

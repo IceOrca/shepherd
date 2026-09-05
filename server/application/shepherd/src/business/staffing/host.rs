@@ -91,6 +91,7 @@ pub struct CustomerUpsertRequest {
     pub time_zone: String,
     pub billing_email: Option<String>,
     pub status: BusinessRecordStatus,
+    pub expected_version: Option<i64>,
 }
 
 impl From<CustomerUpsertRequest> for CustomerInput {
@@ -102,6 +103,7 @@ impl From<CustomerUpsertRequest> for CustomerInput {
             time_zone: value.time_zone.trim().to_owned(),
             billing_email: normalize_optional(value.billing_email),
             status: value.status,
+            expected_version: value.expected_version,
         }
     }
 }
@@ -172,7 +174,7 @@ pub async fn correct_reconciliation(
         )
         .await
         .map(Json)
-        .map_err(|error| staffing_status("correct reconciliation", &user, error))
+        .map_err(|err: StaffingErr| staffing_status("correct reconciliation", &user, err))
 }
 
 pub async fn list_customers(
@@ -209,7 +211,7 @@ pub async fn create_customer(
         .staffing
         .create_customer(user.tenant_id, payload.into(), user.account_id)
         .await
-        .map_err(|error: StaffingErr| staffing_status("create customer", &user, error))?;
+        .map_err(|err: StaffingErr| staffing_status("create customer", &user, err))?;
     Ok((StatusCode::CREATED, Json(customer)))
 }
 
@@ -225,7 +227,7 @@ pub async fn update_customer(
         .staffing
         .update_customer(user.tenant_id, customer_id, payload.into(), user.account_id)
         .await
-        .map_err(|error: StaffingErr| staffing_status("update customer", &user, error))?;
+        .map_err(|err: StaffingErr| staffing_status("update customer", &user, err))?;
     Ok(Json(customer))
 }
 
@@ -242,7 +244,7 @@ pub async fn list_rates(
         .staffing
         .list_rates(user.tenant_id, query.customer_id, i64::from(limit), cursor)
         .await
-        .map_err(|error: StaffingErr| staffing_status("list staffing rates", &user, error))?;
+        .map_err(|err: StaffingErr| staffing_status("list staffing rates", &user, err))?;
     let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
     Ok(Json(StaffingRatePageResponse {
         has_more: next_cursor.is_some(),
@@ -263,9 +265,9 @@ pub async fn list_jobs(
     let page: super::core::KeysetPage<StaffingJob, NameCodeCursor> = ctx
         .core
         .staffing
-        .list_jobs(user.tenant_id, i64::from(limit), cursor)
+        .list_jobs(user.tenant_id, normalize_search(query.search), i64::from(limit), cursor)
         .await
-        .map_err(|error: StaffingErr| staffing_status("list staffing jobs", &user, error))?;
+        .map_err(|err: StaffingErr| staffing_status("list staffing jobs", &user, err))?;
     let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
     Ok(Json(StaffingListPageResponse {
         has_more: next_cursor.is_some(),
@@ -288,7 +290,7 @@ pub async fn list_staff(
         .staffing
         .list_staff(user.tenant_id, normalize_search(query.search), i64::from(limit), cursor)
         .await
-        .map_err(|error: StaffingErr| staffing_status("list staffing staff", &user, error))?;
+        .map_err(|err: StaffingErr| staffing_status("list staffing staff", &user, err))?;
     let next_cursor: Option<String> = encode_cursor(page.next_cursor.as_ref())?;
     Ok(Json(StaffingStaffPageResponse {
         has_more: next_cursor.is_some(),
@@ -309,7 +311,7 @@ pub async fn set_prices(
         .staffing
         .set_prices(user.tenant_id, payload.into(), user.account_id)
         .await
-        .map_err(|error: StaffingErr| staffing_status("set staffing prices", &user, error))?;
+        .map_err(|err: StaffingErr| staffing_status("set staffing prices", &user, err))?;
     Ok((StatusCode::CREATED, Json(prices)))
 }
 

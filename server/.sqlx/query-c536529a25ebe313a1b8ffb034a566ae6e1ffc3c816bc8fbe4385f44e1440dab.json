@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                    SELECT id, code, name, status, created_at, updated_at\n                    FROM business_staffing_jobs\n                    WHERE tenant_id = $1\n                      AND ($2::TEXT IS NULL OR (lower(name), code, id) > ($2, $3, $4))\n                    ORDER BY lower(name), code, id\n                    LIMIT $5\n                    ",
+  "query": "\n                    SELECT id, code, name, status, created_at, updated_at\n                    FROM business_staffing_jobs\n                    WHERE tenant_id = $1\n                      AND ($2::TEXT IS NULL\n                           OR lower(name) LIKE '%' || $2 || '%'\n                           OR lower(code) LIKE '%' || $2 || '%')\n                      AND ($3::TEXT IS NULL OR (lower(name), code, id) > ($3, $4, $5))\n                    ORDER BY lower(name), code, id\n                    LIMIT $6\n                    ",
   "describe": {
     "columns": [
       {
@@ -75,6 +75,7 @@
         "Uuid",
         "Text",
         "Text",
+        "Text",
         "Uuid",
         "Int8"
       ]
@@ -88,5 +89,5 @@
       false
     ]
   },
-  "hash": "997d4a181520e24b8b5e67869b990948af6abbda1d08657bf5baf7bf044c592d"
+  "hash": "c536529a25ebe313a1b8ffb034a566ae6e1ffc3c816bc8fbe4385f44e1440dab"
 }

@@ -29,6 +29,7 @@ struct CustomerRow {
     time_zone: String,
     billing_email: Option<String>,
     status: String,
+    version: i64,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -45,6 +46,7 @@ impl TryFrom<CustomerRow> for Customer {
             time_zone: row.time_zone,
             billing_email: row.billing_email,
             status: BusinessRecordStatus::from_code(&row.status).ok_or(StaffingErr::BackendUnavailable)?,
+            version: row.version,
             created_at: row.created_at,
             updated_at: row.updated_at,
         })
@@ -93,12 +95,17 @@ struct StaffingRateRow {
     created_at: DateTime<Utc>,
 }
 
-impl From<StaffingRateRow> for StaffingRate {
-    fn from(row: StaffingRateRow) -> Self {
-        Self {
+impl TryFrom<StaffingRateRow> for StaffingRate {
+    type Error = StaffingErr;
+
+    fn try_from(row: StaffingRateRow) -> Result<Self, Self::Error> {
+        let rate_kind = StaffingRateKind::from_code(&row.rate_kind).ok_or_else(|| {
+            error!(rate_kind = %row.rate_kind, "Staffing rate row has an unsupported kind");
+            StaffingErr::BackendUnavailable
+        })?;
+        Ok(Self {
             id: row.id,
-            rate_kind: StaffingRateKind::from_code(&row.rate_kind)
-                .expect("database staffing rate kind must satisfy its check constraint"),
+            rate_kind,
             code: row.code,
             name: row.name,
             customer_id: row.customer_id,
@@ -110,7 +117,7 @@ impl From<StaffingRateRow> for StaffingRate {
             effective_to: row.effective_to,
             is_active: row.is_active,
             created_at: row.created_at,
-        }
+        })
     }
 }
 
@@ -260,7 +267,7 @@ impl StaffingRepo {
                 sqlx::query_as!(
                     CustomerRow,
                     r#"
-                    SELECT id, code, name, address, time_zone, billing_email, status, created_at, updated_at
+                    SELECT id, code, name, address, time_zone, billing_email, status, version, created_at, updated_at
                     FROM business_customers
                     WHERE tenant_id = $1
                       AND ($2::TEXT IS NULL
@@ -306,9 +313,11 @@ impl StaffingRepo {
     pub async fn list_jobs(
         &self,
         tenant_id: Uuid,
+        search: Option<&str>,
         limit: i64,
         cursor: Option<&NameCodeCursor>,
     ) -> Result<StaffingJobPage, StaffingErr> {
+        let normalized_search: Option<String> = search.map(str::to_owned);
         let cursor_name: Option<String> = cursor.map(|value: &NameCodeCursor| value.normalized_name.clone());
         let cursor_code: Option<String> = cursor.map(|value: &NameCodeCursor| value.code.clone());
         let cursor_id: Option<Uuid> = cursor.map(|value: &NameCodeCursor| value.id);
@@ -322,11 +331,15 @@ impl StaffingRepo {
                     SELECT id, code, name, status, created_at, updated_at
                     FROM business_staffing_jobs
                     WHERE tenant_id = $1
-                      AND ($2::TEXT IS NULL OR (lower(name), code, id) > ($2, $3, $4))
+                      AND ($2::TEXT IS NULL
+                           OR lower(name) LIKE '%' || $2 || '%'
+                           OR lower(code) LIKE '%' || $2 || '%')
+                      AND ($3::TEXT IS NULL OR (lower(name), code, id) > ($3, $4, $5))
                     ORDER BY lower(name), code, id
-                    LIMIT $5
+                    LIMIT $6
                     "#,
                     tenant_id,
+                    normalized_search,
                     cursor_name,
                     cursor_code,
                     cursor_id,
@@ -373,7 +386,7 @@ impl StaffingRepo {
                         created_by_account_id, updated_by_account_id
                     )
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
-                    RETURNING id, code, name, address, time_zone, billing_email, status, created_at, updated_at
+                    RETURNING id, code, name, address, time_zone, billing_email, status, version, created_at, updated_at
                     "#,
                     customer_id,
                     tenant_id,
@@ -404,7 +417,7 @@ impl StaffingRepo {
         input: &CustomerInput,
         audit_account_id: Uuid,
     ) -> Result<Customer, StaffingErr> {
-        let row: CustomerRow = self
+        let row: Option<CustomerRow> = self
             .db
             .tran_with_tenant(tenant_id, async move |conn: &mut sqlx::PgConnection| {
                 sqlx::query_as!(
@@ -417,10 +430,11 @@ impl StaffingRepo {
                         time_zone = $6,
                         billing_email = $7,
                         status = $8,
+                        version = version + 1,
                         updated_at = CURRENT_TIMESTAMP,
                         updated_by_account_id = $9
-                    WHERE tenant_id = $1 AND id = $2
-                    RETURNING id, code, name, address, time_zone, billing_email, status, created_at, updated_at
+                    WHERE tenant_id = $1 AND id = $2 AND version = $10
+                    RETURNING id, code, name, address, time_zone, billing_email, status, version, created_at, updated_at
                     "#,
                     tenant_id,
                     customer_id,
@@ -431,8 +445,9 @@ impl StaffingRepo {
                     input.billing_email,
                     input.status.as_code(),
                     audit_account_id,
+                    input.expected_version,
                 )
-                .fetch_one(conn)
+                .fetch_optional(conn)
                 .await
             })
             .await
@@ -443,7 +458,7 @@ impl StaffingRepo {
             audit_account_id = %audit_account_id,
             "Staffing customer updated"
         );
-        Customer::try_from(row)
+        Customer::try_from(row.ok_or(StaffingErr::Conflict)?)
     }
 
     pub async fn list_rates(
@@ -496,7 +511,7 @@ impl StaffingRepo {
         } else {
             None
         };
-        let items: Vec<StaffingRate> = rows.into_iter().map(StaffingRate::from).collect();
+        let items: Vec<StaffingRate> = rows.into_iter().map(StaffingRate::try_from).collect::<Result<_, _>>()?;
         Ok(StaffingRatePage { items, next_cursor })
     }
 
@@ -591,6 +606,7 @@ impl StaffingRepo {
                 "historical staffing prices cannot be changed",
             ));
         }
+
         if let Some(employee_id) = input.employee_id {
             let is_active_staff: bool = sqlx::query_scalar!(
                 r#"
@@ -682,6 +698,7 @@ impl StaffingRepo {
             &input.customer_hourly_rate,
         )
         .await?;
+
         let worker_pay_rate: StaffingRateRow = insert_price_rate(
             tran.connection(),
             tenant_id,
@@ -691,12 +708,15 @@ impl StaffingRepo {
             &input.worker_hourly_rate,
         )
         .await?;
+        let customer_bill_rate: StaffingRate = StaffingRate::try_from(customer_bill_rate)?;
+        let worker_pay_rate: StaffingRate = StaffingRate::try_from(worker_pay_rate)?;
+
         tran.commit()
             .await
-            .map_err(|err| database_failure("commit staffing prices", tenant_id, err))?;
+            .map_err(|err: sqlx::Error| database_failure("commit staffing prices", tenant_id, err))?;
         Ok(StaffingPriceSet {
-            customer_bill_rate: customer_bill_rate.into(),
-            worker_pay_rate: worker_pay_rate.into(),
+            customer_bill_rate,
+            worker_pay_rate,
         })
     }
 

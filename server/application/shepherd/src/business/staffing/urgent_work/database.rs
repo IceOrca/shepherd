@@ -1982,7 +1982,10 @@ pub async fn reconcile_report_in_transaction(
         LEFT JOIN business_urgent_customer_work_records AS customer_record
             ON customer_record.tenant_id = report.tenant_id AND customer_record.report_id = report.id
         LEFT JOIN business_customers AS final_customer
-            ON final_customer.tenant_id = report.tenant_id AND final_customer.id = $3
+            ON final_customer.tenant_id = report.tenant_id
+           AND final_customer.branch_id = report.branch_id
+           AND final_customer.id = $3
+           AND final_customer.status = 'active'
         WHERE report.tenant_id = $1 AND report.id = $2
         FOR UPDATE OF report, session, employee
         "#,

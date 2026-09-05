@@ -3,10 +3,8 @@ use std::{future::Future, sync::Arc};
 use sqlx::PgConnection;
 use tracing::{error, warn, info, debug, trace};
 use uuid::Uuid;
-
-pub mod sql;
-
-pub use sql::postgresql::{PostgresCli, TenantDbErr, TenantTransaction};
+pub mod postgresql;
+pub use postgresql::{PostgresCli, TenantDbErr, TenantTransaction};
 
 tokio::task_local! {
     static ACTIVE_BRANCH_ID: Uuid;
@@ -79,27 +77,9 @@ impl DatabaseAdapter {
     pub async fn tran_with_tenant<T, F>(&self, tenant_id: Uuid, op: F) -> Result<T, TenantDbErr>
     where
         T: Send,
-        F: for<'connection> AsyncFnOnce(&'connection mut PgConnection) -> Result<T, sqlx::Error>,
+        F: for<'conn> AsyncFnOnce(&'conn mut PgConnection) -> Result<T, sqlx::Error>,
     {
-        let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
-        let result: Result<T, sqlx::Error> = op(transaction.connection()).await;
-        match result {
-            Ok(value) => {
-                transaction.commit().await?;
-                Ok(value)
-            }
-            Err(error) => {
-                if let Err(rollback_error) = transaction.rollback().await {
-                    error!(
-                        operation = "database_adapter.tran_with_tenant",
-                        tenant_id = %tenant_id,
-                        reason = %rollback_error,
-                        "Tenant/branch transaction rollback failed"
-                    );
-                }
-                Err(TenantDbErr::Sqlx(error))
-            }
-        }
+        self.client.tran_with_tenant(tenant_id, op).await
     }
 
     pub async fn resolve_active_tenant_id(&self, tenant: &str) -> Result<Option<Uuid>, TenantDbErr> {
