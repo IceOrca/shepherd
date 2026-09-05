@@ -200,6 +200,13 @@ pub struct ExpenseCorrectionInput {
     pub currency: String,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct FinancialCorrectionAccess {
+    pub can_correct_self: bool,
+    pub can_manage_unconfirmed: bool,
+    pub can_correct_confirmed: bool,
+}
+
 #[derive(Clone, Debug, Serialize, TS)]
 pub struct ExpenseClaimRevision {
     pub revision_id: Uuid,
@@ -408,12 +415,12 @@ impl FinanceService {
         &self,
         tenant_id: Uuid,
         actor_account_id: Uuid,
-        can_read_all: bool,
+        can_read_branch: bool,
         query: ExpenseListQuery,
     ) -> Result<ExpensePage, FinanceError> {
         validate_page_limit(query.limit)?;
         self.repo
-            .list_expenses(tenant_id, actor_account_id, can_read_all, &query)
+            .list_expenses(tenant_id, actor_account_id, can_read_branch, &query)
             .await
     }
 
@@ -463,7 +470,7 @@ impl FinanceService {
         tenant_id: Uuid,
         expense_id: Uuid,
         actor_account_id: Uuid,
-        can_correct_confirmed: bool,
+        access: FinancialCorrectionAccess,
         idempotency_key: Uuid,
         input: ExpenseCorrectionInput,
     ) -> Result<ExpenseClaim, FinanceError> {
@@ -496,14 +503,7 @@ impl FinanceService {
             _ => {}
         }
         self.repo
-            .correct_expense(
-                tenant_id,
-                expense_id,
-                actor_account_id,
-                can_correct_confirmed,
-                idempotency_key,
-                &input,
-            )
+            .correct_expense(tenant_id, expense_id, actor_account_id, access, idempotency_key, &input)
             .await
     }
 
@@ -512,7 +512,7 @@ impl FinanceService {
         tenant_id: Uuid,
         expense_id: Uuid,
         actor_account_id: Uuid,
-        can_read_all: bool,
+        can_read_branch: bool,
         limit: i64,
         cursor: Option<RevisionCursor>,
     ) -> Result<ExpenseRevisionPage, FinanceError> {
@@ -523,7 +523,7 @@ impl FinanceService {
                 tenant_id,
                 expense_id,
                 actor_account_id,
-                can_read_all,
+                can_read_branch,
                 limit,
                 cursor.as_ref(),
             )
@@ -599,12 +599,12 @@ impl FinanceService {
         &self,
         tenant_id: Uuid,
         actor_account_id: Uuid,
-        can_read_all: bool,
+        can_read_branch: bool,
         query: SalaryAdvanceListQuery,
     ) -> Result<SalaryAdvancePage, FinanceError> {
         validate_page_limit(query.limit)?;
         self.repo
-            .list_salary_advances(tenant_id, actor_account_id, can_read_all, &query)
+            .list_salary_advances(tenant_id, actor_account_id, can_read_branch, &query)
             .await
     }
 
@@ -636,8 +636,7 @@ impl FinanceService {
         tenant_id: Uuid,
         advance_id: Uuid,
         actor_account_id: Uuid,
-        can_manage_requested: bool,
-        can_correct_confirmed: bool,
+        access: FinancialCorrectionAccess,
         idempotency_key: Uuid,
         input: SalaryAdvanceCorrectionInput,
     ) -> Result<SalaryAdvance, FinanceError> {
@@ -652,15 +651,7 @@ impl FinanceService {
         }
         validate_text(&input.reason, 3, 500, "salary advance reason is invalid")?;
         self.repo
-            .correct_salary_advance(
-                tenant_id,
-                advance_id,
-                actor_account_id,
-                can_manage_requested,
-                can_correct_confirmed,
-                idempotency_key,
-                &input,
-            )
+            .correct_salary_advance(tenant_id, advance_id, actor_account_id, access, idempotency_key, &input)
             .await
     }
 
@@ -669,7 +660,7 @@ impl FinanceService {
         tenant_id: Uuid,
         advance_id: Uuid,
         actor_account_id: Uuid,
-        can_read_all: bool,
+        can_read_branch: bool,
         limit: i64,
         cursor: Option<RevisionCursor>,
     ) -> Result<SalaryAdvanceRevisionPage, FinanceError> {
@@ -680,7 +671,7 @@ impl FinanceService {
                 tenant_id,
                 advance_id,
                 actor_account_id,
-                can_read_all,
+                can_read_branch,
                 limit,
                 cursor.as_ref(),
             )

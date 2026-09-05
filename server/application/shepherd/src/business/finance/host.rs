@@ -21,10 +21,10 @@ use crate::{
 use super::core::{
     ExpenseCategory, ExpenseClaim, ExpenseClaimInput, ExpenseClaimRevision, ExpenseCorrectionInput, ExpenseCursor,
     ExpenseClaimStatus, ExpenseDecisionInput, ExpenseFundingSource, ExpenseListQuery, ExpensePage, ExpenseRevisionPage,
-    FinanceError, FinancialSettlementInput, RevisionCursor, SalaryAdvance, SalaryAdvanceCorrectionInput,
-    SalaryAdvanceCursor, SalaryAdvanceDecisionInput, SalaryAdvanceInput, SalaryAdvanceListQuery, SalaryAdvancePage,
-    SalaryAdvanceRecoveryInput, SalaryAdvanceRecoverySource, SalaryAdvanceRevision, SalaryAdvanceRevisionPage,
-    SalaryAdvanceStatus,
+    FinanceError, FinancialCorrectionAccess, FinancialSettlementInput, RevisionCursor, SalaryAdvance,
+    SalaryAdvanceCorrectionInput, SalaryAdvanceCursor, SalaryAdvanceDecisionInput, SalaryAdvanceInput,
+    SalaryAdvanceListQuery, SalaryAdvancePage, SalaryAdvanceRecoveryInput, SalaryAdvanceRecoverySource,
+    SalaryAdvanceRevision, SalaryAdvanceRevisionPage, SalaryAdvanceStatus,
 };
 
 #[derive(Debug, Deserialize)]
@@ -297,14 +297,14 @@ async fn create_expense(
     headers: HeaderMap,
     Json(payload): Json<ExpenseClaimCreateReq>,
 ) -> Result<(StatusCode, Json<ExpenseClaim>), StatusCode> {
-    require_permission(&user, "business.expenses.submit")?;
+    require_any_permission(&user, &["business.expenses.submit", "business.expenses.manage"])?;
     let record: ExpenseClaim = context
         .core
         .finance
         .create_expense(
             user.tenant_id,
             user.account_id,
-            user.has_permission("business.expenses.read"),
+            user.has_permission("business.expenses.manage"),
             idempotency_key(&headers, &user)?,
             payload.into(),
         )
@@ -346,7 +346,14 @@ async fn correct_expense(
     headers: HeaderMap,
     Json(payload): Json<ExpenseCorrectionReq>,
 ) -> Result<Json<ExpenseClaim>, StatusCode> {
-    require_any_permission(&user, &["business.expenses.submit", "business.expenses.correct"])?;
+    require_any_permission(
+        &user,
+        &[
+            "business.expenses.self.correct",
+            "business.expenses.manage",
+            "business.expenses.correct",
+        ],
+    )?;
     context
         .core
         .finance
@@ -354,7 +361,11 @@ async fn correct_expense(
             user.tenant_id,
             expense_id,
             user.account_id,
-            user.has_permission("business.expenses.correct"),
+            FinancialCorrectionAccess {
+                can_correct_self: user.has_permission("business.expenses.self.correct"),
+                can_manage_unconfirmed: user.has_permission("business.expenses.manage"),
+                can_correct_confirmed: user.has_permission("business.expenses.correct"),
+            },
             idempotency_key(&headers, &user)?,
             ExpenseCorrectionInput {
                 expected_revision_id: payload.expected_revision_id,
@@ -550,7 +561,7 @@ async fn correct_salary_advance(
     require_any_permission(
         &user,
         &[
-            "hr.salary_advances.self.request",
+            "hr.salary_advances.self.correct",
             "hr.salary_advances.manage",
             "hr.salary_advances.correct",
         ],
@@ -562,8 +573,11 @@ async fn correct_salary_advance(
             user.tenant_id,
             advance_id,
             user.account_id,
-            user.has_permission("hr.salary_advances.manage"),
-            user.has_permission("hr.salary_advances.correct"),
+            FinancialCorrectionAccess {
+                can_correct_self: user.has_permission("hr.salary_advances.self.correct"),
+                can_manage_unconfirmed: user.has_permission("hr.salary_advances.manage"),
+                can_correct_confirmed: user.has_permission("hr.salary_advances.correct"),
+            },
             idempotency_key(&headers, &user)?,
             SalaryAdvanceCorrectionInput {
                 expected_revision_id: payload.expected_revision_id,

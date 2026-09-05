@@ -307,6 +307,28 @@ expense workflow is **Nhân viên chi hộ**. Its approved remaining balance add
 to that employee's selected payroll period, while a disbursed salary advance's
 remaining balance subtracts from the employee's selected payroll period:
 
+Access on **Chi phí và tạm ứng** is split into independently configurable
+permissions. Staff, supervisors, branch managers, and executive managers have
+self-service defaults: they can see, create, and correct only their own
+unconfirmed records. An employee-paid expense belongs to the employee payer, a
+company-funded expense belongs to the submitting account, and a salary advance
+belongs to its employee even when an authorized owner created it. Branch and
+executive managers additionally receive `business.expenses.read` and
+`hr.salary_advances.read`, which show read-only employee records in the
+validated active branch. An executive manager uses each explicitly authorized
+branch context to cover multiple managed branches.
+
+Self correction uses `business.expenses.self.correct` and
+`hr.salary_advances.self.correct`. Creating or correcting another employee's
+unconfirmed data instead requires `business.expenses.manage` or
+`hr.salary_advances.manage`; read access never implies that authority. The
+tenant-owner defaults include those manage permissions plus the existing
+approve, reject, settlement, disbursement, recovery, and terminal-correction
+permissions. Branch/executive-manager defaults do not. Tenant owners and system
+administration may configure grants or account overrides, and application code
+never infers these abilities from a role name. Every request remains limited by
+the validated `X-Branch-Id` and PostgreSQL RLS.
+
 ```text
 final pay = gross staffing/monthly pay + profit-share payment
           + employee-paid expense balance due in the period

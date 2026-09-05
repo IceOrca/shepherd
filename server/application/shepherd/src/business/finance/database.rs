@@ -11,9 +11,9 @@ use bigdecimal::BigDecimal;
 use super::core::{
     ExpenseCategory, ExpenseClaim, ExpenseClaimInput, ExpenseClaimRevision, ExpenseClaimStatus, ExpenseCorrectionInput,
     ExpenseCursor, ExpenseFundingSource, ExpenseListQuery, ExpensePage, ExpenseRevisionPage, FinanceError,
-    FinancialDecisionCommand, FinancialSettlementInput, RevisionCursor, SalaryAdvance, SalaryAdvanceCorrectionInput,
-    SalaryAdvanceCursor, SalaryAdvanceInput, SalaryAdvanceListQuery, SalaryAdvancePage, SalaryAdvanceRecoveryInput,
-    SalaryAdvanceRevision, SalaryAdvanceRevisionPage, SalaryAdvanceStatus,
+    FinancialCorrectionAccess, FinancialDecisionCommand, FinancialSettlementInput, RevisionCursor, SalaryAdvance,
+    SalaryAdvanceCorrectionInput, SalaryAdvanceCursor, SalaryAdvanceInput, SalaryAdvanceListQuery, SalaryAdvancePage,
+    SalaryAdvanceRecoveryInput, SalaryAdvanceRevision, SalaryAdvanceRevisionPage, SalaryAdvanceStatus,
 };
 
 pub struct FinanceRepo {
@@ -216,10 +216,26 @@ struct AdvanceLockRow {
 
 #[derive(Debug, FromRow)]
 struct CorrectionLockRow {
-    id: Uuid,
     status: String,
-    owner_account_id: Uuid,
+    submitted_by_account_id: Option<Uuid>,
+    subject_account_id: Option<Uuid>,
+    subject_employee_id: Option<Uuid>,
     revision_id: Uuid,
+}
+
+fn correction_actor_allowed(
+    status: &str,
+    initial_status: &str,
+    actor_account_id: Uuid,
+    subject_account_id: Option<Uuid>,
+    access: FinancialCorrectionAccess,
+) -> bool {
+    if status != initial_status {
+        return access.can_correct_confirmed;
+    }
+    access.can_correct_confirmed
+        || access.can_manage_unconfirmed
+        || (access.can_correct_self && subject_account_id == Some(actor_account_id))
 }
 
 async fn set_correction_context(
@@ -469,7 +485,7 @@ impl FinanceRepo {
         &self,
         tenant_id: Uuid,
         actor_account_id: Uuid,
-        can_read_all: bool,
+        can_read_branch: bool,
         query: &ExpenseListQuery,
     ) -> Result<ExpensePage, FinanceError> {
         let status_code: Option<String> = query.status.map(|value: ExpenseClaimStatus| value.as_code().to_owned());
@@ -486,7 +502,7 @@ impl FinanceRepo {
                     ExpenseRow,
                     "src/business/finance/sql/expense_claims.sql",
                     tenant_id,
-                    can_read_all,
+                    can_read_branch,
                     actor_account_id,
                     status_code,
                     normalized_search,
@@ -631,7 +647,7 @@ impl FinanceRepo {
         tenant_id: Uuid,
         expense_id: Uuid,
         actor_account_id: Uuid,
-        can_correct_confirmed: bool,
+        access: FinancialCorrectionAccess,
         idempotency_key: Uuid,
         input: &ExpenseCorrectionInput,
     ) -> Result<ExpenseClaim, FinanceError> {
@@ -663,9 +679,19 @@ impl FinanceRepo {
         let locked: CorrectionLockRow = sqlx::query_as!(
             CorrectionLockRow,
             r#"
-            SELECT claim.id, claim.status, claim.submitted_by_account_id AS owner_account_id,
+            SELECT claim.status,
+                   claim.submitted_by_account_id AS "submitted_by_account_id?",
+                   CASE
+                       WHEN claim.paid_by_employee_id IS NULL THEN claim.submitted_by_account_id
+                       ELSE payer.account_id
+                   END AS subject_account_id,
+                   claim.paid_by_employee_id AS subject_employee_id,
                    revision.revision_id
             FROM business_expense_claims AS claim
+            LEFT JOIN hr_employees AS payer
+              ON payer.tenant_id = claim.tenant_id
+             AND payer.branch_id = claim.branch_id
+             AND payer.id = claim.paid_by_employee_id
             JOIN LATERAL (
                 SELECT item.revision_id
                 FROM business_expense_claim_revisions AS item
@@ -688,13 +714,43 @@ impl FinanceRepo {
         if locked.revision_id != input.expected_revision_id {
             return Err(FinanceError::Conflict);
         }
-        if actor_account_id != locked.owner_account_id && !can_correct_confirmed {
+        if !correction_actor_allowed(
+            &locked.status,
+            "submitted",
+            actor_account_id,
+            locked.subject_account_id,
+            access,
+        ) {
             return Err(FinanceError::Forbidden);
         }
-        if !correction_allowed_for_status(&locked.status, "submitted", can_correct_confirmed) {
+        if !correction_allowed_for_status(&locked.status, "submitted", access.can_correct_confirmed) {
             return Err(FinanceError::Forbidden);
         }
-        let preserve_approval: bool = locked.status == "approved" && can_correct_confirmed;
+        let can_manage_subject: bool = access.can_manage_unconfirmed || access.can_correct_confirmed;
+        let proposed_subject_allowed: bool = if input.paid_by_employee_id == locked.subject_employee_id {
+            true
+        } else if let Some(employee_id) = input.paid_by_employee_id {
+            sqlx::query_scalar!(
+                r#"SELECT EXISTS(
+                    SELECT 1 FROM hr_employees
+                    WHERE tenant_id = $1 AND id = $2 AND status = 'active'
+                      AND ($3 OR account_id = $4)
+                ) AS "is_allowed!""#,
+                tenant_id,
+                employee_id,
+                can_manage_subject,
+                actor_account_id,
+            )
+            .fetch_one(&mut *connection)
+            .await
+            .map_err(map_sqlx)?
+        } else {
+            can_manage_subject || locked.submitted_by_account_id == Some(actor_account_id)
+        };
+        if !proposed_subject_allowed {
+            return Err(FinanceError::Forbidden);
+        }
+        let preserve_approval: bool = locked.status == "approved" && access.can_correct_confirmed;
         if preserve_approval && input.approved_amount.is_none() {
             return Err(FinanceError::InvalidInput(
                 "approved amount is required when correcting an approved expense",
@@ -784,7 +840,7 @@ impl FinanceRepo {
         tenant_id: Uuid,
         expense_id: Uuid,
         actor_account_id: Uuid,
-        can_read_all: bool,
+        can_read_branch: bool,
         limit: i64,
         cursor: Option<&RevisionCursor>,
     ) -> Result<ExpenseRevisionPage, FinanceError> {
@@ -811,23 +867,27 @@ impl FinanceRepo {
                      AND claim.branch_id = revision.branch_id
                      AND claim.id = revision.expense_claim_id
                     LEFT JOIN hr_employees AS payer
-                      ON payer.tenant_id = claim.tenant_id
-                     AND payer.branch_id = claim.branch_id
-                     AND payer.id = claim.paid_by_employee_id
+                      ON payer.tenant_id = revision.tenant_id
+                     AND payer.branch_id = revision.branch_id
+                     AND payer.id = revision.paid_by_employee_id
                     JOIN business_expense_categories AS category
                       ON category.tenant_id = revision.tenant_id AND category.id = revision.category_id
                     JOIN accounts AS reviser
                       ON reviser.tenant_id = revision.tenant_id
                      AND reviser.id = revision.revised_by_account_id
                     WHERE revision.tenant_id = $1 AND revision.expense_claim_id = $2
-                      AND ($3 OR claim.submitted_by_account_id = $4 OR payer.account_id = $4)
+                      AND (
+                          $3
+                          OR (revision.paid_by_employee_id IS NULL AND revision.submitted_by_account_id = $4)
+                          OR payer.account_id = $4
+                      )
                       AND ($5::BIGINT IS NULL OR revision.revision_number < $5)
                     ORDER BY revision.revision_number DESC
                     LIMIT $6
                     "#,
                     tenant_id,
                     expense_id,
-                    can_read_all,
+                    can_read_branch,
                     actor_account_id,
                     cursor_revision_number,
                     query_limit,
@@ -1001,7 +1061,7 @@ impl FinanceRepo {
         &self,
         tenant_id: Uuid,
         actor_account_id: Uuid,
-        can_read_all: bool,
+        can_read_branch: bool,
         query: &SalaryAdvanceListQuery,
     ) -> Result<SalaryAdvancePage, FinanceError> {
         let status_code: Option<String> = query
@@ -1024,7 +1084,7 @@ impl FinanceRepo {
                     SalaryAdvanceRow,
                     "src/business/finance/sql/salary_advances.sql",
                     tenant_id,
-                    can_read_all,
+                    can_read_branch,
                     actor_account_id,
                     status_code,
                     normalized_search,
@@ -1140,8 +1200,7 @@ impl FinanceRepo {
         tenant_id: Uuid,
         advance_id: Uuid,
         actor_account_id: Uuid,
-        can_manage_requested: bool,
-        can_correct_confirmed: bool,
+        access: FinancialCorrectionAccess,
         idempotency_key: Uuid,
         input: &SalaryAdvanceCorrectionInput,
     ) -> Result<SalaryAdvance, FinanceError> {
@@ -1173,9 +1232,16 @@ impl FinanceRepo {
         let locked: CorrectionLockRow = sqlx::query_as!(
             CorrectionLockRow,
             r#"
-            SELECT advance.id, advance.status, advance.requested_by_account_id AS owner_account_id,
+            SELECT advance.status,
+                   NULL::UUID AS submitted_by_account_id,
+                   employee.account_id AS subject_account_id,
+                   advance.employee_id AS subject_employee_id,
                    revision.revision_id
             FROM hr_salary_advances AS advance
+            JOIN hr_employees AS employee
+              ON employee.tenant_id = advance.tenant_id
+             AND employee.branch_id = advance.branch_id
+             AND employee.id = advance.employee_id
             JOIN LATERAL (
                 SELECT item.revision_id
                 FROM hr_salary_advance_revisions AS item
@@ -1198,14 +1264,42 @@ impl FinanceRepo {
         if locked.revision_id != input.expected_revision_id {
             return Err(FinanceError::Conflict);
         }
-        if actor_account_id != locked.owner_account_id && !can_manage_requested && !can_correct_confirmed {
+        if !correction_actor_allowed(
+            &locked.status,
+            "requested",
+            actor_account_id,
+            locked.subject_account_id,
+            access,
+        ) {
             return Err(FinanceError::Forbidden);
         }
-        if !correction_allowed_for_status(&locked.status, "requested", can_correct_confirmed) {
+        if !correction_allowed_for_status(&locked.status, "requested", access.can_correct_confirmed) {
+            return Err(FinanceError::Forbidden);
+        }
+        let can_manage_subject: bool = access.can_manage_unconfirmed || access.can_correct_confirmed;
+        let proposed_subject_allowed: bool = if Some(input.employee_id) == locked.subject_employee_id {
+            true
+        } else {
+            sqlx::query_scalar!(
+                r#"SELECT EXISTS(
+                    SELECT 1 FROM hr_employees
+                    WHERE tenant_id = $1 AND id = $2 AND status = 'active'
+                      AND ($3 OR account_id = $4)
+                ) AS "is_allowed!""#,
+                tenant_id,
+                input.employee_id,
+                can_manage_subject,
+                actor_account_id,
+            )
+            .fetch_one(&mut *connection)
+            .await
+            .map_err(map_sqlx)?
+        };
+        if !proposed_subject_allowed {
             return Err(FinanceError::Forbidden);
         }
         let preserve_decision: bool =
-            matches!(locked.status.as_str(), "approved" | "disbursed" | "recovered") && can_correct_confirmed;
+            matches!(locked.status.as_str(), "approved" | "disbursed" | "recovered") && access.can_correct_confirmed;
         if preserve_decision && input.approved_amount.is_none() {
             return Err(FinanceError::InvalidInput(
                 "approved amount is required when correcting an approved salary advance",
@@ -1270,7 +1364,7 @@ impl FinanceRepo {
         tenant_id: Uuid,
         advance_id: Uuid,
         actor_account_id: Uuid,
-        can_read_all: bool,
+        can_read_branch: bool,
         limit: i64,
         cursor: Option<&RevisionCursor>,
     ) -> Result<SalaryAdvanceRevisionPage, FinanceError> {
@@ -1304,14 +1398,14 @@ impl FinanceRepo {
                       ON reviser.tenant_id = revision.tenant_id
                      AND reviser.id = revision.revised_by_account_id
                     WHERE revision.tenant_id = $1 AND revision.salary_advance_id = $2
-                      AND ($3 OR advance.requested_by_account_id = $4 OR employee.account_id = $4)
+                      AND ($3 OR employee.account_id = $4)
                       AND ($5::BIGINT IS NULL OR revision.revision_number < $5)
                     ORDER BY revision.revision_number DESC
                     LIMIT $6
                     "#,
                     tenant_id,
                     advance_id,
-                    can_read_all,
+                    can_read_branch,
                     actor_account_id,
                     cursor_revision_number,
                     query_limit,
@@ -1549,8 +1643,10 @@ mod tests {
     use infra_postgres::{DatabaseAdapter, with_active_branch};
     use uuid::Uuid;
 
-    use super::{FinanceRepo, correction_allowed_for_status};
-    use crate::business::finance::core::{ExpenseFundingSource, ExpenseListQuery};
+    use super::{FinanceRepo, correction_actor_allowed, correction_allowed_for_status};
+    use crate::business::finance::core::{
+        ExpenseCorrectionInput, ExpenseFundingSource, ExpenseListQuery, FinancialCorrectionAccess,
+    };
 
     type TestResult = Result<(), Box<dyn Error>>;
 
@@ -1564,6 +1660,70 @@ mod tests {
             assert!(correction_allowed_for_status(status, "submitted", true));
             assert!(correction_allowed_for_status(status, "requested", true));
         }
+    }
+
+    #[test]
+    fn financial_correction_access_separates_self_managed_and_terminal_records() {
+        let actor_account_id: Uuid = Uuid::new_v4();
+        let another_account_id: Uuid = Uuid::new_v4();
+        let self_access = FinancialCorrectionAccess {
+            can_correct_self: true,
+            can_manage_unconfirmed: false,
+            can_correct_confirmed: false,
+        };
+        let managed_access = FinancialCorrectionAccess {
+            can_correct_self: true,
+            can_manage_unconfirmed: true,
+            can_correct_confirmed: false,
+        };
+        let terminal_access = FinancialCorrectionAccess {
+            can_correct_self: false,
+            can_manage_unconfirmed: false,
+            can_correct_confirmed: true,
+        };
+
+        assert!(correction_actor_allowed(
+            "submitted",
+            "submitted",
+            actor_account_id,
+            Some(actor_account_id),
+            self_access,
+        ));
+        assert!(!correction_actor_allowed(
+            "submitted",
+            "submitted",
+            actor_account_id,
+            Some(another_account_id),
+            self_access,
+        ));
+        assert!(!correction_actor_allowed(
+            "approved",
+            "submitted",
+            actor_account_id,
+            Some(actor_account_id),
+            self_access,
+        ));
+        assert!(correction_actor_allowed(
+            "requested",
+            "requested",
+            actor_account_id,
+            Some(another_account_id),
+            managed_access,
+        ));
+        assert!(!correction_actor_allowed(
+            "approved",
+            "requested",
+            actor_account_id,
+            Some(another_account_id),
+            managed_access,
+        ));
+        assert!(correction_actor_allowed(
+            "approved",
+            "requested",
+            actor_account_id,
+            Some(another_account_id),
+            terminal_access,
+        ));
     }
 
     #[tokio::test]
@@ -1600,6 +1760,14 @@ mod tests {
         )
         .execute(setup.connection())
         .await?;
+        sqlx::query!(
+            "INSERT INTO account_branch_assignments (tenant_id, account_id, branch_id, assigned_by_account_id) VALUES ($1, $2, $3, $2)",
+            tenant_id,
+            account_id,
+            branch_id,
+        )
+        .execute(setup.connection())
+        .await?;
         setup.commit().await?;
 
         let repo = FinanceRepo::new_arc(Arc::clone(&database));
@@ -1629,6 +1797,36 @@ mod tests {
                     },
                 )
                 .await?;
+            let corrected = repo
+                .correct_expense(
+                    tenant_id,
+                    created.id,
+                    account_id,
+                    FinancialCorrectionAccess {
+                        can_correct_self: true,
+                        can_manage_unconfirmed: false,
+                        can_correct_confirmed: false,
+                    },
+                    Uuid::new_v4(),
+                    &ExpenseCorrectionInput {
+                        expected_revision_id: created.revision_id,
+                        correction_reason: "Correct test description".to_owned(),
+                        category_id,
+                        funding_source: ExpenseFundingSource::CompanyFunds,
+                        paid_by_employee_id: None,
+                        customer_id: None,
+                        urgent_work_report_id: None,
+                        staffing_assignment_id: None,
+                        paid_on,
+                        payroll_inclusion_on: paid_on,
+                        description: "Database decoding regression corrected".to_owned(),
+                        evidence_reference: None,
+                        claimed_amount: "125000.0000".to_owned(),
+                        approved_amount: None,
+                        currency: "VND".to_owned(),
+                    },
+                )
+                .await?;
             let page = repo
                 .list_expenses(
                     tenant_id,
@@ -1644,7 +1842,8 @@ mod tests {
                 .await?;
 
             assert_eq!(page.items.len(), 1);
-            assert_eq!(page.items[0].id, created.id);
+            assert_eq!(page.items[0].id, corrected.id);
+            assert_eq!(page.items[0].revision_number, 2);
             assert!(page.items[0].paid_by_employee_id.is_none());
             assert!(page.items[0].paid_by_employee_name.is_none());
             assert!(page.items[0].approved_by_username.is_none());
@@ -1682,6 +1881,13 @@ mod tests {
             sqlx::query!(
                 "DELETE FROM business_expense_categories WHERE tenant_id = $1",
                 tenant_id
+            )
+            .execute(cleanup.connection())
+            .await?;
+            sqlx::query!(
+                "DELETE FROM account_branch_assignments WHERE tenant_id = $1 AND account_id = $2",
+                tenant_id,
+                account_id
             )
             .execute(cleanup.connection())
             .await?;

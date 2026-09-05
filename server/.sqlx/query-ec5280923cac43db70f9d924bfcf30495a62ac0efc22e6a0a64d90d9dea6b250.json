@@ -1,0 +1,72 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT advance.status,\n                   NULL::UUID AS submitted_by_account_id,\n                   employee.account_id AS subject_account_id,\n                   advance.employee_id AS subject_employee_id,\n                   revision.revision_id\n            FROM hr_salary_advances AS advance\n            JOIN hr_employees AS employee\n              ON employee.tenant_id = advance.tenant_id\n             AND employee.branch_id = advance.branch_id\n             AND employee.id = advance.employee_id\n            JOIN LATERAL (\n                SELECT item.revision_id\n                FROM hr_salary_advance_revisions AS item\n                WHERE item.tenant_id = advance.tenant_id\n                  AND item.branch_id = advance.branch_id\n                  AND item.salary_advance_id = advance.id\n                ORDER BY item.revision_number DESC\n                LIMIT 1\n            ) AS revision ON TRUE\n            WHERE advance.tenant_id = $1 AND advance.id = $2\n            FOR UPDATE OF advance\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hr_salary_advances",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "submitted_by_account_id",
+        "type_info": "Uuid",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "subject_account_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "hr_employees",
+            "name": "account_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "subject_employee_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "hr_salary_advances",
+            "name": "employee_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "revision_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "hr_salary_advance_revisions",
+            "name": "revision_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "ec5280923cac43db70f9d924bfcf30495a62ac0efc22e6a0a64d90d9dea6b250"
+}

@@ -77,7 +77,7 @@ LEFT JOIN hr_salary_advance_recoveries AS recovery
  AND recovery.branch_id = advance.branch_id
  AND recovery.salary_advance_id = advance.id
 WHERE advance.tenant_id = $1
-  AND ($2 OR advance.requested_by_account_id = $3 OR employee.account_id = $3)
+  AND ($2 OR employee.account_id = $3)
   AND ($4::TEXT IS NULL OR advance.status = $4)
   AND (
       $5::TEXT IS NULL

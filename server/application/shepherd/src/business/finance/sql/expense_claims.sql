@@ -83,7 +83,11 @@ LEFT JOIN business_expense_reimbursements AS reimbursement
  AND reimbursement.branch_id = claim.branch_id
  AND reimbursement.expense_claim_id = claim.id
 WHERE claim.tenant_id = $1
-  AND ($2 OR claim.submitted_by_account_id = $3 OR payer.account_id = $3)
+  AND (
+      $2
+      OR (claim.paid_by_employee_id IS NULL AND claim.submitted_by_account_id = $3)
+      OR payer.account_id = $3
+  )
   AND ($4::TEXT IS NULL OR claim.status = $4)
   AND (
       $5::TEXT IS NULL

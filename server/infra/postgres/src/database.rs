@@ -71,15 +71,16 @@ impl DatabaseAdapter {
         self.client.begin_tenant_with_branch(tenant_id, branch_id).await
     }
 
-    /// Runs one SQLx operation inside an automatically committed tenant-scoped
-    /// transaction. Multi-step domain workflows that coordinate locks or map
+    /// Runs one SQLx operation inside an automatically committed tenant- and
+    /// active-branch-scoped transaction. Multi-step domain workflows coordinate locks or map
     /// business errors should continue to use `begin_tenant` explicitly.
     pub async fn tran_with_tenant<T, F>(&self, tenant_id: Uuid, op: F) -> Result<T, TenantDbErr>
     where
         T: Send,
         F: for<'conn> AsyncFnOnce(&'conn mut PgConnection) -> Result<T, sqlx::Error>,
     {
-        self.client.tran_with_tenant(tenant_id, op).await
+        let branch_id: Option<Uuid> = active_branch_id();
+        self.client.tran_with_tenant_and_branch(tenant_id, branch_id, op).await
     }
 
     pub async fn resolve_active_tenant_id(&self, tenant: &str) -> Result<Option<Uuid>, TenantDbErr> {
@@ -115,5 +116,40 @@ impl DatabaseAdapter {
 impl DatabaseAdapter {
     pub async fn ready(&self) -> bool {
         self.client.ready().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn one_shot_transaction_propagates_active_branch_context() -> Result<(), Box<dyn std::error::Error>> {
+        let database_url: String = std::env::var("DATABASE_URL")?;
+        let database: Arc<DatabaseAdapter> = DatabaseAdapter::connect(&database_url).await?;
+        let tenant_id: Uuid = Uuid::new_v4();
+        let branch_id: Uuid = Uuid::new_v4();
+        let tenant_slug: String = format!("branch-context-{}", tenant_id.simple());
+        database
+            .provision_tenant(tenant_id, &tenant_slug, "Branch context test")
+            .await?;
+
+        let observed_branch_id: Option<Uuid> = with_active_branch(
+            branch_id,
+            database.tran_with_tenant(tenant_id, async |connection: &mut PgConnection| {
+                sqlx::query_scalar!(
+                    r#"SELECT NULLIF(current_setting('app.branch_id', TRUE), '')::UUID AS "branch_id?""#,
+                )
+                .fetch_one(connection)
+                .await
+            }),
+        )
+        .await?;
+        assert_eq!(observed_branch_id, Some(branch_id));
+
+        sqlx::query!("DELETE FROM tenants WHERE id = $1", tenant_id)
+            .execute(database.global_pool())
+            .await?;
+        Ok(())
     }
 }

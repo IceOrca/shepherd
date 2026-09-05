@@ -193,7 +193,20 @@ impl PostgresCli {
         T: Send,
         F: for<'conn> AsyncFnOnce(&'conn mut PgConnection) -> Result<T, sqlx::Error>,
     {
-        let mut tran: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        self.tran_with_tenant_and_branch(tenant_id, None, op).await
+    }
+
+    pub(crate) async fn tran_with_tenant_and_branch<T, F>(
+        &self,
+        tenant_id: Uuid,
+        branch_id: Option<Uuid>,
+        op: F,
+    ) -> Result<T, TenantDbErr>
+    where
+        T: Send,
+        F: for<'conn> AsyncFnOnce(&'conn mut PgConnection) -> Result<T, sqlx::Error>,
+    {
+        let mut tran: TenantTransaction = self.begin_tenant_with_branch(tenant_id, branch_id).await?;
         let result: Result<T, sqlx::Error> = op(tran.connection()).await;
         match result {
             Ok(value) => {
@@ -205,6 +218,7 @@ impl PostgresCli {
                     error!(
                         operation = "database_adapter.tran_with_tenant",
                         tenant_id = %tenant_id,
+                        branch_id = ?branch_id,
                         reason = %rollback_error,
                         "Tenant/branch tran rollback failed"
                     );

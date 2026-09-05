@@ -1,0 +1,72 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT claim.status,\n                   claim.submitted_by_account_id AS \"submitted_by_account_id?\",\n                   CASE\n                       WHEN claim.paid_by_employee_id IS NULL THEN claim.submitted_by_account_id\n                       ELSE payer.account_id\n                   END AS subject_account_id,\n                   claim.paid_by_employee_id AS subject_employee_id,\n                   revision.revision_id\n            FROM business_expense_claims AS claim\n            LEFT JOIN hr_employees AS payer\n              ON payer.tenant_id = claim.tenant_id\n             AND payer.branch_id = claim.branch_id\n             AND payer.id = claim.paid_by_employee_id\n            JOIN LATERAL (\n                SELECT item.revision_id\n                FROM business_expense_claim_revisions AS item\n                WHERE item.tenant_id = claim.tenant_id\n                  AND item.branch_id = claim.branch_id\n                  AND item.expense_claim_id = claim.id\n                ORDER BY item.revision_number DESC\n                LIMIT 1\n            ) AS revision ON TRUE\n            WHERE claim.tenant_id = $1 AND claim.id = $2\n            FOR UPDATE OF claim\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claims",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "submitted_by_account_id?",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claims",
+            "name": "submitted_by_account_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "subject_account_id",
+        "type_info": "Uuid",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "subject_employee_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claims",
+            "name": "paid_by_employee_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "revision_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claim_revisions",
+            "name": "revision_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      true,
+      false
+    ]
+  },
+  "hash": "182b83611231bdf647fcc3f63143831643c656000ee4905f6d6cb9826427b95e"
+}
