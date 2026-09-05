@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                INSERT INTO branches (\n                    id, tenant_id, code, name, time_zone, status,\n                    created_by_account_id, updated_by_account_id\n                )\n                VALUES ($1, $2, $3, $4, $5, 'active', $6, $6)\n                RETURNING id, code, name, time_zone, status, version\n                ",
+  "query": "\n                    SELECT id, code, name, time_zone, status, version\n                    FROM branches\n                    WHERE tenant_id = $1\n                      AND (\n                          $3::TEXT IS NULL\n                          OR code LIKE '%' || $3 || '%'\n                          OR lower(name) LIKE '%' || $3 || '%'\n                      )\n                      AND (\n                          $4::TEXT IS NULL\n                          OR (code, id) > ($4, $5::UUID)\n                      )\n                    ORDER BY code, id\n                    LIMIT $2\n                    ",
   "describe": {
     "columns": [
       {
@@ -73,8 +73,7 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "Uuid",
-        "Text",
+        "Int8",
         "Text",
         "Text",
         "Uuid"
@@ -89,5 +88,5 @@
       false
     ]
   },
-  "hash": "976af4ed75c32e82548e58a5d1c1f554e04388f90e2091926d78aaebe2ca2af8"
+  "hash": "0b74dc3901e73fb33ad8fd40ef8b384c74ec93023c456850d0776c739de0a133"
 }

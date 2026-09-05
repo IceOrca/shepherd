@@ -22,7 +22,6 @@ let admin_policy: AuthAdminPolicy = AuthAdminPolicy::try_new(
     "auth.accounts.disable",
     "auth.roles.read",
     "auth.roles.manage",
-    "business.branches.manage",
 )?;
 ```
 

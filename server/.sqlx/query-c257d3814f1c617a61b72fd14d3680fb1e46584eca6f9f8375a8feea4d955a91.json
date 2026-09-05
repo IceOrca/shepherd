@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                UPDATE branches\n                SET name = $3,\n                    time_zone = $4,\n                    status = $5,\n                    version = version + 1,\n                    updated_by_account_id = $6,\n                    updated_at = CURRENT_TIMESTAMP\n                WHERE tenant_id = $1 AND id = $2 AND version = $7\n                RETURNING id, code, name, time_zone, status, version\n                ",
+  "query": "\n                    UPDATE branches\n                    SET name = $3,\n                        time_zone = $4,\n                        status = $5,\n                        version = version + 1,\n                        updated_by_account_id = $6,\n                        updated_at = CURRENT_TIMESTAMP\n                    WHERE tenant_id = $1 AND id = $2 AND version = $7\n                    RETURNING id, code, name, time_zone, status, version\n                    ",
   "describe": {
     "columns": [
       {
@@ -90,5 +90,5 @@
       false
     ]
   },
-  "hash": "f7e1d056a8f26c371984b71d9324c8f06c328cd06a9ef7f8c083bb5640686823"
+  "hash": "c257d3814f1c617a61b72fd14d3680fb1e46584eca6f9f8375a8feea4d955a91"
 }

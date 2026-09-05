@@ -746,16 +746,19 @@ separate platform-level authority.
 Business queries still establish tenant context through SQLx transactions so
 PostgreSQL RLS remains the final tenant-isolation boundary.
 
-### Tenant access-control administration
+### Tenant access-control and branch administration
 
-The tenant-owner console at `/admin/access-control` manages four related areas:
+The branch-management collection uses the shared configured limit and an opaque `(code, id)` keyset cursor, fetches only `limit + 1`, and returns `{ items, next_cursor, has_more, limit }`.
+
+The access-control console at `/admin/access-control` manages three related areas:
 
 - **Users and scope:** choose the protected primary organizational role, assign additional tenant- or branch-scoped roles, and add per-user allow/deny permission exceptions.
 - **Roles and permissions:** edit the tenant's permission set for protected system roles or create additional tenant- or branch-scoped operational roles from the application permission catalog.
-- **Branches:** create branches and update their name, IANA time zone, or active/disabled status. Branches are disabled rather than deleted through this workflow.
 - **Audit:** review immutable access-control changes with actor, target, before/after data, and server timestamp.
 
-The console uses `GET /api/admin/access-control` for its snapshot and the scoped `POST`/`PUT` routes below `/api/admin/access-control/branches`, `/roles`, and `/users/{account_id}` for mutations. `/admin/auth-users` remains the provider-link and tenant-account workflow; its status action enables or disables only the account in the active tenant.
+Branch maintenance is a separate business-domain workflow at `/admin/branches`, implemented by `branch/host.rs -> branch/core.rs -> branch/database.rs`. Its API is `GET /api/business/branches/manage`, `POST /api/business/branches`, and `PUT /api/business/branches/{branch_id}`. `business.branches.manage` controls UI visibility and API authority; the initial tenant-owner role owns that permission, while authorized TenantOwner/System Admin configuration may grant it without adding a role-name check to branch handlers. Because creation and whole-branch maintenance have no pre-existing branch scope, the database transaction requires the permission at tenant scope. It normalizes and validates the branch, stores creator/updater provenance, and appends `branch.create` or `branch.update` to `access_control_audit_log` atomically. Branches are disabled rather than deleted, and successful mutations invalidate tenant authorization caches so tenant-scoped accounts immediately resolve the new active-branch set.
+
+The access-control console uses `GET /api/admin/access-control` for its snapshot and the scoped role/user mutation routes below `/api/admin/access-control/roles` and `/users/{account_id}`. `/admin/auth-users` remains the provider-link and tenant-account workflow; its status action enables or disables only the account in the active tenant.
 
 Permission codes such as `business.customers.manage` are stable internal authorization identifiers. The global `permissions` catalog also owns a required Vietnamese `display_name` and explanatory `description`; the access-control snapshot returns both, and the UI shows these friendly values in role permission lists, selectors, and account override summaries instead of presenting technical codes.
 

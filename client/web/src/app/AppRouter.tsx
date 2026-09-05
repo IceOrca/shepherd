@@ -5,6 +5,7 @@ import { AuthUsersPage } from "../features/admin/AuthUsersPage";
 import { AccessControlPage } from "../features/admin/AccessControlPage";
 import { LoginPage } from "../features/auth/LoginPage";
 import { useAuth } from "../features/auth/AuthProvider";
+import { BranchesPage } from "../features/branches/BranchesPage";
 import { MyAssignmentsPage } from "../features/operations/MyAssignmentsPage";
 import { CustomersPage } from "../features/operations/CustomersPage";
 import { OperationsOverviewPage } from "../features/operations/OperationsOverviewPage";
@@ -109,6 +110,7 @@ export function AppRouter() {
             <Route path="/operations/reconciliation/planned" element={<PermissionGate anyPermission={["business.reconciliation.read"]}><ReconciliationPage /></PermissionGate>} />
           ) : null}
           <Route path="/admin/auth-users" element={<AuthUsersPage />} />
+          <Route path="/admin/branches" element={<PermissionGate anyPermission={["business.branches.manage"]}><BranchesPage /></PermissionGate>} />
           <Route path="/admin/access-control" element={<AccessControlPage />} />
           <Route path="/admin/*" element={<Navigate to="/admin/access-control" replace />} />
           <Route path="*" element={<NotFoundPage />} />

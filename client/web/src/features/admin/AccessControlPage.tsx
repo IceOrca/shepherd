@@ -1,6 +1,5 @@
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  Building2,
   Check,
   ClipboardList,
   KeyRound,
@@ -24,12 +23,10 @@ import type {
   AccessRoleScope,
   AccountPermissionOverrideContract,
   AccountRoleAssignmentContract,
-  CreateAccessControlBranchRequest,
   CreateAccessControlRoleRequest,
   PermissionCode,
   PermissionOverrideEffect,
   RoleCode,
-  UpdateAccessControlBranchRequest,
   UpdateAccessControlRoleRequest,
   UpdateAccountAccessRequest,
 } from "../../api/generated/contracts";
@@ -39,23 +36,13 @@ import { roleLabel } from "../../shared/lib/format";
 import { PLANNED_STAFFING_ENABLED, isPlannedStaffingPermission } from "../../shared/lib/features";
 import {
   authAdminQueryKeys,
-  createAccessControlBranch,
   createAccessControlRole,
   getAccessControlSnapshot,
-  updateAccessControlBranch,
   updateAccessControlRole,
   updateAccountAccess,
 } from "./api";
 
-type AccessTab = "branches" | "roles" | "users" | "audit";
-
-interface BranchEditor {
-  id: string;
-  name: string;
-  time_zone: string;
-  status: string;
-  version: number;
-}
+type AccessTab = "roles" | "users" | "audit";
 
 interface RoleEditor {
   code: RoleCode;
@@ -78,12 +65,6 @@ interface Feedback {
   kind: "success" | "error";
   message: string;
 }
-
-const emptyBranchRequest: CreateAccessControlBranchRequest = {
-  code: "",
-  name: "",
-  time_zone: "Asia/Ho_Chi_Minh",
-};
 
 const emptyRoleRequest: CreateAccessControlRoleRequest = {
   code: "",
@@ -134,9 +115,6 @@ export function AccessControlPage() {
   const queryClient = useQueryClient();
   const [tab, setTab] = useState<AccessTab>("users");
   const [feedback, setFeedback] = useState<Feedback | null>(null);
-  const [branchRequest, setBranchRequest] =
-    useState<CreateAccessControlBranchRequest>(emptyBranchRequest);
-  const [branchEditor, setBranchEditor] = useState<BranchEditor | null>(null);
   const [roleRequest, setRoleRequest] =
     useState<CreateAccessControlRoleRequest>(emptyRoleRequest);
   const [selectedRoleCode, setSelectedRoleCode] = useState<RoleCode>("");
@@ -267,36 +245,6 @@ export function AccessControlPage() {
     await queryClient.invalidateQueries({ queryKey: authAdminQueryKeys.all });
   };
 
-  const branchCreateMutation = useMutation({
-    mutationFn: createAccessControlBranch,
-    onSuccess: async (created: AccessControlBranch): Promise<void> => {
-      setFeedback({ kind: "success", message: `Đã tạo chi nhánh ${created.name}.` });
-      setBranchRequest(emptyBranchRequest);
-      await refreshSnapshot();
-    },
-    onError: (mutationError: Error): void =>
-      setFeedback({ kind: "error", message: friendlyApiError(mutationError, "Không thể tạo chi nhánh.") }),
-  });
-
-  const branchUpdateMutation = useMutation({
-    mutationFn: (editor: BranchEditor): Promise<AccessControlBranch> => {
-      const request: UpdateAccessControlBranchRequest = {
-        name: editor.name,
-        time_zone: editor.time_zone,
-        status: editor.status,
-        expected_version: editor.version,
-      };
-      return updateAccessControlBranch(editor.id, request);
-    },
-    onSuccess: async (updated: AccessControlBranch): Promise<void> => {
-      setFeedback({ kind: "success", message: `Đã cập nhật chi nhánh ${updated.name}.` });
-      setBranchEditor(null);
-      await refreshSnapshot();
-    },
-    onError: (mutationError: Error): void =>
-      setFeedback({ kind: "error", message: friendlyApiError(mutationError, "Không thể cập nhật chi nhánh.") }),
-  });
-
   const roleCreateMutation = useMutation({
     mutationFn: createAccessControlRole,
     onSuccess: async (created: AccessControlRole): Promise<void> => {
@@ -345,11 +293,6 @@ export function AccessControlPage() {
     onError: (mutationError: Error): void =>
       setFeedback({ kind: "error", message: friendlyApiError(mutationError, "Không thể cập nhật quyền người dùng.") }),
   });
-
-  const submitBranch = (event: FormEvent<HTMLFormElement>): void => {
-    event.preventDefault();
-    branchCreateMutation.mutate(branchRequest);
-  };
 
   const submitRole = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
@@ -423,10 +366,9 @@ export function AccessControlPage() {
     );
   }
 
-  const tabs: Array<{ code: AccessTab; label: string; icon: typeof Building2 }> = [
+  const tabs: Array<{ code: AccessTab; label: string; icon: typeof ShieldCheck }> = [
     { code: "users", label: "Người dùng & phạm vi", icon: UsersRound },
     { code: "roles", label: "Vai trò & quyền", icon: ShieldCheck },
-    { code: "branches", label: "Chi nhánh", icon: Building2 },
     { code: "audit", label: "Nhật ký", icon: ClipboardList },
   ];
 
@@ -443,39 +385,13 @@ export function AccessControlPage() {
         </div>
         <div className="mt-5 flex flex-wrap gap-2">
           {tabs.map((item): React.ReactNode => {
-            const Icon: typeof Building2 = item.icon;
+            const Icon: typeof ShieldCheck = item.icon;
             return <button className={`inline-flex min-h-10 items-center gap-2 rounded-xl px-4 text-sm font-bold ${tab === item.code ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`} key={item.code} onClick={(): void => setTab(item.code)} type="button"><Icon className="size-4" />{item.label}</button>;
           })}
         </div>
       </section>
 
       {feedback ? <div className={`rounded-2xl border px-4 py-3 text-sm font-semibold ${feedback.kind === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-red-200 bg-red-50 text-red-800"}`}>{feedback.message}</div> : null}
-
-      {tab === "branches" ? (
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
-          <section className="surface-card overflow-hidden">
-            <div className="border-b border-slate-100 px-5 py-4"><h2 className="font-bold text-slate-950">Danh sách chi nhánh</h2></div>
-            <div className="divide-y divide-slate-100">
-              {branches.map((branch: AccessControlBranch): React.ReactNode => (
-                <button className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left hover:bg-slate-50" key={branch.id} onClick={(): void => setBranchEditor({ id: branch.id, name: branch.name, time_zone: branch.time_zone, status: branch.status, version: branch.version })} type="button">
-                  <span><span className="block font-bold text-slate-900">{branch.name}</span><span className="mt-1 block text-xs text-slate-500">{branch.code} · {branch.time_zone}</span></span>
-                  <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${branch.status === "active" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>{branch.status === "active" ? "Hoạt động" : "Đã tắt"}</span>
-                </button>
-              ))}
-            </div>
-          </section>
-          <div className="space-y-6">
-            <form className="surface-card space-y-4 p-5" onSubmit={submitBranch}>
-              <h2 className="font-bold text-slate-950">Tạo chi nhánh</h2>
-              <input className="min-h-11 w-full rounded-xl border-slate-300" placeholder="Mã chi nhánh" required value={branchRequest.code} onChange={(event): void => setBranchRequest({ ...branchRequest, code: event.target.value })} />
-              <input className="min-h-11 w-full rounded-xl border-slate-300" placeholder="Tên chi nhánh" required value={branchRequest.name} onChange={(event): void => setBranchRequest({ ...branchRequest, name: event.target.value })} />
-              <input className="min-h-11 w-full rounded-xl border-slate-300" placeholder="Múi giờ IANA" required value={branchRequest.time_zone} onChange={(event): void => setBranchRequest({ ...branchRequest, time_zone: event.target.value })} />
-              <button className="action-primary w-full" disabled={branchCreateMutation.isPending} type="submit"><Plus className="size-4" />Tạo chi nhánh</button>
-            </form>
-            {branchEditor ? <form className="surface-card space-y-4 p-5" onSubmit={(event: FormEvent<HTMLFormElement>): void => { event.preventDefault(); branchUpdateMutation.mutate(branchEditor); }}><h2 className="font-bold text-slate-950">Cập nhật chi nhánh</h2><input className="min-h-11 rounded-xl border-slate-300" value={branchEditor.name} onChange={(event): void => setBranchEditor({ ...branchEditor, name: event.target.value })} /><input className="min-h-11 rounded-xl border-slate-300" value={branchEditor.time_zone} onChange={(event): void => setBranchEditor({ ...branchEditor, time_zone: event.target.value })} /><select className="min-h-11 rounded-xl border-slate-300" value={branchEditor.status} onChange={(event): void => setBranchEditor({ ...branchEditor, status: event.target.value })}><option value="active">Hoạt động</option><option value="disabled">Vô hiệu hóa</option></select><button className="action-primary w-full" disabled={branchUpdateMutation.isPending} type="submit"><Save className="size-4" />Lưu chi nhánh</button></form> : null}
-          </div>
-        </div>
-      ) : null}
 
       {tab === "roles" ? (
         <div className="grid gap-6 xl:grid-cols-[300px_minmax(0,1fr)]">

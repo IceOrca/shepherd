@@ -113,6 +113,12 @@ const navigation: NavigationItem[] = [
     permission: "hr.employees.read",
   },
   {
+    label: "Chi nhánh",
+    to: "/admin/branches",
+    icon: Building2,
+    permission: "business.branches.manage",
+  },
+  {
     label: "Phân quyền",
     to: "/admin/access-control",
     icon: UserRoundCog,
@@ -132,6 +138,13 @@ function pageTitle(pathname: string): { title: string; description: string } {
     return {
       title: "Phân quyền doanh nghiệp",
       description: "Quản lý chi nhánh, vai trò, người dùng và quyền theo phạm vi.",
+    };
+  }
+
+  if (pathname === "/admin/branches") {
+    return {
+      title: "Quản lý chi nhánh",
+      description: "Tạo và duy trì các đơn vị vận hành nội bộ của doanh nghiệp.",
     };
   }
 

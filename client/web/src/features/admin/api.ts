@@ -1,15 +1,12 @@
 import type {
-  AccessControlBranch,
   AccessControlRole,
   AccessControlSnapshot,
   AccessControlUser,
   AuthUserPage,
   AuthUserSummary,
-  CreateAccessControlBranchRequest,
   CreateAccessControlRoleRequest,
   CreateAuthUserRequest,
   SetAuthUserStatusRequest,
-  UpdateAccessControlBranchRequest,
   UpdateAccessControlRoleRequest,
   UpdateAccountAccessRequest,
 } from "../../api/generated/contracts";
@@ -35,25 +32,6 @@ export function getAccessControlSnapshot({
   if (auditCursor) parameters.set("audit_cursor", auditCursor);
   const query: string = parameters.toString();
   return apiRequest<AccessControlSnapshot>(`/api/admin/access-control${query ? `?${query}` : ""}`);
-}
-
-export function createAccessControlBranch(
-  request: CreateAccessControlBranchRequest,
-): Promise<AccessControlBranch> {
-  return apiRequest<AccessControlBranch>("/api/admin/access-control/branches", {
-    method: "POST",
-    body: JSON.stringify(request),
-  });
-}
-
-export function updateAccessControlBranch(
-  branchId: string,
-  request: UpdateAccessControlBranchRequest,
-): Promise<AccessControlBranch> {
-  return apiRequest<AccessControlBranch>(
-    `/api/admin/access-control/branches/${encodeURIComponent(branchId)}`,
-    { method: "PUT", body: JSON.stringify(request) },
-  );
 }
 
 export function createAccessControlRole(

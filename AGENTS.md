@@ -254,7 +254,8 @@ Supabase Auth (GoTrue) is the external identity provider. It owns credentials, s
 - `tenant_owner`, `executive_manager`, `branch_manager`, and `supervisor` are coordination roles, not staff clocking roles. They must not receive `business.staffing_work.self.*`, `business.urgent_work.start`, or `business.urgent_work.peer_manage` merely because they are higher in the organization. `staff` owns planned self-service and urgent self/peer clocking. A person who genuinely performs both responsibilities needs an explicit additional role or permission grant.
 - Role delegation is data-driven: tenant owners may delegate all catalog roles; executive managers may delegate branch manager, supervisor, and staff; branch managers may delegate supervisor and staff; supervisors may delegate staff. A non-tenant-wide actor may assign only active branches already present in their authoritative branch access.
 - The five organizational roles are protected system roles. They may not be deleted, renamed, rescoped, disabled, or selected as arbitrary custom-role replacements. A tenant may create additional tenant- or branch-scoped operational roles without changing the account's primary organizational role. The global permission catalog is application-owned and read-only in tenant UI; tenants configure which catalog permissions belong to each tenant role.
-- The tenant access-control console is `/admin/access-control`, backed by `/api/admin/access-control` plus its branch, role, and user mutation routes. Account creation and provider status remain under `/admin/auth-users`; browsers never receive GoTrue administration credentials.
+- The tenant access-control console is `/admin/access-control`, backed by `/api/admin/access-control` plus its role and user mutation routes. Branch listing and maintenance belong to the general business branch domain, not reusable auth: the separate `/admin/branches` page uses `GET /api/business/branches/manage`, `POST /api/business/branches`, and `PUT /api/business/branches/{branch_id}` through `branch/host.rs -> branch/core.rs -> branch/database.rs`. Account creation and provider status remain under `/admin/auth-users`; browsers never receive GoTrue administration credentials.
+- Branch maintenance is authorized by the configurable `business.branches.manage` permission, never by a Rust role-name check. It is initially retained by `tenant_owner` and may be configured only through TenantOwner/System Admin authority. Creation and whole-branch maintenance require an effective tenant-scoped grant inside the same tenant-RLS transaction; a branch-scoped grant is insufficient for creating or administering a sibling branch. Insert/update provenance and the immutable `branch.create`/`branch.update` access audit entry commit atomically, branches are disabled rather than deleted, and successful mutations invalidate tenant authorization caches.
 - Access-control mutations require permission checks, tenant RLS, optimistic `version`/`authorization_version` checks, targeted authenticated-user cache invalidation, and an audit row in the same transaction. Database guards preserve at least one active `tenant_owner` and prevent denying or removing the owner's essential account, role, and branch administration permissions.
 - Effective request authorization is calculated after validating the active branch: tenant-scoped grants plus grants for that branch only, followed by active per-account overrides with deny precedence. The Redis cache stores bounded raw scoped grants, not a union of permissions from every branch.
 - `accounts` stores both `username` and an optional normalized `email`. The application database is authoritative for the email exposed by `AuthenticatedUser`; do not treat a JWT email claim as the current Shepherd account email. Account provisioning must persist the normalized provider email in both systems, and future email-change workflows must update Shepherd explicitly.
@@ -325,9 +326,14 @@ same-customer context, or open-work eligibility.
 
 Important staffing APIs include:
 
+The branch-management collection is opaque `(code, id)` keyset-paginated with the shared configured limit and a `limit + 1` PostgreSQL fetch.
+
 - `GET/POST /api/business/customers`
 - `PUT /api/business/customers/{customer_id}`
 - `GET /api/business/branches`
+- `GET /api/business/branches/manage`
+- `POST /api/business/branches`
+- `PUT /api/business/branches/{branch_id}`
 - `GET /api/business/staffing/rates`
 - `GET /api/business/staffing/staff`
 - `POST /api/business/staffing/prices`
@@ -365,7 +371,7 @@ Maintain role-oriented workflows:
 - **Staff**: an urgent-work-first dashboard; choose an active customer in their branch, choose themselves and present coworkers who have effective staff-clocking authorization in that branch, start/finish work, and view own/team evidence and actor provenance. Do not show ordinary coordination-role employees in the peer picker. **My shifts** remains available for optional planned assignments.
 - **Supervisor/branch manager**: branch dashboard, urgent **Reconciliation**, branch customer management, **Giá và tiền công**, and optional **Shift coordination** pages; compare and maintain paired customer-bill and Staff-pay rates, enter independent customer/time evidence, compare both sources, lock final results, and create planned shifts when time permits.
 - **Executive manager**: the same coordination capabilities across assigned branches, selected explicitly in the UI.
-- **Tenant owner**: tenant administration and all branches. Do not show **My shifts** or staff clocking pages unless the account separately receives the corresponding staff permission.
+- **Tenant owner**: tenant administration and all branches, including the separate permission-gated **Chi nhánh** page. Do not show **My shifts** or staff clocking pages unless the account separately receives the corresponding staff permission.
 - **Auth administrator**: provision or link provider identities and enable/disable Shepherd accounts in the active tenant while maintaining branch mappings. Tenant administrators do not disable a shared provider identity globally.
 
 Navigation is permission-driven, not role-name-driven. The customer page at `/operations/customers` requires `business.customers.read`; its create/edit controls and `POST/PUT` API calls require `business.customers.manage`. The **Giá và tiền công** page at `/operations/staffing-configuration` gates reads and paired effective-dated writes with `business.staffing_rates.*`; the dormant eligibility permissions do not expose a current-client UI. The urgent reconciliation page may read the active customer directory with `business.reconciliation.read` without granting staff-side urgent-work permissions.

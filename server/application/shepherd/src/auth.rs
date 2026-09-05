@@ -7,8 +7,8 @@ pub use infra_auth::ext_service::account::{AccountStatus, AuthedUser, CurrentUse
 pub use infra_auth::ext_service::access_control::{
     AccessControlAuditEntry, AccessControlBranch, AccessControlPermission, AccessControlRole, AccessControlSnapshot,
     AccessControlUser, AccessRoleScope, AccountPermissionOverrideContract, AccountRoleAssignmentContract,
-    CreateAccessControlBranchRequest, CreateAccessControlRoleRequest, PermissionOverrideEffect,
-    UpdateAccessControlBranchRequest, UpdateAccessControlRoleRequest, UpdateAccountAccessRequest,
+    CreateAccessControlRoleRequest, PermissionOverrideEffect, UpdateAccessControlRoleRequest,
+    UpdateAccountAccessRequest, invalidate_tenant_accounts,
 };
 pub use infra_auth::ext_service::auth_admin::{
     AuthAdminPolicy, AuthProviderUserStatus, AuthUserPage, AuthUserSummary, CreateAuthUserRequest,
@@ -27,7 +27,6 @@ fn admin_policy() -> AuthAdminPolicy {
         "auth.accounts.disable",
         "auth.roles.read",
         "auth.roles.manage",
-        "business.branches.manage",
     )
     .unwrap_or_else(|code_error| panic!("Shepherd Auth administration permission code is invalid: {code_error}"))
 }

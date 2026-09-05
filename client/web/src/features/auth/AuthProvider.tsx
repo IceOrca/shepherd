@@ -28,6 +28,7 @@ interface AuthContextValue {
   status: AuthStatus;
   profile: CurrentUserProfile | null;
   memberships: TenantMembershipSummary[];
+  refreshProfile(): Promise<void>;
   selectTenant(tenantId: string): Promise<void>;
   selectBranch(branchId: string): void;
   login(email: string, password: string): Promise<void>;
@@ -108,6 +109,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       status,
       profile,
       memberships,
+      async refreshProfile(): Promise<void> {
+        if (!profile) return;
+        try {
+          const refreshedProfile: CurrentUserProfile = await selectTenantSession(profile.tenant_id);
+          setProfile(initializeActiveBranch(refreshedProfile));
+        } catch (error: unknown) {
+          setApiActiveTenantId(profile.tenant_id);
+          setApiActiveBranchId(profile.active_branch_id);
+          throw error;
+        }
+      },
       async selectTenant(tenantId: string): Promise<void> {
         if (!memberships.some(
           (membership: TenantMembershipSummary): boolean => membership.tenant_id === tenantId,

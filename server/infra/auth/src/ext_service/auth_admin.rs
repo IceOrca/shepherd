@@ -36,7 +36,6 @@ pub struct AuthAdminPolicy {
     pub disable_permission: PermissionCode,
     pub role_read_permission: PermissionCode,
     pub role_manage_permission: PermissionCode,
-    pub branch_manage_permission: PermissionCode,
 }
 
 impl AuthAdminPolicy {
@@ -47,7 +46,6 @@ impl AuthAdminPolicy {
         disable_permission: impl Into<String>,
         role_read_permission: impl Into<String>,
         role_manage_permission: impl Into<String>,
-        branch_manage_permission: impl Into<String>,
     ) -> Result<Self, AuthCodeError> {
         Ok(Self {
             read_permission: PermissionCode::parse(read_permission)?,
@@ -56,7 +54,6 @@ impl AuthAdminPolicy {
             disable_permission: PermissionCode::parse(disable_permission)?,
             role_read_permission: PermissionCode::parse(role_read_permission)?,
             role_manage_permission: PermissionCode::parse(role_manage_permission)?,
-            branch_manage_permission: PermissionCode::parse(branch_manage_permission)?,
         })
     }
 }
@@ -426,7 +423,6 @@ pub fn routes_with_provisioner(
         disable_permission = %policy.disable_permission,
         role_read_permission = %policy.role_read_permission,
         role_manage_permission = %policy.role_manage_permission,
-        branch_manage_permission = %policy.branch_manage_permission,
         "Registering Auth administration routes"
     );
     let state: Arc<AuthAdminContext> = Arc::new(AuthAdminContext {

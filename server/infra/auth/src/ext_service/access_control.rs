@@ -214,23 +214,6 @@ struct AccessControlPageQuery {
 
 #[derive(Clone, Debug, Deserialize, TS)]
 #[ts(export)]
-pub struct CreateAccessControlBranchRequest {
-    pub code: String,
-    pub name: String,
-    pub time_zone: String,
-}
-
-#[derive(Clone, Debug, Deserialize, TS)]
-#[ts(export)]
-pub struct UpdateAccessControlBranchRequest {
-    pub name: String,
-    pub time_zone: String,
-    pub status: String,
-    pub expected_version: i64,
-}
-
-#[derive(Clone, Debug, Deserialize, TS)]
-#[ts(export)]
 pub struct CreateAccessControlRoleRequest {
     pub code: RoleCode,
     pub display_name: String,
@@ -464,8 +447,6 @@ pub fn routes(
     );
     Router::new()
         .route("/admin/access-control", get(snapshot))
-        .route("/admin/access-control/branches", post(create_branch))
-        .route("/admin/access-control/branches/{branch_id}", put(update_branch))
         .route("/admin/access-control/roles", post(create_role))
         .route("/admin/access-control/roles/{role_code}", put(update_role))
         .route("/admin/access-control/users/{account_id}", put(update_user_access))
@@ -506,152 +487,6 @@ async fn snapshot(
         "Access-control snapshot returned"
     );
     Ok(Json(snapshot))
-}
-
-async fn create_branch(
-    State(context): State<Arc<AccessControlContext>>,
-    Extension(actor): Extension<AuthedUser>,
-    Json(mut request): Json<CreateAccessControlBranchRequest>,
-) -> Result<(StatusCode, Json<AccessControlBranch>), AccessControlError> {
-    require_permission(&actor, &context.policy.branch_manage_permission)?;
-    normalize_branch_request(&mut request)?;
-    let tenant_id: Uuid = actor.tenant_id;
-    let actor_id: Uuid = actor.account_id;
-    let branch_id: Uuid = Uuid::new_v4();
-    let branch: AccessControlBranch = context
-        .auth
-        .db
-        .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
-            let inserted: BranchRow = sqlx::query_as!(
-                BranchRow,
-                r#"
-                INSERT INTO branches (
-                    id, tenant_id, code, name, time_zone, status,
-                    created_by_account_id, updated_by_account_id
-                )
-                VALUES ($1, $2, $3, $4, $5, 'active', $6, $6)
-                RETURNING id, code, name, time_zone, status, version
-                "#,
-                branch_id,
-                tenant_id,
-                request.code,
-                request.name,
-                request.time_zone,
-                actor_id,
-            )
-            .fetch_one(&mut *connection)
-            .await?;
-            let after_value: Value = json!({
-                "id": inserted.id,
-                "code": inserted.code,
-                "name": inserted.name,
-                "time_zone": inserted.time_zone,
-                "status": inserted.status,
-            });
-            insert_audit(
-                connection,
-                tenant_id,
-                actor_id,
-                AccessAuditMutation {
-                    action: "branch.create",
-                    object_type: "branch",
-                    object_id: branch_id.to_string(),
-                    branch_id: Some(branch_id),
-                    before_value: None,
-                    after_value: Some(after_value),
-                },
-            )
-            .await?;
-            Ok(inserted)
-        })
-        .await
-        .map_err(|database_error: TenantDbErr| {
-            database_error_status("create branch", tenant_id, actor_id, database_error)
-        })?
-        .into();
-    invalidate_tenant_accounts(&context.auth, tenant_id).await;
-    info!(operation = "access_control.branch.create", tenant_id = %tenant_id, actor_id = %actor_id, branch_id = %branch.id, "Tenant branch created");
-    Ok((StatusCode::CREATED, Json(branch)))
-}
-
-async fn update_branch(
-    State(context): State<Arc<AccessControlContext>>,
-    Extension(actor): Extension<AuthedUser>,
-    Path(branch_id): Path<Uuid>,
-    Json(mut request): Json<UpdateAccessControlBranchRequest>,
-) -> Result<Json<AccessControlBranch>, AccessControlError> {
-    require_permission(&actor, &context.policy.branch_manage_permission)?;
-    normalize_update_branch_request(&mut request)?;
-    let tenant_id: Uuid = actor.tenant_id;
-    let actor_id: Uuid = actor.account_id;
-    let result: Option<BranchRow> = context
-        .auth
-        .db
-        .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
-            let before: Option<BranchRow> = sqlx::query_as!(
-                BranchRow,
-                "SELECT id, code, name, time_zone, status, version FROM branches WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
-                tenant_id,
-                branch_id,
-            )
-            .fetch_optional(&mut *connection)
-            .await?;
-            let Some(before) = before else {
-                return Ok(None);
-            };
-            let updated: Option<BranchRow> = sqlx::query_as!(
-                BranchRow,
-                r#"
-                UPDATE branches
-                SET name = $3,
-                    time_zone = $4,
-                    status = $5,
-                    version = version + 1,
-                    updated_by_account_id = $6,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE tenant_id = $1 AND id = $2 AND version = $7
-                RETURNING id, code, name, time_zone, status, version
-                "#,
-                tenant_id,
-                branch_id,
-                request.name,
-                request.time_zone,
-                request.status,
-                actor_id,
-                request.expected_version,
-            )
-            .fetch_optional(&mut *connection)
-            .await?;
-            if let Some(updated) = &updated {
-                let before_value: Value = branch_value(&before);
-                let after_value: Value = branch_value(updated);
-                insert_audit(
-                    connection,
-                    tenant_id,
-                    actor_id,
-                    AccessAuditMutation {
-                        action: "branch.update",
-                        object_type: "branch",
-                        object_id: branch_id.to_string(),
-                        branch_id: Some(branch_id),
-                        before_value: Some(before_value),
-                        after_value: Some(after_value),
-                    },
-                )
-                .await?;
-            }
-            Ok(updated)
-        })
-        .await
-        .map_err(|database_error: TenantDbErr| database_error_status("update branch", tenant_id, actor_id, database_error))?;
-    let branch: AccessControlBranch = result
-        .ok_or_else(|| {
-            AccessControlError::Conflict("The branch changed or no longer exists; reload and retry.".to_owned())
-        })?
-        .into();
-    invalidate_tenant_accounts(&context.auth, tenant_id).await;
-    info!(operation = "access_control.branch.update", tenant_id = %tenant_id, actor_id = %actor_id, branch_id = %branch_id, branch_status = %branch.status, "Tenant branch updated");
-    Ok(Json(branch))
 }
 
 async fn create_role(
@@ -1539,7 +1374,7 @@ async fn insert_audit(
     Ok(())
 }
 
-async fn invalidate_tenant_accounts(auth: &AuthService, tenant_id: Uuid) {
+pub async fn invalidate_tenant_accounts(auth: &AuthService, tenant_id: Uuid) {
     invalidate_accounts(auth, tenant_id, None).await;
 }
 
@@ -1628,44 +1463,6 @@ async fn require_tenant_permission(
     } else {
         Err(AccessControlError::Forbidden)
     }
-}
-
-fn normalize_branch_request(request: &mut CreateAccessControlBranchRequest) -> Result<(), AccessControlError> {
-    request.code = request.code.trim().to_ascii_lowercase();
-    request.name = request.name.trim().to_owned();
-    request.time_zone = request.time_zone.trim().to_owned();
-    if request.code.len() < 2
-        || request.code.len() > 63
-        || !request.code.chars().all(|character: char| {
-            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-' || character == '_'
-        })
-    {
-        return Err(AccessControlError::Validation(
-            "Branch code must contain 2-63 lowercase letters, digits, hyphens, or underscores.".to_owned(),
-        ));
-    }
-    if request.name.is_empty() || request.time_zone.is_empty() {
-        return Err(AccessControlError::Validation(
-            "Branch name and IANA time zone are required.".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-fn normalize_update_branch_request(request: &mut UpdateAccessControlBranchRequest) -> Result<(), AccessControlError> {
-    request.name = request.name.trim().to_owned();
-    request.time_zone = request.time_zone.trim().to_owned();
-    request.status = request.status.trim().to_ascii_lowercase();
-    if request.name.is_empty()
-        || request.time_zone.is_empty()
-        || !matches!(request.status.as_str(), "active" | "disabled")
-        || request.expected_version < 1
-    {
-        return Err(AccessControlError::Validation(
-            "Branch name, IANA time zone, valid status, and positive version are required.".to_owned(),
-        ));
-    }
-    Ok(())
 }
 
 fn normalize_create_role_request(request: &mut CreateAccessControlRoleRequest) -> Result<(), AccessControlError> {
@@ -1794,10 +1591,6 @@ fn user_from_row(row: UserRow) -> Result<AccessControlUser, AccessControlError> 
         assignments: Vec::new(),
         permission_overrides: Vec::new(),
     })
-}
-
-fn branch_value(row: &BranchRow) -> Value {
-    json!({ "id": row.id, "code": row.code, "name": row.name, "time_zone": row.time_zone, "status": row.status, "version": row.version })
 }
 
 fn role_row_value(row: &RoleRow) -> Value {

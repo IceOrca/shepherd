@@ -5,9 +5,9 @@ use crate::{
         AccessControlAuditEntry, AccessControlBranch, AccessControlPermission, AccessControlRole,
         AccessControlSnapshot, AccessControlUser, AccessRoleScope, AccountPermissionOverrideContract,
         AccountRoleAssignmentContract, AccountStatus, AuthProviderUserStatus, AuthUserPage, AuthUserSummary,
-        CreateAccessControlBranchRequest, CreateAccessControlRoleRequest, CreateAuthUserRequest, CurrentUserProfile,
-        PermissionCode, PermissionOverrideEffect, RoleCode, SetAuthUserStatusRequest, UpdateAccessControlBranchRequest,
-        UpdateAccessControlRoleRequest, UpdateAccountAccessRequest, TenantMembershipSummary,
+        CreateAccessControlRoleRequest, CreateAuthUserRequest, CurrentUserProfile, PermissionCode,
+        PermissionOverrideEffect, RoleCode, SetAuthUserStatusRequest, TenantMembershipSummary,
+        UpdateAccessControlRoleRequest, UpdateAccountAccessRequest,
     },
     business::staffing::{
         {ReconcileStatus, ReconciliationRevision, ManualRateOverrideRequest},
@@ -63,7 +63,10 @@ use crate::{
             },
         },
     },
-    branch::core::BranchSummary,
+    branch::{
+        core::{Branch, BranchCreateRequest, BranchSummary, BranchUpdateRequest},
+        host::BranchPageResponse,
+    },
     people::{
         core::{AttendanceSession, Employee, EmployeeSensitiveProfile, EmployeeStatus, Gender},
         host::handler::{AttendancePageResponse, EmployeePageResponse},
@@ -95,13 +98,15 @@ pub fn contract() -> String {
     push::<AccessControlUser>(&mut output, &config);
     push::<AccessControlAuditEntry>(&mut output, &config);
     push::<AccessControlSnapshot>(&mut output, &config);
-    push::<CreateAccessControlBranchRequest>(&mut output, &config);
-    push::<UpdateAccessControlBranchRequest>(&mut output, &config);
     push::<CreateAccessControlRoleRequest>(&mut output, &config);
     push::<UpdateAccessControlRoleRequest>(&mut output, &config);
     push::<UpdateAccountAccessRequest>(&mut output, &config);
 
     push::<BranchSummary>(&mut output, &config);
+    push::<Branch>(&mut output, &config);
+    push::<BranchCreateRequest>(&mut output, &config);
+    push::<BranchUpdateRequest>(&mut output, &config);
+    push::<BranchPageResponse>(&mut output, &config);
     push::<BusinessRecordStatus>(&mut output, &config);
     push::<StaffingShiftStatus>(&mut output, &config);
     push::<ShiftAssignmentStatus>(&mut output, &config);

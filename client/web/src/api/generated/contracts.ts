@@ -40,10 +40,6 @@ export type AccessControlAuditEntry = { id: string, actor_account_id: string, ac
 
 export type AccessControlSnapshot = { branches: Array<AccessControlBranch>, permissions: Array<AccessControlPermission>, roles: Array<AccessControlRole>, users: Array<AccessControlUser>, audit: Array<AccessControlAuditEntry>, role_next_cursor: string | null, role_has_more: boolean, user_next_cursor: string | null, user_has_more: boolean, audit_next_cursor: string | null, audit_has_more: boolean, limit: number, };
 
-export type CreateAccessControlBranchRequest = { code: string, name: string, time_zone: string, };
-
-export type UpdateAccessControlBranchRequest = { name: string, time_zone: string, status: string, expected_version: number, };
-
 export type CreateAccessControlRoleRequest = { code: RoleCode, display_name: string, description: string | null, scope: AccessRoleScope, permission_codes: Array<PermissionCode>, };
 
 export type UpdateAccessControlRoleRequest = { display_name: string, description: string | null, is_active: boolean, expected_version: number, permission_codes: Array<PermissionCode>, };
@@ -51,6 +47,14 @@ export type UpdateAccessControlRoleRequest = { display_name: string, description
 export type UpdateAccountAccessRequest = { primary_role: RoleCode, expected_version: number, assignments: Array<AccountRoleAssignmentContract>, permission_overrides: Array<AccountPermissionOverrideContract>, };
 
 export type BranchSummary = { id: string, code: string, name: string, time_zone: string, };
+
+export type Branch = { id: string, code: string, name: string, time_zone: string, status: string, version: number, };
+
+export type BranchCreateRequest = { code: string, name: string, time_zone: string, };
+
+export type BranchUpdateRequest = { name: string, time_zone: string, status: string, expected_version: number, };
+
+export type BranchPageResponse = { items: Array<Branch>, next_cursor: string | null, has_more: boolean, limit: number, };
 
 export type BusinessRecordStatus = "active" | "disabled";
 
