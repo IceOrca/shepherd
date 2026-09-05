@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO accounts (id, tenant_id, username, primary_role_code) VALUES ($1, $2, 'expense-list-test', 'staff')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1ed42626ff3569c4509e188329776224fe02e2947d8f870e8ecec1f716990216"
+}

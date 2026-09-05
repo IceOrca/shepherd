@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM business_expense_claim_revisions WHERE tenant_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "86b8382af3e9e77ec2b5ebd6d6d452cd7ed9d88fb1f47c4bdfdcc67811dd011d"
+}

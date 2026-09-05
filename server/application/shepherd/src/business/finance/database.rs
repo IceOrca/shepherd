@@ -453,7 +453,15 @@ impl FinanceRepo {
                 .await
             })
             .await
-            .map_err(|_| FinanceError::BackendUnavailable)?;
+            .map_err(|error: TenantDbErr| {
+                error!(
+                    tenant_id = %tenant_id,
+                    operation = "list_expense_categories",
+                    reason = %error,
+                    "Financial tenant query failed"
+                );
+                FinanceError::BackendUnavailable
+            })?;
         Ok(rows.into_iter().map(Into::into).collect())
     }
 
@@ -492,7 +500,15 @@ impl FinanceRepo {
                 .await
             })
             .await
-            .map_err(|_| FinanceError::BackendUnavailable)?;
+            .map_err(|error: TenantDbErr| {
+                error!(
+                    tenant_id = %tenant_id,
+                    operation = "list_expenses",
+                    reason = %error,
+                    "Financial tenant query failed"
+                );
+                FinanceError::BackendUnavailable
+            })?;
         let has_more: bool = rows.len() > query.limit as usize;
         rows.truncate(query.limit as usize);
         let next_cursor: Option<ExpenseCursor> = if has_more {
@@ -544,7 +560,7 @@ impl FinanceRepo {
         let expense_id: Uuid = Uuid::new_v4();
         let claimed_amount: BigDecimal = BigDecimal::from_str(&input.claimed_amount)
             .map_err(|_| FinanceError::InvalidInput("claimed amount is not a valid number"))?;
-        let evidence_reference: &str = input.evidence_reference.as_deref().unwrap_or_default();
+        let evidence_reference: Option<&str> = input.evidence_reference.as_deref();
         let inserted_id: Option<Uuid> = sqlx::query_scalar!(
             r#"
             INSERT INTO business_expense_claims (
@@ -1527,7 +1543,16 @@ impl FinanceRepo {
 
 #[cfg(test)]
 mod tests {
-    use super::correction_allowed_for_status;
+    use std::{error::Error, sync::Arc};
+
+    use chrono::NaiveDate;
+    use infra_postgres::{DatabaseAdapter, with_active_branch};
+    use uuid::Uuid;
+
+    use super::{FinanceRepo, correction_allowed_for_status};
+    use crate::business::finance::core::{ExpenseFundingSource, ExpenseListQuery};
+
+    type TestResult = Result<(), Box<dyn Error>>;
 
     #[test]
     fn ordinary_finance_permissions_cannot_reopen_decided_records() {
@@ -1539,5 +1564,169 @@ mod tests {
             assert!(correction_allowed_for_status(status, "submitted", true));
             assert!(correction_allowed_for_status(status, "requested", true));
         }
+    }
+
+    #[tokio::test]
+    async fn company_funded_expense_without_payer_or_approver_decodes_from_list() -> TestResult {
+        let database_url = std::env::var("DATABASE_URL")?;
+        let database = DatabaseAdapter::connect(&database_url).await?;
+        let tenant_id = Uuid::new_v4();
+        let branch_id = Uuid::new_v4();
+        let account_id = Uuid::new_v4();
+        let tenant_slug = format!("test-expense-list-{}", tenant_id.simple());
+        database
+            .provision_tenant(tenant_id, &tenant_slug, "Expense list query test")
+            .await?;
+
+        let mut setup = database.begin_tenant(tenant_id).await?;
+        sqlx::query!(
+            "INSERT INTO branches (id, tenant_id, code, name, time_zone) VALUES ($1, $2, 'test-branch', 'Test Branch', 'Asia/Bangkok')",
+            branch_id,
+            tenant_id,
+        )
+        .execute(setup.connection())
+        .await?;
+        sqlx::query!(
+            "INSERT INTO accounts (id, tenant_id, username, primary_role_code) VALUES ($1, $2, 'expense-list-test', 'staff')",
+            account_id,
+            tenant_id,
+        )
+        .execute(setup.connection())
+        .await?;
+        sqlx::query!(
+            "INSERT INTO account_roles (tenant_id, account_id, role_code) VALUES ($1, $2, 'staff')",
+            tenant_id,
+            account_id,
+        )
+        .execute(setup.connection())
+        .await?;
+        setup.commit().await?;
+
+        let repo = FinanceRepo::new_arc(Arc::clone(&database));
+        let operation_result: TestResult = with_active_branch(branch_id, async {
+            let categories = repo.list_expense_categories(tenant_id).await?;
+            let category_id = categories.first().ok_or("default expense category was not created")?.id;
+            let paid_on = NaiveDate::from_ymd_opt(2026, 9, 5).ok_or("invalid static test date")?;
+            let created = repo
+                .create_expense(
+                    tenant_id,
+                    account_id,
+                    false,
+                    Uuid::new_v4(),
+                    &crate::business::finance::core::ExpenseClaimInput {
+                        category_id,
+                        funding_source: ExpenseFundingSource::CompanyFunds,
+                        paid_by_employee_id: None,
+                        customer_id: None,
+                        urgent_work_report_id: None,
+                        staffing_assignment_id: None,
+                        paid_on,
+                        payroll_inclusion_on: paid_on,
+                        description: "Database decoding regression".to_owned(),
+                        evidence_reference: None,
+                        claimed_amount: "125000.0000".to_owned(),
+                        currency: "VND".to_owned(),
+                    },
+                )
+                .await?;
+            let page = repo
+                .list_expenses(
+                    tenant_id,
+                    account_id,
+                    true,
+                    &ExpenseListQuery {
+                        status: None,
+                        search: None,
+                        limit: 20,
+                        cursor: None,
+                    },
+                )
+                .await?;
+
+            assert_eq!(page.items.len(), 1);
+            assert_eq!(page.items[0].id, created.id);
+            assert!(page.items[0].paid_by_employee_id.is_none());
+            assert!(page.items[0].paid_by_employee_name.is_none());
+            assert!(page.items[0].approved_by_username.is_none());
+            Ok(())
+        })
+        .await;
+
+        let cleanup_result: TestResult = with_active_branch(branch_id, async {
+            let mut cleanup = database.begin_tenant(tenant_id).await?;
+            sqlx::query!(
+                "ALTER TABLE business_expense_claim_revisions DISABLE TRIGGER business_expense_claim_revisions_immutable"
+            )
+            .execute(cleanup.connection())
+            .await?;
+            sqlx::query!(
+                "ALTER TABLE business_expense_claims DISABLE TRIGGER business_expense_claims_no_delete"
+            )
+            .execute(cleanup.connection())
+            .await?;
+            sqlx::query!(
+                "DELETE FROM business_expense_claim_events WHERE tenant_id = $1",
+                tenant_id
+            )
+            .execute(cleanup.connection())
+            .await?;
+            sqlx::query!(
+                "DELETE FROM business_expense_claim_revisions WHERE tenant_id = $1",
+                tenant_id
+            )
+            .execute(cleanup.connection())
+            .await?;
+            sqlx::query!("DELETE FROM business_expense_claims WHERE tenant_id = $1", tenant_id)
+                .execute(cleanup.connection())
+                .await?;
+            sqlx::query!(
+                "DELETE FROM business_expense_categories WHERE tenant_id = $1",
+                tenant_id
+            )
+            .execute(cleanup.connection())
+            .await?;
+            sqlx::query!(
+                "DELETE FROM account_roles WHERE tenant_id = $1 AND account_id = $2",
+                tenant_id,
+                account_id
+            )
+            .execute(cleanup.connection())
+            .await?;
+            sqlx::query!(
+                "DELETE FROM accounts WHERE tenant_id = $1 AND id = $2",
+                tenant_id,
+                account_id
+            )
+            .execute(cleanup.connection())
+            .await?;
+            sqlx::query!(
+                "DELETE FROM branches WHERE tenant_id = $1 AND id = $2",
+                tenant_id,
+                branch_id
+            )
+            .execute(cleanup.connection())
+            .await?;
+            sqlx::query!(
+                "ALTER TABLE business_expense_claim_revisions ENABLE TRIGGER business_expense_claim_revisions_immutable"
+            )
+            .execute(cleanup.connection())
+            .await?;
+            sqlx::query!(
+                "ALTER TABLE business_expense_claims ENABLE TRIGGER business_expense_claims_no_delete"
+            )
+            .execute(cleanup.connection())
+            .await?;
+            cleanup.commit().await?;
+            Ok(())
+        })
+        .await;
+        let tenant_cleanup_result = sqlx::query!("DELETE FROM tenants WHERE id = $1", tenant_id)
+            .execute(database.global_pool())
+            .await;
+
+        operation_result?;
+        cleanup_result?;
+        tenant_cleanup_result?;
+        Ok(())
     }
 }

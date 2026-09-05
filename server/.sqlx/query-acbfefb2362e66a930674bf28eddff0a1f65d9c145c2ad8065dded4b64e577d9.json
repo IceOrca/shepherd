@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "ALTER TABLE business_expense_claim_revisions DISABLE TRIGGER business_expense_claim_revisions_immutable",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "acbfefb2362e66a930674bf28eddff0a1f65d9c145c2ad8065dded4b64e577d9"
+}
