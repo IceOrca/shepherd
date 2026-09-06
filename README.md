@@ -171,6 +171,8 @@ soát**. Pending work remains an all-time bounded keyset stream so old unfinishe
 records cannot disappear. Confirmed work requires a selected date interval and
 uses the same branch and customer/all-customer filters. PostgreSQL applies the
 collection, customer, period, and cursor predicates before fetching `limit + 1`.
+Its **Chọn nhanh theo tháng** field fills the local calendar month first and
+last dates, while the two date fields remain editable for custom intervals.
 
 Every finalized planned or urgent assignment automatically creates revision 1
 in `business_assignment_reconciliation_revisions`. Managers and owners can

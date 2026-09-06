@@ -14,7 +14,7 @@ import {
   TrendingUp,
   UsersRound,
 } from "lucide-react";
-import { useMemo, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import type {
   EmployeeSalaryConfig,
   EmployeeSalaryRateCreateReq,
@@ -28,6 +28,12 @@ import type {
   ReportExportKind,
 } from "../../api/generated/contracts";
 import { friendlyApiError, type DownloadedFile } from "../../shared/api/client";
+import {
+  localDateInput,
+  MonthRangeFilterFields,
+  useMonthRangeFilter,
+  type MonthRangeFilterController,
+} from "../../shared/components/MonthRangeFilterFields";
 import { roleLabel } from "../../shared/lib/format";
 import { useAuth } from "../auth/AuthProvider";
 import { useOperationsScope } from "../operations/OperationsScopeProvider";
@@ -144,37 +150,6 @@ function FinancialPeriodDialog({
       </form>
     </div>
   );
-}
-
-function localDate(date: Date): string {
-  const offset: number = date.getTimezoneOffset();
-  return new Date(date.getTime() - offset * 60_000).toISOString().slice(0, 10);
-}
-
-function currentMonthRange(): { start: string; end: string } {
-  const now = new Date();
-  return {
-    start: localDate(new Date(now.getFullYear(), now.getMonth(), 1)),
-    end: localDate(new Date(now.getFullYear(), now.getMonth() + 1, 0)),
-  };
-}
-
-function monthRange(month: string): { start: string; end: string } | null {
-  if (!/^\d{4}-\d{2}$/.test(month)) return null;
-  const [yearText, monthText] = month.split("-");
-  const year: number = Number(yearText);
-  const monthIndex: number = Number(monthText) - 1;
-  if (!Number.isInteger(year) || monthIndex < 0 || monthIndex > 11) return null;
-  return {
-    start: localDate(new Date(year, monthIndex, 1)),
-    end: localDate(new Date(year, monthIndex + 1, 0)),
-  };
-}
-
-function selectedMonthForRange(start: string, end: string): string {
-  const month: string = start.slice(0, 7);
-  const range: { start: string; end: string } | null = monthRange(month);
-  return range?.start === start && range.end === end ? month : "";
 }
 
 function scaledAmount(value: string): bigint {
@@ -400,12 +375,8 @@ export function PayrollAccountingPage(): React.JSX.Element {
   const canManagePeriods: boolean = permissions.includes(
     "finance.periods.manage",
   );
-  const initialRange = useMemo(currentMonthRange, []);
-  const [startDate, setStartDate] = useState<string>(initialRange.start);
-  const [endDate, setEndDate] = useState<string>(initialRange.end);
-  const [selectedMonth, setSelectedMonth] = useState<string>(
-    initialRange.start.slice(0, 7),
-  );
+  const rangeFilter: MonthRangeFilterController = useMonthRangeFilter();
+  const { startDate, endDate }: MonthRangeFilterController = rangeFilter;
   const [scopeMode, setScopeMode] = useState<ScopeMode>("active_branch");
   const [tab, setTab] = useState<ReportTab>(
     canReadFinancial ? "financial" : "payroll",
@@ -414,7 +385,7 @@ export function PayrollAccountingPage(): React.JSX.Element {
     employee_id: "",
     monthly_amount: "",
     currency: "VND",
-    effective_from: localDate(new Date()),
+    effective_from: localDateInput(new Date()),
   });
   const [feedback, setFeedback] = useState<string | null>(null);
   const [periodAction, setPeriodAction] = useState<FinancialPeriodState | null>(
@@ -590,50 +561,7 @@ export function PayrollAccountingPage(): React.JSX.Element {
   return (
     <section className="space-y-5">
       <div className="panel grid gap-4 p-5 sm:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_1.2fr]">
-        <label className="text-sm font-semibold text-slate-700">
-          Chọn nhanh theo tháng
-          <input
-            className="mt-2 min-h-11 w-full rounded-xl border-slate-300"
-            onChange={(event): void => {
-              const month: string = event.target.value;
-              setSelectedMonth(month);
-              const range: { start: string; end: string } | null =
-                monthRange(month);
-              if (range) {
-                setStartDate(range.start);
-                setEndDate(range.end);
-              }
-            }}
-            type="month"
-            value={selectedMonth}
-          />
-        </label>
-        <label className="text-sm font-semibold text-slate-700">
-          Từ ngày
-          <input
-            className="mt-2 min-h-11 w-full rounded-xl border-slate-300"
-            onChange={(event): void => {
-              const value: string = event.target.value;
-              setStartDate(value);
-              setSelectedMonth(selectedMonthForRange(value, endDate));
-            }}
-            type="date"
-            value={startDate}
-          />
-        </label>
-        <label className="text-sm font-semibold text-slate-700">
-          Đến ngày
-          <input
-            className="mt-2 min-h-11 w-full rounded-xl border-slate-300"
-            onChange={(event): void => {
-              const value: string = event.target.value;
-              setEndDate(value);
-              setSelectedMonth(selectedMonthForRange(startDate, value));
-            }}
-            type="date"
-            value={endDate}
-          />
-        </label>
+        <MonthRangeFilterFields controller={rangeFilter} />
         <label className="text-sm font-semibold text-slate-700">
           Phạm vi báo cáo
           <select
@@ -1343,7 +1271,7 @@ export function PayrollAccountingPage(): React.JSX.Element {
                 Hiệu lực từ
                 <input
                   className="mt-2 min-h-11 w-full rounded-xl border-slate-300"
-                  min={localDate(new Date())}
+                  min={localDateInput(new Date())}
                   onChange={(event): void =>
                     setSalaryDraft((current): EmployeeSalaryRateCreateReq => ({
                       ...current,

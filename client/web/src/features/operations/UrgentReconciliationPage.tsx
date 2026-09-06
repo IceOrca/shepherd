@@ -18,6 +18,11 @@ import type {
   UrgentWorkReconcile,
 } from "../../api/generated/contracts";
 import { friendlyApiError } from "../../shared/api/client";
+import {
+  MonthRangeFilterFields,
+  useMonthRangeFilter,
+  type MonthRangeFilterController,
+} from "../../shared/components/MonthRangeFilterFields";
 import { formatDateTime, formatDuration } from "../../shared/lib/format";
 import { useAuth } from "../auth/AuthProvider";
 import {
@@ -157,9 +162,8 @@ export function UrgentReconciliationPage(): React.JSX.Element {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [collection, setCollection] = useState<"pending" | "confirmed">("pending");
-  const today = new Date();
-  const [periodStart, setPeriodStart] = useState<string>(() => new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10));
-  const [periodEnd, setPeriodEnd] = useState<string>(() => new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().slice(0, 10));
+  const rangeFilter: MonthRangeFilterController = useMonthRangeFilter();
+  const { startDate: periodStart, endDate: periodEnd }: MonthRangeFilterController = rangeFilter;
   const [evidence, setEvidence] = useState<EvidenceDraft>({
     customerId: "",
     startedAt: "",
@@ -457,7 +461,13 @@ export function UrgentReconciliationPage(): React.JSX.Element {
           <button className={`min-h-11 rounded-xl px-4 text-sm font-bold ${collection === "pending" ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-700"}`} onClick={() => setCollection("pending")} type="button">Cần đối soát</button>
           <button className={`min-h-11 rounded-xl px-4 text-sm font-bold ${collection === "confirmed" ? "bg-emerald-700 text-white" : "bg-slate-100 text-slate-700"}`} onClick={() => setCollection("confirmed")} type="button">Đã xác nhận / đối soát</button>
         </div>
-        {collection === "confirmed" ? <div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="text-sm font-semibold text-slate-700">Từ ngày<input className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5" type="date" value={periodStart} onChange={(event) => setPeriodStart(event.target.value)} /></label><label className="text-sm font-semibold text-slate-700">Đến ngày<input className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5" min={periodStart} type="date" value={periodEnd} onChange={(event) => setPeriodEnd(event.target.value)} /></label></div> : <p className="mt-2 text-sm text-slate-500">Hiển thị toàn bộ công việc chưa chốt, không giới hạn thời gian.</p>}
+        {collection === "confirmed" ? (
+          <div className="mt-3 grid gap-3 rounded-2xl border border-blue-100 bg-blue-50/50 p-3 sm:grid-cols-3">
+            <MonthRangeFilterFields controller={rangeFilter} />
+          </div>
+        ) : (
+          <p className="mt-2 text-sm text-slate-500">Hiển thị toàn bộ công việc chưa chốt, không giới hạn thời gian.</p>
+        )}
       </section>
 
       <label className="panel block p-4 text-sm font-semibold text-slate-700 md:hidden">
