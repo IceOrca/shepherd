@@ -8,12 +8,15 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, NaiveDate, Utc};
-use tracing::{error, warn, info, debug, trace};
+use tracing::{debug, error, warn};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use uuid::Uuid;
 
-use crate::{AppContext, auth::AuthedUser};
+use crate::{
+    AppContext,
+    auth::{AuthedUser, PermissionRouteExt},
+};
 use crate::pagination::{decode_cursor, encode_cursor, normalize_search, resolve_limit};
 
 use super::core::{
@@ -132,33 +135,51 @@ impl From<CustomerWorkRecordUpsertReq> for CustomerWorkRecordInput {
 
 pub fn routes() -> Router<Arc<AppContext>> {
     Router::new()
-        .route("/staffing/shifts", get(list_shifts).post(create_shift))
-        .route("/staffing/shifts/{shift_id}/cancel", post(cancel_shift))
+        .route("/staffing/shifts", get(list_shifts).require_one("business.shifts.read"))
+        .route(
+            "/staffing/shifts",
+            post(create_shift).require_one("business.shifts.manage"),
+        )
+        .route(
+            "/staffing/shifts/{shift_id}/cancel",
+            post(cancel_shift).require_one("business.shifts.manage"),
+        )
         .route(
             "/staffing/shifts/{shift_id}/assignments",
-            get(list_shift_assignments).post(create_shift_assignment),
+            get(list_shift_assignments).require_one("business.shifts.read"),
         )
-        .route("/staffing/shifts/{shift_id}/candidates", get(list_shift_candidates))
+        .route(
+            "/staffing/shifts/{shift_id}/assignments",
+            post(create_shift_assignment).require_one("business.shifts.manage"),
+        )
+        .route(
+            "/staffing/shifts/{shift_id}/candidates",
+            get(list_shift_candidates).require_one("business.shifts.read"),
+        )
         .route(
             "/staffing/assignments/{assignment_id}/cancel",
-            post(cancel_shift_assignment),
+            post(cancel_shift_assignment).require_one("business.shifts.manage"),
         )
-        .route("/staffing/assignments/reconciliations", get(list_reconciliations))
+        .route(
+            "/staffing/assignments/reconciliations",
+            get(list_reconciliations).require_one("business.reconciliation.read"),
+        )
         .route(
             "/staffing/assignments/{assignment_id}/customer-record",
-            put(upsert_customer_work_record),
+            put(upsert_customer_work_record)
+                .require_any(["business.reconciliation.manage", "business.reconciliation.correct"]),
         )
         .route(
             "/staffing/assignments/{assignment_id}/approve",
-            post(approve_shift_assignment),
+            post(approve_shift_assignment).require_all(["business.shifts.approve", "business.reconciliation.manage"]),
         )
         .route(
             "/staffing/assignments/{assignment_id}/reconcile",
-            post(reconcile_shift_assignment),
+            post(reconcile_shift_assignment).require_one("business.reconciliation.manage"),
         )
         .route(
             "/staffing/assignments/{assignment_id}/accept-staff-record",
-            post(accept_staff_work_record),
+            post(accept_staff_work_record).require_one("business.reconciliation.manage"),
         )
 }
 
@@ -167,7 +188,6 @@ pub async fn list_shifts(
     Extension(user): Extension<AuthedUser>,
     Query(query): Query<PlannedListPageQuery>,
 ) -> Result<Json<StaffingListPageResponse<StaffingShift>>, StatusCode> {
-    require_permission(&user, "business.shifts.read")?;
     let limit = resolve_limit(&ctx.pagination, query.limit)?;
     let cursor: Option<StaffingShiftCursor> = decode_cursor(query.cursor.as_deref())?;
     let page = ctx
@@ -190,7 +210,6 @@ pub async fn create_shift(
     Extension(user): Extension<AuthedUser>,
     Json(payload): Json<StaffingShiftCreateRequest>,
 ) -> Result<(StatusCode, Json<StaffingShift>), StatusCode> {
-    require_permission(&user, "business.shifts.manage")?;
     let shift: StaffingShift = ctx
         .core
         .planned_staffing
@@ -206,7 +225,6 @@ pub async fn list_shift_assignments(
     Path(shift_id): Path<Uuid>,
     Query(query): Query<PlannedListPageQuery>,
 ) -> Result<Json<StaffingListPageResponse<ShiftAssignment>>, StatusCode> {
-    require_permission(&user, "business.shifts.read")?;
     let limit = resolve_limit(&ctx.pagination, query.limit)?;
     let cursor: Option<ShiftAssignmentCursor> = decode_cursor(query.cursor.as_deref())?;
     let page = ctx
@@ -230,7 +248,6 @@ pub async fn list_shift_candidates(
     Path(shift_id): Path<Uuid>,
     Query(query): Query<PlannedListPageQuery>,
 ) -> Result<Json<StaffingListPageResponse<StaffingCandidate>>, StatusCode> {
-    require_permission(&user, "business.shifts.read")?;
     let limit: u16 = resolve_limit(&ctx.pagination, query.limit)?;
     let cursor: Option<StaffingCandidateCursor> = decode_cursor(query.cursor.as_deref())?;
     let page: super::core::KeysetPage<StaffingCandidate, StaffingCandidateCursor> = ctx
@@ -260,7 +277,6 @@ pub async fn create_shift_assignment(
     Path(shift_id): Path<Uuid>,
     Json(payload): Json<ShiftAssignmentCreateRequest>,
 ) -> Result<(StatusCode, Json<ShiftAssignment>), StatusCode> {
-    require_permission(&user, "business.shifts.manage")?;
     let assignment: ShiftAssignment = ctx
         .core
         .planned_staffing
@@ -276,7 +292,6 @@ pub async fn cancel_shift(
     Path(shift_id): Path<Uuid>,
     Json(payload): Json<StaffingCancellationRequest>,
 ) -> Result<StatusCode, StatusCode> {
-    require_permission(&user, "business.shifts.manage")?;
     ctx.core
         .planned_staffing
         .cancel_shift(user.tenant_id, shift_id, payload.reason, user.account_id)
@@ -291,7 +306,6 @@ pub async fn cancel_shift_assignment(
     Path(assignment_id): Path<Uuid>,
     Json(payload): Json<StaffingCancellationRequest>,
 ) -> Result<StatusCode, StatusCode> {
-    require_permission(&user, "business.shifts.manage")?;
     ctx.core
         .planned_staffing
         .cancel_shift_assignment(user.tenant_id, assignment_id, payload.reason, user.account_id)
@@ -305,7 +319,6 @@ pub async fn list_reconciliations(
     Extension(user): Extension<AuthedUser>,
     Query(query): Query<ReconcilePageQuery>,
 ) -> Result<Json<StaffingReconcilePageRsp>, StatusCode> {
-    require_permission(&user, "business.reconciliation.read")?;
     let pagination = &ctx.pagination;
     let limit: u16 = query.limit.unwrap_or(pagination.def_limit);
     if !(pagination.min_limit..=pagination.max_limit).contains(&limit) {
@@ -359,11 +372,7 @@ pub async fn upsert_customer_work_record(
     Path(assignment_id): Path<Uuid>,
     Json(payload): Json<CustomerWorkRecordUpsertReq>,
 ) -> Result<Json<CustomerWorkRecord>, StatusCode> {
-    if !user.has_permission("business.reconciliation.manage") && !user.has_permission("business.reconciliation.correct")
-    {
-        return Err(StatusCode::FORBIDDEN);
-    }
-    let allow_terminal_correction = user.has_permission("business.reconciliation.correct");
+    let allow_terminal_correction: bool = user.has_permission("business.reconciliation.correct");
     ctx.core
         .planned_staffing
         .upsert_customer_work_record(
@@ -384,7 +393,6 @@ pub async fn reconcile_shift_assignment(
     Path(assignment_id): Path<Uuid>,
     Json(payload): Json<ShiftAssignmentApproveRequest>,
 ) -> Result<Json<ShiftAssignment>, StatusCode> {
-    require_permission(&user, "business.reconciliation.manage")?;
     reconcile(ctx, user, assignment_id, payload).await
 }
 
@@ -393,7 +401,6 @@ pub async fn accept_staff_work_record(
     Extension(user): Extension<AuthedUser>,
     Path(assignment_id): Path<Uuid>,
 ) -> Result<Json<ShiftAssignment>, StatusCode> {
-    require_permission(&user, "business.reconciliation.manage")?;
     ctx.core
         .planned_staffing
         .accept_staff_work_record(user.tenant_id, assignment_id, user.account_id)
@@ -408,8 +415,6 @@ pub async fn approve_shift_assignment(
     Path(assignment_id): Path<Uuid>,
     Json(payload): Json<ShiftAssignmentApproveRequest>,
 ) -> Result<Json<ShiftAssignment>, StatusCode> {
-    require_permission(&user, "business.shifts.approve")?;
-    require_permission(&user, "business.reconciliation.manage")?;
     reconcile(ctx, user, assignment_id, payload).await
 }
 
@@ -440,18 +445,6 @@ fn normalize_optional(value: Option<String>) -> Option<String> {
         let normalized: String = value.trim().to_owned();
         (!normalized.is_empty()).then_some(normalized)
     })
-}
-
-fn require_permission(user: &AuthedUser, perm: &str) -> Result<(), StatusCode> {
-    if user.has_permission(perm) {
-        Ok(())
-    } else {
-        info!(
-            "Staffing request denied: tenant_id={} account_id={} required_permission={}",
-            user.tenant_id, user.account_id, perm
-        );
-        Err(StatusCode::FORBIDDEN)
-    }
 }
 
 fn staffing_status(operation: &str, user: &AuthedUser, err: StaffingErr) -> StatusCode {

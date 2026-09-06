@@ -494,6 +494,14 @@ access control does not know these Shepherd roles or query HR tables. The old
 `infra/auth/src/legacy_api` implementation is retained only as uncompiled
 reference material and is not exported by `infra-auth`.
 
+Static endpoint authorization is declared beside each Axum method route through
+the reusable `PermissionRouteExt` API (`require_one`, `require_any`, or
+`require_all`). The shared middleware performs the coarse effective-permission
+gate before handler extraction. Ownership, branch scope, lifecycle and revision
+rules, payload-specific permissions, and database-authoritative mutation checks
+remain in the Shepherd core/database boundary; they are not replaced by the
+route gate.
+
 ### Employee personal profiles
 
 `hr_employees` owns operational and legal employee details; GoTrue and the

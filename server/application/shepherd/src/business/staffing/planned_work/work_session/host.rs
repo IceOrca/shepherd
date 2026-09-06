@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::{
     AppContext,
-    auth::AuthedUser,
+    auth::{AuthedUser, PermissionRouteExt},
     pagination::{decode_cursor, encode_cursor, resolve_limit},
 };
 
@@ -83,9 +83,18 @@ impl ShiftWorkActionRequest {
 pub fn routes() -> Router<Arc<AppContext>> {
     info!("Configured staffing employee work-session routes");
     Router::new()
-        .route("/staffing/assignments/me", get(list_own_assignments))
-        .route("/staffing/assignments/{assignment_id}/start", post(start))
-        .route("/staffing/assignments/{assignment_id}/end", post(end))
+        .route(
+            "/staffing/assignments/me",
+            get(list_own_assignments).require_one("business.staffing_work.self.read"),
+        )
+        .route(
+            "/staffing/assignments/{assignment_id}/start",
+            post(start).require_one("business.staffing_work.self.manage"),
+        )
+        .route(
+            "/staffing/assignments/{assignment_id}/end",
+            post(end).require_one("business.staffing_work.self.manage"),
+        )
 }
 
 async fn list_own_assignments(
@@ -93,7 +102,6 @@ async fn list_own_assignments(
     Extension(user): Extension<AuthedUser>,
     Query(query): Query<OwnAssignmentPageQuery>,
 ) -> Result<Json<OwnStaffingAssignmentPageResponse>, StatusCode> {
-    require_permission(&user, "business.staffing_work.self.read")?;
     let limit: u16 = resolve_limit(&context.pagination, query.limit)?;
     let cursor: Option<OwnStaffingAssignmentCursor> = decode_cursor(query.cursor.as_deref())?;
     debug!(
@@ -131,7 +139,6 @@ async fn start(
     headers: HeaderMap,
     Json(payload): Json<ShiftWorkActionRequest>,
 ) -> Result<(StatusCode, Json<ShiftWorkSession>), StatusCode> {
-    require_permission(&user, "business.staffing_work.self.manage")?;
     info!(
         operation = "start_staffing_work",
         tenant_id = %user.tenant_id,
@@ -166,7 +173,6 @@ async fn end(
     headers: HeaderMap,
     Json(payload): Json<ShiftWorkActionRequest>,
 ) -> Result<Json<ShiftWorkSession>, StatusCode> {
-    require_permission(&user, "business.staffing_work.self.manage")?;
     info!(
         operation = "end_staffing_work",
         tenant_id = %user.tenant_id,
@@ -218,26 +224,6 @@ fn idempotency_key(headers: &HeaderMap, user: &AuthedUser) -> Result<Uuid, Statu
             );
             Err(StatusCode::BAD_REQUEST)
         }
-    }
-}
-
-fn require_permission(user: &AuthedUser, permission: &str) -> Result<(), StatusCode> {
-    if user.has_permission(permission) {
-        trace!(
-            tenant_id = %user.tenant_id,
-            account_id = %user.account_id,
-            required_permission = permission,
-            "Staffing work permission granted"
-        );
-        Ok(())
-    } else {
-        warn!(
-            tenant_id = %user.tenant_id,
-            account_id = %user.account_id,
-            required_permission = permission,
-            "Staffing work request denied"
-        );
-        Err(StatusCode::FORBIDDEN)
     }
 }
 

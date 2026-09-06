@@ -8,12 +8,15 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, NaiveDate, Utc};
-use tracing::{error, warn, info, debug, trace};
+use tracing::{debug, error, warn};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use uuid::Uuid;
 
-use crate::{AppContext, auth::AuthedUser};
+use crate::{
+    AppContext,
+    auth::{AuthedUser, PermissionRouteExt},
+};
 use crate::pagination::{decode_cursor, encode_cursor, normalize_search, resolve_limit};
 
 use super::core::{
@@ -141,15 +144,34 @@ impl From<StaffingPriceSetRequest> for StaffingPriceSetInput {
 
 pub fn routes() -> Router<Arc<AppContext>> {
     Router::new()
-        .route("/customers", get(list_customers).post(create_customer))
-        .route("/customers/{customer_id}", put(update_customer))
-        .route("/staffing/rates", get(list_rates))
-        .route("/staffing/jobs", get(list_jobs))
-        .route("/staffing/staff", get(list_staff))
-        .route("/staffing/prices", post(set_prices))
+        .route("/customers", get(list_customers).require_one("business.customers.read"))
+        .route(
+            "/customers",
+            post(create_customer).require_one("business.customers.manage"),
+        )
+        .route(
+            "/customers/{customer_id}",
+            put(update_customer).require_one("business.customers.manage"),
+        )
+        .route(
+            "/staffing/rates",
+            get(list_rates).require_one("business.staffing_rates.read"),
+        )
+        .route(
+            "/staffing/jobs",
+            get(list_jobs).require_one("business.staffing_jobs.read"),
+        )
+        .route(
+            "/staffing/staff",
+            get(list_staff).require_one("business.staffing_rates.read"),
+        )
+        .route(
+            "/staffing/prices",
+            post(set_prices).require_one("business.staffing_rates.manage"),
+        )
         .route(
             "/staffing/assignments/{assignment_id}/reconciliation-corrections",
-            post(correct_reconciliation),
+            post(correct_reconciliation).require_one("business.reconciliation.correct"),
         )
 }
 
@@ -159,7 +181,6 @@ pub async fn correct_reconciliation(
     Path(assignment_id): Path<Uuid>,
     Json(payload): Json<ReconciliationCorrectionReq>,
 ) -> Result<Json<ReconciliationRevision>, StatusCode> {
-    require_permission(&user, "business.reconciliation.correct")?;
     ctx.core
         .staffing
         .correct_reconciliation(
@@ -182,7 +203,6 @@ pub async fn list_customers(
     Extension(user): Extension<AuthedUser>,
     Query(query): Query<CustomerPageQuery>,
 ) -> Result<Json<CustomerPageResponse>, StatusCode> {
-    require_permission(&user, "business.customers.read")?;
     let limit: u16 = resolve_limit(&ctx.pagination, query.limit)?;
     let cursor: Option<CustomerCursor> = decode_cursor(query.cursor.as_deref())?;
     let page: CustomerPage = ctx
@@ -205,7 +225,6 @@ pub async fn create_customer(
     Extension(user): Extension<AuthedUser>,
     Json(payload): Json<CustomerUpsertRequest>,
 ) -> Result<(StatusCode, Json<Customer>), StatusCode> {
-    require_permission(&user, "business.customers.manage")?;
     let customer: Customer = ctx
         .core
         .staffing
@@ -221,7 +240,6 @@ pub async fn update_customer(
     Path(customer_id): Path<Uuid>,
     Json(payload): Json<CustomerUpsertRequest>,
 ) -> Result<Json<Customer>, StatusCode> {
-    require_permission(&user, "business.customers.manage")?;
     let customer: Customer = ctx
         .core
         .staffing
@@ -236,7 +254,6 @@ pub async fn list_rates(
     Extension(user): Extension<AuthedUser>,
     Query(query): Query<StaffingRatePageQuery>,
 ) -> Result<Json<StaffingRatePageResponse>, StatusCode> {
-    require_permission(&user, "business.staffing_rates.read")?;
     let limit: u16 = resolve_limit(&ctx.pagination, query.limit)?;
     let cursor: Option<StaffingRateCursor> = decode_cursor(query.cursor.as_deref())?;
     let page: StaffingRatePage = ctx
@@ -259,7 +276,6 @@ pub async fn list_jobs(
     Extension(user): Extension<AuthedUser>,
     Query(query): Query<CustomerPageQuery>,
 ) -> Result<Json<StaffingListPageResponse<StaffingJob>>, StatusCode> {
-    require_permission(&user, "business.staffing_jobs.read")?;
     let limit: u16 = resolve_limit(&ctx.pagination, query.limit)?;
     let cursor: Option<NameCodeCursor> = decode_cursor(query.cursor.as_deref())?;
     let page: super::core::KeysetPage<StaffingJob, NameCodeCursor> = ctx
@@ -282,7 +298,6 @@ pub async fn list_staff(
     Extension(user): Extension<AuthedUser>,
     Query(query): Query<StaffingStaffPageQuery>,
 ) -> Result<Json<StaffingStaffPageResponse>, StatusCode> {
-    require_permission(&user, "business.staffing_rates.read")?;
     let limit: u16 = resolve_limit(&ctx.pagination, query.limit)?;
     let cursor: Option<StaffingStaffCursor> = decode_cursor(query.cursor.as_deref())?;
     let page: StaffingStaffPage = ctx
@@ -305,7 +320,6 @@ pub async fn set_prices(
     Extension(user): Extension<AuthedUser>,
     Json(payload): Json<StaffingPriceSetRequest>,
 ) -> Result<(StatusCode, Json<StaffingPriceSet>), StatusCode> {
-    require_permission(&user, "business.staffing_rates.manage")?;
     let prices: StaffingPriceSet = ctx
         .core
         .staffing
@@ -320,18 +334,6 @@ fn normalize_optional(value: Option<String>) -> Option<String> {
         let normalized: String = value.trim().to_owned();
         (!normalized.is_empty()).then_some(normalized)
     })
-}
-
-fn require_permission(user: &AuthedUser, perm: &str) -> Result<(), StatusCode> {
-    if user.has_permission(perm) {
-        Ok(())
-    } else {
-        info!(
-            "Staffing request denied: tenant_id={} account_id={} required_permission={}",
-            user.tenant_id, user.account_id, perm
-        );
-        Err(StatusCode::FORBIDDEN)
-    }
 }
 
 fn staffing_status(operation: &str, user: &AuthedUser, err: StaffingErr) -> StatusCode {

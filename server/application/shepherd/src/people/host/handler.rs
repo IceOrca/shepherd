@@ -50,7 +50,6 @@ pub async fn list_employees(
     Extension(user): Extension<AuthedUser>,
     Query(query): Query<PeoplePageQuery>,
 ) -> Result<Json<EmployeePageResponse>, StatusCode> {
-    require_permission(&user, "hr.employees.read")?;
     let limit: u16 = resolve_limit(&host.pagination, query.limit)?;
     let cursor: Option<EmployeeCursor> = decode_cursor(query.cursor.as_deref())?;
     let page: EmployeePage = host
@@ -73,7 +72,6 @@ pub async fn create_employee(
     Extension(user): Extension<AuthedUser>,
     Json(payload): Json<EmployeeUpsertRequest>,
 ) -> Result<(StatusCode, Json<Employee>), StatusCode> {
-    require_permission(&user, "hr.employees.manage")?;
     let branch_id: Uuid = user.active_branch_id.ok_or(StatusCode::BAD_REQUEST)?;
     let employee: Employee = host
         .core
@@ -88,7 +86,6 @@ pub async fn get_own_employee_citizen_id(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthedUser>,
 ) -> Result<Json<EmployeeSensitiveProfile>, StatusCode> {
-    require_permission(&user, "hr.employees.self.sensitive.read")?;
     host.core
         .people
         .find_employee_sensitive_profile_by_account(user.tenant_id, user.account_id)
@@ -102,7 +99,6 @@ pub async fn get_own_employee(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthedUser>,
 ) -> Result<Json<Employee>, StatusCode> {
-    require_permission(&user, "hr.employees.self.read")?;
     host.core
         .people
         .find_employee_by_account(user.tenant_id, user.account_id)
@@ -117,7 +113,6 @@ pub async fn get_employee(
     Extension(user): Extension<AuthedUser>,
     Path(employee_id): Path<Uuid>,
 ) -> Result<Json<Employee>, StatusCode> {
-    require_permission(&user, "hr.employees.read")?;
     host.core
         .people
         .find_employee(user.tenant_id, employee_id)
@@ -133,7 +128,6 @@ pub async fn update_employee(
     Path(employee_id): Path<Uuid>,
     Json(payload): Json<EmployeeUpsertRequest>,
 ) -> Result<Json<Employee>, StatusCode> {
-    require_permission(&user, "hr.employees.manage")?;
     host.core
         .people
         .update_employee(user.tenant_id, employee_id, payload.into(), user.account_id)
@@ -147,7 +141,6 @@ pub async fn get_employee_citizen_id(
     Extension(user): Extension<AuthedUser>,
     Path(employee_id): Path<Uuid>,
 ) -> Result<Json<EmployeeSensitiveProfile>, StatusCode> {
-    require_permission(&user, "hr.employees.sensitive.read")?;
     host.core
         .people
         .find_employee_sensitive_profile(user.tenant_id, employee_id)
@@ -163,7 +156,6 @@ pub async fn update_employee_citizen_id(
     Path(employee_id): Path<Uuid>,
     Json(payload): Json<EmployeeCitizenIdUpdateRequest>,
 ) -> Result<Json<EmployeeSensitiveProfile>, StatusCode> {
-    require_permission(&user, "hr.employees.sensitive.manage")?;
     host.core
         .people
         .update_employee_citizen_id(user.tenant_id, employee_id, payload.into(), user.account_id)
@@ -178,7 +170,6 @@ pub async fn list_own_attendance_sessions(
     Extension(user): Extension<AuthedUser>,
     Query(query): Query<PeoplePageQuery>,
 ) -> Result<Json<AttendancePageResponse>, StatusCode> {
-    require_permission(&user, "hr.attendance.self.read")?;
     let employee: Employee = host
         .core
         .people
@@ -209,7 +200,6 @@ pub async fn check_in(
     Extension(user): Extension<AuthedUser>,
     Json(request): Json<AttendanceCheckInRequest>,
 ) -> Result<(StatusCode, Json<AttendanceSession>), StatusCode> {
-    require_permission(&user, "hr.attendance.self.manage")?;
     let employee: Employee = host
         .core
         .people
@@ -231,7 +221,6 @@ pub async fn check_out(
     State(host): State<Arc<AppContext>>,
     Extension(user): Extension<AuthedUser>,
 ) -> Result<Json<AttendanceSession>, StatusCode> {
-    require_permission(&user, "hr.attendance.self.manage")?;
     let employee: Employee = host
         .core
         .people
@@ -254,7 +243,6 @@ pub async fn list_employee_attendance_sessions(
     Path(employee_id): Path<Uuid>,
     Query(query): Query<PeoplePageQuery>,
 ) -> Result<Json<AttendancePageResponse>, StatusCode> {
-    require_permission(&user, "hr.attendance.read")?;
     let limit: u16 = resolve_limit(&host.pagination, query.limit)?;
     let cursor: Option<AttendanceCursor> = decode_cursor(query.cursor.as_deref())?;
     let page: AttendancePage = host
@@ -270,18 +258,6 @@ pub async fn list_employee_attendance_sessions(
         next_cursor,
         limit,
     }))
-}
-
-pub(crate) fn require_permission(user: &AuthedUser, permission: &str) -> Result<(), StatusCode> {
-    if user.has_permission(permission) {
-        Ok(())
-    } else {
-        info!(
-            "HR request denied: tenant_id={} account_id={} required_permission={}",
-            user.tenant_id, user.account_id, permission
-        );
-        Err(StatusCode::FORBIDDEN)
-    }
 }
 
 pub(crate) fn hr_status(operation: &str, user: &AuthedUser, err: PeopleOpsErr) -> StatusCode {

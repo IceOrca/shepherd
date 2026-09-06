@@ -23,6 +23,7 @@ use super::{
     account::{AccountStatus, AuthedUser},
     account_cache::AuthedCacheErr,
     auth_admin::{AuthAccountAccessContext, AuthProvisioner, AcctProvisionErr, AuthAdminPolicy},
+    middleware::PermissionRouteExt,
 };
 
 #[derive(Clone)]
@@ -435,6 +436,8 @@ pub fn routes(
     provisioner: Arc<dyn AuthProvisioner>,
     pagination: ListPaginationPolicy,
 ) -> Router {
+    let update_permission: PermissionCode = policy.update_permission.clone();
+    let role_manage_permission: PermissionCode = policy.role_manage_permission.clone();
     let context: Arc<AccessControlContext> = Arc::new(AccessControlContext {
         auth,
         policy,
@@ -446,10 +449,22 @@ pub fn routes(
         "Registering tenant access-control administration routes"
     );
     Router::new()
-        .route("/admin/access-control", get(snapshot))
-        .route("/admin/access-control/roles", post(create_role))
-        .route("/admin/access-control/roles/{role_code}", put(update_role))
-        .route("/admin/access-control/users/{account_id}", put(update_user_access))
+        .route(
+            "/admin/access-control",
+            get(snapshot).require_one(role_manage_permission.as_str()),
+        )
+        .route(
+            "/admin/access-control/roles",
+            post(create_role).require_one(role_manage_permission.as_str()),
+        )
+        .route(
+            "/admin/access-control/roles/{role_code}",
+            put(update_role).require_one(role_manage_permission.as_str()),
+        )
+        .route(
+            "/admin/access-control/users/{account_id}",
+            put(update_user_access).require_all([update_permission.as_str(), role_manage_permission.as_str()]),
+        )
         .with_state(context)
 }
 
@@ -458,7 +473,6 @@ async fn snapshot(
     Extension(actor): Extension<AuthedUser>,
     Query(query): Query<AccessControlPageQuery>,
 ) -> Result<Json<AccessControlSnapshot>, AccessControlError> {
-    require_permission(&actor, &context.policy.role_manage_permission)?;
     let limit: u16 = context
         .pagination
         .resolve(query.limit)
@@ -494,7 +508,6 @@ async fn create_role(
     Extension(actor): Extension<AuthedUser>,
     Json(mut request): Json<CreateAccessControlRoleRequest>,
 ) -> Result<(StatusCode, Json<AccessControlRole>), AccessControlError> {
-    require_permission(&actor, &context.policy.role_manage_permission)?;
     require_tenant_permission(&context, &actor, &context.policy.role_manage_permission).await?;
     normalize_create_role_request(&mut request)?;
     let tenant_id: Uuid = actor.tenant_id;
@@ -567,7 +580,6 @@ async fn update_role(
     Path(role_code_raw): Path<String>,
     Json(mut request): Json<UpdateAccessControlRoleRequest>,
 ) -> Result<Json<AccessControlRole>, AccessControlError> {
-    require_permission(&actor, &context.policy.role_manage_permission)?;
     require_tenant_permission(&context, &actor, &context.policy.role_manage_permission).await?;
     let role_code: RoleCode = RoleCode::parse(role_code_raw)
         .map_err(|code_error: AuthCodeError| AccessControlError::Validation(code_error.to_string()))?;
@@ -661,8 +673,6 @@ async fn update_user_access(
     Path(account_id): Path<Uuid>,
     Json(mut request): Json<UpdateAccountAccessRequest>,
 ) -> Result<Json<AccessControlUser>, AccessControlError> {
-    require_permission(&actor, &context.policy.update_permission)?;
-    require_permission(&actor, &context.policy.role_manage_permission)?;
     require_tenant_permission(&context, &actor, &context.policy.update_permission).await?;
     require_tenant_permission(&context, &actor, &context.policy.role_manage_permission).await?;
     normalize_user_access_request(&mut request)?;
@@ -1423,15 +1433,6 @@ async fn invalidate_accounts(auth: &AuthService, tenant_id: Uuid, account_id: Op
         if let Err(cache_error) = result {
             warn!(operation = "access_control.invalidate_account", tenant_id = %tenant_id, account_id = ?account_id, reason = %cache_error, "Authed-user cache invalidation failed; bounded TTL remains in force");
         }
-    }
-}
-
-fn require_permission(actor: &AuthedUser, permission: &PermissionCode) -> Result<(), AccessControlError> {
-    if actor.has_permission(permission.as_str()) {
-        Ok(())
-    } else {
-        warn!(operation = "access_control.authorize", tenant_id = %actor.tenant_id, actor_id = %actor.account_id, required_permission = %permission, "Access-control request denied");
-        Err(AccessControlError::Forbidden)
     }
 }
 

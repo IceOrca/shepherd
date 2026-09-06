@@ -8,13 +8,13 @@ use axum::{
 };
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
-use tracing::{error, info, warn};
+use tracing::{error, warn};
 use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::{
     AppContext,
-    auth::AuthedUser,
+    auth::{AuthedUser, PermissionRouteExt},
     pagination::{decode_cursor, encode_cursor, normalize_search, resolve_limit},
 };
 
@@ -207,40 +207,77 @@ pub struct SalaryAdvanceRecoveryReq {
 
 pub fn routes() -> Router<Arc<AppContext>> {
     Router::new()
-        .route("/finance/expense-categories", get(list_expense_categories))
-        .route("/finance/expenses", get(list_expenses).post(create_expense))
-        .route("/finance/expenses/{expense_id}/correct", post(correct_expense))
-        .route("/finance/expenses/{expense_id}/revisions", get(list_expense_revisions))
-        .route("/finance/expenses/{expense_id}/approve", post(approve_expense))
-        .route("/finance/expenses/{expense_id}/reject", post(reject_expense))
-        .route("/finance/expenses/{expense_id}/reimburse", post(reimburse_expense))
+        .route(
+            "/finance/expense-categories",
+            get(list_expense_categories).require_any(["business.expenses.self.read", "business.expenses.read"]),
+        )
+        .route(
+            "/finance/expenses",
+            get(list_expenses).require_any(["business.expenses.self.read", "business.expenses.read"]),
+        )
+        .route(
+            "/finance/expenses",
+            post(create_expense).require_any(["business.expenses.submit", "business.expenses.manage"]),
+        )
+        .route(
+            "/finance/expenses/{expense_id}/correct",
+            post(correct_expense).require_any([
+                "business.expenses.self.correct",
+                "business.expenses.manage",
+                "business.expenses.correct",
+            ]),
+        )
+        .route(
+            "/finance/expenses/{expense_id}/revisions",
+            get(list_expense_revisions).require_any(["business.expenses.self.read", "business.expenses.read"]),
+        )
+        .route(
+            "/finance/expenses/{expense_id}/approve",
+            post(approve_expense).require_one("business.expenses.approve"),
+        )
+        .route(
+            "/finance/expenses/{expense_id}/reject",
+            post(reject_expense).require_one("business.expenses.approve"),
+        )
+        .route(
+            "/finance/expenses/{expense_id}/reimburse",
+            post(reimburse_expense).require_one("business.expenses.settle"),
+        )
         .route(
             "/finance/salary-advances",
-            get(list_salary_advances).post(create_salary_advance),
+            get(list_salary_advances).require_any(["hr.salary_advances.self.read", "hr.salary_advances.read"]),
+        )
+        .route(
+            "/finance/salary-advances",
+            post(create_salary_advance).require_any(["hr.salary_advances.self.request", "hr.salary_advances.manage"]),
         )
         .route(
             "/finance/salary-advances/{advance_id}/approve",
-            post(approve_salary_advance),
+            post(approve_salary_advance).require_one("hr.salary_advances.approve"),
         )
         .route(
             "/finance/salary-advances/{advance_id}/correct",
-            post(correct_salary_advance),
+            post(correct_salary_advance).require_any([
+                "hr.salary_advances.self.correct",
+                "hr.salary_advances.manage",
+                "hr.salary_advances.correct",
+            ]),
         )
         .route(
             "/finance/salary-advances/{advance_id}/revisions",
-            get(list_salary_advance_revisions),
+            get(list_salary_advance_revisions).require_any(["hr.salary_advances.self.read", "hr.salary_advances.read"]),
         )
         .route(
             "/finance/salary-advances/{advance_id}/reject",
-            post(reject_salary_advance),
+            post(reject_salary_advance).require_one("hr.salary_advances.approve"),
         )
         .route(
             "/finance/salary-advances/{advance_id}/disburse",
-            post(disburse_salary_advance),
+            post(disburse_salary_advance).require_one("hr.salary_advances.disburse"),
         )
         .route(
             "/finance/salary-advances/{advance_id}/recover",
-            post(recover_salary_advance),
+            post(recover_salary_advance).require_one("hr.salary_advances.recover"),
         )
 }
 
@@ -248,7 +285,6 @@ async fn list_expense_categories(
     State(context): State<Arc<AppContext>>,
     Extension(user): Extension<AuthedUser>,
 ) -> Result<Json<Vec<ExpenseCategory>>, StatusCode> {
-    require_any_permission(&user, &["business.expenses.self.read", "business.expenses.read"])?;
     context
         .core
         .finance
@@ -263,7 +299,6 @@ async fn list_expenses(
     Extension(user): Extension<AuthedUser>,
     Query(query): Query<ExpensePageQuery>,
 ) -> Result<Json<ExpensePageRsp>, StatusCode> {
-    require_any_permission(&user, &["business.expenses.self.read", "business.expenses.read"])?;
     let limit: u16 = resolve_limit(&context.pagination, query.limit)?;
     let cursor: Option<ExpenseCursor> = decode_cursor(query.cursor.as_deref())?;
     let page: ExpensePage = context
@@ -297,7 +332,6 @@ async fn create_expense(
     headers: HeaderMap,
     Json(payload): Json<ExpenseClaimCreateReq>,
 ) -> Result<(StatusCode, Json<ExpenseClaim>), StatusCode> {
-    require_any_permission(&user, &["business.expenses.submit", "business.expenses.manage"])?;
     let record: ExpenseClaim = context
         .core
         .finance
@@ -320,7 +354,6 @@ async fn approve_expense(
     headers: HeaderMap,
     Json(payload): Json<FinancialDecisionReq>,
 ) -> Result<Json<ExpenseClaim>, StatusCode> {
-    require_permission(&user, "business.expenses.approve")?;
     context
         .core
         .finance
@@ -346,14 +379,6 @@ async fn correct_expense(
     headers: HeaderMap,
     Json(payload): Json<ExpenseCorrectionReq>,
 ) -> Result<Json<ExpenseClaim>, StatusCode> {
-    require_any_permission(
-        &user,
-        &[
-            "business.expenses.self.correct",
-            "business.expenses.manage",
-            "business.expenses.correct",
-        ],
-    )?;
     context
         .core
         .finance
@@ -396,7 +421,6 @@ async fn list_expense_revisions(
     Path(expense_id): Path<Uuid>,
     Query(query): Query<FinanceCursorQuery>,
 ) -> Result<Json<ExpenseRevisionPageRsp>, StatusCode> {
-    require_any_permission(&user, &["business.expenses.self.read", "business.expenses.read"])?;
     let limit: u16 = resolve_limit(&context.pagination, query.limit)?;
     let cursor: Option<RevisionCursor> = decode_cursor(query.cursor.as_deref())?;
     let page: ExpenseRevisionPage = context
@@ -428,7 +452,6 @@ async fn reject_expense(
     headers: HeaderMap,
     Json(payload): Json<FinancialRejectionRequest>,
 ) -> Result<Json<ExpenseClaim>, StatusCode> {
-    require_permission(&user, "business.expenses.approve")?;
     context
         .core
         .finance
@@ -451,7 +474,6 @@ async fn reimburse_expense(
     headers: HeaderMap,
     Json(payload): Json<FinancialSettlementReq>,
 ) -> Result<Json<ExpenseClaim>, StatusCode> {
-    require_permission(&user, "business.expenses.settle")?;
     context
         .core
         .finance
@@ -475,7 +497,6 @@ async fn list_salary_advances(
     Extension(user): Extension<AuthedUser>,
     Query(query): Query<SalaryAdvancePageQuery>,
 ) -> Result<Json<SalaryAdvancePageResponse>, StatusCode> {
-    require_any_permission(&user, &["hr.salary_advances.self.read", "hr.salary_advances.read"])?;
     let limit: u16 = resolve_limit(&context.pagination, query.limit)?;
     let cursor: Option<SalaryAdvanceCursor> = decode_cursor(query.cursor.as_deref())?;
     let page: SalaryAdvancePage = context
@@ -509,7 +530,6 @@ async fn create_salary_advance(
     headers: HeaderMap,
     Json(payload): Json<SalaryAdvanceCreateReq>,
 ) -> Result<(StatusCode, Json<SalaryAdvance>), StatusCode> {
-    require_any_permission(&user, &["hr.salary_advances.self.request", "hr.salary_advances.manage"])?;
     let record: SalaryAdvance = context
         .core
         .finance
@@ -532,7 +552,6 @@ async fn approve_salary_advance(
     headers: HeaderMap,
     Json(payload): Json<FinancialDecisionReq>,
 ) -> Result<Json<SalaryAdvance>, StatusCode> {
-    require_permission(&user, "hr.salary_advances.approve")?;
     context
         .core
         .finance
@@ -558,14 +577,6 @@ async fn correct_salary_advance(
     headers: HeaderMap,
     Json(payload): Json<SalaryAdvanceCorrectionReq>,
 ) -> Result<Json<SalaryAdvance>, StatusCode> {
-    require_any_permission(
-        &user,
-        &[
-            "hr.salary_advances.self.correct",
-            "hr.salary_advances.manage",
-            "hr.salary_advances.correct",
-        ],
-    )?;
     context
         .core
         .finance
@@ -602,7 +613,6 @@ async fn list_salary_advance_revisions(
     Path(advance_id): Path<Uuid>,
     Query(query): Query<FinanceCursorQuery>,
 ) -> Result<Json<SalaryAdvanceRevisionPageResponse>, StatusCode> {
-    require_any_permission(&user, &["hr.salary_advances.self.read", "hr.salary_advances.read"])?;
     let limit: u16 = resolve_limit(&context.pagination, query.limit)?;
     let cursor: Option<RevisionCursor> = decode_cursor(query.cursor.as_deref())?;
     let page: SalaryAdvanceRevisionPage = context
@@ -634,7 +644,6 @@ async fn reject_salary_advance(
     headers: HeaderMap,
     Json(payload): Json<FinancialRejectionRequest>,
 ) -> Result<Json<SalaryAdvance>, StatusCode> {
-    require_permission(&user, "hr.salary_advances.approve")?;
     context
         .core
         .finance
@@ -657,7 +666,6 @@ async fn disburse_salary_advance(
     headers: HeaderMap,
     Json(payload): Json<SalaryAdvanceDisburseReq>,
 ) -> Result<Json<SalaryAdvance>, StatusCode> {
-    require_permission(&user, "hr.salary_advances.disburse")?;
     context
         .core
         .finance
@@ -680,7 +688,6 @@ async fn recover_salary_advance(
     headers: HeaderMap,
     Json(payload): Json<SalaryAdvanceRecoveryReq>,
 ) -> Result<Json<SalaryAdvance>, StatusCode> {
-    require_permission(&user, "hr.salary_advances.recover")?;
     context
         .core
         .finance
@@ -716,22 +723,6 @@ fn normalize_optional(value: Option<String>) -> Option<String> {
         let normalized: String = value.trim().to_owned();
         (!normalized.is_empty()).then_some(normalized)
     })
-}
-
-fn require_any_permission(user: &AuthedUser, permissions: &[&str]) -> Result<(), StatusCode> {
-    if permissions
-        .iter()
-        .any(|permission: &&str| user.has_permission(permission))
-    {
-        Ok(())
-    } else {
-        info!(tenant_id = %user.tenant_id, account_id = %user.account_id, "Financial read request denied");
-        Err(StatusCode::FORBIDDEN)
-    }
-}
-
-fn require_permission(user: &AuthedUser, permission: &str) -> Result<(), StatusCode> {
-    require_any_permission(user, &[permission])
 }
 
 fn finance_status(operation: &str, user: &AuthedUser, error: FinanceError) -> StatusCode {

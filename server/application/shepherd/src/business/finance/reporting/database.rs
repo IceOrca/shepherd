@@ -931,7 +931,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::FinancialReportRepo;
-    use crate::business::finance::reporting::core::FinancialPeriodStatus;
+    use crate::business::finance::reporting::core::{FinancialPeriodState, FinancialPeriodStatus};
 
     type TestResult = Result<(), Box<dyn Error>>;
 
@@ -977,11 +977,12 @@ mod tests {
 
         let periods = result?;
         assert_eq!(periods.len(), 1);
-        assert_eq!(periods[0].status, FinancialPeriodStatus::Open);
-        assert_eq!(periods[0].revision_number, 0);
-        assert!(periods[0].reason.is_none());
-        assert!(periods[0].actor_username.is_none());
-        assert!(periods[0].occurred_at.is_none());
+        let period: &FinancialPeriodState = periods.first().expect("the requested open period must be listed");
+        assert_eq!(period.status, FinancialPeriodStatus::Open);
+        assert_eq!(period.revision_number, 0);
+        assert!(period.reason.is_none());
+        assert!(period.actor_username.is_none());
+        assert!(period.occurred_at.is_none());
         Ok(())
     }
 }

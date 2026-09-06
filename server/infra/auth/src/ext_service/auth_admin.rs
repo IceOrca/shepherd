@@ -6,7 +6,7 @@ use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, put},
+    routing::{get, post, put},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use infra_postgres::{TenantDbErr, TenantTransaction};
@@ -23,6 +23,7 @@ use crate::{
     ext_service::ListPaginationPolicy,
     ext_service::access_control::AccountRoleAssignmentContract,
     ext_service::account::{AccountStatus, AuthedUser},
+    ext_service::middleware::PermissionRouteExt,
 };
 
 const IDEMPOTENCY_HEADER: &str = "idempotency-key";
@@ -425,6 +426,9 @@ pub fn routes_with_provisioner(
         role_manage_permission = %policy.role_manage_permission,
         "Registering Auth administration routes"
     );
+    let read_permission: PermissionCode = policy.read_permission.clone();
+    let create_permission: PermissionCode = policy.create_permission.clone();
+    let disable_permission: PermissionCode = policy.disable_permission.clone();
     let state: Arc<AuthAdminContext> = Arc::new(AuthAdminContext {
         auth,
         policy,
@@ -432,8 +436,18 @@ pub fn routes_with_provisioner(
         pagination,
     });
     Router::new()
-        .route("/admin/auth-users", get(list_users).post(create_user))
-        .route("/admin/auth-users/{auth_user_id}/status", put(set_user_status))
+        .route(
+            "/admin/auth-users",
+            get(list_users).require_one(read_permission.as_str()),
+        )
+        .route(
+            "/admin/auth-users",
+            post(create_user).require_one(create_permission.as_str()),
+        )
+        .route(
+            "/admin/auth-users/{auth_user_id}/status",
+            put(set_user_status).require_one(disable_permission.as_str()),
+        )
         .with_state(state)
 }
 
@@ -443,7 +457,6 @@ async fn list_users(
     Query(query): Query<AuthUserPageQuery>,
 ) -> Result<Json<AuthUserPage>, AdminApiError> {
     info!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, "Auth user list request accepted");
-    require_permission(&actor, &context.policy.read_permission)?;
     let limit = context
         .pagination
         .resolve(query.limit)
@@ -603,7 +616,6 @@ async fn create_user(
         primary_role = %request.primary_role,
         "Auth user creation request accepted"
     );
-    require_permission(&actor, &context.policy.create_permission)?;
     normalize_create_request(&mut request)?;
     ensure_role_grantable(&context, &actor, &request.primary_role, &request.branch_ids).await?;
     ensure_branch_assignments_valid(&context, &actor, &request.primary_role, &request.branch_ids).await?;
@@ -731,7 +743,6 @@ async fn set_user_status(
         disabled = request.disabled,
         "Auth user status request accepted"
     );
-    require_permission(&actor, &context.policy.disable_permission)?;
     let account: MappedAccount = load_mapped_account(&context, &actor, &auth_user_id).await?;
     if account.account_id == actor.account_id && request.disabled {
         return Err(AdminApiError::Validation(
@@ -1935,16 +1946,6 @@ fn normalize_create_request(request: &mut CreateAuthUserRequest) -> Result<(), A
         ));
     }
     Ok(())
-}
-
-fn require_permission(actor: &AuthedUser, permission: &PermissionCode) -> Result<(), AdminApiError> {
-    if actor.has_permission(permission.as_str()) {
-        trace!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, permission = %permission, "Auth administration permission accepted");
-        Ok(())
-    } else {
-        warn!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, permission = %permission, "Auth administration permission rejected");
-        Err(AdminApiError::Forbidden)
-    }
 }
 
 fn summary(account: MappedAccount, provider_user: Option<ExternalIdentity>) -> AuthUserSummary {

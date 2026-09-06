@@ -1645,7 +1645,7 @@ mod tests {
 
     use super::{FinanceRepo, correction_actor_allowed, correction_allowed_for_status};
     use crate::business::finance::core::{
-        ExpenseCorrectionInput, ExpenseFundingSource, ExpenseListQuery, FinancialCorrectionAccess,
+        ExpenseClaim, ExpenseCorrectionInput, ExpenseFundingSource, ExpenseListQuery, FinancialCorrectionAccess,
     };
 
     type TestResult = Result<(), Box<dyn Error>>;
@@ -1842,11 +1842,12 @@ mod tests {
                 .await?;
 
             assert_eq!(page.items.len(), 1);
-            assert_eq!(page.items[0].id, corrected.id);
-            assert_eq!(page.items[0].revision_number, 2);
-            assert!(page.items[0].paid_by_employee_id.is_none());
-            assert!(page.items[0].paid_by_employee_name.is_none());
-            assert!(page.items[0].approved_by_username.is_none());
+            let expense: &ExpenseClaim = page.items.first().expect("the inserted expense must be listed");
+            assert_eq!(expense.id, corrected.id);
+            assert_eq!(expense.revision_number, 2);
+            assert!(expense.paid_by_employee_id.is_none());
+            assert!(expense.paid_by_employee_name.is_none());
+            assert!(expense.approved_by_username.is_none());
             Ok(())
         })
         .await;

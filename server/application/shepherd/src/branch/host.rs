@@ -4,7 +4,7 @@ use axum::{
     Extension, Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{get, put},
+    routing::{get, post, put},
 };
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -13,7 +13,7 @@ use ts_rs::TS;
 
 use crate::{
     AppContext,
-    auth::{AuthedUser, invalidate_tenant_accounts},
+    auth::{AuthedUser, PermissionRouteExt, invalidate_tenant_accounts},
     branch::core::{
         Branch, BranchCreateRequest, BranchCursor, BranchErr, BranchSummary, BranchSummaryCursor, BranchUpdateRequest,
     },
@@ -48,9 +48,16 @@ pub struct BranchSummaryPageResponse {
 
 pub fn routes() -> Router<Arc<AppContext>> {
     Router::new()
-        .route("/branches", get(list_branches).post(create_branch))
-        .route("/branches/manage", get(list_managed_branches))
-        .route("/branches/{branch_id}", put(update_branch))
+        .route("/branches", get(list_branches).require_one(READ_PERMISSION))
+        .route("/branches", post(create_branch).require_one(MANAGE_PERMISSION))
+        .route(
+            "/branches/manage",
+            get(list_managed_branches).require_one(MANAGE_PERMISSION),
+        )
+        .route(
+            "/branches/{branch_id}",
+            put(update_branch).require_one(MANAGE_PERMISSION),
+        )
 }
 
 async fn list_branches(
@@ -58,7 +65,6 @@ async fn list_branches(
     Extension(user): Extension<AuthedUser>,
     Query(query): Query<BranchPageQuery>,
 ) -> Result<Json<BranchSummaryPageResponse>, StatusCode> {
-    require_permission(&user, READ_PERMISSION)?;
     let limit = resolve_limit(&ctx.pagination, query.limit)?;
     let cursor: Option<BranchSummaryCursor> = decode_cursor(query.cursor.as_deref())?;
     let page = ctx
@@ -95,7 +101,6 @@ async fn list_managed_branches(
     Extension(user): Extension<AuthedUser>,
     Query(query): Query<BranchPageQuery>,
 ) -> Result<Json<BranchPageResponse>, StatusCode> {
-    require_permission(&user, MANAGE_PERMISSION)?;
     let limit = resolve_limit(&ctx.pagination, query.limit)?;
     let cursor: Option<BranchCursor> = decode_cursor(query.cursor.as_deref())?;
     let page = ctx
@@ -124,7 +129,6 @@ async fn create_branch(
     Extension(user): Extension<AuthedUser>,
     Json(request): Json<BranchCreateRequest>,
 ) -> Result<(StatusCode, Json<Branch>), StatusCode> {
-    require_permission(&user, MANAGE_PERMISSION)?;
     let branch = ctx
         .core
         .branch
@@ -148,7 +152,6 @@ async fn update_branch(
     Path(branch_id): Path<Uuid>,
     Json(request): Json<BranchUpdateRequest>,
 ) -> Result<Json<Branch>, StatusCode> {
-    require_permission(&user, MANAGE_PERMISSION)?;
     let branch = ctx
         .core
         .branch
@@ -165,21 +168,6 @@ async fn update_branch(
         "Tenant branch updated"
     );
     Ok(Json(branch))
-}
-
-fn require_permission(user: &AuthedUser, permission: &str) -> Result<(), StatusCode> {
-    if user.has_permission(permission) {
-        Ok(())
-    } else {
-        info!(
-            operation = "branch.authorize",
-            tenant_id = %user.tenant_id,
-            account_id = %user.account_id,
-            required_permission = permission,
-            "Branch request denied"
-        );
-        Err(StatusCode::FORBIDDEN)
-    }
 }
 
 fn business_status(operation: &str, user: &AuthedUser, error: BranchErr) -> StatusCode {

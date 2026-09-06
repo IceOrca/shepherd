@@ -16,7 +16,7 @@ pub use infra_auth::ext_service::auth_admin::{
 };
 pub use infra_auth::ext_service::{
     account::{resolve_app_acct, protected_layer},
-    middleware::require_authenticated,
+    middleware::{PermissionRequirement, PermissionRouteExt, require_authenticated},
 };
 
 fn admin_policy() -> AuthAdminPolicy {

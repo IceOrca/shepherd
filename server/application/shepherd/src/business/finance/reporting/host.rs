@@ -13,13 +13,13 @@ use axum::{
 use chrono::{NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::{error, info, warn};
+use tracing::{error, warn};
 use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::{
     AppContext,
-    auth::AuthedUser,
+    auth::{AuthedUser, PermissionRouteExt},
     pagination::{decode_cursor, encode_cursor, normalize_search, resolve_limit},
 };
 
@@ -86,18 +86,35 @@ pub fn routes() -> Router<Arc<AppContext>> {
     Router::new()
         .route(
             "/finance/salary-configurations",
-            get(list_salary_configurations).post(create_salary_rate),
+            get(list_salary_configurations).require_one("hr.salary_rates.read"),
         )
-        .route("/finance/operating-report", get(operating_report))
-        .route("/finance/payroll-report", get(payroll_report))
+        .route(
+            "/finance/salary-configurations",
+            post(create_salary_rate).require_one("hr.salary_rates.manage"),
+        )
+        .route(
+            "/finance/operating-report",
+            get(operating_report).require_one("finance.operating_reports.read"),
+        )
+        .route(
+            "/finance/payroll-report",
+            get(payroll_report).require_one("hr.payroll.read"),
+        )
         .route(
             "/finance/periods",
-            get(list_financial_periods).post(change_financial_period),
+            get(list_financial_periods).require_one("finance.operating_reports.read"),
+        )
+        .route(
+            "/finance/periods",
+            post(change_financial_period).require_one("finance.periods.manage"),
         )
 }
 
 pub fn export_routes() -> Router<Arc<AppContext>> {
-    Router::new().route("/finance/report-exports/xlsx", post(export_report_xlsx))
+    Router::new().route(
+        "/finance/report-exports/xlsx",
+        post(export_report_xlsx).require_any(["finance.operating_reports.export", "hr.payroll.export"]),
+    )
 }
 
 enum ReportExportData {
@@ -369,7 +386,6 @@ async fn list_financial_periods(
     Extension(user): Extension<AuthedUser>,
     Query(range): Query<ReportRangeQuery>,
 ) -> Result<Json<Vec<FinancialPeriodState>>, StatusCode> {
-    require_permission(&user, "finance.operating_reports.read")?;
     context
         .core
         .financial_reporting
@@ -385,7 +401,6 @@ async fn change_financial_period(
     headers: HeaderMap,
     Json(payload): Json<FinancialPeriodChangeRequest>,
 ) -> Result<(StatusCode, Json<FinancialPeriodState>), StatusCode> {
-    require_permission(&user, "finance.periods.manage")?;
     let result: FinancialPeriodState = context
         .core
         .financial_reporting
@@ -410,7 +425,6 @@ async fn list_salary_configurations(
     Extension(user): Extension<AuthedUser>,
     Query(query): Query<SalaryConfigurationPageQuery>,
 ) -> Result<Json<EmployeeSalaryConfigPageRsp>, StatusCode> {
-    require_permission(&user, "hr.salary_rates.read")?;
     let limit: u16 = resolve_limit(&context.pagination, query.limit)?;
     let cursor: Option<EmployeeSalaryConfigCursor> = decode_cursor(query.cursor.as_deref())?;
     let page: EmployeeSalaryConfigPage = context
@@ -434,7 +448,6 @@ async fn create_salary_rate(
     headers: HeaderMap,
     Json(payload): Json<EmployeeSalaryRateCreateReq>,
 ) -> Result<(StatusCode, Json<EmployeeSalaryConfig>), StatusCode> {
-    require_permission(&user, "hr.salary_rates.manage")?;
     let result: EmployeeSalaryConfig = context
         .core
         .financial_reporting
@@ -459,7 +472,6 @@ async fn operating_report(
     Extension(user): Extension<AuthedUser>,
     Query(range): Query<ReportRangeQuery>,
 ) -> Result<Json<OperatingFinancialReport>, StatusCode> {
-    require_permission(&user, "finance.operating_reports.read")?;
     context
         .core
         .financial_reporting
@@ -474,7 +486,6 @@ async fn payroll_report(
     Extension(user): Extension<AuthedUser>,
     Query(range): Query<ReportRangeQuery>,
 ) -> Result<Json<PayrollReport>, StatusCode> {
-    require_permission(&user, "hr.payroll.read")?;
     context
         .core
         .financial_reporting
@@ -493,15 +504,6 @@ fn idempotency_key(headers: &HeaderMap, user: &AuthedUser) -> Result<Uuid, Statu
             StatusCode::BAD_REQUEST
         })?;
     Uuid::parse_str(value).map_err(|_| StatusCode::BAD_REQUEST)
-}
-
-fn require_permission(user: &AuthedUser, permission: &str) -> Result<(), StatusCode> {
-    if user.has_permission(permission) {
-        Ok(())
-    } else {
-        info!(tenant_id = %user.tenant_id, account_id = %user.account_id, permission, "Financial reporting request denied");
-        Err(StatusCode::FORBIDDEN)
-    }
 }
 
 fn reporting_status(operation: &str, user: &AuthedUser, error: FinanceError) -> StatusCode {

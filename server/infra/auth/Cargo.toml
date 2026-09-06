@@ -44,5 +44,8 @@ infra-postgres = { workspace = true, optional = true }
 infra-redis = { workspace = true, optional = true }
 cfg-if = { workspace = true }
 
+[dev-dependencies]
+tower = { workspace = true, features = ["util"] }
+
 [lints]
 workspace = true
