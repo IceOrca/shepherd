@@ -319,6 +319,9 @@ executive managers additionally receive `business.expenses.read` and
 `hr.salary_advances.read`, which show read-only employee records in the
 validated active branch. An executive manager uses each explicitly authorized
 branch context to cover multiple managed branches.
+New salary-advance responses keep approval and disbursement actors absent until
+those lifecycle actions actually occur; create and list operations return those
+fields as nullable values rather than treating them as a service failure.
 
 Self correction uses `business.expenses.self.correct` and
 `hr.salary_advances.self.correct`. Creating or correcting another employee's

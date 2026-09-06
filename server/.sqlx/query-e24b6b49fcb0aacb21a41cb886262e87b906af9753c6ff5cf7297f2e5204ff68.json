@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "ALTER TABLE hr_salary_advance_revisions DISABLE TRIGGER hr_salary_advance_revisions_immutable",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "e24b6b49fcb0aacb21a41cb886262e87b906af9753c6ff5cf7297f2e5204ff68"
+}

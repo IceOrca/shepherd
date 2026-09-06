@@ -1646,6 +1646,7 @@ mod tests {
     use super::{FinanceRepo, correction_actor_allowed, correction_allowed_for_status};
     use crate::business::finance::core::{
         ExpenseClaim, ExpenseCorrectionInput, ExpenseFundingSource, ExpenseListQuery, FinancialCorrectionAccess,
+        SalaryAdvanceInput, SalaryAdvanceListQuery, SalaryAdvanceStatus,
     };
 
     type TestResult = Result<(), Box<dyn Error>>;
@@ -1923,6 +1924,190 @@ mod tests {
             )
             .execute(cleanup.connection())
             .await?;
+            cleanup.commit().await?;
+            Ok(())
+        })
+        .await;
+        let tenant_cleanup_result = sqlx::query!("DELETE FROM tenants WHERE id = $1", tenant_id)
+            .execute(database.global_pool())
+            .await;
+
+        operation_result?;
+        cleanup_result?;
+        tenant_cleanup_result?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn self_service_salary_advance_without_approval_or_disbursement_decodes() -> TestResult {
+        let database_url = std::env::var("DATABASE_URL")?;
+        let database = DatabaseAdapter::connect(&database_url).await?;
+        let tenant_id = Uuid::new_v4();
+        let branch_id = Uuid::new_v4();
+        let account_id = Uuid::new_v4();
+        let employee_id = Uuid::new_v4();
+        let tenant_slug = format!("test-advance-create-{}", tenant_id.simple());
+        database
+            .provision_tenant(tenant_id, &tenant_slug, "Salary advance create test")
+            .await?;
+
+        let mut setup = database.begin_tenant(tenant_id).await?;
+        sqlx::query!(
+            "INSERT INTO branches (id, tenant_id, code, name, time_zone) VALUES ($1, $2, 'test-branch', 'Test Branch', 'Asia/Bangkok')",
+            branch_id,
+            tenant_id,
+        )
+        .execute(setup.connection())
+        .await?;
+        sqlx::query!(
+            "INSERT INTO accounts (id, tenant_id, username, primary_role_code) VALUES ($1, $2, 'advance-create-test', 'staff')",
+            account_id,
+            tenant_id,
+        )
+        .execute(setup.connection())
+        .await?;
+        sqlx::query!(
+            "INSERT INTO account_roles (tenant_id, account_id, role_code) VALUES ($1, $2, 'staff')",
+            tenant_id,
+            account_id,
+        )
+        .execute(setup.connection())
+        .await?;
+        sqlx::query!(
+            "INSERT INTO account_branch_assignments (tenant_id, account_id, branch_id, assigned_by_account_id) VALUES ($1, $2, $3, $2)",
+            tenant_id,
+            account_id,
+            branch_id,
+        )
+        .execute(setup.connection())
+        .await?;
+        sqlx::query!(
+            r#"
+            INSERT INTO hr_employees (
+                id, tenant_id, branch_id, account_id, employee_code, display_name,
+                status, hire_date
+            ) VALUES ($1, $2, $3, $4, 'advance-create-test', 'Advance Create Test', 'active', CURRENT_DATE)
+            "#,
+            employee_id,
+            tenant_id,
+            branch_id,
+            account_id,
+        )
+        .execute(setup.connection())
+        .await?;
+        setup.commit().await?;
+
+        let repo = FinanceRepo::new_arc(Arc::clone(&database));
+        let operation_result: TestResult = with_active_branch(branch_id, async {
+            let paid_on = NaiveDate::from_ymd_opt(2026, 9, 6).ok_or("invalid static test date")?;
+            let created = repo
+                .create_salary_advance(
+                    tenant_id,
+                    account_id,
+                    false,
+                    Uuid::new_v4(),
+                    &SalaryAdvanceInput {
+                        employee_id,
+                        requested_amount: "500000.0000".to_owned(),
+                        currency: "VND".to_owned(),
+                        reason: "Self-service salary advance".to_owned(),
+                        paid_on,
+                        payroll_inclusion_on: paid_on,
+                    },
+                )
+                .await?;
+            assert_eq!(created.status, SalaryAdvanceStatus::Requested);
+            assert!(created.approved_by_username.is_none());
+            assert!(created.disbursed_by_username.is_none());
+            assert!(created.disbursement_reference.is_none());
+            assert!(created.approved_at.is_none());
+            assert!(created.disbursed_at.is_none());
+
+            let page = repo
+                .list_salary_advances(
+                    tenant_id,
+                    account_id,
+                    false,
+                    &SalaryAdvanceListQuery {
+                        status: None,
+                        search: None,
+                        limit: 20,
+                        cursor: None,
+                    },
+                )
+                .await?;
+            assert_eq!(page.items.len(), 1);
+            let listed = page.items.first().ok_or("the requested advance must be listed")?;
+            assert_eq!(listed.id, created.id);
+            Ok(())
+        })
+        .await;
+
+        let cleanup_result: TestResult = with_active_branch(branch_id, async {
+            let mut cleanup = database.begin_tenant(tenant_id).await?;
+            sqlx::query!(
+                "ALTER TABLE hr_salary_advance_revisions DISABLE TRIGGER hr_salary_advance_revisions_immutable"
+            )
+            .execute(cleanup.connection())
+            .await?;
+            sqlx::query!("ALTER TABLE hr_salary_advances DISABLE TRIGGER hr_salary_advances_no_delete")
+                .execute(cleanup.connection())
+                .await?;
+            sqlx::query!("DELETE FROM hr_salary_advance_events WHERE tenant_id = $1", tenant_id)
+                .execute(cleanup.connection())
+                .await?;
+            sqlx::query!(
+                "DELETE FROM hr_salary_advance_revisions WHERE tenant_id = $1",
+                tenant_id
+            )
+            .execute(cleanup.connection())
+            .await?;
+            sqlx::query!("DELETE FROM hr_salary_advances WHERE tenant_id = $1", tenant_id)
+                .execute(cleanup.connection())
+                .await?;
+            sqlx::query!(
+                "DELETE FROM hr_employees WHERE tenant_id = $1 AND id = $2",
+                tenant_id,
+                employee_id
+            )
+            .execute(cleanup.connection())
+            .await?;
+            sqlx::query!(
+                "DELETE FROM account_branch_assignments WHERE tenant_id = $1 AND account_id = $2",
+                tenant_id,
+                account_id
+            )
+            .execute(cleanup.connection())
+            .await?;
+            sqlx::query!(
+                "DELETE FROM account_roles WHERE tenant_id = $1 AND account_id = $2",
+                tenant_id,
+                account_id
+            )
+            .execute(cleanup.connection())
+            .await?;
+            sqlx::query!(
+                "DELETE FROM accounts WHERE tenant_id = $1 AND id = $2",
+                tenant_id,
+                account_id
+            )
+            .execute(cleanup.connection())
+            .await?;
+            sqlx::query!(
+                "DELETE FROM branches WHERE tenant_id = $1 AND id = $2",
+                tenant_id,
+                branch_id
+            )
+            .execute(cleanup.connection())
+            .await?;
+            sqlx::query!(
+                "ALTER TABLE hr_salary_advance_revisions ENABLE TRIGGER hr_salary_advance_revisions_immutable"
+            )
+            .execute(cleanup.connection())
+            .await?;
+            sqlx::query!("ALTER TABLE hr_salary_advances ENABLE TRIGGER hr_salary_advances_no_delete")
+                .execute(cleanup.connection())
+                .await?;
             cleanup.commit().await?;
             Ok(())
         })

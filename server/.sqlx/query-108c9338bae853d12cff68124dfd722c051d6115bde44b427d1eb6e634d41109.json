@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "ALTER TABLE hr_salary_advances DISABLE TRIGGER hr_salary_advances_no_delete",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "108c9338bae853d12cff68124dfd722c051d6115bde44b427d1eb6e634d41109"
+}
