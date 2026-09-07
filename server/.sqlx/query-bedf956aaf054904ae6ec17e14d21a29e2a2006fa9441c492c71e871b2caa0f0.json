@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT id\n                FROM branches\n                WHERE tenant_id = $1 AND status = 'active'\n                ORDER BY code, id\n                LIMIT 1\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "branches",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bedf956aaf054904ae6ec17e14d21a29e2a2006fa9441c492c71e871b2caa0f0"
+}

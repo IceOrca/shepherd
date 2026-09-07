@@ -49,8 +49,8 @@ sqlx = { version = "*", default-features = false, features = ["runtime-tokio", "
 dotenvy = { version = "*" }
 parking_lot = { version = "*" }
 base64 = { version = "*" }
-sha2 = { version = "*" }
-hmac = { version = "*" }
+sha2 = { version = "0.11" }
+hmac = { version = "0.13" }
 aes-gcm = { version = "*" }
 cfg-if = { version = "*" }
 thiserror = { version = "*" }

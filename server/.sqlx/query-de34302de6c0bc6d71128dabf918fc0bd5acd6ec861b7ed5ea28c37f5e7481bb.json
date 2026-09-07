@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH target_role AS (\n            SELECT scope_type\n            FROM tenant_roles\n            WHERE tenant_id = $1\n              AND code = $3\n              AND is_active\n              AND is_system\n            FOR SHARE\n        )\n        SELECT EXISTS (\n            SELECT 1\n            FROM target_role AS target\n            WHERE (\n                target.scope_type = 'tenant'\n                AND cardinality($4::UUID[]) = 0\n                AND EXISTS (\n                    SELECT 1\n                    FROM account_role_assignments AS actor_assignment\n                    JOIN tenant_roles AS actor_role\n                      ON actor_role.tenant_id = actor_assignment.tenant_id\n                     AND actor_role.code = actor_assignment.role_code\n                     AND actor_role.is_active\n                     AND actor_role.is_system\n                    JOIN auth_role_assignment_grants AS delegation\n                      ON delegation.grantor_role_code = actor_assignment.role_code\n                     AND delegation.target_role_code = $3\n                    WHERE actor_assignment.tenant_id = $1\n                      AND actor_assignment.account_id = $2\n                      AND actor_assignment.branch_id IS NULL\n                )\n            ) OR (\n                target.scope_type = 'branch'\n                AND cardinality($4::UUID[]) > 0\n                AND NOT EXISTS (\n                    SELECT 1\n                    FROM unnest($4::UUID[]) AS requested(branch_id)\n                    WHERE NOT EXISTS (\n                        SELECT 1\n                        FROM account_role_assignments AS actor_assignment\n                        JOIN tenant_roles AS actor_role\n                          ON actor_role.tenant_id = actor_assignment.tenant_id\n                         AND actor_role.code = actor_assignment.role_code\n                         AND actor_role.is_active\n                         AND actor_role.is_system\n                        JOIN auth_role_assignment_grants AS delegation\n                          ON delegation.grantor_role_code = actor_assignment.role_code\n                         AND delegation.target_role_code = $3\n                        WHERE actor_assignment.tenant_id = $1\n                          AND actor_assignment.account_id = $2\n                          AND (\n                            actor_assignment.branch_id IS NULL\n                            OR actor_assignment.branch_id = requested.branch_id\n                          )\n                    )\n                )\n            )\n        ) AS \"allowed!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "allowed!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "de34302de6c0bc6d71128dabf918fc0bd5acd6ec861b7ed5ea28c37f5e7481bb"
+}

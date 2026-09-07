@@ -27,7 +27,7 @@ const LEGACY_INFRA_MANAGED_BY: &str = "infra-auth";
 #[derive(Clone)]
 pub struct SupabaseAuthAdmin {
     client: reqwest::Client,
-    base_url: String,
+    base_url: Url,
     admin_token_signer: AdminTokenSigner,
 }
 
@@ -84,11 +84,15 @@ enum SupabaseAuthError {
     Response { status: u16, message: String },
     #[error("Supabase Auth returned malformed JSON")]
     InvalidResponse(#[source] reqwest::Error),
+    #[error("Supabase Auth subject is invalid")]
+    InvalidSubject,
+    #[error("Supabase Auth administration URL could not be constructed")]
+    InvalidAdminUrl(#[source] url::ParseError),
 }
 
 #[derive(Clone, Debug, Deserialize)]
 struct SupabaseAuthUser {
-    id: Uuid,
+    id: String,
     #[serde(default)]
     email: Option<String>,
     #[serde(default)]
@@ -122,11 +126,13 @@ impl SupabaseAuthAdmin {
     pub fn from_env() -> Result<Arc<Self>, ConfigErr> {
         debug!("Loading Supabase Auth identity administration configuration");
         let raw_url: String = required_env("AUTH_ADMIN_URL").ok_or(ConfigErr::MissingUrl)?;
-        let parsed_url: Url = Url::parse(&raw_url)
+        let mut parsed_url: Url = Url::parse(&raw_url)
             .map_err(|configuration_error: url::ParseError| ConfigErr::InvalidUrl(configuration_error.to_string()))?;
         if !matches!(parsed_url.scheme(), "http" | "https") || parsed_url.host_str().is_none() {
             return Err(ConfigErr::UnsupportedUrl);
         }
+        let normalized_path: String = format!("{}/", parsed_url.path().trim_end_matches('/'));
+        parsed_url.set_path(&normalized_path);
         let timeout_secs: u64 =
             std::env::var("AUTH_ADMIN_HTTP_TIMEOUT_SECS").map_or(Ok(DEFAULT_HTTP_TIMEOUT_SECS), |value: String| {
                 value
@@ -142,7 +148,7 @@ impl SupabaseAuthAdmin {
         let admin_token_signer: AdminTokenSigner = AdminTokenSigner::from_env()?;
         let service: Arc<Self> = Arc::new(Self {
             client,
-            base_url: raw_url.trim().trim_end_matches('/').to_owned(),
+            base_url: parsed_url,
             admin_token_signer,
         });
         info!(
@@ -153,26 +159,22 @@ impl SupabaseAuthAdmin {
     }
 
     async fn get_user(&self, subject: &str) -> Result<Option<SupabaseAuthUser>, SupabaseAuthError> {
-        let user_id: Uuid =
-            Uuid::parse_str(subject).map_err(|_parse_error: uuid::Error| SupabaseAuthError::Response {
-                status: 422,
-                message: "The Supabase Auth user subject is invalid.".to_owned(),
-            })?;
-        trace!(auth_user_id = %user_id, "Supabase Auth user lookup accepted");
+        let user_url: Url = self.admin_users_url(Some(subject))?;
+        trace!(auth_user_id = %subject, "Supabase Auth user lookup accepted");
         let admin_token: String = self.admin_token_signer.sign()?;
         let response: reqwest::Response = self
             .client
-            .get(format!("{}/admin/users/{user_id}", self.base_url))
+            .get(user_url)
             .bearer_auth(admin_token)
             .send()
             .await
             .map_err(SupabaseAuthError::Transport)?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
-            debug!(auth_user_id = %user_id, "Supabase Auth user was not found");
+            debug!(auth_user_id = %subject, "Supabase Auth user was not found");
             return Ok(None);
         }
         let user: SupabaseAuthUser = read_supabase_auth_response(response).await?;
-        debug!(auth_user_id = %user_id, "Supabase Auth user loaded");
+        debug!(auth_user_id = %subject, "Supabase Auth user loaded");
         Ok(Some(user))
     }
 
@@ -181,7 +183,7 @@ impl SupabaseAuthAdmin {
         let admin_token: String = self.admin_token_signer.sign()?;
         let response: reqwest::Response = self
             .client
-            .get(format!("{}/admin/users", self.base_url))
+            .get(self.admin_users_url(None)?)
             .query(&[("filter", normalized_email)])
             .bearer_auth(admin_token)
             .send()
@@ -190,6 +192,26 @@ impl SupabaseAuthAdmin {
         read_supabase_auth_response::<SupabaseAuthUserList>(response)
             .await
             .map(SupabaseAuthUserList::into_users)
+    }
+
+    fn admin_users_url(&self, subject: Option<&str>) -> Result<Url, SupabaseAuthError> {
+        let mut url: Url = self
+            .base_url
+            .join("admin/users")
+            .map_err(SupabaseAuthError::InvalidAdminUrl)?;
+        if let Some(subject) = subject {
+            if subject.is_empty()
+                || subject.trim() != subject
+                || subject.len() > 255
+                || subject.chars().any(char::is_control)
+            {
+                return Err(SupabaseAuthError::InvalidSubject);
+            }
+            url.path_segments_mut()
+                .map_err(|()| SupabaseAuthError::InvalidSubject)?
+                .push(subject);
+        }
+        Ok(url)
     }
 }
 
@@ -287,7 +309,7 @@ impl ExtAuthAdmin for SupabaseAuthAdmin {
         let admin_token: String = self.admin_token_signer.sign().map_err(map_supabase_auth_error)?;
         let response: reqwest::Response = self
             .client
-            .post(format!("{}/admin/users", self.base_url))
+            .post(self.admin_users_url(None).map_err(map_supabase_auth_error)?)
             .bearer_auth(admin_token)
             .json(&attributes)
             .send()
@@ -355,7 +377,7 @@ impl From<SupabaseAuthUser> for ExternalIdentity {
             ExternalIdentityStatus::Active
         };
         Self {
-            subject: user.id.to_string(),
+            subject: user.id,
             email: user.email,
             status,
             email_confirmed: user.email_confirmed_at.is_some(),
@@ -374,6 +396,9 @@ fn user_is_banned(user: &SupabaseAuthUser) -> bool {
 
 fn map_supabase_auth_error(error: SupabaseAuthError) -> ExtAdminErr {
     match error {
+        SupabaseAuthError::InvalidSubject => {
+            ExtAdminErr::Validation("The external identity subject is invalid.".to_owned())
+        }
         SupabaseAuthError::Response {
             status: 400 | 422,
             message,
@@ -396,6 +421,10 @@ fn map_supabase_auth_error(error: SupabaseAuthError) -> ExtAdminErr {
         SupabaseAuthError::InvalidResponse(response_error) => {
             error!(reason = %response_error, "Supabase Auth administration returned malformed JSON");
             ExtAdminErr::Unavailable("Supabase Auth returned malformed JSON".to_owned())
+        }
+        SupabaseAuthError::InvalidAdminUrl(url_error) => {
+            error!(reason = %url_error, "Supabase Auth administration URL construction failed");
+            ExtAdminErr::Unavailable("Supabase Auth administration endpoint is unavailable".to_owned())
         }
         SupabaseAuthError::Response { status, message } => {
             warn!(status, "Supabase Auth administration request was rejected");
@@ -453,8 +482,9 @@ mod tests {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use jsonwebtoken::{Algorithm, EncodingKey, decode_header};
 
-    use super::{AdminTokenSigner, SupabaseAuthUser, provider_message, user_is_banned};
-    use uuid::Uuid;
+    use super::{
+        AdminTokenSigner, SupabaseAuthAdmin, SupabaseAuthError, SupabaseAuthUser, provider_message, user_is_banned,
+    };
 
     const TEST_ES256_PRIVATE_KEY: &[u8] = br#"-----BEGIN PRIVATE KEY-----
 MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgBTB80Tj8f1KY+uhC
@@ -466,7 +496,7 @@ goJNLXyZySwuRTAsDkwzkYc8/FBa6AfD99PAXvKZc99tqRuc9GSjNv89
     #[test]
     fn detects_future_ban_and_sanitizes_provider_message() {
         let user: SupabaseAuthUser = SupabaseAuthUser {
-            id: Uuid::nil(),
+            id: "opaque-provider-subject".to_owned(),
             email: None,
             email_confirmed_at: None,
             last_sign_in_at: None,
@@ -479,6 +509,37 @@ goJNLXyZySwuRTAsDkwzkYc8/FBa6AfD99PAXvKZc99tqRuc9GSjNv89
             provider_message(r#"{"msg":"Email already exists"}"#),
             "Email already exists"
         );
+    }
+
+    #[test]
+    fn encodes_opaque_subject_as_one_admin_url_segment() {
+        let encoding_key: EncodingKey = EncodingKey::from_ec_pem(TEST_ES256_PRIVATE_KEY)
+            .unwrap_or_else(|error| panic!("test ES256 key must be valid: {error}"));
+        let admin = SupabaseAuthAdmin {
+            client: reqwest::Client::new(),
+            base_url: reqwest::Url::parse("https://auth.example.test/auth/v1/")
+                .unwrap_or_else(|error| panic!("test URL must be valid: {error}")),
+            admin_token_signer: AdminTokenSigner {
+                encoding_key,
+                key_id: "test".to_owned(),
+                issuer: "https://auth.example.test/auth/v1".to_owned(),
+                audience: "authenticated".to_owned(),
+                role: "service_role".to_owned(),
+                expiry_secs: 60,
+            },
+        };
+
+        let url = admin
+            .admin_users_url(Some("provider/user+42"))
+            .unwrap_or_else(|error| panic!("opaque subject must be accepted: {error}"));
+        assert!(
+            url.as_str().ends_with("/admin/users/provider%2Fuser+42"),
+            "subject must remain one encoded path segment"
+        );
+        assert!(matches!(
+            admin.admin_users_url(Some(" invalid ")),
+            Err(SupabaseAuthError::InvalidSubject)
+        ));
     }
 
     #[test]

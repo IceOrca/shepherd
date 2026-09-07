@@ -138,6 +138,22 @@ export function AccessControlPage() {
     getNextPageParam: (lastPage: AccessControlSnapshot): string | undefined =>
       lastPage.role_next_cursor ?? undefined,
   });
+  const branchCatalogQuery = useInfiniteQuery({
+    queryKey: [...authAdminQueryKeys.accessControl, "branch-catalog"],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }: { pageParam: string | null }): Promise<AccessControlSnapshot> =>
+      getAccessControlSnapshot({ branchCursor: pageParam }),
+    getNextPageParam: (lastPage: AccessControlSnapshot): string | undefined =>
+      lastPage.branch_next_cursor ?? undefined,
+  });
+  const permissionCatalogQuery = useInfiniteQuery({
+    queryKey: [...authAdminQueryKeys.accessControl, "permission-catalog"],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }: { pageParam: string | null }): Promise<AccessControlSnapshot> =>
+      getAccessControlSnapshot({ permissionCursor: pageParam }),
+    getNextPageParam: (lastPage: AccessControlSnapshot): string | undefined =>
+      lastPage.permission_next_cursor ?? undefined,
+  });
   const userQuery = useInfiniteQuery({
     queryKey: [...authAdminQueryKeys.accessControl, "users"],
     initialPageParam: null as string | null,
@@ -157,9 +173,14 @@ export function AccessControlPage() {
   const rolePages: AccessControlSnapshot[] = snapshotQuery.data?.pages ?? [];
   const userPages: AccessControlSnapshot[] = userQuery.data?.pages ?? [];
   const auditPages: AccessControlSnapshot[] = auditQuery.data?.pages ?? [];
-  const snapshot: AccessControlSnapshot | undefined = rolePages[0];
-  const branches: AccessControlBranch[] = snapshot?.branches ?? [];
-  const permissions: AccessControlPermission[] = snapshot?.permissions ?? [];
+  const branches: AccessControlBranch[] =
+    branchCatalogQuery.data?.pages.flatMap(
+      (page: AccessControlSnapshot): AccessControlBranch[] => page.branches,
+    ) ?? [];
+  const permissions: AccessControlPermission[] =
+    permissionCatalogQuery.data?.pages.flatMap(
+      (page: AccessControlSnapshot): AccessControlPermission[] => page.permissions,
+    ) ?? [];
   const availablePermissions: AccessControlPermission[] = PLANNED_STAFFING_ENABLED
     ? permissions
     : permissions.filter(
@@ -175,6 +196,26 @@ export function AccessControlPage() {
   const activeRoles: AccessControlRole[] = allLoadedRoles.filter(
     (role: AccessControlRole): boolean => role.is_active,
   );
+
+  useEffect((): void => {
+    if (branchCatalogQuery.hasNextPage && !branchCatalogQuery.isFetchingNextPage) {
+      void branchCatalogQuery.fetchNextPage();
+    }
+  }, [
+    branchCatalogQuery.fetchNextPage,
+    branchCatalogQuery.hasNextPage,
+    branchCatalogQuery.isFetchingNextPage,
+  ]);
+
+  useEffect((): void => {
+    if (permissionCatalogQuery.hasNextPage && !permissionCatalogQuery.isFetchingNextPage) {
+      void permissionCatalogQuery.fetchNextPage();
+    }
+  }, [
+    permissionCatalogQuery.fetchNextPage,
+    permissionCatalogQuery.hasNextPage,
+    permissionCatalogQuery.isFetchingNextPage,
+  ]);
 
   const changeRolePage = (nextPage: number): void => {
     if (nextPage < 1) return;
@@ -351,17 +392,33 @@ export function AccessControlPage() {
     setUserEditor({ ...userEditor, permission_overrides: [...remaining, nextOverride] });
   };
 
-  if (snapshotQuery.isPending) {
+  if (
+    snapshotQuery.isPending ||
+    branchCatalogQuery.isPending ||
+    permissionCatalogQuery.isPending
+  ) {
     return <div className="grid min-h-72 place-items-center text-sm font-semibold text-slate-500"><LoaderCircle className="mr-2 size-5 animate-spin" />Đang tải cấu hình phân quyền...</div>;
   }
 
-  if (snapshotQuery.error || snapshot === undefined) {
+  const catalogError =
+    snapshotQuery.error ??
+    branchCatalogQuery.error ??
+    permissionCatalogQuery.error;
+  if (catalogError || rolePages[0] === undefined) {
     return (
       <div className="surface-card p-8 text-center">
         <ShieldCheck className="mx-auto size-10 text-red-500" />
         <h2 className="mt-4 text-lg font-bold">Không thể tải cấu hình phân quyền</h2>
-        <p className="mt-2 text-sm text-slate-500">{friendlyApiError(snapshotQuery.error, "Máy chủ chưa thể trả dữ liệu quản trị.")}</p>
-        <button className="action-secondary mt-5" onClick={() => void snapshotQuery.refetch()} type="button"><RefreshCw className="size-4" />Thử lại</button>
+        <p className="mt-2 text-sm text-slate-500">{friendlyApiError(catalogError, "Máy chủ chưa thể trả dữ liệu quản trị.")}</p>
+        <button
+          className="action-secondary mt-5"
+          onClick={() => {
+            void snapshotQuery.refetch();
+            void branchCatalogQuery.refetch();
+            void permissionCatalogQuery.refetch();
+          }}
+          type="button"
+        ><RefreshCw className="size-4" />Thử lại</button>
       </div>
     );
   }

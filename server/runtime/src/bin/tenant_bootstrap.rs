@@ -2,13 +2,15 @@
 
 use std::{error::Error, fmt::Write as _, fs, io, path::Path};
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use hmac::{Hmac, KeyInit, Mac};
 use infra_auth::ext_service::auth_admin::{
     CreateExternalIdentityRequest, ExternalIdentity, ExtAuthAdmin, ExternalIdentityStatus,
 };
 use infra_kernel::debug::Debugging;
 use infra_postgres::DatabaseAdapter;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 use sqlx::{PgPool, Postgres, Transaction};
 use supabase_auth::SupabaseAuthAdmin;
 use tracing::{error, warn, info, debug, trace};
@@ -66,7 +68,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let operator_account: String = authenticate_operator()?;
     let operator_email: String = normalized_required_env("TENANT_BOOTSTRAP_ADMIN_EMAIL")?;
     let auth_issuer: String = required_env("AUTH_ISSUER_URL")?;
-    let request_fingerprint: String = fingerprint_request(&args, &owners);
+    let fingerprint_key: Vec<u8> = provisioning_fingerprint_key()?;
+    let request_fingerprint: String = fingerprint_request(&args, &owners, &fingerprint_key)?;
 
     info!(
         tenant_id = %args.tenant_id,
@@ -600,8 +603,9 @@ async fn mark_failed(pool: &PgPool, idempotency_key: Uuid, error_code: &str) {
     }
 }
 
-fn fingerprint_request(args: &BootstrapArgs, owners: &[OwnerInput]) -> String {
-    let mut digest: Sha256 = Sha256::new();
+fn fingerprint_request(args: &BootstrapArgs, owners: &[OwnerInput], key: &[u8]) -> Result<String, io::Error> {
+    let mut digest: Hmac<Sha256> =
+        Hmac::<Sha256>::new_from_slice(key).map_err(|_| io::Error::other("invalid provisioning fingerprint key"))?;
     update_fingerprint(&mut digest, &args.tenant_id.to_string());
     update_fingerprint(&mut digest, &args.tenant_slug);
     update_fingerprint(&mut digest, &args.tenant_display_name);
@@ -610,17 +614,30 @@ fn fingerprint_request(args: &BootstrapArgs, owners: &[OwnerInput]) -> String {
         update_fingerprint(&mut digest, &owner.email);
         update_fingerprint(&mut digest, &owner.password);
     }
-    let bytes = digest.finalize();
+    let bytes = digest.finalize().into_bytes();
     let mut fingerprint = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         write!(&mut fingerprint, "{byte:02x}").expect("writing to a String cannot fail");
     }
-    fingerprint
+    Ok(fingerprint)
 }
 
-fn update_fingerprint(digest: &mut Sha256, value: &str) {
-    digest.update(value.len().to_be_bytes());
+fn update_fingerprint(digest: &mut Hmac<Sha256>, value: &str) {
+    digest.update(&value.len().to_be_bytes());
     digest.update(value.as_bytes());
+}
+
+fn provisioning_fingerprint_key() -> Result<Vec<u8>, io::Error> {
+    let encoded_key: String = required_env("AUTH_PROVISIONING_FINGERPRINT_KEY_BASE64")?;
+    let key: Vec<u8> = STANDARD
+        .decode(encoded_key)
+        .map_err(|_| io::Error::other("AUTH_PROVISIONING_FINGERPRINT_KEY_BASE64 must be valid standard base64"))?;
+    if key.len() < 32 {
+        return Err(io::Error::other(
+            "AUTH_PROVISIONING_FINGERPRINT_KEY_BASE64 must decode to at least 32 bytes",
+        ));
+    }
+    Ok(key)
 }
 
 fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {

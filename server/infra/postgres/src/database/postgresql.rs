@@ -368,6 +368,7 @@ mod tests {
         let tenant_id: Uuid = Uuid::new_v4();
         let committed_account_id: Uuid = Uuid::new_v4();
         let rolled_back_account_id: Uuid = Uuid::new_v4();
+        let branch_id: Uuid = Uuid::new_v4();
         let tenant_slug: String = format!("tenant-runner-{}", tenant_id.simple());
         client
             .ensure_tenant_registration(tenant_id, &tenant_slug, "Tenant runner test")
@@ -375,6 +376,16 @@ mod tests {
 
         let inserted_account_id: Uuid = client
             .tran_with_tenant(tenant_id, async move |conn: &mut PgConnection| {
+                sqlx::query!(
+                    r#"
+                    INSERT INTO branches (id, tenant_id, code, name)
+                    VALUES ($1, $2, 'tenant-runner-branch', 'Tenant runner branch')
+                    "#,
+                    branch_id,
+                    tenant_id,
+                )
+                .execute(&mut *conn)
+                .await?;
                 let inserted: TestIdRow = sqlx::query_as!(
                     TestIdRow,
                     r#"
@@ -395,7 +406,20 @@ mod tests {
                     tenant_id,
                     committed_account_id,
                 )
-                .execute(conn)
+                .execute(&mut *conn)
+                .await?;
+                sqlx::query!(
+                    r#"
+                    INSERT INTO account_role_assignments (
+                        tenant_id, account_id, role_code, branch_id
+                    )
+                    VALUES ($1, $2, 'staff', $3)
+                    "#,
+                    tenant_id,
+                    committed_account_id,
+                    branch_id,
+                )
+                .execute(&mut *conn)
                 .await?;
                 Ok(inserted.id)
             })
@@ -440,7 +464,10 @@ mod tests {
         client
             .tran_with_tenant(tenant_id, async move |conn: &mut PgConnection| {
                 sqlx::query!("DELETE FROM accounts WHERE tenant_id = $1", tenant_id)
-                    .execute(conn)
+                    .execute(&mut *conn)
+                    .await?;
+                sqlx::query!("DELETE FROM branches WHERE tenant_id = $1", tenant_id)
+                    .execute(&mut *conn)
                     .await?;
                 Ok(())
             })
@@ -469,6 +496,7 @@ mod tests {
         let tenant_a: Uuid = Uuid::new_v4();
         let tenant_b: Uuid = Uuid::new_v4();
         let account_a: Uuid = Uuid::new_v4();
+        let branch_a: Uuid = Uuid::new_v4();
         let tenant_a_slug: String = format!("rls-a-{}", tenant_a.simple());
         let tenant_b_slug: String = format!("rls-b-{}", tenant_b.simple());
         client
@@ -479,6 +507,16 @@ mod tests {
             .await?;
 
         let mut tenant_a_transaction: TenantTransaction = client.begin_tenant(tenant_a).await?;
+        sqlx::query!(
+            r#"
+            INSERT INTO branches (id, tenant_id, code, name)
+            VALUES ($1, $2, 'rls-test-branch', 'RLS test branch')
+            "#,
+            branch_a,
+            tenant_a,
+        )
+        .execute(tenant_a_transaction.connection())
+        .await?;
         sqlx::query!(
             r#"
             INSERT INTO accounts (id, tenant_id, username, primary_role_code)
@@ -496,6 +534,19 @@ mod tests {
             "#,
             tenant_a,
             account_a,
+        )
+        .execute(tenant_a_transaction.connection())
+        .await?;
+        sqlx::query!(
+            r#"
+            INSERT INTO account_role_assignments (
+                tenant_id, account_id, role_code, branch_id
+            )
+            VALUES ($1, $2, 'staff', $3)
+            "#,
+            tenant_a,
+            account_a,
+            branch_a,
         )
         .execute(tenant_a_transaction.connection())
         .await?;
@@ -522,6 +573,9 @@ mod tests {
 
         let mut cleanup_transaction: TenantTransaction = client.begin_tenant(tenant_a).await?;
         sqlx::query!("DELETE FROM accounts WHERE tenant_id = $1", tenant_a)
+            .execute(cleanup_transaction.connection())
+            .await?;
+        sqlx::query!("DELETE FROM branches WHERE tenant_id = $1", tenant_a)
             .execute(cleanup_transaction.connection())
             .await?;
         cleanup_transaction.commit().await?;

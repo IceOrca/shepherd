@@ -5,10 +5,10 @@ use axum::Router;
 pub use infra_auth::{AuthService, PermissionCode, RoleCode};
 pub use infra_auth::ext_service::account::{AccountStatus, AuthedUser, CurrentUserProfile, TenantMembershipSummary};
 pub use infra_auth::ext_service::access_control::{
-    AccessControlAuditEntry, AccessControlBranch, AccessControlPermission, AccessControlRole, AccessControlSnapshot,
-    AccessControlUser, AccessRoleScope, AccountPermissionOverrideContract, AccountRoleAssignmentContract,
-    CreateAccessControlRoleRequest, PermissionOverrideEffect, UpdateAccessControlRoleRequest,
-    UpdateAccountAccessRequest, invalidate_tenant_accounts,
+    AccessControlAuditEntry, AccessControlBranch, AccessControlPermission, AccessControlRole, AccessControlRolePage,
+    AccessControlSnapshot, AccessControlUser, AccessRoleScope, AccountPermissionOverrideContract,
+    AccountRoleAssignmentContract, CreateAccessControlRoleRequest, PermissionOverrideEffect,
+    UpdateAccessControlRoleRequest, UpdateAccountAccessRequest, invalidate_tenant_accounts,
 };
 pub use infra_auth::ext_service::auth_admin::{
     AuthAdminPolicy, AuthProviderUserStatus, AuthUserPage, AuthUserSummary, CreateAuthUserRequest,

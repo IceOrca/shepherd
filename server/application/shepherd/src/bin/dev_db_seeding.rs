@@ -439,6 +439,10 @@ async fn seed_tenant(
     )
     .await?;
 
+    // Branch-scoped accounts must receive their authoritative primary-role
+    // assignment in the same transaction that creates the account.
+    seed_branches(db, tenant_id, tenant, std::slice::from_ref(&owner), owner.id).await?;
+
     let mut seeded_accounts: Vec<SeedAccount> = vec![owner.clone()];
     for account_definition in tenant
         .accounts
@@ -2235,6 +2239,62 @@ async fn ensure_account(
         .map_err(io::Error::other)?;
         inserted.id
     };
+
+    if role != DevRole::TenantOwner {
+        let branch_id: Uuid = if role == DevRole::ExecutiveManager && branch_code.is_none() {
+            sqlx::query_scalar!(
+                r#"
+                SELECT id
+                FROM branches
+                WHERE tenant_id = $1 AND status = 'active'
+                ORDER BY code, id
+                LIMIT 1
+                "#,
+                tenant_id,
+            )
+            .fetch_optional(transaction.connection())
+            .await
+            .map_err(io::Error::other)?
+            .ok_or_else(|| io::Error::other("no active development branch exists for the executive manager"))?
+        } else {
+            let branch_code: &str = branch_code.ok_or_else(|| {
+                io::Error::other(format!(
+                    "branch-scoped development account '{username}' has no branch code"
+                ))
+            })?;
+            sqlx::query_scalar!(
+                r#"
+                SELECT id
+                FROM branches
+                WHERE tenant_id = $1
+                  AND code = $2
+                  AND status = 'active'
+                "#,
+                tenant_id,
+                branch_code,
+            )
+            .fetch_optional(transaction.connection())
+            .await
+            .map_err(io::Error::other)?
+            .ok_or_else(|| io::Error::other(format!("active development branch '{branch_code}' was not found")))?
+        };
+        sqlx::query!(
+            r#"
+            INSERT INTO account_branch_assignments (
+                tenant_id, account_id, branch_id, assigned_by_account_id
+            )
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (tenant_id, account_id, branch_id) DO NOTHING
+            "#,
+            tenant_id,
+            account_id,
+            branch_id,
+            audit_account_id,
+        )
+        .execute(transaction.connection())
+        .await
+        .map_err(io::Error::other)?;
+    }
 
     let role_insert: sqlx::postgres::PgQueryResult = sqlx::query!(
         r#"

@@ -44,14 +44,19 @@ creates or recovers the GoTrue identity, links the Shepherd account, runs the ap
 and marks the operation complete. Repeating the same request with the same key returns the completed
 account. Reusing a key with different input is rejected.
 
-The provisioning ledger stores only a SHA-256 request fingerprint and safe identifiers; passwords are
-never persisted there. A failed application transaction triggers a checked GoTrue deletion attempt.
+The provisioning ledger stores only a keyed HMAC-SHA-256 request fingerprint and safe identifiers;
+passwords are never persisted there. A failed application transaction triggers a checked GoTrue deletion attempt.
 If that compensation cannot be confirmed, the retained provider identifier allows a later retry to
 recover and finish the same operation instead of creating another identity.
 
 ## Configuration
 
 Access-token validation requires `AUTH_ISSUER_URL`, `AUTH_AUDIENCE`, and `AUTH_JWKS_URL`. `AUTH_JWT_ALGORITHMS` defaults to `EdDSA`. `AUTH_JWKS_REFRESH_SECS`, `AUTH_HTTP_TIMEOUT_SECS`, and `AUTH_CLOCK_SKEW_SECS` tune validation.
+
+Account provisioning also requires
+`AUTH_PROVISIONING_FINGERPRINT_KEY_BASE64`, a standard-base64 value that
+decodes to at least 32 random bytes. Keep it server-only and stable across
+deployments so idempotency replays remain comparable.
 
 Account administration is supplied through the provider-neutral
 `ExtAuthAdmin` contract. Concrete provider URLs, credentials, token

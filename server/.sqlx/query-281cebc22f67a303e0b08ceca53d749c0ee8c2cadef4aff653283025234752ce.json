@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO account_branch_assignments (\n                tenant_id, account_id, branch_id, assigned_by_account_id\n            )\n            VALUES ($1, $2, $3, $4)\n            ON CONFLICT (tenant_id, account_id, branch_id) DO NOTHING\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "281cebc22f67a303e0b08ceca53d749c0ee8c2cadef4aff653283025234752ce"
+}

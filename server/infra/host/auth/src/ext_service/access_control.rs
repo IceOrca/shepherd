@@ -26,6 +26,9 @@ use super::{
     middleware::PermissionRouteExt,
 };
 
+const TENANT_PERMISSION_REQUIRED: &str = "current account lacks the required tenant permission";
+const ROLE_DELEGATION_REQUIRED: &str = "current account cannot delegate the requested primary role";
+
 #[derive(Clone)]
 struct AccessControlContext {
     auth: Arc<AuthService>,
@@ -116,6 +119,15 @@ pub struct AccessControlRole {
     pub assigned_account_count: i64,
 }
 
+#[derive(Clone, Debug, Serialize, TS)]
+#[ts(export)]
+pub struct AccessControlRolePage {
+    pub items: Vec<AccessControlRole>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+    pub limit: u16,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[ts(export)]
 pub struct AccountRoleAssignmentContract {
@@ -177,6 +189,10 @@ pub struct AccessControlSnapshot {
     pub roles: Vec<AccessControlRole>,
     pub users: Vec<AccessControlUser>,
     pub audit: Vec<AccessControlAuditEntry>,
+    pub branch_next_cursor: Option<String>,
+    pub branch_has_more: bool,
+    pub permission_next_cursor: Option<String>,
+    pub permission_has_more: bool,
     pub role_next_cursor: Option<String>,
     pub role_has_more: bool,
     pub user_next_cursor: Option<String>,
@@ -184,6 +200,18 @@ pub struct AccessControlSnapshot {
     pub audit_next_cursor: Option<String>,
     pub audit_has_more: bool,
     pub limit: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct BranchCursor {
+    name: String,
+    id: Uuid,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct PermissionCursor {
+    display_name: String,
+    code: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -205,12 +233,28 @@ struct AuditCursor {
     id: Uuid,
 }
 
+struct SnapshotCursors {
+    branch: Option<BranchCursor>,
+    permission: Option<PermissionCursor>,
+    role: Option<RoleCursor>,
+    user: Option<UserCursor>,
+    audit: Option<AuditCursor>,
+}
+
 #[derive(Debug, Deserialize)]
 struct AccessControlPageQuery {
     limit: Option<u16>,
+    branch_cursor: Option<String>,
+    permission_cursor: Option<String>,
     role_cursor: Option<String>,
     user_cursor: Option<String>,
     audit_cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RolePageQuery {
+    limit: Option<u16>,
+    cursor: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, TS)]
@@ -397,9 +441,15 @@ type PagedAccessControlSnapshotRows = (
     bool,
     bool,
     bool,
+    bool,
+    bool,
 );
 
 struct SnapshotPageMetadata {
+    branch_next_cursor: Option<String>,
+    branch_has_more: bool,
+    permission_next_cursor: Option<String>,
+    permission_has_more: bool,
     role_next_cursor: Option<String>,
     role_has_more: bool,
     user_next_cursor: Option<String>,
@@ -437,6 +487,7 @@ pub fn routes(
     pagination: ListPaginationPolicy,
 ) -> Router {
     let update_permission: PermissionCode = policy.update_permission.clone();
+    let role_read_permission: PermissionCode = policy.role_read_permission.clone();
     let role_manage_permission: PermissionCode = policy.role_manage_permission.clone();
     let context: Arc<AccessControlContext> = Arc::new(AccessControlContext {
         auth,
@@ -455,7 +506,9 @@ pub fn routes(
         )
         .route(
             "/admin/access-control/roles",
-            post(create_role).require_one(role_manage_permission.as_str()),
+            get(list_roles)
+                .require_one(role_read_permission.as_str())
+                .merge(post(create_role).require_one(role_manage_permission.as_str())),
         )
         .route(
             "/admin/access-control/roles/{role_code}",
@@ -468,6 +521,20 @@ pub fn routes(
         .with_state(context)
 }
 
+async fn list_roles(
+    State(context): State<Arc<AccessControlContext>>,
+    Extension(actor): Extension<AuthedUser>,
+    Query(query): Query<RolePageQuery>,
+) -> Result<Json<AccessControlRolePage>, AccessControlError> {
+    let limit: u16 = context
+        .pagination
+        .resolve(query.limit)
+        .map_err(AccessControlError::Validation)?;
+    let cursor: Option<RoleCursor> = decode_cursor(query.cursor.as_deref())?;
+    let page: AccessControlRolePage = load_role_page(&context.auth, actor.tenant_id, limit, cursor).await?;
+    Ok(Json(page))
+}
+
 async fn snapshot(
     State(context): State<Arc<AccessControlContext>>,
     Extension(actor): Extension<AuthedUser>,
@@ -477,6 +544,8 @@ async fn snapshot(
         .pagination
         .resolve(query.limit)
         .map_err(AccessControlError::Validation)?;
+    let branch_cursor: Option<BranchCursor> = decode_cursor(query.branch_cursor.as_deref())?;
+    let permission_cursor: Option<PermissionCursor> = decode_cursor(query.permission_cursor.as_deref())?;
     let role_cursor: Option<RoleCursor> = decode_cursor(query.role_cursor.as_deref())?;
     let user_cursor: Option<UserCursor> = decode_cursor(query.user_cursor.as_deref())?;
     let audit_cursor: Option<AuditCursor> = decode_cursor(query.audit_cursor.as_deref())?;
@@ -485,9 +554,13 @@ async fn snapshot(
         &context.auth,
         actor.tenant_id,
         limit,
-        role_cursor,
-        user_cursor,
-        audit_cursor,
+        SnapshotCursors {
+            branch: branch_cursor,
+            permission: permission_cursor,
+            role: role_cursor,
+            user: user_cursor,
+            audit: audit_cursor,
+        },
     )
     .await?;
     debug!(
@@ -508,15 +581,16 @@ async fn create_role(
     Extension(actor): Extension<AuthedUser>,
     Json(mut request): Json<CreateAccessControlRoleRequest>,
 ) -> Result<(StatusCode, Json<AccessControlRole>), AccessControlError> {
-    require_tenant_permission(&context, &actor, &context.policy.role_manage_permission).await?;
     normalize_create_role_request(&mut request)?;
     let tenant_id: Uuid = actor.tenant_id;
     let actor_id: Uuid = actor.account_id;
     let role_code: RoleCode = request.code.clone();
+    let role_manage_permission: PermissionCode = context.policy.role_manage_permission.clone();
     context
         .auth
         .db
         .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            require_tenant_permission_on(connection, tenant_id, actor_id, role_manage_permission.as_str()).await?;
             sqlx::query!(
                 r#"
                 INSERT INTO tenant_roles (
@@ -580,19 +654,20 @@ async fn update_role(
     Path(role_code_raw): Path<String>,
     Json(mut request): Json<UpdateAccessControlRoleRequest>,
 ) -> Result<Json<AccessControlRole>, AccessControlError> {
-    require_tenant_permission(&context, &actor, &context.policy.role_manage_permission).await?;
     let role_code: RoleCode = RoleCode::parse(role_code_raw)
         .map_err(|code_error: AuthCodeError| AccessControlError::Validation(code_error.to_string()))?;
     normalize_update_role_request(&mut request)?;
     let tenant_id: Uuid = actor.tenant_id;
     let actor_id: Uuid = actor.account_id;
     let role_code_for_update: RoleCode = role_code.clone();
+    let role_manage_permission: PermissionCode = context.policy.role_manage_permission.clone();
     let update_result: bool = context
         .auth
         .db
         .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
             let before: Option<RoleRow> =
                 load_role_row(connection, tenant_id, role_code_for_update.as_str(), true).await?;
+            require_tenant_permission_on(connection, tenant_id, actor_id, role_manage_permission.as_str()).await?;
             let Some(before) = before else {
                 return Ok(false);
             };
@@ -673,22 +748,43 @@ async fn update_user_access(
     Path(account_id): Path<Uuid>,
     Json(mut request): Json<UpdateAccountAccessRequest>,
 ) -> Result<Json<AccessControlUser>, AccessControlError> {
-    require_tenant_permission(&context, &actor, &context.policy.update_permission).await?;
-    require_tenant_permission(&context, &actor, &context.policy.role_manage_permission).await?;
     normalize_user_access_request(&mut request)?;
     let tenant_id: Uuid = actor.tenant_id;
     let actor_id: Uuid = actor.account_id;
     let provisioner: Arc<dyn AuthProvisioner> = Arc::clone(&context.provisioner);
+    let update_permission: PermissionCode = context.policy.update_permission.clone();
+    let role_manage_permission: PermissionCode = context.policy.role_manage_permission.clone();
     let updated: bool = context
         .auth
         .db
         .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            require_tenant_permission_on(
+                connection,
+                tenant_id,
+                actor_id,
+                update_permission.as_str(),
+            )
+            .await?;
+            require_tenant_permission_on(
+                connection,
+                tenant_id,
+                actor_id,
+                role_manage_permission.as_str(),
+            )
+            .await?;
             let before: Option<UserRow> = load_user_row(connection, tenant_id, account_id, true).await?;
             let Some(before) = before else {
                 return Ok(false);
             };
             validate_primary_role_assignments(connection, tenant_id, &request).await?;
             validate_assignment_references(connection, tenant_id, &request).await?;
+            validate_actor_role_delegation(
+                connection,
+                tenant_id,
+                actor_id,
+                &request,
+            )
+            .await?;
 
             let version_update: PgQueryResult = sqlx::query!(
                 r#"
@@ -832,7 +928,9 @@ async fn update_user_access(
                         provisioning_error_code = provisioning_error.code(),
                         "Application-specific account access hook failed"
                     );
-                    sqlx::Error::Protocol("application-specific account access hook failed".to_owned())
+                    sqlx::Error::Protocol(format!(
+                        "application-specific account access hook failed: {}", provisioning_error.code()
+                    ))
                 })?;
 
             let before_value: Value = json!({
@@ -873,22 +971,163 @@ async fn update_user_access(
     Ok(Json(user))
 }
 
+async fn load_role_page(
+    auth: &AuthService,
+    tenant_id: Uuid,
+    limit: u16,
+    cursor: Option<RoleCursor>,
+) -> Result<AccessControlRolePage, AccessControlError> {
+    let fetch_limit: i64 = i64::from(limit) + 1;
+    let rows: (Vec<RoleRow>, Vec<RolePermissionRow>, bool) = auth
+        .db
+        .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
+            let mut roles: Vec<RoleRow> = sqlx::query_as!(
+                RoleRow,
+                r#"
+                SELECT role.code, role.display_name, role.description, role.scope_type,
+                       role.is_system, role.is_active, role.version,
+                       COUNT(DISTINCT assignment.account_id)::BIGINT AS "assigned_account_count!"
+                FROM tenant_roles AS role
+                LEFT JOIN account_role_assignments AS assignment
+                  ON assignment.tenant_id = role.tenant_id
+                 AND assignment.role_code = role.code
+                WHERE role.tenant_id = $1
+                  AND (
+                    $2::BOOLEAN IS NULL
+                    OR role.is_system < $2
+                    OR (
+                      role.is_system = $2
+                      AND (lower(role.display_name), role.code) > ($3, $4)
+                    )
+                  )
+                GROUP BY role.tenant_id, role.code
+                ORDER BY role.is_system DESC, lower(role.display_name), role.code
+                LIMIT $5
+                "#,
+                tenant_id,
+                cursor.as_ref().map(|value: &RoleCursor| value.is_system),
+                cursor.as_ref().map(|value: &RoleCursor| value.name.as_str()),
+                cursor.as_ref().map(|value: &RoleCursor| value.code.as_str()),
+                fetch_limit,
+            )
+            .fetch_all(&mut *connection)
+            .await?;
+            let has_more: bool = roles.len() > usize::from(limit);
+            roles.truncate(usize::from(limit));
+            let role_codes: Vec<String> =
+                roles.iter().map(|row: &RoleRow| row.code.clone()).collect();
+            let permissions: Vec<RolePermissionRow> = sqlx::query_as!(
+                RolePermissionRow,
+                "SELECT role_code, permission_code FROM tenant_role_permissions WHERE tenant_id = $1 AND role_code = ANY($2) ORDER BY role_code, permission_code",
+                tenant_id,
+                &role_codes,
+            )
+            .fetch_all(&mut *connection)
+            .await?;
+            Ok((roles, permissions, has_more))
+        })
+        .await
+        .map_err(|database_error: TenantDbErr| {
+            database_error_status(
+                "load access-control role page",
+                tenant_id,
+                Uuid::nil(),
+                database_error,
+            )
+        })?;
+    let has_more: bool = rows.2;
+    let next_cursor: Option<String> = if has_more {
+        rows.0
+            .last()
+            .map(|row: &RoleRow| {
+                encode_cursor(&RoleCursor {
+                    is_system: row.is_system,
+                    name: row.display_name.to_lowercase(),
+                    code: row.code.clone(),
+                })
+            })
+            .transpose()?
+    } else {
+        None
+    };
+    let mut items: Vec<AccessControlRole> = rows
+        .0
+        .into_iter()
+        .map(role_from_row)
+        .collect::<Result<Vec<AccessControlRole>, AccessControlError>>()?;
+    for permission in rows.1 {
+        if let Some(role) = items
+            .iter_mut()
+            .find(|role: &&mut AccessControlRole| role.code.as_str() == permission.role_code)
+        {
+            role.permission_codes
+                .push(parse_permission(permission.permission_code)?);
+        }
+    }
+    Ok(AccessControlRolePage {
+        items,
+        next_cursor,
+        has_more,
+        limit,
+    })
+}
+
 async fn load_snapshot(
     auth: &AuthService,
     tenant_id: Uuid,
     limit: u16,
-    role_cursor: Option<RoleCursor>,
-    user_cursor: Option<UserCursor>,
-    audit_cursor: Option<AuditCursor>,
+    cursors: SnapshotCursors,
 ) -> Result<AccessControlSnapshot, AccessControlError> {
+    let SnapshotCursors {
+        branch: branch_cursor,
+        permission: permission_cursor,
+        role: role_cursor,
+        user: user_cursor,
+        audit: audit_cursor,
+    } = cursors;
     let fetch_limit: i64 = i64::from(limit) + 1;
     let rows: PagedAccessControlSnapshotRows = auth
         .db
         .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
-            let branches: Vec<BranchRow> = sqlx::query_as!(BranchRow, "SELECT id, code, name, time_zone, status, version FROM branches WHERE tenant_id = $1 ORDER BY lower(name), id", tenant_id)
+            let mut branches: Vec<BranchRow> = sqlx::query_as!(
+                BranchRow,
+                r#"
+                SELECT id, code, name, time_zone, status, version
+                FROM branches
+                WHERE tenant_id = $1
+                  AND ($2::TEXT IS NULL OR (lower(name), id) > ($2, $3))
+                ORDER BY lower(name), id
+                LIMIT $4
+                "#,
+                tenant_id,
+                branch_cursor.as_ref().map(|cursor: &BranchCursor| cursor.name.as_str()),
+                branch_cursor.as_ref().map(|cursor: &BranchCursor| cursor.id),
+                fetch_limit,
+            )
                 .fetch_all(&mut *connection).await?;
-            let permissions: Vec<PermissionRow> = sqlx::query_as!(PermissionRow, "SELECT code, display_name, description FROM permissions ORDER BY lower(display_name), code")
+            let branch_has_more: bool = branches.len() > usize::from(limit);
+            branches.truncate(usize::from(limit));
+            let mut permissions: Vec<PermissionRow> = sqlx::query_as!(
+                PermissionRow,
+                r#"
+                SELECT code, display_name, description
+                FROM permissions
+                WHERE $1::TEXT IS NULL
+                   OR (lower(display_name), code) > ($1, $2)
+                ORDER BY lower(display_name), code
+                LIMIT $3
+                "#,
+                permission_cursor
+                    .as_ref()
+                    .map(|cursor: &PermissionCursor| cursor.display_name.as_str()),
+                permission_cursor
+                    .as_ref()
+                    .map(|cursor: &PermissionCursor| cursor.code.as_str()),
+                fetch_limit,
+            )
                 .fetch_all(&mut *connection).await?;
+            let permission_has_more: bool = permissions.len() > usize::from(limit);
+            permissions.truncate(usize::from(limit));
             let mut roles: Vec<RoleRow> = sqlx::query_as!(
                 RoleRow,
                 r#"
@@ -936,7 +1175,7 @@ async fn load_snapshot(
                 .fetch_all(&mut *connection).await?;
             let audit_has_more: bool = audit.len() > usize::from(limit);
             audit.truncate(usize::from(limit));
-            Ok((branches, permissions, roles, role_permissions, users, assignments, overrides, audit, role_has_more, user_has_more, audit_has_more))
+            Ok((branches, permissions, roles, role_permissions, users, assignments, overrides, audit, branch_has_more, permission_has_more, role_has_more, user_has_more, audit_has_more))
         })
         .await
         .map_err(|database_error: TenantDbErr| database_error_status("load access-control snapshot", tenant_id, Uuid::nil(), database_error))?;
@@ -949,11 +1188,41 @@ async fn load_snapshot(
         assignments,
         overrides,
         audit,
+        branch_has_more,
+        permission_has_more,
         role_has_more,
         user_has_more,
         audit_has_more,
     ) = rows;
     let metadata: SnapshotPageMetadata = SnapshotPageMetadata {
+        branch_next_cursor: if branch_has_more {
+            branches
+                .last()
+                .map(|row: &BranchRow| {
+                    encode_cursor(&BranchCursor {
+                        name: row.name.to_lowercase(),
+                        id: row.id,
+                    })
+                })
+                .transpose()?
+        } else {
+            None
+        },
+        branch_has_more,
+        permission_next_cursor: if permission_has_more {
+            permissions
+                .last()
+                .map(|row: &PermissionRow| {
+                    encode_cursor(&PermissionCursor {
+                        display_name: row.display_name.to_lowercase(),
+                        code: row.code.clone(),
+                    })
+                })
+                .transpose()?
+        } else {
+            None
+        },
+        permission_has_more,
         role_next_cursor: if role_has_more {
             roles
                 .last()
@@ -1096,6 +1365,10 @@ fn snapshot_from_rows(
         roles,
         users,
         audit,
+        branch_next_cursor: metadata.branch_next_cursor,
+        branch_has_more: metadata.branch_has_more,
+        permission_next_cursor: metadata.permission_next_cursor,
+        permission_has_more: metadata.permission_has_more,
         role_next_cursor: metadata.role_next_cursor,
         role_has_more: metadata.role_has_more,
         user_next_cursor: metadata.user_next_cursor,
@@ -1293,6 +1566,92 @@ async fn validate_primary_role_assignments(
     Ok(())
 }
 
+async fn validate_actor_role_delegation(
+    connection: &mut PgConnection,
+    tenant_id: Uuid,
+    actor_id: Uuid,
+    request: &UpdateAccountAccessRequest,
+) -> Result<(), sqlx::Error> {
+    let primary_branch_ids: Vec<Uuid> = request
+        .assignments
+        .iter()
+        .filter(|assignment: &&AccountRoleAssignmentContract| assignment.role_code == request.primary_role)
+        .filter_map(|assignment: &AccountRoleAssignmentContract| assignment.branch_id)
+        .collect();
+    let allowed: bool = sqlx::query_scalar!(
+        r#"
+        WITH target_role AS (
+            SELECT scope_type
+            FROM tenant_roles
+            WHERE tenant_id = $1
+              AND code = $3
+              AND is_active
+              AND is_system
+            FOR SHARE
+        )
+        SELECT EXISTS (
+            SELECT 1
+            FROM target_role AS target
+            WHERE (
+                target.scope_type = 'tenant'
+                AND cardinality($4::UUID[]) = 0
+                AND EXISTS (
+                    SELECT 1
+                    FROM account_role_assignments AS actor_assignment
+                    JOIN tenant_roles AS actor_role
+                      ON actor_role.tenant_id = actor_assignment.tenant_id
+                     AND actor_role.code = actor_assignment.role_code
+                     AND actor_role.is_active
+                     AND actor_role.is_system
+                    JOIN auth_role_assignment_grants AS delegation
+                      ON delegation.grantor_role_code = actor_assignment.role_code
+                     AND delegation.target_role_code = $3
+                    WHERE actor_assignment.tenant_id = $1
+                      AND actor_assignment.account_id = $2
+                      AND actor_assignment.branch_id IS NULL
+                )
+            ) OR (
+                target.scope_type = 'branch'
+                AND cardinality($4::UUID[]) > 0
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM unnest($4::UUID[]) AS requested(branch_id)
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM account_role_assignments AS actor_assignment
+                        JOIN tenant_roles AS actor_role
+                          ON actor_role.tenant_id = actor_assignment.tenant_id
+                         AND actor_role.code = actor_assignment.role_code
+                         AND actor_role.is_active
+                         AND actor_role.is_system
+                        JOIN auth_role_assignment_grants AS delegation
+                          ON delegation.grantor_role_code = actor_assignment.role_code
+                         AND delegation.target_role_code = $3
+                        WHERE actor_assignment.tenant_id = $1
+                          AND actor_assignment.account_id = $2
+                          AND (
+                            actor_assignment.branch_id IS NULL
+                            OR actor_assignment.branch_id = requested.branch_id
+                          )
+                    )
+                )
+            )
+        ) AS "allowed!"
+        "#,
+        tenant_id,
+        actor_id,
+        request.primary_role.as_str(),
+        &primary_branch_ids,
+    )
+    .fetch_one(connection)
+    .await?;
+    if allowed {
+        Ok(())
+    } else {
+        Err(sqlx::Error::Protocol(ROLE_DELEGATION_REQUIRED.to_owned()))
+    }
+}
+
 async fn validate_assignment_references(
     connection: &mut PgConnection,
     tenant_id: Uuid,
@@ -1436,33 +1795,33 @@ async fn invalidate_accounts(auth: &AuthService, tenant_id: Uuid, account_id: Op
     }
 }
 
-async fn require_tenant_permission(
-    context: &AccessControlContext,
-    actor: &AuthedUser,
-    permission: &PermissionCode,
-) -> Result<(), AccessControlError> {
-    let tenant_id = actor.tenant_id;
-    let actor_id = actor.account_id;
-    let permission_code = permission.as_str().to_owned();
-    let allowed: bool = context
-        .auth
-        .db
-        .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
-            sqlx::query_scalar!(
-                r#"SELECT shepherd_account_has_tenant_permission($1, $2, $3) AS "allowed!""#,
-                tenant_id,
-                actor_id,
-                permission_code,
-            )
-            .fetch_one(connection)
-            .await
-        })
-        .await
-        .map_err(|error| database_error_status("check tenant authority", tenant_id, actor_id, error))?;
+async fn require_tenant_permission_on(
+    connection: &mut PgConnection,
+    tenant_id: Uuid,
+    actor_id: Uuid,
+    permission: &str,
+) -> Result<(), sqlx::Error> {
+    let allowed: bool = sqlx::query_scalar!(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM accounts AS actor
+            WHERE actor.tenant_id = $1
+              AND actor.id = $2
+              AND actor.status = 'active'
+              AND shepherd_account_has_tenant_permission($1, $2, $3)
+        ) AS "allowed!"
+        "#,
+        tenant_id,
+        actor_id,
+        permission,
+    )
+    .fetch_one(connection)
+    .await?;
     if allowed {
         Ok(())
     } else {
-        Err(AccessControlError::Forbidden)
+        Err(sqlx::Error::Protocol(TENANT_PERMISSION_REQUIRED.to_owned()))
     }
 }
 
@@ -1610,6 +1969,12 @@ fn database_error_status(
         AccessControlError::Conflict("That code or assignment already exists.".to_owned())
     } else if message.contains("unfinished operations") {
         AccessControlError::Conflict(message)
+    } else if message.contains(TENANT_PERMISSION_REQUIRED) || message.contains(ROLE_DELEGATION_REQUIRED) {
+        AccessControlError::Forbidden
+    } else if message.contains("employee_branch_transfer_has_history") {
+        AccessControlError::Conflict(
+            "The employee has branch-owned history and needs a dedicated branch-transfer workflow.".to_owned(),
+        )
     } else if message.contains("tenant owner")
         || message.contains("system tenant role")
         || message.contains("branch cardinality")

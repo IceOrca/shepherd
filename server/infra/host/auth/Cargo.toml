@@ -10,6 +10,7 @@ ext-service = [
     "dep:async-trait",
     "dep:reqwest",
     "dep:chrono",
+    "dep:hmac",
     "dep:serde_json",
     "dep:sha2",
     "dep:thiserror",
@@ -27,6 +28,7 @@ async-trait = { workspace = true, optional = true }
 axum.workspace = true
 base64 = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
+hmac = { workspace = true, optional = true }
 jsonwebtoken.workspace = true
 redis = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }

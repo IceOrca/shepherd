@@ -3,10 +3,10 @@ use ts_rs::{Config, TS};
 use crate::{
     auth::{
         AccessControlAuditEntry, AccessControlBranch, AccessControlPermission, AccessControlRole,
-        AccessControlSnapshot, AccessControlUser, AccessRoleScope, AccountPermissionOverrideContract,
-        AccountRoleAssignmentContract, AccountStatus, AuthProviderUserStatus, AuthUserPage, AuthUserSummary,
-        CreateAccessControlRoleRequest, CreateAuthUserRequest, CurrentUserProfile, PermissionCode,
-        PermissionOverrideEffect, RoleCode, SetAuthUserStatusRequest, TenantMembershipSummary,
+        AccessControlRolePage, AccessControlSnapshot, AccessControlUser, AccessRoleScope,
+        AccountPermissionOverrideContract, AccountRoleAssignmentContract, AccountStatus, AuthProviderUserStatus,
+        AuthUserPage, AuthUserSummary, CreateAccessControlRoleRequest, CreateAuthUserRequest, CurrentUserProfile,
+        PermissionCode, PermissionOverrideEffect, RoleCode, SetAuthUserStatusRequest, TenantMembershipSummary,
         UpdateAccessControlRoleRequest, UpdateAccountAccessRequest,
     },
     business::staffing::{
@@ -96,6 +96,7 @@ pub fn contract() -> String {
     push::<AccessControlBranch>(&mut output, &config);
     push::<AccessControlPermission>(&mut output, &config);
     push::<AccessControlRole>(&mut output, &config);
+    push::<AccessControlRolePage>(&mut output, &config);
     push::<AccountRoleAssignmentContract>(&mut output, &config);
     push::<AccountPermissionOverrideContract>(&mut output, &config);
     push::<AccessControlUser>(&mut output, &config);

@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT EXISTS (\n                    SELECT 1\n                    FROM accounts AS actor\n                    WHERE actor.tenant_id = $1\n                      AND actor.id = $2\n                      AND actor.status = 'active'\n                      AND (\n                        (\n                          EXISTS (\n                            SELECT 1 FROM account_role_assignments AS target_assignment\n                            WHERE target_assignment.tenant_id = $1\n                              AND target_assignment.account_id = $3\n                              AND target_assignment.branch_id IS NULL\n                          )\n                          AND shepherd_account_has_tenant_permission($1, $2, $4)\n                        )\n                        OR (\n                          NOT EXISTS (\n                            SELECT 1 FROM account_role_assignments AS target_assignment\n                            WHERE target_assignment.tenant_id = $1\n                              AND target_assignment.account_id = $3\n                              AND target_assignment.branch_id IS NULL\n                          )\n                          AND EXISTS (\n                            SELECT 1 FROM account_role_assignments AS target_assignment\n                            WHERE target_assignment.tenant_id = $1\n                              AND target_assignment.account_id = $3\n                              AND target_assignment.branch_id IS NOT NULL\n                          )\n                          AND NOT EXISTS (\n                            SELECT 1\n                            FROM account_role_assignments AS target_assignment\n                            WHERE target_assignment.tenant_id = $1\n                              AND target_assignment.account_id = $3\n                              AND target_assignment.branch_id IS NOT NULL\n                              AND (\n                                NOT shepherd_account_has_permission(\n                                  $1, $2, target_assignment.branch_id, $4\n                                )\n                                OR NOT EXISTS (\n                                  SELECT 1 FROM account_role_assignments AS actor_scope\n                                  WHERE actor_scope.tenant_id = $1\n                                    AND actor_scope.account_id = $2\n                                    AND (actor_scope.branch_id IS NULL\n                                         OR actor_scope.branch_id = target_assignment.branch_id)\n                                )\n                              )\n                          )\n                        )\n                      )\n                ) AS \"allowed!\"\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "allowed!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "6b6505ed4bb28d2c7e8eed2b756fc2edfb0dc4075c1deb024b7a776b62a60059"
+}

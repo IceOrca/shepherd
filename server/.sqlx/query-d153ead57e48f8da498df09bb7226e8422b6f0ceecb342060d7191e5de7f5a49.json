@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT code, display_name, description FROM permissions ORDER BY lower(display_name), code",
+  "query": "\n                SELECT code, display_name, description\n                FROM permissions\n                WHERE $1::TEXT IS NULL\n                   OR (lower(display_name), code) > ($1, $2)\n                ORDER BY lower(display_name), code\n                LIMIT $3\n                ",
   "describe": {
     "columns": [
       {
@@ -38,7 +38,11 @@
       }
     ],
     "parameters": {
-      "Left": []
+      "Left": [
+        "Text",
+        "Text",
+        "Int8"
+      ]
     },
     "nullable": [
       false,
@@ -46,5 +50,5 @@
       false
     ]
   },
-  "hash": "56b9c94ef27ba2211734cf71a6bf34058115ac7f2f9cb17fdf27703762f20246"
+  "hash": "d153ead57e48f8da498df09bb7226e8422b6f0ceecb342060d7191e5de7f5a49"
 }

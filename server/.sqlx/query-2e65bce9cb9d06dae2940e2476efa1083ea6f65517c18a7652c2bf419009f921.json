@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH target_role AS (\n            SELECT scope_type\n            FROM tenant_roles\n            WHERE tenant_id = $1 AND code = $3 AND is_active AND is_system\n            FOR SHARE\n        )\n        SELECT EXISTS (\n            SELECT 1\n            FROM target_role AS target\n            WHERE (\n                target.scope_type = 'tenant'\n                AND cardinality($4::UUID[]) = 0\n                AND shepherd_account_has_tenant_permission($1, $2, $5)\n                AND EXISTS (\n                    SELECT 1\n                    FROM account_role_assignments AS actor_assignment\n                    INNER JOIN tenant_roles AS actor_role\n                      ON actor_role.tenant_id = actor_assignment.tenant_id\n                     AND actor_role.code = actor_assignment.role_code\n                     AND actor_role.is_active\n                     AND actor_role.is_system\n                    INNER JOIN auth_role_assignment_grants AS delegation\n                      ON delegation.grantor_role_code = actor_assignment.role_code\n                     AND delegation.target_role_code = $3\n                    WHERE actor_assignment.tenant_id = $1\n                      AND actor_assignment.account_id = $2\n                      AND actor_assignment.branch_id IS NULL\n                )\n            ) OR (\n                target.scope_type = 'branch'\n                AND cardinality($4::UUID[]) > 0\n                AND NOT EXISTS (\n                    SELECT 1\n                    FROM unnest($4::UUID[]) AS requested(branch_id)\n                    WHERE NOT EXISTS (\n                        SELECT 1 FROM branches AS branch\n                        WHERE branch.tenant_id = $1\n                          AND branch.id = requested.branch_id\n                          AND branch.status = 'active'\n                    )\n                    OR NOT shepherd_account_has_permission($1, $2, requested.branch_id, $5)\n                    OR NOT EXISTS (\n                        SELECT 1\n                        FROM account_role_assignments AS actor_assignment\n                        INNER JOIN tenant_roles AS actor_role\n                          ON actor_role.tenant_id = actor_assignment.tenant_id\n                         AND actor_role.code = actor_assignment.role_code\n                         AND actor_role.is_active\n                         AND actor_role.is_system\n                        INNER JOIN auth_role_assignment_grants AS delegation\n                          ON delegation.grantor_role_code = actor_assignment.role_code\n                         AND delegation.target_role_code = $3\n                        WHERE actor_assignment.tenant_id = $1\n                          AND actor_assignment.account_id = $2\n                          AND (actor_assignment.branch_id IS NULL\n                               OR actor_assignment.branch_id = requested.branch_id)\n                    )\n                )\n            )\n        ) AS \"allowed!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "allowed!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "UuidArray",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "2e65bce9cb9d06dae2940e2476efa1083ea6f65517c18a7652c2bf419009f921"
+}

@@ -172,6 +172,12 @@ impl AuthProvisioner for AppAuthProvisioner {
                 error = %database_error,
                 "Shepherd HR employee branch synchronization failed"
             );
+            if database_error
+                .as_database_error()
+                .is_some_and(|error| error.is_foreign_key_violation())
+            {
+                return AcctProvisionErr::new("employee_branch_transfer_has_history");
+            }
             AcctProvisionErr::new("hr_employee_branch_update_failed")
         })?;
         debug!(

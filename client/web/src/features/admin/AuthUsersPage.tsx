@@ -20,7 +20,7 @@ import type {
   AccountRoleAssignmentContract,
   AuthUserSummary,
   AccessControlRole,
-  AccessControlSnapshot,
+  AccessControlRolePage,
   BranchSummary,
   CreateAuthUserRequest,
   RoleCode,
@@ -35,7 +35,7 @@ import {
 import {
   authAdminQueryKeys,
   createAuthUser,
-  getAccessControlSnapshot,
+  listAccessControlRoles,
   listAuthUsers,
   setAuthUserStatus,
 } from "./api";
@@ -148,17 +148,17 @@ export function AuthUsersPage() {
   const roleCatalogQuery = useInfiniteQuery({
     queryKey: [...authAdminQueryKeys.accessControl, "account-create-roles"],
     initialPageParam: null as string | null,
-    queryFn: ({ pageParam }: { pageParam: string | null }): Promise<AccessControlSnapshot> =>
-      getAccessControlSnapshot({ roleCursor: pageParam }),
-    getNextPageParam: (lastPage: AccessControlSnapshot): string | undefined =>
-      lastPage.role_next_cursor ?? undefined,
+    queryFn: ({ pageParam }: { pageParam: string | null }): Promise<AccessControlRolePage> =>
+      listAccessControlRoles(pageParam),
+    getNextPageParam: (lastPage: AccessControlRolePage): string | undefined =>
+      lastPage.next_cursor ?? undefined,
     enabled: canCreate && canReadRoles,
   });
 
   const roleOptions: CreateRoleOption[] = useMemo((): CreateRoleOption[] => {
     const catalogRoles: AccessControlRole[] =
       roleCatalogQuery.data?.pages.flatMap(
-        (page: AccessControlSnapshot): AccessControlRole[] => page.roles,
+        (page: AccessControlRolePage): AccessControlRole[] => page.items,
       ) ?? [];
     if (catalogRoles.length === 0) {
       return [...systemRoleOptions];

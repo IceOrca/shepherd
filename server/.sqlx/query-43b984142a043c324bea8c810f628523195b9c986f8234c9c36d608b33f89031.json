@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT EXISTS (\n            SELECT 1\n            FROM accounts AS actor\n            WHERE actor.tenant_id = $1\n              AND actor.id = $2\n              AND actor.status = 'active'\n              AND shepherd_account_has_tenant_permission($1, $2, $3)\n        ) AS \"allowed!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "allowed!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "43b984142a043c324bea8c810f628523195b9c986f8234c9c36d608b33f89031"
+}

@@ -30,6 +30,8 @@ export type AccessControlPermission = { code: PermissionCode, display_name: stri
 
 export type AccessControlRole = { code: RoleCode, display_name: string, description: string | null, scope: AccessRoleScope, is_system: boolean, is_active: boolean, version: number, permission_codes: Array<PermissionCode>, assigned_account_count: number, };
 
+export type AccessControlRolePage = { items: Array<AccessControlRole>, next_cursor: string | null, has_more: boolean, limit: number, };
+
 export type AccountRoleAssignmentContract = { role_code: RoleCode, branch_id: string | null, };
 
 export type AccountPermissionOverrideContract = { permission_code: PermissionCode, branch_id: string | null, effect: PermissionOverrideEffect, expires_at: string | null, };
@@ -38,7 +40,7 @@ export type AccessControlUser = { account_id: string, username: string, email: s
 
 export type AccessControlAuditEntry = { id: string, actor_account_id: string, action: string, object_type: string, object_id: string, branch_id: string | null, before_value: unknown, after_value: unknown, created_at: string, };
 
-export type AccessControlSnapshot = { branches: Array<AccessControlBranch>, permissions: Array<AccessControlPermission>, roles: Array<AccessControlRole>, users: Array<AccessControlUser>, audit: Array<AccessControlAuditEntry>, role_next_cursor: string | null, role_has_more: boolean, user_next_cursor: string | null, user_has_more: boolean, audit_next_cursor: string | null, audit_has_more: boolean, limit: number, };
+export type AccessControlSnapshot = { branches: Array<AccessControlBranch>, permissions: Array<AccessControlPermission>, roles: Array<AccessControlRole>, users: Array<AccessControlUser>, audit: Array<AccessControlAuditEntry>, branch_next_cursor: string | null, branch_has_more: boolean, permission_next_cursor: string | null, permission_has_more: boolean, role_next_cursor: string | null, role_has_more: boolean, user_next_cursor: string | null, user_has_more: boolean, audit_next_cursor: string | null, audit_has_more: boolean, limit: number, };
 
 export type CreateAccessControlRoleRequest = { code: RoleCode, display_name: string, description: string | null, scope: AccessRoleScope, permission_codes: Array<PermissionCode>, };
 

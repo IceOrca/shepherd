@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    INSERT INTO branches (id, tenant_id, code, name)\n                    VALUES ($1, $2, 'tenant-runner-branch', 'Tenant runner branch')\n                    ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d6a8697d6136f65bcac76ceaa6ea61d3c9c680141d795a803454506c4703acfc"
+}

@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT role.code\n        FROM account_role_assignments AS assignment\n        INNER JOIN tenant_roles AS role\n          ON role.tenant_id = assignment.tenant_id\n         AND role.code = assignment.role_code\n         AND role.is_active\n        WHERE assignment.tenant_id = $1 AND assignment.account_id = $2\n        FOR SHARE OF role\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "code",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tenant_roles",
+            "name": "code"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "fb14460c6a1c3b368dcdfc8fffb9892abe625027994ea0e92c3c803f69a1100a"
+}

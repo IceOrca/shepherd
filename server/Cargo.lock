@@ -1773,6 +1773,7 @@ dependencies = [
  "base64 0.23.1",
  "cfg-if",
  "chrono",
+ "hmac 0.13.0",
  "infra-kernel",
  "infra-postgres",
  "infra-redis",
@@ -3350,7 +3351,9 @@ name = "shepherd-runtime"
 version = "0.0.1"
 dependencies = [
  "axum",
+ "base64 0.22.1",
  "dotenvy",
+ "hmac 0.13.0",
  "infra-auth",
  "infra-host",
  "infra-kernel",

@@ -702,6 +702,19 @@ mod database_tests {
         .await?;
         sqlx::query!(
             r#"
+            INSERT INTO account_role_assignments (
+                tenant_id, account_id, role_code, branch_id
+            )
+            VALUES ($1, $2, 'staff', $3)
+            "#,
+            tenant_id,
+            account_id,
+            branch_id,
+        )
+        .execute(setup.connection())
+        .await?;
+        sqlx::query!(
+            r#"
             INSERT INTO hr_employees (
                 id, tenant_id, branch_id, account_id, employee_code, display_name, status, hire_date
             )

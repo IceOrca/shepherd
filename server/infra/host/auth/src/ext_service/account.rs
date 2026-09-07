@@ -120,13 +120,13 @@ impl AuthedUser {
         }
     }
 
-    fn activate_branch(&mut self, branch_id: Uuid) -> Result<(), StatusCode> {
-        if !self.branch_ids.contains(&branch_id) {
+    fn activate_scope(&mut self, branch_id: Option<Uuid>) -> Result<(), StatusCode> {
+        if branch_id.is_some_and(|branch_id: Uuid| !self.branch_ids.contains(&branch_id)) {
             warn!(
                 operation = "activate_authenticated_branch",
                 tenant_id = %self.tenant_id,
                 account_id = %self.account_id,
-                branch_id = %branch_id,
+                branch_id = ?branch_id,
                 "Cannot activate a branch outside the account authorization scope"
             );
             return Err(StatusCode::FORBIDDEN);
@@ -134,7 +134,7 @@ impl AuthedUser {
 
         let mut role_set: BTreeSet<RoleCode> = BTreeSet::new();
         for role_grant in &self.authz_roles {
-            if role_grant.branch_id.is_none() || role_grant.branch_id == Some(branch_id) {
+            if role_grant.branch_id.is_none() || role_grant.branch_id == branch_id {
                 role_set.insert(role_grant.role_code.clone());
             }
         }
@@ -142,7 +142,7 @@ impl AuthedUser {
         let mut allowed_permissions: BTreeSet<PermissionCode> = BTreeSet::new();
         let mut denied_permissions: BTreeSet<PermissionCode> = BTreeSet::new();
         for permission_grant in &self.authz_perms {
-            if permission_grant.branch_id.is_some() && permission_grant.branch_id != Some(branch_id) {
+            if permission_grant.branch_id.is_some() && permission_grant.branch_id != branch_id {
                 continue;
             }
             match permission_grant.effect {
@@ -158,17 +158,25 @@ impl AuthedUser {
 
         self.roles = role_set.into_iter().collect();
         self.permissions = allowed_permissions.into_iter().collect();
-        self.active_branch_id = Some(branch_id);
+        self.active_branch_id = branch_id;
         debug!(
-            operation = "activate_authenticated_branch",
+            operation = "activate_authenticated_scope",
             tenant_id = %self.tenant_id,
             account_id = %self.account_id,
-            branch_id = %branch_id,
+            branch_id = ?branch_id,
             role_count = self.roles.len(),
             permission_count = self.permissions.len(),
-            "Resolved branch-specific effective roles and permissions"
+            "Resolved effective roles and permissions for the request scope"
         );
         Ok(())
+    }
+
+    fn activate_branch(&mut self, branch_id: Uuid) -> Result<(), StatusCode> {
+        self.activate_scope(Some(branch_id))
+    }
+
+    fn activate_tenant_scope(&mut self) -> Result<(), StatusCode> {
+        self.activate_scope(None)
     }
 }
 
@@ -393,8 +401,11 @@ pub async fn resolve_app_acct(
         }
     };
 
-    let active_branch_id: Uuid = resolve_active_branch(request.headers(), &user)?;
-    user.activate_branch(active_branch_id)?;
+    let active_branch_id: Option<Uuid> = resolve_active_branch(request.headers(), &user)?;
+    match active_branch_id {
+        Some(branch_id) => user.activate_branch(branch_id)?,
+        None => user.activate_tenant_scope()?,
+    }
     let tenant_id: Uuid = user.tenant_id;
     let account_id: Uuid = user.account_id;
     debug!(
@@ -403,7 +414,7 @@ pub async fn resolve_app_acct(
         account_id = %account_id,
         role_count = user.roles.len(),
         permission_count = user.permissions.len(),
-        active_branch_id = %active_branch_id,
+        active_branch_id = ?active_branch_id,
         accessible_branch_count = user.branch_ids.len(),
         "Resolved active application account for external identity"
     );
@@ -411,7 +422,10 @@ pub async fn resolve_app_acct(
         .extensions_mut()
         .insert(PrincipalRateLimitKey::new(format!("{tenant_id}:{account_id}")));
     request.extensions_mut().insert(user);
-    let response: Response = with_active_branch(active_branch_id, next.run(request)).await;
+    let response: Response = match active_branch_id {
+        Some(branch_id) => with_active_branch(branch_id, next.run(request)).await,
+        None => next.run(request).await,
+    };
     info!(
         operation = "resolve_app_acct",
         method = %method,
@@ -487,15 +501,15 @@ async fn resolve_active_tenant(
     }
 }
 
-fn resolve_active_branch(headers: &HeaderMap, user: &AuthedUser) -> Result<Uuid, StatusCode> {
+fn resolve_active_branch(headers: &HeaderMap, user: &AuthedUser) -> Result<Option<Uuid>, StatusCode> {
     let requested_branch_id: Option<Uuid> = headers
         .get(ACTIVE_BRANCH_HEADER)
         .map(|value| value.to_str().map_err(|_| StatusCode::BAD_REQUEST))
         .transpose()?
         .map(|value: &str| Uuid::parse_str(value).map_err(|_| StatusCode::BAD_REQUEST))
         .transpose()?;
-    let active_branch_id: Uuid = match requested_branch_id {
-        Some(branch_id) if user.branch_ids.contains(&branch_id) => branch_id,
+    let active_branch_id: Option<Uuid> = match requested_branch_id {
+        Some(branch_id) if user.branch_ids.contains(&branch_id) => Some(branch_id),
         Some(branch_id) => {
             warn!(
                 operation = "resolve_active_branch",
@@ -507,23 +521,15 @@ fn resolve_active_branch(headers: &HeaderMap, user: &AuthedUser) -> Result<Uuid,
             );
             return Err(StatusCode::FORBIDDEN);
         }
-        None => user.branch_ids.first().copied().ok_or_else(|| {
-            warn!(
-                operation = "resolve_active_branch",
-                tenant_id = %user.tenant_id,
-                account_id = %user.account_id,
-                "Active account has no accessible active branch"
-            );
-            StatusCode::FORBIDDEN
-        })?,
+        None => user.branch_ids.first().copied(),
     };
     debug!(
         operation = "resolve_active_branch",
         tenant_id = %user.tenant_id,
         account_id = %user.account_id,
-        active_branch_id = %active_branch_id,
+        active_branch_id = ?active_branch_id,
         requested_explicitly = requested_branch_id.is_some(),
-        "Resolved validated active branch for protected request"
+        "Resolved validated branch or tenant-only scope for protected request"
     );
     Ok(active_branch_id)
 }
@@ -1053,5 +1059,40 @@ mod tests {
         user.activate_branch(second_branch_id)
             .expect("authorized branch must activate");
         assert!(user.has_permission("business.shared.read"));
+    }
+
+    #[test]
+    fn tenant_scoped_account_without_branches_keeps_tenant_authority() {
+        let mut user: AuthedUser = AuthedUser {
+            tenant_id: Uuid::from_u128(30),
+            account_id: Uuid::from_u128(31),
+            username: "tenant-owner".to_owned(),
+            email: Some("owner@example.test".to_owned()),
+            primary_role: role("tenant_owner"),
+            roles: Vec::new(),
+            permissions: Vec::new(),
+            branch_ids: Vec::new(),
+            active_branch_id: None,
+            authz_roles: vec![ScopedRoleGrant {
+                branch_id: None,
+                role_code: role("tenant_owner"),
+            }],
+            authz_perms: vec![ScopedPermissionGrant {
+                branch_id: None,
+                permission_code: permission("business.branches.manage"),
+                effect: PermissionEffect::Allow,
+            }],
+        };
+
+        assert_eq!(
+            resolve_active_branch(&HeaderMap::new(), &user).expect("tenant-only scope must resolve"),
+            None
+        );
+        user.activate_tenant_scope()
+            .expect("tenant-only authority must activate");
+
+        assert_eq!(user.active_branch_id, None);
+        assert!(user.roles.contains(&role("tenant_owner")));
+        assert!(user.has_permission("business.branches.manage"));
     }
 }

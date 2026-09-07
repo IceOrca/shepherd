@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT EXISTS (\n                SELECT 1\n                FROM tenant_roles AS role\n                LEFT JOIN branches AS branch\n                  ON branch.tenant_id = role.tenant_id\n                 AND branch.id = $4\n                 AND branch.status = 'active'\n                WHERE role.tenant_id = $1\n                  AND role.code = $3\n                  AND role.is_active\n                  AND NOT role.is_system\n                  AND (\n                    (role.scope_type = 'tenant' AND $4::UUID IS NULL\n                     AND shepherd_account_has_tenant_permission($1, $2, $5))\n                    OR\n                    (role.scope_type = 'branch' AND branch.id IS NOT NULL\n                     AND shepherd_account_has_permission($1, $2, $4, $5)\n                     AND EXISTS (\n                       SELECT 1 FROM account_role_assignments AS actor_scope\n                       WHERE actor_scope.tenant_id = $1\n                         AND actor_scope.account_id = $2\n                         AND (actor_scope.branch_id IS NULL OR actor_scope.branch_id = $4)\n                     ))\n                  )\n                FOR SHARE OF role\n            ) AS \"allowed!\"\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "allowed!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "9a6fc736250516dee6fb9db551b7a57266e428040ac80c0fb321a1ecb4886779"
+}

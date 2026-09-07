@@ -9,10 +9,11 @@ use axum::{
     routing::{get, post, put},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use hmac::{Hmac, KeyInit, Mac};
 use infra_postgres::{TenantDbErr, TenantTransaction};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 use sqlx::{PgConnection, postgres::PgQueryResult};
 use tracing::{debug, error, info, trace, warn};
 use ts_rs::TS;
@@ -27,6 +28,7 @@ use crate::{
 };
 
 const IDEMPOTENCY_HEADER: &str = "idempotency-key";
+const STATUS_AUTHORITY_REQUIRED: &str = "current account cannot change the requested account status";
 
 /// Application-owned permission codes required by the reusable account routes.
 #[derive(Clone, Debug)]
@@ -620,7 +622,7 @@ async fn create_user(
     ensure_role_grantable(&context, &actor, &request.primary_role, &request.branch_ids).await?;
     ensure_branch_assignments_valid(&context, &actor, &request.primary_role, &request.branch_ids).await?;
     ensure_additional_role_assignments_grantable(&context, &actor, &request).await?;
-    let request_fingerprint: String = provisioning_fingerprint(&request);
+    let request_fingerprint: String = provisioning_fingerprint(&request, &context.provisioning_fingerprint_key)?;
     let claim: ProvisioningClaim =
         claim_provisioning_request(&context, &actor, idempotency_key, &request_fingerprint).await?;
     if let ProvisioningClaim::Replay {
@@ -894,8 +896,8 @@ fn parse_idempotency_key(headers: &HeaderMap) -> Result<Uuid, AdminApiError> {
     })
 }
 
-fn provisioning_fingerprint(request: &CreateAuthUserRequest) -> String {
-    let mut hasher: Sha256 = Sha256::new();
+fn provisioning_fingerprint(request: &CreateAuthUserRequest, key: &[u8]) -> Result<String, AdminApiError> {
+    let mut hasher: Hmac<Sha256> = Hmac::<Sha256>::new_from_slice(key).map_err(|_| AdminApiError::Internal)?;
     update_fingerprint_field(&mut hasher, &request.username);
     update_fingerprint_field(&mut hasher, &request.email);
     update_fingerprint_field(&mut hasher, request.primary_role.as_str());
@@ -911,23 +913,23 @@ fn provisioning_fingerprint(request: &CreateAuthUserRequest) -> String {
     }
     match request.password.as_deref() {
         Some(password) => {
-            hasher.update([1_u8]);
+            hasher.update(&[1_u8]);
             update_fingerprint_field(&mut hasher, password);
         }
-        None => hasher.update([0_u8]),
+        None => hasher.update(&[0_u8]),
     }
-    let digest: sha2::digest::Output<Sha256> = hasher.finalize();
+    let digest = hasher.finalize().into_bytes();
     let mut fingerprint: String = String::with_capacity(64);
     for byte in digest {
         let encoded_byte: String = format!("{byte:02x}");
         fingerprint.push_str(&encoded_byte);
     }
-    fingerprint
+    Ok(fingerprint)
 }
 
-fn update_fingerprint_field(hasher: &mut Sha256, value: &str) {
+fn update_fingerprint_field(hasher: &mut Hmac<Sha256>, value: &str) {
     let length: u64 = u64::try_from(value.len()).unwrap_or(u64::MAX);
-    hasher.update(length.to_be_bytes());
+    hasher.update(&length.to_be_bytes());
     hasher.update(value.as_bytes());
 }
 
@@ -1105,6 +1107,7 @@ async fn resolve_or_create_provider_user(
     if let Some(auth_user_id) = known_auth_user_id
         && let Some(user) = context.auth_admin.get_identity(&auth_user_id).await?
     {
+        validate_provider_identity(request, &user)?;
         debug!(tenant_id = %tenant_id, auth_user_id = %auth_user_id, idempotency_key = %idempotency_key, "Recovered Auth user by persisted ID");
         return Ok(user);
     }
@@ -1113,9 +1116,11 @@ async fn resolve_or_create_provider_user(
         .find_provisioned_identity(&request.email, tenant_id, idempotency_key)
         .await?
     {
+        validate_provider_identity(request, &user)?;
         return Ok(user);
     }
     if let Some(user) = context.auth_admin.find_identity_by_email(&request.email).await? {
+        validate_provider_identity(request, &user)?;
         info!(
             tenant_id = %tenant_id,
             auth_user_id = %user.subject,
@@ -1131,7 +1136,27 @@ async fn resolve_or_create_provider_user(
         tenant_id,
         idempotency_key,
     };
-    context.auth_admin.create_identity(&create_request).await
+    let user: ExternalIdentity = context.auth_admin.create_identity(&create_request).await?;
+    validate_provider_identity(request, &user)?;
+    Ok(user)
+}
+
+fn validate_provider_identity(request: &CreateAuthUserRequest, user: &ExternalIdentity) -> Result<(), ExtAdminErr> {
+    if !user
+        .email
+        .as_deref()
+        .is_some_and(|email: &str| email.eq_ignore_ascii_case(&request.email))
+    {
+        return Err(ExtAdminErr::Conflict(
+            "The recovered external identity does not match the requested email.".to_owned(),
+        ));
+    }
+    if user.status != ExternalIdentityStatus::Active {
+        return Err(ExtAdminErr::Conflict(
+            "The external identity is disabled and cannot be linked to a new active account.".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 async fn record_provisioned_auth_user(
@@ -1299,17 +1324,57 @@ async fn ensure_role_grantable(
                     WHERE target_role.tenant_id = $1
                       AND target_role.code = $3
                       AND target_role.is_active
+                      AND EXISTS (
+                          SELECT 1 FROM accounts AS actor
+                          WHERE actor.tenant_id = $1
+                            AND actor.id = $2
+                            AND actor.status = 'active'
+                      )
                       AND (
                           (
                               target_role.is_system
-                              AND EXISTS (
-                                  SELECT 1
-                                  FROM account_roles AS actor_role
-                                  INNER JOIN auth_role_assignment_grants AS role_grant
-                                      ON role_grant.grantor_role_code = actor_role.role_code
-                                  WHERE actor_role.tenant_id = $1
-                                    AND actor_role.account_id = $2
-                                    AND role_grant.target_role_code = target_role.code
+                              AND (
+                                  (
+                                      target_role.scope_type = 'tenant'
+                                      AND EXISTS (
+                                          SELECT 1
+                                          FROM account_role_assignments AS actor_assignment
+                                          INNER JOIN tenant_roles AS actor_role
+                                            ON actor_role.tenant_id = actor_assignment.tenant_id
+                                           AND actor_role.code = actor_assignment.role_code
+                                           AND actor_role.is_active
+                                           AND actor_role.is_system
+                                          INNER JOIN auth_role_assignment_grants AS role_grant
+                                            ON role_grant.grantor_role_code = actor_assignment.role_code
+                                           AND role_grant.target_role_code = target_role.code
+                                          WHERE actor_assignment.tenant_id = $1
+                                            AND actor_assignment.account_id = $2
+                                            AND actor_assignment.branch_id IS NULL
+                                      )
+                                  )
+                                  OR (
+                                      target_role.scope_type = 'branch'
+                                      AND cardinality($5::UUID[]) > 0
+                                      AND NOT EXISTS (
+                                          SELECT 1 FROM unnest($5::UUID[]) AS requested(branch_id)
+                                          WHERE NOT EXISTS (
+                                              SELECT 1
+                                              FROM account_role_assignments AS actor_assignment
+                                              INNER JOIN tenant_roles AS actor_role
+                                                ON actor_role.tenant_id = actor_assignment.tenant_id
+                                               AND actor_role.code = actor_assignment.role_code
+                                               AND actor_role.is_active
+                                               AND actor_role.is_system
+                                              INNER JOIN auth_role_assignment_grants AS role_grant
+                                                ON role_grant.grantor_role_code = actor_assignment.role_code
+                                               AND role_grant.target_role_code = target_role.code
+                                              WHERE actor_assignment.tenant_id = $1
+                                                AND actor_assignment.account_id = $2
+                                                AND (actor_assignment.branch_id IS NULL
+                                                     OR actor_assignment.branch_id = requested.branch_id)
+                                          )
+                                      )
+                                  )
                               )
                           )
                           OR (
@@ -1330,6 +1395,13 @@ async fn ensure_role_grantable(
                                               $2,
                                               requested.branch_id,
                                               $4
+                                          )
+                                          OR NOT EXISTS (
+                                              SELECT 1 FROM account_role_assignments AS actor_scope
+                                              WHERE actor_scope.tenant_id = $1
+                                                AND actor_scope.account_id = $2
+                                                AND (actor_scope.branch_id IS NULL
+                                                     OR actor_scope.branch_id = requested.branch_id)
                                           )
                                       )
                                   )
@@ -1549,6 +1621,178 @@ async fn ensure_branch_assignments_valid(
     Ok(())
 }
 
+async fn revalidate_create_authority(
+    connection: &mut PgConnection,
+    context: &AuthAdminContext,
+    actor: &AuthedUser,
+    request: &CreateAuthUserRequest,
+) -> Result<(), AdminApiError> {
+    let actor_is_active: bool = sqlx::query_scalar!(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM accounts
+            WHERE tenant_id = $1 AND id = $2 AND status = 'active'
+            FOR SHARE
+        ) AS "exists!"
+        "#,
+        actor.tenant_id,
+        actor.account_id,
+    )
+    .fetch_one(&mut *connection)
+    .await
+    .map_err(|error: sqlx::Error| account_create_error("lock active actor", actor, error))?;
+    if !actor_is_active {
+        return Err(AdminApiError::Forbidden);
+    }
+
+    let _locked_actor_roles: Vec<String> = sqlx::query_scalar!(
+        r#"
+        SELECT role.code
+        FROM account_role_assignments AS assignment
+        INNER JOIN tenant_roles AS role
+          ON role.tenant_id = assignment.tenant_id
+         AND role.code = assignment.role_code
+         AND role.is_active
+        WHERE assignment.tenant_id = $1 AND assignment.account_id = $2
+        FOR SHARE OF role
+        "#,
+        actor.tenant_id,
+        actor.account_id,
+    )
+    .fetch_all(&mut *connection)
+    .await
+    .map_err(|error: sqlx::Error| account_create_error("lock actor roles", actor, error))?;
+
+    let primary_allowed: bool = sqlx::query_scalar!(
+        r#"
+        WITH target_role AS (
+            SELECT scope_type
+            FROM tenant_roles
+            WHERE tenant_id = $1 AND code = $3 AND is_active AND is_system
+            FOR SHARE
+        )
+        SELECT EXISTS (
+            SELECT 1
+            FROM target_role AS target
+            WHERE (
+                target.scope_type = 'tenant'
+                AND cardinality($4::UUID[]) = 0
+                AND shepherd_account_has_tenant_permission($1, $2, $5)
+                AND EXISTS (
+                    SELECT 1
+                    FROM account_role_assignments AS actor_assignment
+                    INNER JOIN tenant_roles AS actor_role
+                      ON actor_role.tenant_id = actor_assignment.tenant_id
+                     AND actor_role.code = actor_assignment.role_code
+                     AND actor_role.is_active
+                     AND actor_role.is_system
+                    INNER JOIN auth_role_assignment_grants AS delegation
+                      ON delegation.grantor_role_code = actor_assignment.role_code
+                     AND delegation.target_role_code = $3
+                    WHERE actor_assignment.tenant_id = $1
+                      AND actor_assignment.account_id = $2
+                      AND actor_assignment.branch_id IS NULL
+                )
+            ) OR (
+                target.scope_type = 'branch'
+                AND cardinality($4::UUID[]) > 0
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM unnest($4::UUID[]) AS requested(branch_id)
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM branches AS branch
+                        WHERE branch.tenant_id = $1
+                          AND branch.id = requested.branch_id
+                          AND branch.status = 'active'
+                    )
+                    OR NOT shepherd_account_has_permission($1, $2, requested.branch_id, $5)
+                    OR NOT EXISTS (
+                        SELECT 1
+                        FROM account_role_assignments AS actor_assignment
+                        INNER JOIN tenant_roles AS actor_role
+                          ON actor_role.tenant_id = actor_assignment.tenant_id
+                         AND actor_role.code = actor_assignment.role_code
+                         AND actor_role.is_active
+                         AND actor_role.is_system
+                        INNER JOIN auth_role_assignment_grants AS delegation
+                          ON delegation.grantor_role_code = actor_assignment.role_code
+                         AND delegation.target_role_code = $3
+                        WHERE actor_assignment.tenant_id = $1
+                          AND actor_assignment.account_id = $2
+                          AND (actor_assignment.branch_id IS NULL
+                               OR actor_assignment.branch_id = requested.branch_id)
+                    )
+                )
+            )
+        ) AS "allowed!"
+        "#,
+        actor.tenant_id,
+        actor.account_id,
+        request.primary_role.as_str(),
+        &request.branch_ids,
+        context.policy.create_permission.as_str(),
+    )
+    .fetch_one(&mut *connection)
+    .await
+    .map_err(|error: sqlx::Error| account_create_error("revalidate primary account authority", actor, error))?;
+    if !primary_allowed {
+        warn!(tenant_id = %actor.tenant_id, actor_id = %actor.account_id, role = %request.primary_role, "Account creation authority changed before commit");
+        return Err(AdminApiError::Forbidden);
+    }
+
+    for assignment in &request.additional_role_assignments {
+        let custom_role_allowed: bool = sqlx::query_scalar!(
+            r#"
+            SELECT EXISTS (
+                SELECT 1
+                FROM tenant_roles AS role
+                LEFT JOIN branches AS branch
+                  ON branch.tenant_id = role.tenant_id
+                 AND branch.id = $4
+                 AND branch.status = 'active'
+                WHERE role.tenant_id = $1
+                  AND role.code = $3
+                  AND role.is_active
+                  AND NOT role.is_system
+                  AND (
+                    (role.scope_type = 'tenant' AND $4::UUID IS NULL
+                     AND shepherd_account_has_tenant_permission($1, $2, $5))
+                    OR
+                    (role.scope_type = 'branch' AND branch.id IS NOT NULL
+                     AND shepherd_account_has_permission($1, $2, $4, $5)
+                     AND EXISTS (
+                       SELECT 1 FROM account_role_assignments AS actor_scope
+                       WHERE actor_scope.tenant_id = $1
+                         AND actor_scope.account_id = $2
+                         AND (actor_scope.branch_id IS NULL OR actor_scope.branch_id = $4)
+                     ))
+                  )
+                FOR SHARE OF role
+            ) AS "allowed!"
+            "#,
+            actor.tenant_id,
+            actor.account_id,
+            assignment.role_code.as_str(),
+            assignment.branch_id,
+            context.policy.role_manage_permission.as_str(),
+        )
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(|error: sqlx::Error| account_create_error("revalidate additional role authority", actor, error))?;
+        if !custom_role_allowed {
+            warn!(
+                tenant_id = %actor.tenant_id,
+                actor_id = %actor.account_id,
+                role = %assignment.role_code,
+                branch_id = ?assignment.branch_id,
+                "Additional role authority changed before account creation commit"
+            );
+            return Err(AdminApiError::Forbidden);
+        }
+    }
+    Ok(())
+}
+
 async fn link_created_user(
     context: &AuthAdminContext,
     actor: &AuthedUser,
@@ -1572,6 +1816,8 @@ async fn link_created_user(
         );
         AdminApiError::Internal
     })?;
+    revalidate_create_authority(transaction.connection(), context, actor, request).await?;
+
     let tenant_role = sqlx::query!(
         r#"
         SELECT scope_type, is_system
@@ -1773,6 +2019,29 @@ async fn link_created_user(
             );
             AdminApiError::Internal
         })?;
+    sqlx::query!(
+        r#"
+        INSERT INTO access_control_audit_log (
+            tenant_id, actor_account_id, action, object_type, object_id,
+            before_value, after_value
+        )
+        VALUES ($1, $2, 'account.create', 'account', $3, NULL, $4)
+        "#,
+        actor.tenant_id,
+        actor.account_id,
+        account_id.to_string(),
+        json!({
+            "username": request.username,
+            "email": request.email,
+            "primary_role": request.primary_role.as_str(),
+            "branch_ids": request.branch_ids,
+            "additional_role_assignments": request.additional_role_assignments,
+        }),
+    )
+    .execute(transaction.connection())
+    .await
+    .map_err(|error: sqlx::Error| account_create_error("insert account access audit", actor, error))?;
+
     let completion_result: PgQueryResult = sqlx::query!(
         r#"
         UPDATE auth_account_provisioning_requests
@@ -1850,7 +2119,7 @@ async fn invalidate_account_cache(context: &AuthService, actor: &AuthedUser, sub
 }
 
 async fn update_account_status(
-    context: &AuthService,
+    context: &AuthAdminContext,
     actor: &AuthedUser,
     account_id: Uuid,
     disabled: bool,
@@ -1870,13 +2139,96 @@ async fn update_account_status(
     );
     let tenant_id: Uuid = actor.tenant_id;
     let actor_account_id: Uuid = actor.account_id;
-    let result: PgQueryResult = context
+    let disable_permission: String = context.policy.disable_permission.as_str().to_owned();
+    let updated: bool = context
         .db
         .tran_with_tenant(tenant_id, async move |connection: &mut PgConnection| {
-            sqlx::query!(
+            let current_status: Option<String> = sqlx::query_scalar!(
+                "SELECT status FROM accounts WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
+                tenant_id,
+                account_id,
+            )
+            .fetch_optional(&mut *connection)
+            .await?;
+            let Some(current_status) = current_status else {
+                return Ok(false);
+            };
+
+            let allowed: bool = sqlx::query_scalar!(
+                r#"
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM accounts AS actor
+                    WHERE actor.tenant_id = $1
+                      AND actor.id = $2
+                      AND actor.status = 'active'
+                      AND (
+                        (
+                          EXISTS (
+                            SELECT 1 FROM account_role_assignments AS target_assignment
+                            WHERE target_assignment.tenant_id = $1
+                              AND target_assignment.account_id = $3
+                              AND target_assignment.branch_id IS NULL
+                          )
+                          AND shepherd_account_has_tenant_permission($1, $2, $4)
+                        )
+                        OR (
+                          NOT EXISTS (
+                            SELECT 1 FROM account_role_assignments AS target_assignment
+                            WHERE target_assignment.tenant_id = $1
+                              AND target_assignment.account_id = $3
+                              AND target_assignment.branch_id IS NULL
+                          )
+                          AND EXISTS (
+                            SELECT 1 FROM account_role_assignments AS target_assignment
+                            WHERE target_assignment.tenant_id = $1
+                              AND target_assignment.account_id = $3
+                              AND target_assignment.branch_id IS NOT NULL
+                          )
+                          AND NOT EXISTS (
+                            SELECT 1
+                            FROM account_role_assignments AS target_assignment
+                            WHERE target_assignment.tenant_id = $1
+                              AND target_assignment.account_id = $3
+                              AND target_assignment.branch_id IS NOT NULL
+                              AND (
+                                NOT shepherd_account_has_permission(
+                                  $1, $2, target_assignment.branch_id, $4
+                                )
+                                OR NOT EXISTS (
+                                  SELECT 1 FROM account_role_assignments AS actor_scope
+                                  WHERE actor_scope.tenant_id = $1
+                                    AND actor_scope.account_id = $2
+                                    AND (actor_scope.branch_id IS NULL
+                                         OR actor_scope.branch_id = target_assignment.branch_id)
+                                )
+                              )
+                          )
+                        )
+                      )
+                ) AS "allowed!"
+                "#,
+                tenant_id,
+                actor_account_id,
+                account_id,
+                disable_permission,
+            )
+            .fetch_one(&mut *connection)
+            .await?;
+            if !allowed {
+                return Err(sqlx::Error::Protocol(STATUS_AUTHORITY_REQUIRED.to_owned()));
+            }
+            if current_status == status {
+                return Ok(true);
+            }
+
+            let result: PgQueryResult = sqlx::query!(
                 r#"
                 UPDATE accounts
-                SET status = $3, updated_at = CURRENT_TIMESTAMP, updated_by_account_id = $4
+                SET status = $3,
+                    authorization_version = authorization_version + 1,
+                    updated_at = CURRENT_TIMESTAMP,
+                    updated_by_account_id = $4
                 WHERE tenant_id = $1 AND id = $2
                 "#,
                 tenant_id,
@@ -1884,13 +2236,35 @@ async fn update_account_status(
                 status,
                 actor_account_id,
             )
-            .execute(connection)
-            .await
+            .execute(&mut *connection)
+            .await?;
+            if result.rows_affected() != 1 {
+                return Ok(false);
+            }
+            sqlx::query!(
+                r#"
+                INSERT INTO access_control_audit_log (
+                    tenant_id, actor_account_id, action, object_type, object_id,
+                    before_value, after_value
+                )
+                VALUES ($1, $2, 'account.status.update', 'account', $3, $4, $5)
+                "#,
+                tenant_id,
+                actor_account_id,
+                account_id.to_string(),
+                json!({ "status": current_status }),
+                json!({ "status": status }),
+            )
+            .execute(&mut *connection)
+            .await?;
+            Ok(true)
         })
         .await
         .map_err(|error: TenantDbErr| {
             error!(tenant_id = %tenant_id, account_id = %account_id, error = %error, "Auth account status tenant operation failed");
-            if error.to_string().contains("unfinished operations") {
+            if error.to_string().contains(STATUS_AUTHORITY_REQUIRED) {
+                AdminApiError::Forbidden
+            } else if error.to_string().contains("unfinished operations") {
                 AdminApiError::Conflict(
                     "The account still has unfinished operations and cannot be disabled.".to_owned(),
                 )
@@ -1898,7 +2272,7 @@ async fn update_account_status(
                 AdminApiError::Internal
             }
         })?;
-    if result.rows_affected() != 1 {
+    if !updated {
         warn!(tenant_id = %actor.tenant_id, account_id = %account_id, "Application account status target was not found");
         return Err(AdminApiError::NotFound(
             "The account to update was not found.".to_owned(),
@@ -2083,22 +2457,29 @@ mod tests {
                 branch_id: Some(Uuid::parse_str("00000000-0000-4000-8000-000000000001").expect("valid branch ID")),
             }],
         };
-        let same_fingerprint: String = provisioning_fingerprint(&request);
+        let key = [7_u8; 32];
+        let same_fingerprint: String = provisioning_fingerprint(&request, &key).expect("valid HMAC key");
         let mut changed_request: CreateAuthUserRequest = request.clone();
         changed_request.password = Some("second-password".to_owned());
-        let changed_fingerprint: String = provisioning_fingerprint(&changed_request);
+        let changed_fingerprint: String = provisioning_fingerprint(&changed_request, &key).expect("valid HMAC key");
         let mut changed_branch_request: CreateAuthUserRequest = request.clone();
         changed_branch_request.branch_ids =
             vec![Uuid::parse_str("00000000-0000-4000-8000-000000000002").expect("valid branch ID")];
         let mut changed_additional_role_request: CreateAuthUserRequest = request.clone();
         changed_additional_role_request.additional_role_assignments.clear();
 
-        assert_eq!(same_fingerprint, provisioning_fingerprint(&request));
+        assert_eq!(
+            same_fingerprint,
+            provisioning_fingerprint(&request, &key).expect("valid HMAC key")
+        );
         assert_ne!(same_fingerprint, changed_fingerprint);
-        assert_ne!(same_fingerprint, provisioning_fingerprint(&changed_branch_request));
         assert_ne!(
             same_fingerprint,
-            provisioning_fingerprint(&changed_additional_role_request)
+            provisioning_fingerprint(&changed_branch_request, &key).expect("valid HMAC key")
+        );
+        assert_ne!(
+            same_fingerprint,
+            provisioning_fingerprint(&changed_additional_role_request, &key).expect("valid HMAC key")
         );
     }
 }

@@ -1,5 +1,6 @@
 import type {
   AccessControlRole,
+  AccessControlRolePage,
   AccessControlSnapshot,
   AccessControlUser,
   AuthUserPage,
@@ -18,20 +19,37 @@ export const authAdminQueryKeys = {
 };
 
 export function getAccessControlSnapshot({
+  branchCursor,
+  permissionCursor,
   roleCursor,
   userCursor,
   auditCursor,
 }: {
+  branchCursor?: string | null;
+  permissionCursor?: string | null;
   roleCursor?: string | null;
   userCursor?: string | null;
   auditCursor?: string | null;
 } = {}): Promise<AccessControlSnapshot> {
   const parameters: URLSearchParams = new URLSearchParams();
+  if (branchCursor) parameters.set("branch_cursor", branchCursor);
+  if (permissionCursor) parameters.set("permission_cursor", permissionCursor);
   if (roleCursor) parameters.set("role_cursor", roleCursor);
   if (userCursor) parameters.set("user_cursor", userCursor);
   if (auditCursor) parameters.set("audit_cursor", auditCursor);
   const query: string = parameters.toString();
   return apiRequest<AccessControlSnapshot>(`/api/admin/access-control${query ? `?${query}` : ""}`);
+}
+
+export function listAccessControlRoles(
+  cursor: string | null = null,
+): Promise<AccessControlRolePage> {
+  const parameters: URLSearchParams = new URLSearchParams();
+  if (cursor !== null) parameters.set("cursor", cursor);
+  const query: string = parameters.toString();
+  return apiRequest<AccessControlRolePage>(
+    `/api/admin/access-control/roles${query ? `?${query}` : ""}`,
+  );
 }
 
 export function createAccessControlRole(
