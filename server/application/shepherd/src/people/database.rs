@@ -818,7 +818,7 @@ fn mutation_failure(op: &str, tenant_id: Uuid, err: sqlx::Error) -> PeopleOpsErr
     let mapped: PeopleOpsErr = err.as_database_error().map_or(
         PeopleOpsErr::BackendUnavailable,
         |db_err: &dyn sqlx::error::DatabaseError| {
-            if db_err.is_unique_violation() || db_err.code().as_deref() == Some("23505") {
+            if db_err.is_unique_violation() || matches!(db_err.code().as_deref(), Some("23505" | "55000")) {
                 PeopleOpsErr::Conflict
             } else if db_err.is_foreign_key_violation() || db_err.is_check_violation() {
                 PeopleOpsErr::InvalidInput("a referenced HR record is invalid")

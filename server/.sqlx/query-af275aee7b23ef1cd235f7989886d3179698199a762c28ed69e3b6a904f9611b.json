@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM business_shift_assignments WHERE tenant_id = $1 AND urgent_work_report_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "af275aee7b23ef1cd235f7989886d3179698199a762c28ed69e3b6a904f9611b"
+}

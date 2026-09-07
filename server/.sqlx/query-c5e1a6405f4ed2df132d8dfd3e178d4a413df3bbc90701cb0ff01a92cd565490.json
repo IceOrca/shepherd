@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "ALTER TABLE business_customer_work_records DISABLE TRIGGER business_customer_work_records_reject_delete",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "c5e1a6405f4ed2df132d8dfd3e178d4a413df3bbc90701cb0ff01a92cd565490"
+}

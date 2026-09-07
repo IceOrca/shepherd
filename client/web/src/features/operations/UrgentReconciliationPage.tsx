@@ -228,6 +228,10 @@ export function UrgentReconciliationPage(): React.JSX.Element {
   const hasNextPage: boolean = currentPage < loadedPages.length || reconciliationQuery.hasNextPage;
   const selected: UrgentWorkReconcile | null =
     pageItems.find((item: UrgentWorkReconcile): boolean => item.work.report_id === selectedId) ?? null;
+  const canEditSelectedEvidence: boolean =
+    selected?.reconciliation_status === "reconciled"
+      ? canCorrect
+      : selected?.reconciliation_status !== "pending_staff" && canManage;
 
   useEffect((): void => {
     setCurrentPage(1);
@@ -588,12 +592,12 @@ export function UrgentReconciliationPage(): React.JSX.Element {
               <p className="mt-1 text-sm text-slate-500">
                 {selected.customer_record ? "Nhập khách hàng và thời gian theo bill hoặc thông tin khách hàng đã xác nhận." : "Hệ thống đã sao chép giờ nhân viên vào bản nháp. Hãy kiểm tra rồi bấm lưu; dữ liệu chưa được lưu tự động."}
               </p>
-              {selected.work.ended_at ? <button className="mt-3 inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-3 text-sm font-bold text-violet-800 hover:bg-violet-100 sm:w-auto" disabled={!canManage && !canCorrect} onClick={copyStaffEvidence} type="button"><RefreshCw className="size-4" />Sao chép lại dữ liệu nhân viên</button> : null}
+              {selected.work.ended_at ? <button className="mt-3 inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-3 text-sm font-bold text-violet-800 hover:bg-violet-100 sm:w-auto" disabled={!canEditSelectedEvidence} onClick={copyStaffEvidence} type="button"><RefreshCw className="size-4" />Sao chép lại dữ liệu nhân viên</button> : null}
               <label className="mt-4 block text-sm font-semibold text-slate-700">
                 Khách hàng / nơi làm việc xác nhận
                 <select
                   className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5"
-                  disabled={(!canManage && !canCorrect)}
+                  disabled={!canEditSelectedEvidence}
                   onChange={(event: React.ChangeEvent<HTMLSelectElement>): void =>
                     setEvidence((current: EvidenceDraft): EvidenceDraft => ({ ...current, customerId: event.target.value }))
                   }
@@ -613,7 +617,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                   Bắt đầu xác nhận
                   <input
                     className="mt-1.5 min-w-0 w-full max-w-full rounded-xl border border-slate-200 px-3 py-2.5"
-                    disabled={!canManage && !canCorrect}
+                    disabled={!canEditSelectedEvidence}
                     onChange={(event: React.ChangeEvent<HTMLInputElement>): void =>
                       setEvidence((current: EvidenceDraft): EvidenceDraft => ({ ...current, startedAt: event.target.value, startedAtExact: null }))
                     }
@@ -627,7 +631,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                   Kết thúc xác nhận
                   <input
                     className="mt-1.5 min-w-0 w-full max-w-full rounded-xl border border-slate-200 px-3 py-2.5"
-                    disabled={!canManage && !canCorrect}
+                    disabled={!canEditSelectedEvidence}
                     onChange={(event: React.ChangeEvent<HTMLInputElement>): void =>
                       setEvidence((current: EvidenceDraft): EvidenceDraft => ({ ...current, endedAt: event.target.value, endedAtExact: null }))
                     }
@@ -642,7 +646,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                 Mã bill / tham chiếu
                 <input
                   className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5"
-                  disabled={!canManage && !canCorrect}
+                  disabled={!canEditSelectedEvidence}
                   onChange={(event: React.ChangeEvent<HTMLInputElement>): void =>
                     setEvidence((current: EvidenceDraft): EvidenceDraft => ({ ...current, reference: event.target.value }))
                   }
@@ -653,7 +657,7 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                 Ghi chú
                 <textarea
                   className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5"
-                  disabled={!canManage && !canCorrect}
+                  disabled={!canEditSelectedEvidence}
                   onChange={(event: React.ChangeEvent<HTMLTextAreaElement>): void =>
                     setEvidence((current: EvidenceDraft): EvidenceDraft => ({ ...current, notes: event.target.value }))
                   }
@@ -661,8 +665,8 @@ export function UrgentReconciliationPage(): React.JSX.Element {
                   value={evidence.notes}
                 />
               </label>
-              {selected.reconciliation_status !== "reconciled" || canCorrect ? (
-                <button className="action-secondary mt-4 w-full sm:w-auto" disabled={(!canManage && !canCorrect) || evidenceMutation.isPending} type="submit">
+              {canEditSelectedEvidence ? (
+                <button className="action-secondary mt-4 w-full sm:w-auto" disabled={evidenceMutation.isPending} type="submit">
                   <Save className="size-4" />
                   {evidenceMutation.isPending ? "Đang lưu..." : selected.reconciliation_status === "reconciled" ? "Lưu bản sửa bằng chứng" : "Lưu bằng chứng khách hàng"}
                 </button>

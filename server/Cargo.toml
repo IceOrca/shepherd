@@ -2,11 +2,11 @@
 resolver = "2"
 members = [
     "infra/kernel",
-    "infra/auth",
-    "infra/authz",
     "infra/postgres",
     "infra/redis",
     "infra/host",
+    "infra/host/auth",
+    "infra/host/authz",
     "infra/app-sdk",
     "infra/jobs",
     "infra/notifier",
@@ -69,11 +69,11 @@ bigdecimal = { version = "*" }
 
 # reusable infra crates
 infra-kernel = { path = "infra/kernel" }
-infra-auth = { path = "infra/auth" }
-infra-authz = { path = "infra/authz" }
 infra-postgres = { path = "infra/postgres" }
 infra-redis = { path = "infra/redis" }
 infra-host = { path = "infra/host" }
+infra-auth = { path = "infra/host/auth" }
+infra-authz = { path = "infra/host/authz" }
 infra-app-sdk = { path = "infra/app-sdk" }
 infra-jobs = { path = "infra/jobs" }
 infra-notifier = { path = "infra/notifier" }

@@ -12,12 +12,31 @@ use uuid::Uuid;
 
 use super::{
     core::{
-        UrgentCustomerWorkRecordInput, UrgentWorkActionSource, UrgentWorkEndInput, UrgentStaffingErr,
-        UrgentWorkLocationInput, UrgentWorkManualInput, UrgentWorkReconcileInput, UrgentStaffingService,
-        UrgentWorkStartInput, UrgentWorkStatus, UrgentWorkSubmissionKind,
+        UrgentCustomerEvidenceAccess, UrgentCustomerWorkRecordInput, UrgentStaffingErr, UrgentStaffingService,
+        UrgentWorkActionSource, UrgentWorkEndInput, UrgentWorkLocationInput, UrgentWorkManualInput,
+        UrgentWorkReconcileInput, UrgentWorkStartInput, UrgentWorkStatus, UrgentWorkSubmissionKind,
     },
     database::UrgentStaffingRepo,
 };
+
+fn pending_evidence_access() -> UrgentCustomerEvidenceAccess {
+    UrgentCustomerEvidenceAccess {
+        can_manage_pending: true,
+        can_correct_terminal: false,
+    }
+}
+
+fn rejected_with_sqlstate(result: Result<PgQueryResult, sqlx::Error>, expected: &str) -> bool {
+    result
+        .err()
+        .and_then(|error: sqlx::Error| {
+            error
+                .as_database_error()
+                .and_then(|database| database.code().map(|code| code.into_owned()))
+        })
+        .as_deref()
+        == Some(expected)
+}
 use crate::business::staffing::{
     CustomerWorkRecordInput, ManualRateOverride, ReconcileStatus, StaffingErr,
     planned_work::core::ShiftAssignmentStatus,
@@ -53,6 +72,7 @@ struct CountRow {
 }
 
 struct Fixture {
+    _database_test_guard: tokio::sync::OwnedMutexGuard<()>,
     database: Arc<DatabaseAdapter>,
     tenant_id: Uuid,
     actor_account_id: Uuid,
@@ -70,6 +90,7 @@ struct Fixture {
 
 impl Fixture {
     async fn create() -> Result<Self, Box<dyn Error>> {
+        let database_test_guard = crate::lock_database_integration_test().await;
         init_tracing();
         let database_url: String = std::env::var("DATABASE_URL")?;
         let database: Arc<DatabaseAdapter> = DatabaseAdapter::connect(&database_url).await?;
@@ -230,6 +251,7 @@ impl Fixture {
         setup.commit().await?;
 
         Ok(Self {
+            _database_test_guard: database_test_guard,
             database,
             tenant_id,
             actor_account_id,
@@ -372,6 +394,48 @@ impl Fixture {
         Ok(count)
     }
 
+    async fn invalid_urgent_status_is_rejected(
+        &self,
+        report_id: Uuid,
+        proposed_status: &str,
+    ) -> Result<bool, Box<dyn Error>> {
+        let mut transaction = self.database.begin_tenant(self.tenant_id).await?;
+        let result = sqlx::query!(
+            "UPDATE business_urgent_work_reports SET status = $3, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = $1 AND id = $2",
+            self.tenant_id,
+            report_id,
+            proposed_status,
+        )
+        .execute(transaction.connection())
+        .await;
+        transaction.rollback().await?;
+        Ok(rejected_with_sqlstate(result, "55000"))
+    }
+
+    async fn reconciled_snapshot_deletes_are_rejected(&self, report_id: Uuid) -> Result<bool, Box<dyn Error>> {
+        let mut assignment_transaction = self.database.begin_tenant(self.tenant_id).await?;
+        let assignment_result = sqlx::query!(
+            "DELETE FROM business_shift_assignments WHERE tenant_id = $1 AND urgent_work_report_id = $2",
+            self.tenant_id,
+            report_id,
+        )
+        .execute(assignment_transaction.connection())
+        .await;
+        assignment_transaction.rollback().await?;
+
+        let mut evidence_transaction = self.database.begin_tenant(self.tenant_id).await?;
+        let evidence_result = sqlx::query!(
+            "DELETE FROM business_urgent_customer_work_records WHERE tenant_id = $1 AND report_id = $2",
+            self.tenant_id,
+            report_id,
+        )
+        .execute(evidence_transaction.connection())
+        .await;
+        evidence_transaction.rollback().await?;
+
+        Ok(rejected_with_sqlstate(assignment_result, "55000") && rejected_with_sqlstate(evidence_result, "55000"))
+    }
+
     async fn cleanup(self) -> TestResult {
         tracing::debug!(
             operation = "urgent_staffing.test_fixture_cleanup",
@@ -403,6 +467,36 @@ impl Fixture {
         sqlx::query!(
             "ALTER TABLE business_urgent_work_sessions \
              DISABLE TRIGGER business_urgent_work_sessions_reject_delete",
+        )
+        .execute(transaction.connection())
+        .await?;
+        sqlx::query!(
+            "ALTER TABLE business_customer_work_records \
+             DISABLE TRIGGER business_customer_work_records_reject_delete",
+        )
+        .execute(transaction.connection())
+        .await?;
+        sqlx::query!(
+            "ALTER TABLE business_urgent_customer_work_records \
+             DISABLE TRIGGER business_urgent_customer_work_records_reject_delete",
+        )
+        .execute(transaction.connection())
+        .await?;
+        sqlx::query!(
+            "ALTER TABLE business_shift_assignments \
+             DISABLE TRIGGER business_shift_assignments_reject_delete",
+        )
+        .execute(transaction.connection())
+        .await?;
+        sqlx::query!(
+            "ALTER TABLE business_staffing_rates \
+             DISABLE TRIGGER aa_business_staffing_rates_guard_history",
+        )
+        .execute(transaction.connection())
+        .await?;
+        sqlx::query!(
+            "ALTER TABLE business_assignment_reconciliation_revisions \
+             DISABLE TRIGGER business_assignment_reconciliation_revisions_no_update_delete",
         )
         .execute(transaction.connection())
         .await?;
@@ -442,6 +536,12 @@ impl Fixture {
         .await?;
         let planned_session_delete: PgQueryResult = sqlx::query!(
             "DELETE FROM business_shift_work_sessions WHERE tenant_id = $1",
+            self.tenant_id,
+        )
+        .execute(transaction.connection())
+        .await?;
+        sqlx::query!(
+            "DELETE FROM business_assignment_reconciliation_revisions WHERE tenant_id = $1",
             self.tenant_id,
         )
         .execute(transaction.connection())
@@ -529,6 +629,36 @@ impl Fixture {
         sqlx::query!(
             "ALTER TABLE business_urgent_work_sessions \
              ENABLE TRIGGER business_urgent_work_sessions_reject_delete",
+        )
+        .execute(transaction.connection())
+        .await?;
+        sqlx::query!(
+            "ALTER TABLE business_customer_work_records \
+             ENABLE TRIGGER business_customer_work_records_reject_delete",
+        )
+        .execute(transaction.connection())
+        .await?;
+        sqlx::query!(
+            "ALTER TABLE business_urgent_customer_work_records \
+             ENABLE TRIGGER business_urgent_customer_work_records_reject_delete",
+        )
+        .execute(transaction.connection())
+        .await?;
+        sqlx::query!(
+            "ALTER TABLE business_shift_assignments \
+             ENABLE TRIGGER business_shift_assignments_reject_delete",
+        )
+        .execute(transaction.connection())
+        .await?;
+        sqlx::query!(
+            "ALTER TABLE business_staffing_rates \
+             ENABLE TRIGGER aa_business_staffing_rates_guard_history",
+        )
+        .execute(transaction.connection())
+        .await?;
+        sqlx::query!(
+            "ALTER TABLE business_assignment_reconciliation_revisions \
+             ENABLE TRIGGER business_assignment_reconciliation_revisions_no_update_delete",
         )
         .execute(transaction.connection())
         .await?;
@@ -1049,6 +1179,11 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
             .first()
             .map(|work: &super::core::UrgentWorkItem| work.report_id)
             .ok_or_else(|| io::Error::other("urgent report missing"))?;
+        assert!(
+            fixture
+                .invalid_urgent_status_is_rejected(report_id, "reconciled")
+                .await?
+        );
         fixture.age_urgent_report(report_id).await?;
         let ended: super::core::UrgentWorkItem = require_urgent(
             service
@@ -1071,6 +1206,26 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
             .worked_seconds
             .ok_or_else(|| io::Error::other("urgent duration missing"))?;
 
+        let correction_only_rejected = service
+            .upsert_customer_record(
+                fixture.tenant_id,
+                fixture.actor_account_id,
+                report_id,
+                UrgentCustomerWorkRecordInput {
+                    confirmed_customer_id: fixture.customer_id,
+                    confirmed_started_at: ended.started_at,
+                    confirmed_ended_at: ended_at,
+                    customer_reference: Some("correction-only-must-not-create".to_owned()),
+                    notes: None,
+                },
+                UrgentCustomerEvidenceAccess {
+                    can_manage_pending: false,
+                    can_correct_terminal: true,
+                },
+            )
+            .await;
+        assert!(matches!(correction_only_rejected, Err(UrgentStaffingErr::Forbidden)));
+
         require_urgent(
             service
                 .upsert_customer_record(
@@ -1084,7 +1239,7 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
                         customer_reference: Some("customer-bill-001".to_owned()),
                         notes: None,
                     },
-                    false,
+                    pending_evidence_access(),
                 )
                 .await,
         )?;
@@ -1142,7 +1297,7 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
                         customer_reference: Some("customer-bill-001".to_owned()),
                         notes: None,
                     },
-                    false,
+                    pending_evidence_access(),
                 )
                 .await,
         )?;
@@ -1180,7 +1335,7 @@ async fn reconciliation_compares_exact_time_and_creates_an_approved_snapshot() -
                         customer_reference: Some("customer-bill-001".to_owned()),
                         notes: None,
                     },
-                    false,
+                    pending_evidence_access(),
                 )
                 .await,
         )?;
@@ -1335,7 +1490,7 @@ async fn urgent_accept_staff_record_requires_exact_customer_evidence_and_preserv
                         customer_reference: Some("test-exact-customer-record".to_owned()),
                         notes: None,
                     },
-                    false,
+                    pending_evidence_access(),
                 )
                 .await,
         )?;
@@ -1347,6 +1502,7 @@ async fn urgent_accept_staff_record_requires_exact_customer_evidence_and_preserv
         )?;
         assert_eq!(accepted.reconciliation_status, ReconcileStatus::Reconciled);
         assert_eq!(fixture.urgent_customer_history_count(report_id).await?, 0);
+        assert!(fixture.reconciled_snapshot_deletes_are_rejected(report_id).await?);
 
         let repeated: Result<super::core::UrgentWorkReconcile, UrgentStaffingErr> = service
             .accept_staff_record(fixture.tenant_id, fixture.actor_account_id, report_id, fixture.job_id)

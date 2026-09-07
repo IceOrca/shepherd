@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Bangkok')::DATE AS \"today!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "today!",
+        "type_info": "Date",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "36e8a88e7defa18277772cd98d73ad68c935944a5724b4cf6ac40b773b0cc82b"
+}

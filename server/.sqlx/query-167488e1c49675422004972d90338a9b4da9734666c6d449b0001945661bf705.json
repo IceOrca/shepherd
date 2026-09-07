@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "ALTER TABLE business_assignment_reconciliation_revisions ENABLE TRIGGER business_assignment_reconciliation_revisions_no_update_delete",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "167488e1c49675422004972d90338a9b4da9734666c6d449b0001945661bf705"
+}

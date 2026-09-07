@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "ALTER TABLE business_staffing_rates DISABLE TRIGGER aa_business_staffing_rates_guard_history",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "9017dc90052f7e93c6a7c64748ab60090b22eb8606c320893b0981d315922afa"
+}

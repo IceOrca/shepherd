@@ -13,6 +13,17 @@ use tracing::{error, warn, info, debug, trace};
 
 use std::sync::Arc;
 
+#[cfg(test)]
+static DATABASE_INTEGRATION_TEST_LOCK: std::sync::LazyLock<std::sync::Arc<tokio::sync::Mutex<()>>> =
+    std::sync::LazyLock::new(|| std::sync::Arc::new(tokio::sync::Mutex::new(())));
+
+#[cfg(test)]
+pub(crate) async fn lock_database_integration_test() -> tokio::sync::OwnedMutexGuard<()> {
+    std::sync::Arc::clone(&DATABASE_INTEGRATION_TEST_LOCK)
+        .lock_owned()
+        .await
+}
+
 use axum::{Router, middleware::from_fn_with_state};
 use infra_app_sdk::{AppManifest, AppManifestOps};
 use infra_postgres::DatabaseAdapter;

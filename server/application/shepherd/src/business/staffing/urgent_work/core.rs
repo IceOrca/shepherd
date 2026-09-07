@@ -45,6 +45,12 @@ pub enum UrgentWorkSubmissionKind {
     Manual,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UrgentCustomerEvidenceAccess {
+    pub can_manage_pending: bool,
+    pub can_correct_terminal: bool,
+}
+
 impl UrgentWorkSubmissionKind {
     pub fn from_code(code: &str) -> Option<Self> {
         match code {
@@ -574,7 +580,7 @@ impl UrgentStaffingService {
         actor_account_id: Uuid,
         report_id: Uuid,
         input: UrgentCustomerWorkRecordInput,
-        allow_terminal_correction: bool,
+        access: UrgentCustomerEvidenceAccess,
     ) -> Result<UrgentCustomerWorkRecord, UrgentStaffingErr> {
         if input.confirmed_customer_id.is_nil() || input.confirmed_ended_at <= input.confirmed_started_at {
             return Err(UrgentStaffingErr::InvalidInput("urgent customer evidence is invalid"));
@@ -592,14 +598,7 @@ impl UrgentStaffingService {
         let record_id: Uuid = Uuid::new_v4();
         let result: Result<UrgentCustomerWorkRecord, UrgentStaffingErr> = self
             .repo
-            .upsert_customer_record(
-                tenant_id,
-                actor_account_id,
-                record_id,
-                report_id,
-                &input,
-                allow_terminal_correction,
-            )
+            .upsert_customer_record(tenant_id, actor_account_id, record_id, report_id, &input, access)
             .await;
         log_result(
             "urgent_staffing.upsert_customer_record",

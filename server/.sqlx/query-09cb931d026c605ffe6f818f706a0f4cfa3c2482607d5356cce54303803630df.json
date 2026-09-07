@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "ALTER TABLE business_shift_assignments DISABLE TRIGGER business_shift_assignments_reject_delete",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "09cb931d026c605ffe6f818f706a0f4cfa3c2482607d5356cce54303803630df"
+}

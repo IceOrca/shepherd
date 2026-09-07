@@ -31,7 +31,7 @@ sha2.workspace = true
 sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "postgres", "tls-rustls", "macros", "uuid", "json"] }
 uuid.workspace = true
 infra-kernel = { workspace = true, features = ["debugging"] }
-infra-auth = { path = "../infra/auth", default-features = false, features = ["ext-service"] }
+infra-auth = {workspace = true}
 infra-postgres.workspace = true
 infra-host.workspace = true
 infra-worker.workspace = true

@@ -358,6 +358,11 @@ fn mutation_failure(op: &str, tenant_id: Uuid, err: TenantDbErr) -> BranchErr {
             BranchErr::Conflict
         }
         TenantDbErr::Sqlx(sqlx::Error::Database(database_error))
+            if database_error.code().as_deref() == Some("55000") =>
+        {
+            BranchErr::Conflict
+        }
+        TenantDbErr::Sqlx(sqlx::Error::Database(database_error))
             if database_error.is_check_violation() || database_error.is_foreign_key_violation() =>
         {
             BranchErr::InvalidInput("branch data violates a database constraint")
@@ -370,4 +375,66 @@ fn mutation_failure(op: &str, tenant_id: Uuid, err: TenantDbErr) -> BranchErr {
         warn!(op, tenant_id = %tenant_id, reason = %err, "Branch mutation rejected");
     }
     mapped
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use infra_postgres::DatabaseAdapter;
+    use uuid::Uuid;
+
+    type TestResult = Result<(), Box<dyn Error>>;
+
+    #[tokio::test]
+    async fn tenant_must_retain_one_active_branch() -> TestResult {
+        let _database_test_guard = crate::lock_database_integration_test().await;
+        let database_url = std::env::var("DATABASE_URL")?;
+        let database = DatabaseAdapter::connect(&database_url).await?;
+        let tenant_id = Uuid::new_v4();
+        let branch_id = Uuid::new_v4();
+        let tenant_slug = format!("test-last-active-branch-{}", tenant_id.simple());
+        database
+            .provision_tenant(tenant_id, &tenant_slug, "Last active branch test")
+            .await?;
+
+        let mut setup = database.begin_tenant(tenant_id).await?;
+        sqlx::query!(
+            "INSERT INTO branches (id, tenant_id, code, name, time_zone) VALUES ($1, $2, 'only-branch', 'Only Branch', 'Asia/Bangkok')",
+            branch_id,
+            tenant_id,
+        )
+        .execute(setup.connection())
+        .await?;
+        setup.commit().await?;
+
+        let mut update = database.begin_tenant(tenant_id).await?;
+        let rejected = sqlx::query!(
+            "UPDATE branches SET status = 'disabled' WHERE tenant_id = $1 AND id = $2",
+            tenant_id,
+            branch_id,
+        )
+        .execute(update.connection())
+        .await
+        .expect_err("the final active branch must not be disabled");
+        assert_eq!(
+            rejected.as_database_error().and_then(|error| error.code()).as_deref(),
+            Some("55000")
+        );
+        update.rollback().await?;
+
+        let mut cleanup = database.begin_tenant(tenant_id).await?;
+        sqlx::query!(
+            "DELETE FROM branches WHERE tenant_id = $1 AND id = $2",
+            tenant_id,
+            branch_id,
+        )
+        .execute(cleanup.connection())
+        .await?;
+        cleanup.commit().await?;
+        sqlx::query!("DELETE FROM tenants WHERE id = $1", tenant_id)
+            .execute(database.global_pool())
+            .await?;
+        Ok(())
+    }
 }

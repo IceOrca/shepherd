@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "ALTER TABLE hr_employee_salary_rates ENABLE TRIGGER hr_employee_salary_rates_guard",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "d64d7dde440fa168cdde11448d8ebced23427d2213adee57e5a64336284fb057"
+}

@@ -651,6 +651,7 @@ mod database_tests {
 
     #[tokio::test]
     async fn work_session_flow_is_idempotent_and_drives_approval() -> Result<(), Box<dyn Error>> {
+        let _database_test_guard = crate::lock_database_integration_test().await;
         let _ignored_already_initialized: Result<(), Box<dyn Error + Send + Sync>> = tracing_subscriber::fmt()
             .with_env_filter("shepherd=trace,infra_postgres=debug")
             .with_test_writer()
@@ -893,6 +894,24 @@ mod database_tests {
             )
             .execute(verify.connection())
             .await?;
+            sqlx::query!(
+                "ALTER TABLE business_customer_work_records \
+                 DISABLE TRIGGER business_customer_work_records_reject_delete",
+            )
+            .execute(verify.connection())
+            .await?;
+            sqlx::query!(
+                "ALTER TABLE business_shift_assignments \
+                 DISABLE TRIGGER business_shift_assignments_reject_delete",
+            )
+            .execute(verify.connection())
+            .await?;
+            sqlx::query!(
+                "ALTER TABLE business_assignment_reconciliation_revisions \
+                 DISABLE TRIGGER business_assignment_reconciliation_revisions_no_update_delete",
+            )
+            .execute(verify.connection())
+            .await?;
             let outbox_count = sqlx::query_scalar!(
                 r#"SELECT COUNT(*) AS "count!" FROM notification_outbox WHERE tenant_id = $1"#,
                 tenant_id
@@ -915,6 +934,12 @@ mod database_tests {
             .await?;
             sqlx::query!(
                 "DELETE FROM business_customer_work_records WHERE tenant_id = $1",
+                tenant_id
+            )
+            .execute(verify.connection())
+            .await?;
+            sqlx::query!(
+                "DELETE FROM business_assignment_reconciliation_revisions WHERE tenant_id = $1",
                 tenant_id
             )
             .execute(verify.connection())
@@ -943,6 +968,24 @@ mod database_tests {
             sqlx::query!(
                 "ALTER TABLE business_shift_work_sessions \
                  ENABLE TRIGGER business_shift_work_sessions_reject_delete",
+            )
+            .execute(verify.connection())
+            .await?;
+            sqlx::query!(
+                "ALTER TABLE business_customer_work_records \
+                 ENABLE TRIGGER business_customer_work_records_reject_delete",
+            )
+            .execute(verify.connection())
+            .await?;
+            sqlx::query!(
+                "ALTER TABLE business_shift_assignments \
+                 ENABLE TRIGGER business_shift_assignments_reject_delete",
+            )
+            .execute(verify.connection())
+            .await?;
+            sqlx::query!(
+                "ALTER TABLE business_assignment_reconciliation_revisions \
+                 ENABLE TRIGGER business_assignment_reconciliation_revisions_no_update_delete",
             )
             .execute(verify.connection())
             .await?;

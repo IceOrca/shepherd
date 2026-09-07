@@ -9,11 +9,11 @@ use uuid::Uuid;
 
 use super::super::{ManualRateOverride, ReconcileCollection, ReconcileStatus};
 use super::core::{
-    UrgentCustomerCursor, UrgentCustomerPage, UrgentCustomerWorkRecord, UrgentCustomerWorkRecordInput,
-    UrgentEmployeeCursor, UrgentEmployeePage, UrgentOwnWorkCursor, UrgentOwnWorkPage, UrgentReconcileCursor,
-    UrgentReconcilePage, UrgentTeamWorkPage, UrgentWorkActionSource, UrgentWorkCustomer, UrgentWorkEmployee,
-    UrgentWorkEndInput, UrgentStaffingErr, UrgentWorkItem, UrgentWorkManualInput, UrgentWorkReconcile,
-    UrgentWorkReconcileInput, UrgentWorkStartInput, UrgentWorkStatus, UrgentWorkSubmissionKind,
+    UrgentCustomerCursor, UrgentCustomerEvidenceAccess, UrgentCustomerPage, UrgentCustomerWorkRecord,
+    UrgentCustomerWorkRecordInput, UrgentEmployeeCursor, UrgentEmployeePage, UrgentOwnWorkCursor, UrgentOwnWorkPage,
+    UrgentReconcileCursor, UrgentReconcilePage, UrgentTeamWorkPage, UrgentWorkActionSource, UrgentWorkCustomer,
+    UrgentWorkEmployee, UrgentWorkEndInput, UrgentStaffingErr, UrgentWorkItem, UrgentWorkManualInput,
+    UrgentWorkReconcile, UrgentWorkReconcileInput, UrgentWorkStartInput, UrgentWorkStatus, UrgentWorkSubmissionKind,
 };
 
 pub struct UrgentStaffingRepo {
@@ -1248,7 +1248,7 @@ impl UrgentStaffingRepo {
         record_id: Uuid,
         report_id: Uuid,
         input: &UrgentCustomerWorkRecordInput,
-        allow_terminal_correction: bool,
+        access: UrgentCustomerEvidenceAccess,
     ) -> Result<UrgentCustomerWorkRecord, UrgentStaffingErr> {
         let mut tran: TenantTransaction = self.begin_tenant(tenant_id).await?;
         let status: Option<String> = sqlx::query_scalar!(
@@ -1261,8 +1261,9 @@ impl UrgentStaffingRepo {
         .map_err(|err| database_failure("lock urgent customer evidence report", tenant_id, err))?;
         match status.as_deref() {
             None => return Err(UrgentStaffingErr::NotFound),
-            Some("completed") => {}
-            Some("reconciled") if allow_terminal_correction => {}
+            Some("completed") if access.can_manage_pending => {}
+            Some("reconciled") if access.can_correct_terminal => {}
+            Some("completed" | "reconciled") => return Err(UrgentStaffingErr::Forbidden),
             Some(_) => return Err(UrgentStaffingErr::Conflict),
         }
         if status.as_deref() == Some("reconciled") {

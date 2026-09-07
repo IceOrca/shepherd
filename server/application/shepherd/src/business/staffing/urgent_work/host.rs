@@ -21,11 +21,11 @@ use crate::{
 
 use super::super::{ManualRateOverride, ReconcileCollection, ManualRateOverrideRequest};
 use super::core::{
-    UrgentCustomerCursor, UrgentCustomerPage, UrgentCustomerWorkRecord, UrgentCustomerWorkRecordInput,
-    UrgentEmployeeCursor, UrgentEmployeePage, UrgentOwnWorkCursor, UrgentOwnWorkPage, UrgentReconcileCursor,
-    UrgentReconcilePage, UrgentTeamWorkPage, UrgentWorkEmployee, UrgentWorkEndInput, UrgentStaffingErr,
-    UrgentWorkCustomer, UrgentWorkItem, UrgentWorkLocationInput, UrgentWorkManualInput, UrgentWorkReconcileInput,
-    UrgentWorkReconcile, UrgentWorkStartInput,
+    UrgentCustomerCursor, UrgentCustomerEvidenceAccess, UrgentCustomerPage, UrgentCustomerWorkRecord,
+    UrgentCustomerWorkRecordInput, UrgentEmployeeCursor, UrgentEmployeePage, UrgentOwnWorkCursor, UrgentOwnWorkPage,
+    UrgentReconcileCursor, UrgentReconcilePage, UrgentTeamWorkPage, UrgentWorkCustomer, UrgentWorkEmployee,
+    UrgentWorkEndInput, UrgentStaffingErr, UrgentWorkItem, UrgentWorkLocationInput, UrgentWorkManualInput,
+    UrgentWorkReconcile, UrgentWorkReconcileInput, UrgentWorkStartInput,
 };
 
 #[derive(Debug, Deserialize)]
@@ -430,7 +430,10 @@ async fn upsert_customer_record(
     Path(report_id): Path<Uuid>,
     Json(request): Json<UrgentCustomerWorkRecordUpsertReq>,
 ) -> Result<Json<UrgentCustomerWorkRecord>, StatusCode> {
-    let allow_terminal_correction: bool = user.has_permission("business.reconciliation.correct");
+    let access = UrgentCustomerEvidenceAccess {
+        can_manage_pending: user.has_permission("business.urgent_work.reconcile"),
+        can_correct_terminal: user.has_permission("business.reconciliation.correct"),
+    };
     let input: UrgentCustomerWorkRecordInput = UrgentCustomerWorkRecordInput {
         confirmed_customer_id: request.confirmed_customer_id,
         confirmed_started_at: request.confirmed_started_at,
@@ -441,13 +444,7 @@ async fn upsert_customer_record(
     let record: UrgentCustomerWorkRecord = ctx
         .core
         .urgent_staffing
-        .upsert_customer_record(
-            user.tenant_id,
-            user.account_id,
-            report_id,
-            input,
-            allow_terminal_correction,
-        )
+        .upsert_customer_record(user.tenant_id, user.account_id, report_id, input, access)
         .await
         .map_err(|err: UrgentStaffingErr| status("save urgent customer evidence", &user, err))?;
     Ok(Json(record))

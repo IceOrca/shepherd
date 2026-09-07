@@ -222,7 +222,7 @@ fn map_sqlx(error: sqlx::Error) -> FinanceError {
     if let Some(database_error) = error.as_database_error() {
         return match database_error.code().as_deref() {
             Some("42501") => FinanceError::Forbidden,
-            Some("23505" | "23514" | "55000") => FinanceError::Conflict,
+            Some("23P01" | "23505" | "23514" | "55000") => FinanceError::Conflict,
             Some("23503") => FinanceError::InvalidInput("referenced payroll context is invalid"),
             _ => {
                 error!(reason = %database_error, "Financial reporting database operation failed");
@@ -782,6 +782,25 @@ impl FinancialReportRepo {
         let connection: &mut PgConnection = transaction.connection();
         let monthly_amount = BigDecimal::from_str(&input.monthly_amount)
             .map_err(|_| FinanceError::InvalidInput("monthly amount is not a valid number"))?;
+        let branch_row: BranchRow = branch(&mut *connection, tenant_id).await?;
+        let locked_employee_id: Option<Uuid> = sqlx::query_scalar!(
+            r#"
+            SELECT id
+            FROM hr_employees
+            WHERE tenant_id = $1 AND branch_id = $2 AND id = $3
+            FOR UPDATE
+            "#,
+            tenant_id,
+            branch_row.id,
+            input.employee_id,
+        )
+        .fetch_optional(&mut *connection)
+        .await
+        .map_err(map_sqlx)?;
+        if locked_employee_id.is_none() {
+            return Err(FinanceError::NotFound);
+        }
+
         let existing_employee: Option<Uuid> = sqlx::query_scalar!(
             "SELECT employee_id FROM hr_employee_salary_rates WHERE tenant_id = $1 AND created_by_account_id = $2 AND idempotency_key = $3",
             tenant_id,
@@ -800,7 +819,6 @@ impl FinancialReportRepo {
             return Ok(result);
         }
 
-        let branch_row: BranchRow = branch(&mut *connection, tenant_id).await?;
         let today: NaiveDate = sqlx::query_scalar!(
             r#"SELECT (CURRENT_TIMESTAMP AT TIME ZONE time_zone)::DATE AS "today!"
                FROM branches WHERE tenant_id = $1 AND id = $2"#,
@@ -926,17 +944,18 @@ impl FinancialReportRepo {
 mod tests {
     use std::{error::Error, sync::Arc};
 
-    use chrono::NaiveDate;
+    use chrono::{Days, NaiveDate};
     use infra_postgres::{DatabaseAdapter, with_active_branch};
     use uuid::Uuid;
 
     use super::FinancialReportRepo;
-    use crate::business::finance::reporting::core::{FinancialPeriodState, FinancialPeriodStatus};
+    use crate::business::finance::reporting::core::{EmployeeSalaryRateInput, FinancialPeriodState, FinancialPeriodStatus};
 
     type TestResult = Result<(), Box<dyn Error>>;
 
     #[tokio::test]
     async fn open_financial_period_without_an_event_decodes_nullable_audit_fields() -> TestResult {
+        let _database_test_guard = crate::lock_database_integration_test().await;
         let database_url = std::env::var("DATABASE_URL")?;
         let database = DatabaseAdapter::connect(&database_url).await?;
         let tenant_id = Uuid::new_v4();
@@ -983,6 +1002,155 @@ mod tests {
         assert!(period.reason.is_none());
         assert!(period.actor_username.is_none());
         assert!(period.occurred_at.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn concurrent_salary_versions_serialize_without_overlapping() -> TestResult {
+        let _database_test_guard = crate::lock_database_integration_test().await;
+        let database_url = std::env::var("DATABASE_URL")?;
+        let database = DatabaseAdapter::connect(&database_url).await?;
+        let tenant_id = Uuid::new_v4();
+        let branch_id = Uuid::new_v4();
+        let account_id = Uuid::new_v4();
+        let employee_id = Uuid::new_v4();
+        let tenant_slug = format!("test-salary-version-{}", tenant_id.simple());
+        database
+            .provision_tenant(tenant_id, &tenant_slug, "Salary version concurrency test")
+            .await?;
+
+        let mut setup = database.begin_tenant(tenant_id).await?;
+        sqlx::query!(
+            "INSERT INTO accounts (id, tenant_id, username, primary_role_code) VALUES ($1, $2, 'salary-version-manager', 'supervisor')",
+            account_id,
+            tenant_id,
+        )
+        .execute(setup.connection())
+        .await?;
+        sqlx::query!(
+            "INSERT INTO account_roles (tenant_id, account_id, role_code) VALUES ($1, $2, 'supervisor')",
+            tenant_id,
+            account_id,
+        )
+        .execute(setup.connection())
+        .await?;
+        sqlx::query!(
+            "INSERT INTO branches (id, tenant_id, code, name, time_zone) VALUES ($1, $2, 'salary-version', 'Salary Version', 'Asia/Bangkok')",
+            branch_id,
+            tenant_id,
+        )
+        .execute(setup.connection())
+        .await?;
+        sqlx::query!(
+            r#"
+            INSERT INTO hr_employees (
+                id, tenant_id, branch_id, account_id, employee_code,
+                display_name, status, hire_date
+            )
+            VALUES (
+                $1, $2, $3, $4, 'salary-version-manager',
+                'Salary Version Manager', 'active', CURRENT_DATE
+            )
+            "#,
+            employee_id,
+            tenant_id,
+            branch_id,
+            account_id,
+        )
+        .execute(setup.connection())
+        .await?;
+        let today: NaiveDate =
+            sqlx::query_scalar!(r#"SELECT (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Bangkok')::DATE AS "today!""#)
+                .fetch_one(setup.connection())
+                .await?;
+        setup.commit().await?;
+
+        let tomorrow = today
+            .checked_add_days(Days::new(1))
+            .expect("the current date must have a following day");
+        let first_repo = FinancialReportRepo::new_arc(Arc::clone(&database));
+        let second_repo = Arc::clone(&first_repo);
+        let first = async move {
+            with_active_branch(branch_id, async move {
+                first_repo
+                    .create_salary_rate(
+                        tenant_id,
+                        account_id,
+                        Uuid::new_v4(),
+                        &EmployeeSalaryRateInput {
+                            employee_id,
+                            monthly_amount: "10000000".to_owned(),
+                            currency: "VND".to_owned(),
+                            effective_from: today,
+                        },
+                    )
+                    .await
+            })
+            .await
+        };
+        let second = async move {
+            with_active_branch(branch_id, async move {
+                second_repo
+                    .create_salary_rate(
+                        tenant_id,
+                        account_id,
+                        Uuid::new_v4(),
+                        &EmployeeSalaryRateInput {
+                            employee_id,
+                            monthly_amount: "11000000".to_owned(),
+                            currency: "VND".to_owned(),
+                            effective_from: tomorrow,
+                        },
+                    )
+                    .await
+            })
+            .await
+        };
+        let (first_result, second_result) = tokio::join!(first, second);
+        first_result?;
+        second_result?;
+
+        let mut verify = database.begin_tenant(tenant_id).await?;
+        let versions = sqlx::query!(
+            "SELECT effective_from, effective_to FROM hr_employee_salary_rates WHERE tenant_id = $1 AND employee_id = $2 ORDER BY effective_from",
+            tenant_id,
+            employee_id,
+        )
+        .fetch_all(verify.connection())
+        .await?;
+        let [first_version, second_version] = versions.as_slice() else {
+            return Err(std::io::Error::other("salary version test expected exactly two rows").into());
+        };
+        assert_eq!(first_version.effective_from, today);
+        assert_eq!(first_version.effective_to, Some(today));
+        assert_eq!(second_version.effective_from, tomorrow);
+        assert_eq!(second_version.effective_to, None);
+
+        sqlx::query!("ALTER TABLE hr_employee_salary_rates DISABLE TRIGGER hr_employee_salary_rates_guard")
+            .execute(verify.connection())
+            .await?;
+        sqlx::query!("DELETE FROM hr_employee_salary_rates WHERE tenant_id = $1", tenant_id)
+            .execute(verify.connection())
+            .await?;
+        sqlx::query!("ALTER TABLE hr_employee_salary_rates ENABLE TRIGGER hr_employee_salary_rates_guard")
+            .execute(verify.connection())
+            .await?;
+        sqlx::query!("DELETE FROM hr_employees WHERE tenant_id = $1", tenant_id)
+            .execute(verify.connection())
+            .await?;
+        sqlx::query!("DELETE FROM account_roles WHERE tenant_id = $1", tenant_id)
+            .execute(verify.connection())
+            .await?;
+        sqlx::query!("DELETE FROM accounts WHERE tenant_id = $1", tenant_id)
+            .execute(verify.connection())
+            .await?;
+        sqlx::query!("DELETE FROM branches WHERE tenant_id = $1", tenant_id)
+            .execute(verify.connection())
+            .await?;
+        verify.commit().await?;
+        sqlx::query!("DELETE FROM tenants WHERE id = $1", tenant_id)
+            .execute(database.global_pool())
+            .await?;
         Ok(())
     }
 }

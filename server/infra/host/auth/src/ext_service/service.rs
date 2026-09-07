@@ -283,8 +283,9 @@ mod tests {
     }
 
     fn service() -> OidcJwksVerifier {
-        let decoding_key = DecodingKey::from_ed_pem(include_bytes!("../../../../security/jwtkey_dev/jwt_public.pem"))
-            .expect("test public key");
+        let decoding_key =
+            DecodingKey::from_ed_pem(include_bytes!("../../../../../security/jwtkey_dev/jwt_public.pem"))
+                .expect("test public key");
         let mut jwk =
             jsonwebtoken::jwk::Jwk::from_decoding_key(&decoding_key, Some(Algorithm::EdDSA)).expect("test JWK");
         jwk.common.key_id = Some(KID.to_owned());
@@ -306,7 +307,7 @@ mod tests {
                 preferred_username: "alice",
                 tid: Some(uuid::uuid!("018f4c6d-7e41-7b89-a4fd-0f8efcc57e31")),
             },
-            &EncodingKey::from_ed_pem(include_bytes!("../../../../security/jwtkey_dev/jwt_private.pem"))
+            &EncodingKey::from_ed_pem(include_bytes!("../../../../../security/jwtkey_dev/jwt_private.pem"))
                 .expect("test private key"),
         )
         .expect("signed test token")

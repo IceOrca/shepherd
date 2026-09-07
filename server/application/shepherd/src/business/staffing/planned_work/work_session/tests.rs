@@ -31,6 +31,7 @@ use crate::business::finance::{
 type TestResult = Result<(), Box<dyn Error>>;
 
 struct Fixture {
+    _database_test_guard: tokio::sync::OwnedMutexGuard<()>,
     db: Arc<DatabaseAdapter>,
     tenant_id: Uuid,
     branch_id: Uuid,
@@ -40,6 +41,7 @@ struct Fixture {
 
 impl Fixture {
     async fn create() -> Result<Self, Box<dyn Error>> {
+        let database_test_guard = crate::lock_database_integration_test().await;
         init_tracing();
         let database_url = std::env::var("DATABASE_URL")?;
         let db = DatabaseAdapter::connect(&database_url).await?;
@@ -180,6 +182,7 @@ impl Fixture {
         setup.commit().await?;
 
         Ok(Self {
+            _database_test_guard: database_test_guard,
             db,
             tenant_id,
             branch_id,
@@ -420,6 +423,24 @@ impl Fixture {
         )
         .execute(transaction.connection())
         .await?;
+        sqlx::query!(
+            "ALTER TABLE business_customer_work_records \
+             DISABLE TRIGGER business_customer_work_records_reject_delete",
+        )
+        .execute(transaction.connection())
+        .await?;
+        sqlx::query!(
+            "ALTER TABLE business_shift_assignments \
+             DISABLE TRIGGER business_shift_assignments_reject_delete",
+        )
+        .execute(transaction.connection())
+        .await?;
+        sqlx::query!(
+            "ALTER TABLE business_assignment_reconciliation_revisions \
+             DISABLE TRIGGER business_assignment_reconciliation_revisions_no_update_delete",
+        )
+        .execute(transaction.connection())
+        .await?;
         sqlx::query!("DELETE FROM notification_outbox WHERE tenant_id = $1", self.tenant_id)
             .execute(transaction.connection())
             .await?;
@@ -437,6 +458,12 @@ impl Fixture {
         .await?;
         sqlx::query!(
             "DELETE FROM business_customer_work_records WHERE tenant_id = $1",
+            self.tenant_id,
+        )
+        .execute(transaction.connection())
+        .await?;
+        sqlx::query!(
+            "DELETE FROM business_assignment_reconciliation_revisions WHERE tenant_id = $1",
             self.tenant_id,
         )
         .execute(transaction.connection())
@@ -474,6 +501,24 @@ impl Fixture {
         sqlx::query!(
             "ALTER TABLE business_shift_work_sessions \
              ENABLE TRIGGER business_shift_work_sessions_reject_delete",
+        )
+        .execute(transaction.connection())
+        .await?;
+        sqlx::query!(
+            "ALTER TABLE business_customer_work_records \
+             ENABLE TRIGGER business_customer_work_records_reject_delete",
+        )
+        .execute(transaction.connection())
+        .await?;
+        sqlx::query!(
+            "ALTER TABLE business_shift_assignments \
+             ENABLE TRIGGER business_shift_assignments_reject_delete",
+        )
+        .execute(transaction.connection())
+        .await?;
+        sqlx::query!(
+            "ALTER TABLE business_assignment_reconciliation_revisions \
+             ENABLE TRIGGER business_assignment_reconciliation_revisions_no_update_delete",
         )
         .execute(transaction.connection())
         .await?;
