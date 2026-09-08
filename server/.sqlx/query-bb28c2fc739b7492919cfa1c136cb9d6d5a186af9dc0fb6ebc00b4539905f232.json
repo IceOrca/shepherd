@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id FROM branches WHERE tenant_id = $1 AND id = $2 FOR SHARE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "branches",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bb28c2fc739b7492919cfa1c136cb9d6d5a186af9dc0fb6ebc00b4539905f232"
+}

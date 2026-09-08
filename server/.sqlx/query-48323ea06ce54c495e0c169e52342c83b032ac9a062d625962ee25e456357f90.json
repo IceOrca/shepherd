@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH subject AS (\n            SELECT claim.branch_id,\n                   CASE WHEN claim.paid_by_employee_id IS NULL\n                        THEN claim.submitted_by_account_id ELSE employee.account_id END AS account_id\n            FROM business_expense_claims AS claim\n            LEFT JOIN hr_employees AS employee\n              ON employee.tenant_id = claim.tenant_id AND employee.id = claim.paid_by_employee_id\n            WHERE $4 AND claim.tenant_id = $1 AND claim.id = $3\n            UNION ALL\n            SELECT advance.branch_id, employee.account_id\n            FROM hr_salary_advances AS advance\n            JOIN hr_employees AS employee\n              ON employee.tenant_id = advance.tenant_id AND employee.id = advance.employee_id\n            WHERE NOT $4 AND advance.tenant_id = $1 AND advance.id = $3\n        )\n        SELECT EXISTS (\n            SELECT 1 FROM subject\n            WHERE shepherd_account_has_permission($1, $2, subject.branch_id, $5)\n               OR (subject.account_id = $2\n                   AND shepherd_account_has_permission($1, $2, subject.branch_id, $6))\n        ) AS \"allowed!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "allowed!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Bool",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "48323ea06ce54c495e0c169e52342c83b032ac9a062d625962ee25e456357f90"
+}

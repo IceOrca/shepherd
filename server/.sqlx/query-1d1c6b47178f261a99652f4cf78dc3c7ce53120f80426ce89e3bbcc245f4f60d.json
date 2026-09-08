@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE hr_employees SET display_name = 'Renamed manager', employee_code = 'renamed-manager' WHERE tenant_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1d1c6b47178f261a99652f4cf78dc3c7ce53120f80426ce89e3bbcc245f4f60d"
+}

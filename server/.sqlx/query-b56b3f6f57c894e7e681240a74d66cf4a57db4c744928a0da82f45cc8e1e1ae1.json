@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO hr_employee_profit_share_payments (tenant_id, branch_id, payroll_period_start, employee_id, employee_home_branch_id, employee_code, employee_name, role_code, currency, profit_base, percentage, payment_amount, financial_period_event_id) VALUES ($1, $2, $3, $4, $2, 'test-manager', 'Original manager', 'branch_manager', 'VND', 10000000, 7, 700000, $5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Date",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b56b3f6f57c894e7e681240a74d66cf4a57db4c744928a0da82f45cc8e1e1ae1"
+}

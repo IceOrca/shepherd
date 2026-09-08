@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT set_config('app.branch_id', $1, TRUE)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "set_config",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "081d94d5586b0e58cc6615dca5a0b5cf0f205fd44cfbc4daabfd78f1aade364d"
+}

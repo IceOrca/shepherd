@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO hr_employee_salary_rates (id, tenant_id, employee_id, monthly_amount, currency, effective_from, effective_to, created_by_account_id, idempotency_key) VALUES ($1, $2, $3, 31000000, 'VND', $4, $5, $6, $7)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Date",
+        "Date",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "813c43fd964f5614ff5e732e1e8881061dc476aba09018b59877a4333c4263e2"
+}

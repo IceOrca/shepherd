@@ -1114,6 +1114,47 @@ async fn concurrent_peer_lifecycle_is_idempotent_and_preserves_provenance() -> T
 }
 
 #[tokio::test]
+async fn independent_employee_starts_serialize_at_the_branch_without_deadlock() -> TestResult {
+    let fixture: Fixture = Fixture::create().await?;
+    let result: TestResult = infra_postgres::with_active_branch(fixture.branch_id, async {
+        let service: Arc<UrgentStaffingService> = fixture.urgent_service();
+        let mut blocker: infra_postgres::TenantTransaction = fixture.database.begin_tenant(fixture.tenant_id).await?;
+        sqlx::query!(
+            "SELECT id FROM branches WHERE tenant_id = $1 AND id = $2 FOR SHARE",
+            fixture.tenant_id,
+            fixture.branch_id,
+        )
+        .fetch_one(blocker.connection())
+        .await?;
+        let first_input: UrgentWorkStartInput = start_input(&fixture, vec![fixture.actor_employee_id], Uuid::new_v4());
+        let second_input: UrgentWorkStartInput = start_input(&fixture, vec![fixture.peer_employee_id], Uuid::new_v4());
+        let (first, second, released) = tokio::join!(
+            service.start(fixture.tenant_id, fixture.actor_account_id, false, first_input),
+            service.start(fixture.tenant_id, fixture.peer_account_id, false, second_input),
+            async {
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                blocker.rollback().await
+            }
+        );
+        released?;
+        let first: Vec<super::core::UrgentWorkItem> = require_urgent(first)?;
+        let second: Vec<super::core::UrgentWorkItem> = require_urgent(second)?;
+        if first.len() != 1 || second.len() != 1 {
+            return Err("each independent start must create exactly one report".into());
+        }
+        let first_report: &super::core::UrgentWorkItem = first.first().ok_or("missing first report")?;
+        let second_report: &super::core::UrgentWorkItem = second.first().ok_or("missing second report")?;
+        if first_report.report_id == second_report.report_id {
+            return Err("independent employees must have distinct reports".into());
+        }
+        Ok(())
+    })
+    .await;
+    fixture.cleanup().await?;
+    result
+}
+
+#[tokio::test]
 async fn urgent_open_work_blocks_a_planned_session_for_the_same_employee() -> TestResult {
     let fixture: Fixture = Fixture::create().await?;
     let test_result: TestResult = infra_postgres::with_active_branch(fixture.branch_id, async {

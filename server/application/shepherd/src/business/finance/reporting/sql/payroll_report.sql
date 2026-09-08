@@ -26,13 +26,17 @@ WITH profit_share AS (
       ON account.tenant_id = employee.tenant_id
      AND account.id = employee.account_id
     WHERE employee.tenant_id = $1
-    UNION
-    SELECT payment.employee_id,
+    UNION ALL
+    SELECT DISTINCT payment.employee_id,
            shepherd_current_branch_id(),
            payment.employee_code,
            payment.employee_name,
            payment.role_code
     FROM profit_share AS payment
+    WHERE NOT EXISTS (
+        SELECT 1 FROM hr_employees AS employee
+        WHERE employee.tenant_id = $1 AND employee.id = payment.employee_id
+    )
 ), active_employees AS (
     SELECT employee.id
     FROM hr_employees AS employee

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE hr_employees SET status = 'terminated', termination_date = DATE '2026-08-15' WHERE tenant_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "23525970efc854c498f8594224c130c67e3ed9579ca37c2cc59923c953dd5192"
+}

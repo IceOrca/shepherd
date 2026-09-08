@@ -779,6 +779,9 @@ impl FinancialReportRepo {
         input: &EmployeeSalaryRateInput,
     ) -> Result<EmployeeSalaryConfig, FinanceError> {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        crate::business::database::lock_active_branch(transaction.connection(), tenant_id)
+            .await
+            .map_err(map_sqlx)?;
         let connection: &mut PgConnection = transaction.connection();
         let monthly_amount = BigDecimal::from_str(&input.monthly_amount)
             .map_err(|_| FinanceError::InvalidInput("monthly amount is not a valid number"))?;
@@ -939,6 +942,10 @@ impl FinancialReportRepo {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "regression_tests.rs"]
+mod regression_tests;
 
 #[cfg(test)]
 mod tests {

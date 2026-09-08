@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE account_permission_overrides SET effect = 'deny' WHERE tenant_id = $1 AND account_id = $2 AND permission_code = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "109fa837de704d1fe7900da5c3b310570353d990c7a4e3a6122fe782615c1249"
+}

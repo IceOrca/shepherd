@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE branches SET name = 'Renamed branch', time_zone = 'America/New_York' WHERE tenant_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "09b02a7a5d6af02a8837fbfee1bf5379c46dff3d9e9145d8c58b97a4a0f5ff4e"
+}

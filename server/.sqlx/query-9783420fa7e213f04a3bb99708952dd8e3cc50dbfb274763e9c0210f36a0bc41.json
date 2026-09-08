@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE branches SET time_zone = 'America/New_York' WHERE tenant_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9783420fa7e213f04a3bb99708952dd8e3cc50dbfb274763e9c0210f36a0bc41"
+}

@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO business_expense_claims (id, tenant_id, category_id, funding_source, paid_by_employee_id, paid_on, payroll_inclusion_on, description, claimed_amount, currency, submitted_by_account_id, submission_idempotency_key) VALUES ($1, $2, $3, 'employee_personal', $4, CURRENT_DATE, CURRENT_DATE, 'Staff expense', 500000, 'VND', $5, $6)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0b8826b577d35a53b35efe023f45cff3de660031824af6c623de6c793bdd9f4d"
+}

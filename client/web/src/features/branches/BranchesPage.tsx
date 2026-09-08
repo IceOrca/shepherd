@@ -229,7 +229,7 @@ export function BranchesPage() {
           {editor ? (
             <form className="surface-card p-5 sm:p-6" onSubmit={submitUpdate}>
               <h2 className="text-lg font-bold text-slate-950">Cập nhật chi nhánh</h2>
-              <p className="mt-2 text-sm text-slate-500">Mã chi nhánh được giữ cố định để bảo toàn tham chiếu nghiệp vụ.</p>
+              <p className="mt-2 text-sm text-slate-500">Mã chi nhánh được giữ cố định. Múi giờ chỉ có thể đổi trước khi chi nhánh phát sinh dữ liệu tài chính hoặc kỳ lương.</p>
               <div className="mt-6 space-y-5">
                 <label className="block"><span className="text-sm font-bold text-slate-800">Tên chi nhánh</span><input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" maxLength={200} required value={editor.name} onChange={(event): void => setEditor({ ...editor, name: event.target.value })} /></label>
                 <label className="block"><span className="text-sm font-bold text-slate-800">Múi giờ IANA</span><input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" maxLength={64} required value={editor.time_zone} onChange={(event): void => setEditor({ ...editor, time_zone: event.target.value })} /></label>

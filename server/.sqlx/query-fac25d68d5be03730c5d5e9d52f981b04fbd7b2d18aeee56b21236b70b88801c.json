@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO hr_salary_advances (id, tenant_id, employee_id, requested_amount, currency, reason, paid_on, payroll_inclusion_on, requested_by_account_id, request_idempotency_key) VALUES ($1, $2, $3, 500000, 'VND', 'Staff advance', CURRENT_DATE, CURRENT_DATE, $4, $5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fac25d68d5be03730c5d5e9d52f981b04fbd7b2d18aeee56b21236b70b88801c"
+}

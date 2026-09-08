@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id FROM branches WHERE tenant_id = $1 AND id = shepherd_current_branch_id() FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "branches",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "2fb959275c653bbb57770f8e87fefc402acd8a5c3ddc10c6fa61453e8dfb0f66"
+}

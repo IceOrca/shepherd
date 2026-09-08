@@ -1,6 +1,9 @@
 pub mod branch;
+pub(crate) mod database;
 pub mod finance;
 pub mod staffing;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 use std::sync::Arc;
 

@@ -586,6 +586,11 @@ impl StaffingRepo {
         audit_account_id: Uuid,
     ) -> Result<StaffingPriceSet, StaffingErr> {
         let mut tran: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        crate::business::database::lock_active_branch(tran.connection(), tenant_id)
+            .await
+            .map_err(|error: sqlx::Error| -> StaffingErr {
+                mutation_failure("lock staffing mutation branch", tenant_id, error)
+            })?;
         let customer_context: Option<CustomerContext> = sqlx::query_as!(
             CustomerContext,
             r#"
@@ -829,6 +834,11 @@ impl StaffingRepo {
         audit_account_id: Uuid,
     ) -> Result<ReconciliationRevision, StaffingErr> {
         let mut tran: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        crate::business::database::lock_active_branch(tran.connection(), tenant_id)
+            .await
+            .map_err(|error: sqlx::Error| -> StaffingErr {
+                mutation_failure("lock staffing mutation branch", tenant_id, error)
+            })?;
         let locked: Option<String> = sqlx::query_scalar!(
             "SELECT status FROM business_shift_assignments WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
             tenant_id,

@@ -520,6 +520,11 @@ impl UrgentStaffingRepo {
         input: &UrgentWorkStartInput,
     ) -> Result<Vec<UrgentWorkItem>, UrgentStaffingErr> {
         let mut tran: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        crate::business::database::lock_active_branch(tran.connection(), tenant_id)
+            .await
+            .map_err(|error: sqlx::Error| -> UrgentStaffingErr {
+                mutation_failure("lock urgent mutation branch", tenant_id, error)
+            })?;
         // Locking the actor before reading the idempotency record serializes
         // concurrent deliveries from the same device/account.
         let actor_employee: Option<IdRow> = sqlx::query_as!(
@@ -765,6 +770,11 @@ impl UrgentStaffingRepo {
         input: &UrgentWorkEndInput,
     ) -> Result<UrgentWorkItem, UrgentStaffingErr> {
         let mut tran: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        crate::business::database::lock_active_branch(tran.connection(), tenant_id)
+            .await
+            .map_err(|error: sqlx::Error| -> UrgentStaffingErr {
+                mutation_failure("lock urgent mutation branch", tenant_id, error)
+            })?;
         let context: EndContextRow = sqlx::query_as!(
             EndContextRow,
             r#"
@@ -911,6 +921,11 @@ impl UrgentStaffingRepo {
         input: &UrgentWorkManualInput,
     ) -> Result<UrgentWorkItem, UrgentStaffingErr> {
         let mut tran: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        crate::business::database::lock_active_branch(tran.connection(), tenant_id)
+            .await
+            .map_err(|error: sqlx::Error| -> UrgentStaffingErr {
+                mutation_failure("lock urgent mutation branch", tenant_id, error)
+            })?;
         let actor_employee: Option<IdRow> = sqlx::query_as!(
             IdRow,
             r#"
@@ -1128,6 +1143,11 @@ impl UrgentStaffingRepo {
         reason: &str,
     ) -> Result<(), UrgentStaffingErr> {
         let mut tran: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        crate::business::database::lock_active_branch(tran.connection(), tenant_id)
+            .await
+            .map_err(|error: sqlx::Error| -> UrgentStaffingErr {
+                mutation_failure("lock urgent mutation branch", tenant_id, error)
+            })?;
         let context = sqlx::query!(
             r#"
             SELECT report.status,
@@ -1251,6 +1271,11 @@ impl UrgentStaffingRepo {
         access: UrgentCustomerEvidenceAccess,
     ) -> Result<UrgentCustomerWorkRecord, UrgentStaffingErr> {
         let mut tran: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        crate::business::database::lock_active_branch(tran.connection(), tenant_id)
+            .await
+            .map_err(|error: sqlx::Error| -> UrgentStaffingErr {
+                mutation_failure("lock urgent mutation branch", tenant_id, error)
+            })?;
         let status: Option<String> = sqlx::query_scalar!(
             "SELECT status FROM business_urgent_work_reports WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
             tenant_id,
@@ -1367,6 +1392,11 @@ impl UrgentStaffingRepo {
         job_id: Uuid,
     ) -> Result<UrgentWorkReconcile, UrgentStaffingErr> {
         let mut tran: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        crate::business::database::lock_active_branch(tran.connection(), tenant_id)
+            .await
+            .map_err(|error: sqlx::Error| -> UrgentStaffingErr {
+                mutation_failure("lock urgent mutation branch", tenant_id, error)
+            })?;
         let staff = sqlx::query!(
             r#"
             SELECT report.status, report.claimed_customer_id,
@@ -1950,6 +1980,11 @@ pub async fn reconcile_report_in_transaction(
     report_id: Uuid,
     input: &UrgentWorkReconcileInput,
 ) -> Result<UrgentWorkReconcile, UrgentStaffingErr> {
+    crate::business::database::lock_active_branch(tran.connection(), tenant_id)
+        .await
+        .map_err(|error: sqlx::Error| -> UrgentStaffingErr {
+            mutation_failure("lock reconciliation branch", tenant_id, error)
+        })?;
     let status: Option<String> = sqlx::query_scalar!(
         "SELECT status FROM business_urgent_work_reports WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
         tenant_id,

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE hr_employees SET hire_date = DATE '2026-02-01' WHERE tenant_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7e4666cc10d88eb04c66c055fcc2ddf29d8b0f4cd71d81575db78dab170afccf"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SAVEPOINT rejected_change",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "3c84c11437e4e197ba4f0fe5127bed7b9f6bc7250c62bcb080c7e8a8a990a347"
+}

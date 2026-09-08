@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE business_expense_claims SET description = 'Corrected expense', version = version + 1 WHERE tenant_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e8517d680ad0051ef34dcc067c6ab4e02d7e550c03137f675f04737542cb9d3a"
+}

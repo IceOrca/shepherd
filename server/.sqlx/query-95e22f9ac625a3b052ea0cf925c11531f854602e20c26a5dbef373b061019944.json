@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "ROLLBACK TO SAVEPOINT rejected_change",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "95e22f9ac625a3b052ea0cf925c11531f854602e20c26a5dbef373b061019944"
+}

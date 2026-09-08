@@ -374,6 +374,11 @@ impl PeopleRepo {
             "employee update requires an expected version",
         ))?;
         let mut tran: TenantTransaction = self.begin_active_tenant(tenant_id).await?;
+        crate::business::database::lock_active_branch(tran.connection(), tenant_id)
+            .await
+            .map_err(|error: sqlx::Error| -> PeopleOpsErr {
+                mutation_failure("lock employee mutation branch", tenant_id, error)
+            })?;
         let row: Option<EmployeeRow> = sqlx::query_as!(
             EmployeeRow,
             r#"

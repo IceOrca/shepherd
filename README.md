@@ -418,6 +418,37 @@ Reports are calculated synchronously from committed transactional data, so an
 accepted open-period correction is visible atomically and there is no
 asynchronous report cache to repair.
 
+Closed-month protection also covers monthly salary versions and employee
+hire/termination dates. PostgreSQL checks the salary-covered days actually
+changed, including closed current or future months; a new effective date is
+not permission to rewrite a locked month. Changes outside locked salary days
+remain allowed, and an explicit recorded reopen permits the correction.
+Payroll joins employees by identity, not mutable names, codes, or roles, so a
+renamed employee appears once per currency even when a closed profit-share
+snapshot retains older identity details.
+
+Creation and correction retries for expenses and salary advances recheck
+current subject ownership and effective read permissions, including account
+allow/deny overrides. An old idempotency key cannot expose a record reassigned
+to another employee. Financially guarded business writes acquire the branch
+lock before employee or record locks, using the same ordering as period close;
+independent urgent starts therefore serialize without a shared-lock upgrade
+deadlock.
+
+A branch's time zone can be changed only before it has financial activity
+(expense, advance, salary, reconciled result, settlement, or period decision).
+This prevents recorded cash movements from moving between calendar months.
+Branch name/status edits and unchanged time-zone submissions remain allowed.
+The database enforces this even when branch administration targets a sibling
+of the active write branch.
+
+Apply migration `20260908000100_guard_closed_payroll_sources.sql` through the
+normal SQLx migration workflow; no database reset or history deletion is
+needed. Regenerate the SQLx offline cache after applying it. Regression tests
+cover concurrent independent urgent starts, salary locks/reopening, payroll
+identity deduplication, current-authority retries, and sibling-branch time-zone
+protection.
+
 PostgreSQL triggers reject updates/deletes on revision and period-event tables
 and reject deletion of the financial projections. `REVOKE` from `PUBLIC` is
 also applied as defense in depth. Development still uses one schema-owning

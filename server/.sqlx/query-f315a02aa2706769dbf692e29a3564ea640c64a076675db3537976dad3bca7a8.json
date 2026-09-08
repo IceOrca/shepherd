@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO tenants (id, slug, display_name) VALUES ($1, $2, 'Rollback business regression')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f315a02aa2706769dbf692e29a3564ea640c64a076675db3537976dad3bca7a8"
+}

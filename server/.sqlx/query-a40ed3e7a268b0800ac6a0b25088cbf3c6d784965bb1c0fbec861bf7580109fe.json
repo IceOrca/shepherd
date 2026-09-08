@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE hr_employee_salary_rates SET effective_to = DATE '2026-08-15' WHERE tenant_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a40ed3e7a268b0800ac6a0b25088cbf3c6d784965bb1c0fbec861bf7580109fe"
+}

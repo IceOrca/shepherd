@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT shepherd_current_branch_id()",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "shepherd_current_branch_id",
+        "type_info": "Uuid",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "764031a913ecb6aa7cc4a49da037bdefd711e99a2d128b2c47f54fcb3f943865"
+}

@@ -340,6 +340,101 @@ impl TryFrom<SalaryAdvanceRevisionRow> for SalaryAdvanceRevision {
     }
 }
 
+#[derive(Clone, Copy)]
+enum FinancialSubject {
+    Expense,
+    SalaryAdvance,
+}
+
+/// A successful old command is not authority to read a reassigned projection.
+/// Call under the branch barrier so another correction cannot change its owner.
+async fn require_current_financial_read(
+    connection: &mut PgConnection,
+    tenant_id: Uuid,
+    actor_account_id: Uuid,
+    subject_id: Uuid,
+    subject: FinancialSubject,
+) -> Result<(), FinanceError> {
+    let (is_expense, read_permission, self_permission): (bool, &str, &str) = match subject {
+        FinancialSubject::Expense => (true, "business.expenses.read", "business.expenses.self.read"),
+        FinancialSubject::SalaryAdvance => (false, "hr.salary_advances.read", "hr.salary_advances.self.read"),
+    };
+    let allowed: bool = sqlx::query_scalar!(
+        r#"
+        WITH subject AS (
+            SELECT claim.branch_id,
+                   CASE WHEN claim.paid_by_employee_id IS NULL
+                        THEN claim.submitted_by_account_id ELSE employee.account_id END AS account_id
+            FROM business_expense_claims AS claim
+            LEFT JOIN hr_employees AS employee
+              ON employee.tenant_id = claim.tenant_id AND employee.id = claim.paid_by_employee_id
+            WHERE $4 AND claim.tenant_id = $1 AND claim.id = $3
+            UNION ALL
+            SELECT advance.branch_id, employee.account_id
+            FROM hr_salary_advances AS advance
+            JOIN hr_employees AS employee
+              ON employee.tenant_id = advance.tenant_id AND employee.id = advance.employee_id
+            WHERE NOT $4 AND advance.tenant_id = $1 AND advance.id = $3
+        )
+        SELECT EXISTS (
+            SELECT 1 FROM subject
+            WHERE shepherd_account_has_permission($1, $2, subject.branch_id, $5)
+               OR (subject.account_id = $2
+                   AND shepherd_account_has_permission($1, $2, subject.branch_id, $6))
+        ) AS "allowed!"
+        "#,
+        tenant_id,
+        actor_account_id,
+        subject_id,
+        is_expense,
+        read_permission,
+        self_permission,
+    )
+    .fetch_one(connection)
+    .await
+    .map_err(map_sqlx)?;
+    if !allowed {
+        tracing::warn!(%tenant_id, %actor_account_id, %subject_id, "Finance replay denied by current read scope");
+        return Err(FinanceError::Forbidden);
+    }
+    Ok(())
+}
+
+async fn correction_replay_is_readable(
+    connection: &mut PgConnection,
+    tenant_id: Uuid,
+    actor_account_id: Uuid,
+    subject_id: Uuid,
+    idempotency_key: Uuid,
+    subject: FinancialSubject,
+) -> Result<bool, FinanceError> {
+    let is_expense: bool = matches!(subject, FinancialSubject::Expense);
+    let existing_id: Option<Uuid> = sqlx::query_scalar!(
+        r#"
+        SELECT expense_claim_id AS "subject_id!" FROM business_expense_claim_revisions
+        WHERE tenant_id = $1 AND revised_by_account_id = $2 AND idempotency_key = $3 AND $4
+        UNION ALL
+        SELECT salary_advance_id FROM hr_salary_advance_revisions
+        WHERE tenant_id = $1 AND revised_by_account_id = $2 AND idempotency_key = $3 AND NOT $4
+        "#,
+        tenant_id,
+        actor_account_id,
+        idempotency_key,
+        is_expense,
+    )
+    .fetch_optional(&mut *connection)
+    .await
+    .map_err(map_sqlx)?;
+    match existing_id {
+        None => Ok(false),
+        Some(existing_id) if existing_id != subject_id => Err(FinanceError::Conflict),
+        Some(_) => {
+            require_current_financial_read(connection, tenant_id, actor_account_id, subject_id, subject).await?;
+            Ok(true)
+        }
+    }
+}
+
 async fn fetch_expense(
     connection: &mut PgConnection,
     tenant_id: Uuid,
@@ -552,6 +647,9 @@ impl FinanceRepo {
         input: &ExpenseClaimInput,
     ) -> Result<ExpenseClaim, FinanceError> {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        crate::business::database::lock_active_branch(transaction.connection(), tenant_id)
+            .await
+            .map_err(map_sqlx)?;
         let connection: &mut PgConnection = transaction.connection();
         let payer_is_allowed: bool = match input.paid_by_employee_id {
             Some(employee_id) => sqlx::query_scalar!(
@@ -637,6 +735,16 @@ impl FinanceRepo {
             .await
             .map_err(map_sqlx)?
         };
+        if inserted_id.is_none() {
+            require_current_financial_read(
+                &mut *connection,
+                tenant_id,
+                actor_account_id,
+                resolved_id,
+                FinancialSubject::Expense,
+            )
+            .await?;
+        }
         let result: ExpenseClaim = fetch_expense(&mut *connection, tenant_id, resolved_id).await?;
         commit(transaction).await?;
         Ok(result)
@@ -652,25 +760,25 @@ impl FinanceRepo {
         input: &ExpenseCorrectionInput,
     ) -> Result<ExpenseClaim, FinanceError> {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        crate::business::database::lock_active_branch(transaction.connection(), tenant_id)
+            .await
+            .map_err(map_sqlx)?;
         let connection: &mut PgConnection = transaction.connection();
         let claimed_amount = parse_decimal(&input.claimed_amount, "claimed amount is not a valid number")?;
         let approved_amount = parse_optional_decimal(
             input.approved_amount.as_deref(),
             "approved amount is not a valid number",
         )?;
-        let repeated_expense_id: Option<Uuid> = sqlx::query_scalar!(
-            "SELECT expense_claim_id FROM business_expense_claim_revisions WHERE tenant_id = $1 AND revised_by_account_id = $2 AND idempotency_key = $3",
+        if correction_replay_is_readable(
+            &mut *connection,
             tenant_id,
             actor_account_id,
+            expense_id,
             idempotency_key,
+            FinancialSubject::Expense,
         )
-        .fetch_optional(&mut *connection)
-        .await
-        .map_err(map_sqlx)?;
-        if let Some(repeated_id) = repeated_expense_id {
-            if repeated_id != expense_id {
-                return Err(FinanceError::Conflict);
-            }
+        .await?
+        {
             let result: ExpenseClaim = fetch_expense(&mut *connection, tenant_id, expense_id).await?;
             commit(transaction).await?;
             return Ok(result);
@@ -923,6 +1031,9 @@ impl FinanceRepo {
         command: &FinancialDecisionCommand,
     ) -> Result<ExpenseClaim, FinanceError> {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        crate::business::database::lock_active_branch(transaction.connection(), tenant_id)
+            .await
+            .map_err(map_sqlx)?;
         let connection: &mut PgConnection = transaction.connection();
         let approved_amount = parse_optional_decimal(
             command.approved_amount.as_deref(),
@@ -999,6 +1110,9 @@ impl FinanceRepo {
         input: &FinancialSettlementInput,
     ) -> Result<ExpenseClaim, FinanceError> {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        crate::business::database::lock_active_branch(transaction.connection(), tenant_id)
+            .await
+            .map_err(map_sqlx)?;
         let connection: &mut PgConnection = transaction.connection();
         let amount = parse_decimal(&input.amount, "reimbursement amount is not a valid number")?;
         let existing_expense_id: Option<Uuid> = sqlx::query_scalar!(
@@ -1124,6 +1238,9 @@ impl FinanceRepo {
         input: &SalaryAdvanceInput,
     ) -> Result<SalaryAdvance, FinanceError> {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        crate::business::database::lock_active_branch(transaction.connection(), tenant_id)
+            .await
+            .map_err(map_sqlx)?;
         let connection: &mut PgConnection = transaction.connection();
         let requested_amount = parse_decimal(&input.requested_amount, "requested amount is not a valid number")?;
         let employee_allowed: bool = sqlx::query_scalar!(
@@ -1190,6 +1307,16 @@ impl FinanceRepo {
             .await
             .map_err(map_sqlx)?
         };
+        if inserted_id.is_none() {
+            require_current_financial_read(
+                &mut *connection,
+                tenant_id,
+                actor_account_id,
+                resolved_id,
+                FinancialSubject::SalaryAdvance,
+            )
+            .await?;
+        }
         let result: SalaryAdvance = fetch_advance(&mut *connection, tenant_id, resolved_id).await?;
         commit(transaction).await?;
         Ok(result)
@@ -1205,25 +1332,25 @@ impl FinanceRepo {
         input: &SalaryAdvanceCorrectionInput,
     ) -> Result<SalaryAdvance, FinanceError> {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        crate::business::database::lock_active_branch(transaction.connection(), tenant_id)
+            .await
+            .map_err(map_sqlx)?;
         let connection: &mut PgConnection = transaction.connection();
         let requested_amount = parse_decimal(&input.requested_amount, "requested amount is not a valid number")?;
         let approved_amount = parse_optional_decimal(
             input.approved_amount.as_deref(),
             "approved amount is not a valid number",
         )?;
-        let repeated_advance_id: Option<Uuid> = sqlx::query_scalar!(
-            "SELECT salary_advance_id FROM hr_salary_advance_revisions WHERE tenant_id = $1 AND revised_by_account_id = $2 AND idempotency_key = $3",
+        if correction_replay_is_readable(
+            &mut *connection,
             tenant_id,
             actor_account_id,
+            advance_id,
             idempotency_key,
+            FinancialSubject::SalaryAdvance,
         )
-        .fetch_optional(&mut *connection)
-        .await
-        .map_err(map_sqlx)?;
-        if let Some(repeated_id) = repeated_advance_id {
-            if repeated_id != advance_id {
-                return Err(FinanceError::Conflict);
-            }
+        .await?
+        {
             let result: SalaryAdvance = fetch_advance(&mut *connection, tenant_id, advance_id).await?;
             commit(transaction).await?;
             return Ok(result);
@@ -1441,6 +1568,9 @@ impl FinanceRepo {
         command: &FinancialDecisionCommand,
     ) -> Result<SalaryAdvance, FinanceError> {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        crate::business::database::lock_active_branch(transaction.connection(), tenant_id)
+            .await
+            .map_err(map_sqlx)?;
         let connection: &mut PgConnection = transaction.connection();
         let approved_amount = parse_optional_decimal(
             command.approved_amount.as_deref(),
@@ -1513,6 +1643,9 @@ impl FinanceRepo {
         reference: &str,
     ) -> Result<SalaryAdvance, FinanceError> {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        crate::business::database::lock_active_branch(transaction.connection(), tenant_id)
+            .await
+            .map_err(map_sqlx)?;
         let connection: &mut PgConnection = transaction.connection();
         let repeated: Option<ActionEventRow> = sqlx::query_as!(
             ActionEventRow,
@@ -1576,6 +1709,9 @@ impl FinanceRepo {
         input: &SalaryAdvanceRecoveryInput,
     ) -> Result<SalaryAdvance, FinanceError> {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
+        crate::business::database::lock_active_branch(transaction.connection(), tenant_id)
+            .await
+            .map_err(map_sqlx)?;
         let connection: &mut PgConnection = transaction.connection();
         let amount = parse_decimal(&input.amount, "recovery amount is not a valid number")?;
         let existing_advance_id: Option<Uuid> = sqlx::query_scalar!(
@@ -1634,6 +1770,10 @@ impl FinanceRepo {
         Ok(result)
     }
 }
+
+#[cfg(test)]
+#[path = "regression_tests.rs"]
+mod regression_tests;
 
 #[cfg(test)]
 mod tests {
