@@ -2345,7 +2345,7 @@ async fn ensure_identity(
         tenant_id,
         account_id,
     )
-    .execute(db.global_pool())
+    .execute(db.pool())
     .await
     .map_err(io::Error::other)?;
     Ok(())

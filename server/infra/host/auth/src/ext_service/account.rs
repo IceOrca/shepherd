@@ -18,7 +18,7 @@ use uuid::Uuid;
 use crate::ext_service::middleware::require_authenticated;
 
 use crate::{
-    AuthCodeError, AuthService, PermissionCode, RoleCode,
+    AuthCodeErr, AuthService, PermissionCode, RoleCode,
     ext_service::{AuthedPrincipal, account_cache::AuthedCacheErr},
 };
 
@@ -554,7 +554,7 @@ async fn load_tenant_memberships(
         principal.subject,
         MAX_TENANT_MEMBERSHIPS + 1,
     )
-    .fetch_all(db.global_pool())
+    .fetch_all(db.pool())
     .await
     .map_err(|err: sqlx::Error| {
         error!(
@@ -628,17 +628,16 @@ async fn load_tenant_memberships(
             continue;
         };
 
-        let primary_role: RoleCode =
-            RoleCode::try_from(row.primary_role_code).map_err(|code_error: AuthCodeError| {
-                error!(
-                    operation = "load_tenant_memberships",
-                    tenant_id = %row.tenant_id,
-                    account_id = %row.account_id,
-                    reason = %code_error,
-                    "Tenant membership has an invalid primary role code"
-                );
-                StatusCode::SERVICE_UNAVAILABLE
-            })?;
+        let primary_role: RoleCode = RoleCode::try_from(row.primary_role_code).map_err(|code_error: AuthCodeErr| {
+            error!(
+                operation = "load_tenant_memberships",
+                tenant_id = %row.tenant_id,
+                account_id = %row.account_id,
+                reason = %code_error,
+                "Tenant membership has an invalid primary role code"
+            );
+            StatusCode::SERVICE_UNAVAILABLE
+        })?;
 
         memberships.push(TenantMembershipSummary {
             tenant_id: row.tenant_id,
@@ -684,7 +683,7 @@ async fn load_app_acct(
     )
     // The selected tenant has not entered RLS context yet, so validate the
     // global identity-to-membership registry before loading tenant data.
-    .fetch_optional(db.global_pool())
+    .fetch_optional(db.pool())
     .await
     .map_err(|err: sqlx::Error| {
         error!(
@@ -867,26 +866,25 @@ async fn load_app_acct(
     );
 
     // Loaded application role and permission grants
-    let primary_role: RoleCode =
-        RoleCode::try_from(account.primary_role_code).map_err(|code_error: AuthCodeError| {
-            error!(
-                tenant_id = %account.tenant_id,
-                account_id = %account.id,
-                reason = %code_error,
-                "Application account primary role code is invalid"
-            );
-            StatusCode::SERVICE_UNAVAILABLE
-        })?;
+    let primary_role: RoleCode = RoleCode::try_from(account.primary_role_code).map_err(|code_error: AuthCodeErr| {
+        error!(
+            tenant_id = %account.tenant_id,
+            account_id = %account.id,
+            reason = %code_error,
+            "Application account primary role code is invalid"
+        );
+        StatusCode::SERVICE_UNAVAILABLE
+    })?;
     let authz_roles: Vec<ScopedRoleGrant> = role_rows
         .into_iter()
-        .map(|row: AccountRole| -> Result<ScopedRoleGrant, AuthCodeError> {
+        .map(|row: AccountRole| -> Result<ScopedRoleGrant, AuthCodeErr> {
             Ok(ScopedRoleGrant {
                 branch_id: row.branch_id,
                 role_code: RoleCode::try_from(row.role_code)?,
             })
         })
         .collect::<Result<Vec<ScopedRoleGrant>, _>>()
-        .map_err(|code_error: AuthCodeError| {
+        .map_err(|code_error: AuthCodeErr| {
             error!(
                 tenant_id = %account.tenant_id,
                 account_id = %account.id,
@@ -898,7 +896,7 @@ async fn load_app_acct(
     let mut authz_perms: Vec<ScopedPermissionGrant> = Vec::with_capacity(permission_rows.len());
     for row in permission_rows {
         let permission_code: PermissionCode =
-            PermissionCode::try_from(row.permission_code).map_err(|code_error: AuthCodeError| {
+            PermissionCode::try_from(row.permission_code).map_err(|code_error: AuthCodeErr| {
                 error!(
                     tenant_id = %account.tenant_id,
                     account_id = %account.id,

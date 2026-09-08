@@ -11,21 +11,19 @@ use infra_auth::{AuthService, ext_service::AuthedPrincipal};
 use infra_kernel::debug::Debugging;
 use serde_json::json;
 use super::{bootstrap, database, core::*};
+use tracing::{error, warn, info, debug, trace};
 
 // Tenant onboarding is rare; serialize it before acquiring pooled connections.
 static BOOTSTRAP_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static LOGGING_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 type ApiError = (StatusCode, Json<serde_json::Value>);
-fn failure(status: StatusCode, message: &str) -> ApiError {
-    (
-        status,
-        Json(json!({"message": message, "code": "platform_request_failed"})),
-    )
+fn failure(s: StatusCode, msg: &str) -> ApiError {
+    (s, Json(json!({"message": msg, "code": "platform_request_failed"})))
 }
 
 async fn profile(auth: &AuthService, principal: &AuthedPrincipal) -> Result<Option<PlatformProfile>, ApiError> {
-    database::administrator(auth.db.global_pool(), &principal.issuer, &principal.subject)
+    database::administrator(auth.db.pool(), &principal.issuer, &principal.subject)
         .await
         .map_err(|error: sqlx::Error| {
             tracing::error!(operation = "platform.authorize", reason = %error, "Platform authority lookup failed");
@@ -97,7 +95,7 @@ async fn create_tenant(
         )
     })?;
     let guard: sqlx::Transaction<'static, sqlx::Postgres> =
-        database::lock_administrator(auth.db.global_pool(), &principal.issuer, &principal.subject)
+        database::lock_administrator(auth.db.pool(), &principal.issuer, &principal.subject)
             .await
             .map_err(|error: sqlx::Error| {
                 if matches!(error, sqlx::Error::RowNotFound) {
@@ -107,12 +105,12 @@ async fn create_tenant(
                 }
             })?;
     tracing::info!(tenant_id = %request.tenant_id, actor = %principal.subject, "Platform tenant bootstrap requested");
-    let result: TenantBootstrapResult = bootstrap::bootstrap(auth.db.global_pool(), auth.auth_admin.as_ref(), &principal.issuer, &request, &principal.subject, &admin.email)
+    let result: TenantBootstrapResult = bootstrap::bootstrap(auth.db.pool(), auth.auth_admin.as_ref(), &principal.issuer, &request, &principal.subject, &admin.email)
         .await.map_err(|error| {
             tracing::warn!(tenant_id = %request.tenant_id, reason = %error, "Platform tenant bootstrap rejected");
             failure(StatusCode::CONFLICT, "Không thể tạo doanh nghiệp. Kiểm tra mã doanh nghiệp và email chủ sở hữu; giữ nguyên yêu cầu để thử lại nếu dịch vụ bị gián đoạn.")
         })?;
-    guard.commit().await.map_err(|_| {
+    guard.commit().await.map_err(|_err: sqlx::Error| {
         failure(
             StatusCode::SERVICE_UNAVAILABLE,
             "Hãy gửi lại cùng yêu cầu để kiểm tra kết quả.",
@@ -135,13 +133,13 @@ async fn set_log_level(
 ) -> Result<Json<ServerLogFilter>, ApiError> {
     let _permit: tokio::sync::MutexGuard<'_, ()> = LOGGING_GATE.lock().await;
     let guard: sqlx::Transaction<'static, sqlx::Postgres> =
-        database::lock_administrator(auth.db.global_pool(), &principal.issuer, &principal.subject)
+        database::lock_administrator(auth.db.pool(), &principal.issuer, &principal.subject)
             .await
             .map_err(|_| failure(StatusCode::FORBIDDEN, "Không thể xác nhận quyền quản trị."))?;
     let before: String =
         Debugging::filter().map_err(|_| failure(StatusCode::SERVICE_UNAVAILABLE, "Không thể đọc cấu hình ghi log."))?;
     let result: Result<(), sqlx::Error> = database::audit_log_request(
-        auth.db.global_pool(),
+        auth.db.pool(),
         &principal.issuer,
         &principal.subject,
         &before,
@@ -153,11 +151,11 @@ async fn set_log_level(
         failure(StatusCode::SERVICE_UNAVAILABLE, "Không thể lưu lịch sử thay đổi log.")
     })?;
     let filter: String = Debugging::set_level(request.level.as_str())
-        .map_err(|_| failure(StatusCode::SERVICE_UNAVAILABLE, "Không thể cập nhật mức log."))?;
+        .map_err(|_err: String| failure(StatusCode::SERVICE_UNAVAILABLE, "Không thể cập nhật mức log."))?;
     tracing::warn!(actor = %principal.subject, level = request.level.as_str(), "Server log level changed without restart");
     guard
         .commit()
         .await
-        .map_err(|_| failure(StatusCode::SERVICE_UNAVAILABLE, "Không thể hoàn tất cập nhật log."))?;
+        .map_err(|_err: sqlx::Error| failure(StatusCode::SERVICE_UNAVAILABLE, "Không thể hoàn tất cập nhật log."))?;
     Ok(Json(ServerLogFilter { filter }))
 }

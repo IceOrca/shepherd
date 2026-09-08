@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use uuid::Uuid;
-
+use tracing::{error, warn, info, debug, trace};
 #[derive(Clone, Deserialize, Serialize, TS)]
 pub struct TenantBootstrapOwner {
     pub username: String,

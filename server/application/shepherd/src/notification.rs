@@ -181,7 +181,7 @@ impl NotifyDispatcher {
         let tenant_ids: Vec<Uuid> = sqlx::query_scalar!("SELECT id FROM tenants WHERE status = 'active' ORDER BY id")
             // Tenant enumeration is intentionally global; every outbox access
             // after this point runs in that tenant's RLS-scoped transaction.
-            .fetch_all(self.db.global_pool())
+            .fetch_all(self.db.pool())
             .await
             .map_err(|error: sqlx::Error| format!("list active tenants: {error}"))?;
 

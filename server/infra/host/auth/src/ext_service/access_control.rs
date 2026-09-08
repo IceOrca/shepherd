@@ -17,7 +17,7 @@ use tracing::{debug, error, info, trace, warn};
 use ts_rs::TS;
 use uuid::Uuid;
 
-use crate::{AuthCodeError, AuthService, PermissionCode, RoleCode, ext_service::ListPaginationPolicy};
+use crate::{AuthCodeErr, AuthService, PermissionCode, RoleCode, ext_service::ListPaginationPolicy};
 
 use super::{
     account::{AccountStatus, AuthedUser},
@@ -655,7 +655,7 @@ async fn update_role(
     Json(mut request): Json<UpdateAccessControlRoleRequest>,
 ) -> Result<Json<AccessControlRole>, AccessControlError> {
     let role_code: RoleCode = RoleCode::parse(role_code_raw)
-        .map_err(|code_error: AuthCodeError| AccessControlError::Validation(code_error.to_string()))?;
+        .map_err(|code_error: AuthCodeErr| AccessControlError::Validation(code_error.to_string()))?;
     normalize_update_role_request(&mut request)?;
     let tenant_id: Uuid = actor.tenant_id;
     let actor_id: Uuid = actor.account_id;
@@ -1905,14 +1905,14 @@ fn normalize_user_access_request(request: &mut UpdateAccountAccessRequest) -> Re
 }
 
 fn parse_role(code: String) -> Result<RoleCode, AccessControlError> {
-    RoleCode::try_from(code).map_err(|code_error: AuthCodeError| {
+    RoleCode::try_from(code).map_err(|code_error: AuthCodeErr| {
         error!(reason = %code_error, "Persisted tenant role code is invalid");
         AccessControlError::Internal
     })
 }
 
 fn parse_permission(code: String) -> Result<PermissionCode, AccessControlError> {
-    PermissionCode::try_from(code).map_err(|code_error: AuthCodeError| {
+    PermissionCode::try_from(code).map_err(|code_error: AuthCodeErr| {
         error!(reason = %code_error, "Persisted permission code is invalid");
         AccessControlError::Internal
     })

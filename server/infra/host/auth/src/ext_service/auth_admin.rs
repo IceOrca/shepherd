@@ -20,7 +20,7 @@ use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::{
-    AuthCodeError, AuthService, PermissionCode, RoleCode,
+    AuthCodeErr, AuthService, PermissionCode, RoleCode,
     ext_service::ListPaginationPolicy,
     ext_service::access_control::AccountRoleAssignmentContract,
     ext_service::account::{AccountStatus, AuthedUser},
@@ -49,7 +49,7 @@ impl AuthAdminPolicy {
         disable_permission: impl Into<String>,
         role_read_permission: impl Into<String>,
         role_manage_permission: impl Into<String>,
-    ) -> Result<Self, AuthCodeError> {
+    ) -> Result<Self, AuthCodeErr> {
         Ok(Self {
             read_permission: PermissionCode::parse(read_permission)?,
             create_permission: PermissionCode::parse(create_permission)?,

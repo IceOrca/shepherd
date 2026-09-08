@@ -298,9 +298,9 @@ impl PostgresCli {
         }
     }
 
-    /// Internal escape hatch used by `DatabaseAdapter::global_pool`; external
+    /// Internal escape hatch used by `DatabaseAdapter::pool`; external
     /// application crates cannot access the pool through `PostgresCli`.
-    pub(in crate::database) fn pool(&self) -> &PgPool {
+    pub(crate) fn pool(&self) -> &PgPool {
         &self.pool
     }
 

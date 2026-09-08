@@ -15,7 +15,7 @@ use axum::http::header::{HeaderValue, InvalidHeaderValue};
 pub use infra_kernel::request::OriginatorIp;
 use tracing::{error, warn, info, debug, trace};
 
-use crate::HostContext;
+use crate::HostInfa;
 const DEFAULT_TRUSTED_PROXY_CIDRS: &str = "127.0.0.1/32,::1/128";
 static TRUSTED_PROXY_CIDRS: OnceLock<Vec<TrustedProxyCidr>> = OnceLock::new();
 
@@ -68,7 +68,7 @@ fn trusted_proxy_cidrs() -> &'static [TrustedProxyCidr] {
     })
 }
 
-pub fn layer(router: Router, state: Arc<HostContext>) -> Router {
+pub fn layer(router: Router, state: Arc<HostInfa>) -> Router {
     let host_router: Router = router.route_layer(from_fn_with_state(state, originator_ip_layer));
     host_router
 }
@@ -91,7 +91,7 @@ fn extract_originator_ip_trusted(headers: &HeaderMap, socketinfo: Option<&Socket
 }
 
 async fn originator_ip_layer(
-    State(ctx): State<Arc<HostContext>>,
+    State(ctx): State<Arc<HostInfa>>,
     ConnectInfo(socketinfo): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     mut req: Request,

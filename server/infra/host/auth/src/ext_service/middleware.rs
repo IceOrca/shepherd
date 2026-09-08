@@ -11,10 +11,9 @@ use axum::{
 use infra_kernel::request::PrincipalRateLimitKey;
 use tracing::{debug, error, info, trace, warn};
 use super::AccessTokenErr;
-
 use crate::{AuthService, PermissionCode};
-
 use super::{AuthedPrincipal, account::AuthedUser};
+use crate::AuthCodeErr;
 
 #[derive(Clone, Debug)]
 pub enum PermissionRequirement {
@@ -94,7 +93,7 @@ where
 
 fn parse_permission(permission: &str) -> PermissionCode {
     PermissionCode::parse(permission)
-        .unwrap_or_else(|error| panic!("invalid route permission requirement `{permission}`: {error}"))
+        .unwrap_or_else(|err: AuthCodeErr| panic!("invalid route permission requirement `{permission}`: {err}"))
 }
 
 async fn require_permissions(
@@ -106,7 +105,7 @@ async fn require_permissions(
     if requirement.allows(&user) {
         return Ok(next.run(request).await);
     }
-    info!(
+    debug!(
         operation = "authorize_route_permissions",
         tenant_id = %user.tenant_id,
         account_id = %user.account_id,

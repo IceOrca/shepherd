@@ -9,12 +9,12 @@ use ts_rs::TS;
 pub struct RoleCode(String);
 
 impl RoleCode {
-    pub fn parse(value: impl Into<String>) -> Result<Self, AuthCodeError> {
+    pub fn parse(value: impl Into<String>) -> Result<Self, AuthCodeErr> {
         let value: String = value.into();
         if is_valid_role_code(&value) {
             Ok(Self(value))
         } else {
-            Err(AuthCodeError::InvalidRoleCode)
+            Err(AuthCodeErr::InvalidRoleCode)
         }
     }
 
@@ -53,7 +53,7 @@ impl<'de> Deserialize<'de> for RoleCode {
 }
 
 impl TryFrom<String> for RoleCode {
-    type Error = AuthCodeError;
+    type Error = AuthCodeErr;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         Self::parse(value)
@@ -61,7 +61,7 @@ impl TryFrom<String> for RoleCode {
 }
 
 impl TryFrom<&str> for RoleCode {
-    type Error = AuthCodeError;
+    type Error = AuthCodeErr;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Self::parse(value.to_owned())
@@ -73,12 +73,12 @@ impl TryFrom<&str> for RoleCode {
 pub struct PermissionCode(String);
 
 impl PermissionCode {
-    pub fn parse(value: impl Into<String>) -> Result<Self, AuthCodeError> {
+    pub fn parse(value: impl Into<String>) -> Result<Self, AuthCodeErr> {
         let value: String = value.into();
         if is_valid_permission_code(&value) {
             Ok(Self(value))
         } else {
-            Err(AuthCodeError::InvalidPermissionCode)
+            Err(AuthCodeErr::InvalidPermissionCode)
         }
     }
 
@@ -117,7 +117,7 @@ impl<'de> Deserialize<'de> for PermissionCode {
 }
 
 impl TryFrom<String> for PermissionCode {
-    type Error = AuthCodeError;
+    type Error = AuthCodeErr;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         Self::parse(value)
@@ -125,7 +125,7 @@ impl TryFrom<String> for PermissionCode {
 }
 
 impl TryFrom<&str> for PermissionCode {
-    type Error = AuthCodeError;
+    type Error = AuthCodeErr;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Self::parse(value.to_owned())
@@ -133,12 +133,12 @@ impl TryFrom<&str> for PermissionCode {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AuthCodeError {
+pub enum AuthCodeErr {
     InvalidRoleCode,
     InvalidPermissionCode,
 }
 
-impl fmt::Display for AuthCodeError {
+impl fmt::Display for AuthCodeErr {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidRoleCode => formatter.write_str("role code format is invalid"),
@@ -147,7 +147,7 @@ impl fmt::Display for AuthCodeError {
     }
 }
 
-impl Error for AuthCodeError {}
+impl Error for AuthCodeErr {}
 
 fn is_valid_role_code(value: &str) -> bool {
     let mut characters: std::str::Chars<'_> = value.chars();

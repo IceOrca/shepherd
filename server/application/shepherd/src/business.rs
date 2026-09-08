@@ -1,3 +1,4 @@
+pub mod branch;
 pub mod finance;
 pub mod staffing;
 
@@ -5,7 +6,7 @@ use std::sync::Arc;
 
 use axum::Router;
 
-use crate::{AppContext, branch};
+use crate::{AppContext};
 
 pub fn routes() -> Router<Arc<AppContext>> {
     let routes: Router<Arc<AppContext>> = Router::new()

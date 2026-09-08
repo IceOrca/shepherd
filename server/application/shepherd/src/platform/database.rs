@@ -4,7 +4,7 @@ use infra_auth::ext_service::auth_admin::{
 };
 use serde_json::{Value, json};
 use sqlx::{PgPool, Postgres, Transaction};
-use tracing::{debug, info, warn, error};
+use tracing::{error, warn, info, debug, trace};
 use uuid::Uuid;
 use super::core::{TenantBootstrapRequest, TenantBootstrapOwner};
 use super::core::PlatformProfile;

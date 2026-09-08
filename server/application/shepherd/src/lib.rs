@@ -2,7 +2,6 @@
 
 pub mod auth;
 mod auth_provisioning;
-pub mod branch;
 pub mod business;
 pub mod notification;
 pub mod pagination;
@@ -43,7 +42,7 @@ use business::finance::{
     database::FinanceRepo,
     reporting::{core::FinancialReportService, database::FinancialReportRepo},
 };
-use branch::{core::BranchService, database::BranchRepo};
+use business::branch::{core::BranchService, database::BranchRepo};
 use people::{core::PeopleService, database::PeopleRepo};
 
 pub use infra_host::ratelimiting;

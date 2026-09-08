@@ -8,6 +8,7 @@ use super::{
     core::{TenantBootstrapRequest, TenantBootstrapOwner, TenantBootstrapResult},
     database,
 };
+use tracing::{error, warn, info, debug, trace};
 
 pub async fn bootstrap(
     pool: &PgPool,
@@ -38,9 +39,9 @@ pub async fn bootstrap(
             database::commit_tenant(pool, request, &owners, issuer, operator).await
         }
         .await;
-        if let Err(error) = result {
+        if let Err(err) = result {
             database::mark_failed(pool, request.idempotency_key, "bootstrap_failed").await;
-            return Err(error);
+            return Err(err);
         }
     }
     guard.commit().await?;

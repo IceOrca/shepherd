@@ -22,9 +22,9 @@ pub fn routes(state: &Arc<LegacyAuthService>) -> Router {
 
 pub async fn init(
     auth_admin: Arc<dyn infra_auth::ext_service::auth_admin::ExtAuthAdmin>,
-) -> (Arc<HostContext>, Router) {
+) -> (Arc<HostInfa>, Router) {
     info!("Starting infra host initialization");
-    let host_ctx: Arc<HostContext> = HostContext::new_arc(auth_admin).await;
+    let host_ctx: Arc<HostInfa> = HostInfa::new_arc(auth_admin).await;
     debug!("Infra host context initialized; building host routes");
     let host_router: Router = routes(Arc::clone(&host_ctx));
     let host_router: Router = apply_layers(host_router, Arc::clone(&host_ctx));
@@ -32,7 +32,7 @@ pub async fn init(
     (host_ctx, host_router)
 }
 
-pub fn mount_app_routes(router: Router, routes: AppRoutes, host: Arc<HostContext>) -> Router {
+pub fn mount_app_routes(router: Router, routes: AppRoutes, host: Arc<HostInfa>) -> Router {
     info!("Mounting public, protected, and admin application route groups");
     let public: Router = RateLimiter::public_layer(routes.public);
     let protected: Router = routes

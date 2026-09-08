@@ -1034,6 +1034,9 @@ queries this table on every platform request; sensitive writes hold the
 operator row while executing so revocation cannot race accepted mutations.
 The browser calls `GET /api/platform/session` after sign-in, and a mapped
 operator can enter the console with zero tenant memberships.
+The console uses a master/detail layout: the operator selects tenant bootstrap
+or runtime log configuration from the compact navigation, and only the selected
+workflow occupies the detail panel.
 
 Initialize the development operator by copying
 `deploy/shepherd/dev/system-admin.env.example` to

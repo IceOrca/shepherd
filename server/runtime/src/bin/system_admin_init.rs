@@ -17,7 +17,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .provision_platform_identity(&username, &email, &password)
         .await?;
     let database: std::sync::Arc<DatabaseAdapter> = DatabaseAdapter::new_arc().await;
-    let mut transaction: sqlx::Transaction<'static, sqlx::Postgres> = database.global_pool().begin().await?;
+    let mut transaction: sqlx::Transaction<'static, sqlx::Postgres> = database.pool().begin().await?;
     sqlx::query!("INSERT INTO platform_administrators (issuer, subject, username, email) VALUES ($1, $2, $3, $4) ON CONFLICT (issuer, subject) DO UPDATE SET username = EXCLUDED.username, email = EXCLUDED.email, is_active = TRUE", issuer, identity.subject, username, email)
         .execute(&mut *transaction).await?;
     sqlx::query!("INSERT INTO platform_administration_events (actor_issuer, actor_subject, action, details) VALUES ($1, $2, 'administrator.initialize', '{}'::jsonb)", issuer, identity.subject)

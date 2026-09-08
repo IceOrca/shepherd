@@ -1,7 +1,7 @@
 #![cfg_attr(debug_assertions, allow(unused))]
 
 mod codes;
-pub use codes::{AuthCodeError, PermissionCode, RoleCode};
+pub use codes::{AuthCodeErr, PermissionCode, RoleCode};
 
 cfg_if::cfg_if! {
 if #[cfg(feature = "ext-service")] {

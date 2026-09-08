@@ -15,20 +15,20 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::timeout::TimeoutLayer;
 use tracing::{error, warn, info, debug, trace};
 
-use crate::HostContext;
+use crate::HostInfa;
 use crate::ip_extract;
 use crate::logging;
 
 const DEFAULT_CORS_ALLOWED_ORIGINS: &str = "http://localhost:5173,http://localhost:5174";
 const DEFAULT_HTTP_REQUEST_TIMEOUT_SECS: u64 = 20;
 
-pub fn routes(host_ctx: Arc<HostContext>) -> Router {
+pub fn routes(host_ctx: Arc<HostInfa>) -> Router {
     let host_router: Router = make_route_with_state("/", get(get_root), Arc::clone(&host_ctx));
     info!("Infra host routes initialized");
     host_router
 }
 
-pub fn apply_layers(router: Router, host_ctx: Arc<HostContext>) -> Router {
+pub fn apply_layers(router: Router, host_ctx: Arc<HostInfa>) -> Router {
     info!("Applying host request tracing, client identification, timeout, and CORS layers");
     let router: Router = logging::layer(router);
     let router: Router = ip_extract::layer(router, host_ctx);

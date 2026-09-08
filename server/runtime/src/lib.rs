@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 use axum::Router;
-use infra_host::HostContext as HostInfa;
+use infra_host::HostInfa;
 use infra_worker::Worker;
 use tracing::{error, warn, info, debug, trace};
 

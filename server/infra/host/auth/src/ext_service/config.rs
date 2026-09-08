@@ -1,7 +1,7 @@
 use std::{str::FromStr, time::Duration};
 
 use jsonwebtoken::Algorithm;
-
+use tracing::{debug, error, info, trace, warn};
 use super::AccessTokenErr;
 
 const DEFAULT_JWKS_REFRESH_SECS: u64 = 300;
@@ -96,7 +96,7 @@ fn required_env(name: &str) -> Result<String, AccessTokenErr> {
 fn normalize_url(label: &str, value: String) -> Result<String, AccessTokenErr> {
     let value: String = value.trim().trim_end_matches('/').to_owned();
     let url: reqwest::Url = reqwest::Url::parse(&value)
-        .map_err(|error| AccessTokenErr::Configuration(format!("invalid {label} URL: {error}")))?;
+        .map_err(|err| AccessTokenErr::Configuration(format!("invalid {label} URL: {err}")))?;
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
         return Err(AccessTokenErr::Configuration(format!(
             "{label} URL must be an absolute HTTP(S) URL"
@@ -119,8 +119,8 @@ fn parse_algorithms(value: &str) -> Result<Vec<Algorithm>, AccessTokenErr> {
 
 fn parse_u64_env(name: &str, default: u64) -> Result<u64, AccessTokenErr> {
     std::env::var(name).map_or(Ok(default), |value: String| {
-        value.parse::<u64>().map_err(|error: std::num::ParseIntError| {
-            AccessTokenErr::Configuration(format!("{name} must be an unsigned integer: {error}"))
+        value.parse::<u64>().map_err(|err: std::num::ParseIntError| {
+            AccessTokenErr::Configuration(format!("{name} must be an unsigned integer: {err}"))
         })
     })
 }

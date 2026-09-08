@@ -991,7 +991,7 @@ mod tests {
         .await?;
         cleanup.commit().await?;
         sqlx::query!("DELETE FROM tenants WHERE id = $1", tenant_id)
-            .execute(database.global_pool())
+            .execute(database.pool())
             .await?;
 
         let periods = result?;
@@ -1162,7 +1162,7 @@ mod tests {
             .await?;
         verify.commit().await?;
         sqlx::query!("DELETE FROM tenants WHERE id = $1", tenant_id)
-            .execute(database.global_pool())
+            .execute(database.pool())
             .await?;
         Ok(())
     }

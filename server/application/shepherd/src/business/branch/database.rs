@@ -6,7 +6,7 @@ use sqlx::PgConnection;
 use tracing::{debug, error, info, trace, warn};
 use uuid::Uuid;
 
-use crate::branch::core::{
+use super::core::{
     Branch, BranchCreateRequest, BranchCursor, BranchErr, BranchPage, BranchSummary, BranchSummaryCursor,
     BranchSummaryPage, BranchUpdateRequest,
 };
@@ -433,7 +433,7 @@ mod tests {
         .await?;
         cleanup.commit().await?;
         sqlx::query!("DELETE FROM tenants WHERE id = $1", tenant_id)
-            .execute(database.global_pool())
+            .execute(database.pool())
             .await?;
         Ok(())
     }

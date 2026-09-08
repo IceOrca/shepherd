@@ -1929,7 +1929,7 @@ mod tests {
         })
         .await;
         let tenant_cleanup_result = sqlx::query!("DELETE FROM tenants WHERE id = $1", tenant_id)
-            .execute(database.global_pool())
+            .execute(database.pool())
             .await;
 
         operation_result?;
@@ -2113,7 +2113,7 @@ mod tests {
         })
         .await;
         let tenant_cleanup_result = sqlx::query!("DELETE FROM tenants WHERE id = $1", tenant_id)
-            .execute(database.global_pool())
+            .execute(database.pool())
             .await;
 
         operation_result?;

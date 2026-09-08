@@ -66,7 +66,7 @@ use crate::{
             },
         },
     },
-    branch::{
+    business::branch::{
         core::{Branch, BranchCreateRequest, BranchSummary, BranchUpdateRequest},
         host::{BranchPageResponse, BranchSummaryPageResponse},
     },

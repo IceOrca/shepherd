@@ -26,7 +26,7 @@ use ratelimiting::RateLimiter;
 /// Application state may hold this context, but the infra never holds an
 /// application domain service.
 #[derive(Clone)]
-pub struct HostContext {
+pub struct HostInfa {
     pub database: Arc<DatabaseAdapter>,
     pub redis: Arc<RedisAdapter>,
     #[cfg(feature = "auth")]
@@ -36,7 +36,7 @@ pub struct HostContext {
     pub ratelimiter: Arc<RateLimiter>,
 }
 
-impl HostContext {
+impl HostInfa {
     pub async fn new_arc(auth_admin: Arc<dyn ExtAuthAdmin>) -> Arc<Self> {
         let database: Arc<DatabaseAdapter> = DatabaseAdapter::new_arc().await;
         let redis: Arc<RedisAdapter> = RedisAdapter::new_arc();

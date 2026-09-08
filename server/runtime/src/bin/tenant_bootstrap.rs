@@ -51,7 +51,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         };
     request.normalize().map_err(io::Error::other)?;
     let result: shepherd::platform::core::TenantBootstrapResult = shepherd::platform::bootstrap::bootstrap(
-        db.global_pool(),
+        db.pool(),
         auth_admin.as_ref(),
         &auth_issuer,
         &request,

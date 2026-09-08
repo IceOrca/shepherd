@@ -664,7 +664,7 @@ impl Fixture {
         .await?;
         transaction.commit().await?;
         let tenant_delete: PgQueryResult = sqlx::query!("DELETE FROM tenants WHERE id = $1", self.tenant_id)
-            .execute(self.database.global_pool())
+            .execute(self.database.pool())
             .await?;
         tracing::debug!(
             operation = "urgent_staffing.test_fixture_cleanup",

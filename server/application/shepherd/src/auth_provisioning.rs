@@ -63,7 +63,7 @@ impl AuthProvisioner for AppAuthProvisioner {
                 tenant_id = %context.tenant_id,
                 actor_id = %context.actor_account_id,
                 account_id = %context.account_id,
-                error = %database_error,
+                err = %database_error,
                 "Automatic HR employee provisioning failed"
             );
             AcctProvisionErr::new("hr_employee_insert_failed")
@@ -102,7 +102,7 @@ impl AuthProvisioner for AppAuthProvisioner {
                     tenant_id = %context.tenant_id,
                     actor_id = %context.actor_account_id,
                     account_id = %context.account_id,
-                    error = %database_error,
+                    err = %database_error,
                     "Tenant-owner account could not be detached from an HR employee"
                 );
                 AcctProvisionErr::new("tenant_owner_employee_detach_failed")
@@ -128,7 +128,7 @@ impl AuthProvisioner for AppAuthProvisioner {
                 tenant_id = %context.tenant_id,
                 actor_id = %context.actor_account_id,
                 account_id = %context.account_id,
-                error = %database_error,
+                err = %database_error,
                 "Existing HR employee branch could not be loaded"
             );
             AcctProvisionErr::new("hr_employee_branch_load_failed")
@@ -169,12 +169,12 @@ impl AuthProvisioner for AppAuthProvisioner {
                 actor_id = %context.actor_account_id,
                 account_id = %context.account_id,
                 branch_id = %branch_id,
-                error = %database_error,
+                err = %database_error,
                 "Shepherd HR employee branch synchronization failed"
             );
             if database_error
                 .as_database_error()
-                .is_some_and(|error| error.is_foreign_key_violation())
+                .is_some_and(|err| err.is_foreign_key_violation())
             {
                 return AcctProvisionErr::new("employee_branch_transfer_has_history");
             }
@@ -274,7 +274,7 @@ mod tests {
             &[first_branch, current_branch],
             Some(current_branch),
         )
-        .unwrap_or_else(|error| panic!("employee branch must resolve: {error}"));
+        .unwrap_or_else(|err| panic!("employee branch must resolve: {err}"));
         assert_eq!(selected, current_branch);
     }
 
@@ -288,7 +288,7 @@ mod tests {
             &[],
             Some(current_branch),
         )
-        .unwrap_or_else(|error| panic!("tenant-scoped role must retain its employee home branch: {error}"));
+        .unwrap_or_else(|err| panic!("tenant-scoped role must retain its employee home branch: {err}"));
         assert_eq!(selected, current_branch);
     }
 }

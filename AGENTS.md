@@ -281,7 +281,7 @@ Supabase Auth (GoTrue) is the external identity provider. It owns credentials, s
 
 ## Software Architecture and API Design
 
-Reusable server capabilities live in `server/infra/`. `kernel` owns neutral primitives and debugging; `postgres` and `redis` are thin adapters; `auth` and `authz` own reusable authentication and authorization behavior; `app-sdk`, `jobs`, `notifier`, and `worker` own reusable application-support capabilities; and `host` owns `HostContext`, `AppRoutes`, Axum policies, logging, audit, and rate limiting. `infra-host` enables its Cargo `auth` feature by default; use `default-features = false` only intentionally. The composition root is `server/runtime/`.
+Reusable server capabilities live in `server/infra/`. `kernel` owns neutral primitives and debugging; `postgres` and `redis` are thin adapters; `auth` and `authz` own reusable authentication and authorization behavior; `app-sdk`, `jobs`, `notifier`, and `worker` own reusable application-support capabilities; and `host` owns `HostInfa`, `AppRoutes`, Axum policies, logging, audit, and rate limiting. `infra-host` enables its Cargo `auth` feature by default; use `default-features = false` only intentionally. The composition root is `server/runtime/`.
 
 Dependency direction is strict. `server/infra/` must not depend on Shepherd business modules, business tables, role names, or workflows. `infra-auth` owns only provider-neutral principals, opaque issuer/subject identity keys, configurable OIDC/JWKS verification, multi-tenant account and authorization CRUD, cache behavior, and abstract lifecycle contracts. Concrete provider URLs, administration tokens, HTTP payloads, metadata, identifier formats, and error interpretation belong in technical provider adapters under `server/infra/external-auth/<provider>/`; provider-neutral infra crates must not depend on those concrete adapters. The runtime composition root constructs the selected adapter and injects it through the `infra-auth` contract. The current Supabase Auth implementation is `external-auth-supabase-auth`. Replacing it with Zitadel, Keycloak, or another provider must require a new adapter and runtime wiring, not edits to reusable auth or Shepherd business logic.
 
@@ -502,6 +502,9 @@ queries this table on every platform request; sensitive writes hold the
 operator row while executing so revocation cannot race accepted mutations.
 The browser calls `GET /api/platform/session` after sign-in, and a mapped
 operator can enter the console with zero tenant memberships.
+The console uses a master/detail layout: the operator selects tenant bootstrap
+or runtime log configuration from the compact navigation, and only the selected
+workflow occupies the detail panel.
 
 Initialize the development operator by copying
 `deploy/shepherd/dev/system-admin.env.example` to
