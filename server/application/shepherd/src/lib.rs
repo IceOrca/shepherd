@@ -7,6 +7,7 @@ pub mod business;
 pub mod notification;
 pub mod pagination;
 pub mod people;
+pub mod platform;
 pub mod ratelimit;
 pub mod typescript;
 use tracing::{error, warn, info, debug, trace};
@@ -246,7 +247,9 @@ pub fn routes(ctx: Arc<AppContext>) -> Router {
     // Tenant discovery is identity-authenticated only. It must stay outside
     // application-account and active-branch resolution so a multi-membership
     // identity can select a tenant and a new tenant can create its first branch.
-    Router::new().nest("/api", identity_routes.merge(protected_routes))
+    let platform_routes: Router =
+        authenticated_identity_routes(Arc::clone(&ctx), platform::host::routes(Arc::clone(&ctx.auth)));
+    Router::new().nest("/api", identity_routes.merge(platform_routes).merge(protected_routes))
 }
 
 fn authenticated_identity_routes(ctx: Arc<AppContext>, routes: Router) -> Router {

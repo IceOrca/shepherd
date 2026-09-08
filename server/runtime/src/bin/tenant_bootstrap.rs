@@ -1,20 +1,11 @@
 #![cfg_attr(debug_assertions, allow(unused))]
 
-use std::{error::Error, fmt::Write as _, fs, io, path::Path};
-
-use base64::{Engine as _, engine::general_purpose::STANDARD};
-use hmac::{Hmac, KeyInit, Mac};
-use infra_auth::ext_service::auth_admin::{
-    CreateExternalIdentityRequest, ExternalIdentity, ExtAuthAdmin, ExternalIdentityStatus,
-};
+use std::{error::Error, fs, io, path::Path};
 use infra_kernel::debug::Debugging;
 use infra_postgres::DatabaseAdapter;
-use serde_json::{Value, json};
-use sha2::Sha256;
-use sqlx::{PgPool, Postgres, Transaction};
 use supabase_auth::SupabaseAuthAdmin;
-use tracing::{error, warn, info, debug, trace};
 use uuid::Uuid;
+use tracing::{info, warn};
 
 #[derive(Debug)]
 struct BootstrapArgs {
@@ -25,42 +16,15 @@ struct BootstrapArgs {
     owners_file: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct OwnerInput {
     username: String,
     email: String,
     password: String,
 }
 
-#[derive(Debug)]
-struct ResolvedOwner {
-    account_id: Uuid,
-    username: String,
-    email: String,
-    subject: String,
-}
-
-#[derive(Debug)]
-struct BootstrapClaimRow {
-    request_fingerprint: String,
-    tenant_id: Uuid,
-    tenant_slug: String,
-    status: String,
-}
-
-#[derive(Debug)]
-struct IdentityTenantRow {
-    tenant_id: Uuid,
-}
-
-#[derive(Debug)]
-struct ExistingTenantRow {
-    slug: String,
-    display_name: String,
-}
-
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     load_environment()?;
     Debugging::init();
     let args: BootstrapArgs = parse_args()?;
@@ -68,70 +32,34 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let operator_account: String = authenticate_operator()?;
     let operator_email: String = normalized_required_env("TENANT_BOOTSTRAP_ADMIN_EMAIL")?;
     let auth_issuer: String = required_env("AUTH_ISSUER_URL")?;
-    let fingerprint_key: Vec<u8> = provisioning_fingerprint_key()?;
-    let request_fingerprint: String = fingerprint_request(&args, &owners, &fingerprint_key)?;
-
-    info!(
-        tenant_id = %args.tenant_id,
-        tenant_slug = args.tenant_slug,
-        owner_count = owners.len(),
-        idempotency_key = %args.idempotency_key,
-        operator_account,
-        "Platform tenant bootstrap started"
-    );
-
     let db: std::sync::Arc<DatabaseAdapter> = DatabaseAdapter::new_arc().await;
-    let completed: bool = claim_bootstrap(
+    let auth_admin: std::sync::Arc<SupabaseAuthAdmin> = SupabaseAuthAdmin::from_env()?;
+    let mut request: shepherd::platform::core::TenantBootstrapRequest =
+        shepherd::platform::core::TenantBootstrapRequest {
+            tenant_id: args.tenant_id,
+            tenant_slug: args.tenant_slug.clone(),
+            tenant_display_name: args.tenant_display_name.clone(),
+            idempotency_key: args.idempotency_key,
+            owners: owners
+                .into_iter()
+                .map(|owner| shepherd::platform::core::TenantBootstrapOwner {
+                    username: owner.username,
+                    email: owner.email,
+                    password: owner.password,
+                })
+                .collect(),
+        };
+    request.normalize().map_err(io::Error::other)?;
+    let result: shepherd::platform::core::TenantBootstrapResult = shepherd::platform::bootstrap::bootstrap(
         db.global_pool(),
-        &args,
-        &request_fingerprint,
+        auth_admin.as_ref(),
+        &auth_issuer,
+        &request,
         &operator_account,
         &operator_email,
-        owners.len(),
     )
     .await?;
-    if completed {
-        info!(
-            tenant_id = %args.tenant_id,
-            tenant_slug = args.tenant_slug,
-            idempotency_key = %args.idempotency_key,
-            "Platform tenant bootstrap replay returned the completed result"
-        );
-        print_result(&args, owners.len(), true);
-        return Ok(());
-    }
-
-    let auth_admin: std::sync::Arc<SupabaseAuthAdmin> = SupabaseAuthAdmin::from_env()?;
-    let resolved_owners: Vec<ResolvedOwner> =
-        match resolve_owner_identities(db.global_pool(), auth_admin.as_ref(), &args, &owners, &auth_issuer).await {
-            Ok(resolved) => resolved,
-            Err(resolve_error) => {
-                mark_failed(db.global_pool(), args.idempotency_key, "external_identity_resolution").await;
-                return Err(resolve_error);
-            }
-        };
-
-    if let Err(database_error) = commit_tenant(
-        db.global_pool(),
-        &args,
-        &resolved_owners,
-        &auth_issuer,
-        &operator_account,
-    )
-    .await
-    {
-        mark_failed(db.global_pool(), args.idempotency_key, "tenant_transaction").await;
-        return Err(database_error);
-    }
-
-    info!(
-        tenant_id = %args.tenant_id,
-        tenant_slug = args.tenant_slug,
-        owner_count = resolved_owners.len(),
-        idempotency_key = %args.idempotency_key,
-        "Platform tenant bootstrap completed"
-    );
-    print_result(&args, resolved_owners.len(), false);
+    print_result(&args, result.owner_count, result.replayed);
     Ok(())
 }
 
@@ -271,373 +199,6 @@ fn authenticate_operator() -> Result<String, io::Error> {
         "Platform tenant bootstrap administrator authenticated"
     );
     Ok(expected_account)
-}
-
-async fn claim_bootstrap(
-    pool: &PgPool,
-    args: &BootstrapArgs,
-    fingerprint: &str,
-    operator_account: &str,
-    operator_email: &str,
-    owner_count: usize,
-) -> Result<bool, sqlx::Error> {
-    let owner_count: i32 = i32::try_from(owner_count).map_err(|conversion_error: std::num::TryFromIntError| {
-        sqlx::Error::Protocol(format!("owner count is too large: {conversion_error}"))
-    })?;
-    let inserted: sqlx::postgres::PgQueryResult = sqlx::query!(
-        r#"
-        INSERT INTO platform_tenant_bootstrap_requests (
-            idempotency_key, request_fingerprint, tenant_id, tenant_slug,
-            tenant_display_name, operator_account, operator_email, owner_count
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        ON CONFLICT (idempotency_key) DO NOTHING
-        "#,
-        args.idempotency_key,
-        fingerprint,
-        args.tenant_id,
-        args.tenant_slug,
-        args.tenant_display_name,
-        operator_account,
-        operator_email,
-        owner_count,
-    )
-    .execute(pool)
-    .await?;
-    debug!(
-        idempotency_key = %args.idempotency_key,
-        inserted = inserted.rows_affected() == 1,
-        "Platform tenant bootstrap claim checked"
-    );
-    let claim: BootstrapClaimRow = sqlx::query_as!(
-        BootstrapClaimRow,
-        r#"
-        SELECT request_fingerprint, tenant_id, tenant_slug, status
-        FROM platform_tenant_bootstrap_requests
-        WHERE idempotency_key = $1
-        "#,
-        args.idempotency_key,
-    )
-    .fetch_one(pool)
-    .await?;
-    if claim.request_fingerprint != fingerprint
-        || claim.tenant_id != args.tenant_id
-        || claim.tenant_slug != args.tenant_slug
-    {
-        return Err(sqlx::Error::Protocol(
-            "idempotency key was already used for different tenant bootstrap input".to_owned(),
-        ));
-    }
-    if claim.status == "completed" {
-        return Ok(true);
-    }
-    sqlx::query!(
-        r#"
-        UPDATE platform_tenant_bootstrap_requests
-        SET status = 'processing', last_error_code = NULL, completed_at = NULL,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE idempotency_key = $1
-        "#,
-        args.idempotency_key,
-    )
-    .execute(pool)
-    .await?;
-    Ok(false)
-}
-
-async fn resolve_owner_identities(
-    pool: &PgPool,
-    auth_admin: &dyn ExtAuthAdmin,
-    args: &BootstrapArgs,
-    owners: &[OwnerInput],
-    auth_issuer: &str,
-) -> Result<Vec<ResolvedOwner>, Box<dyn Error>> {
-    let mut resolved: Vec<ResolvedOwner> = Vec::with_capacity(owners.len());
-    for owner in owners {
-        let identity: ExternalIdentity = if let Some(recovered) = auth_admin
-            .find_provisioned_identity(&owner.email, args.tenant_id, args.idempotency_key)
-            .await?
-        {
-            recovered
-        } else if let Some(existing) = auth_admin.find_identity_by_email(&owner.email).await? {
-            existing
-        } else {
-            auth_admin
-                .create_identity(&CreateExternalIdentityRequest {
-                    username: owner.username.clone(),
-                    email: owner.email.clone(),
-                    password: Some(owner.password.clone()),
-                    tenant_id: args.tenant_id,
-                    idempotency_key: args.idempotency_key,
-                })
-                .await?
-        };
-        if identity.status != ExternalIdentityStatus::Active {
-            return Err(io::Error::other(format!("owner identity '{}' is disabled", owner.email)).into());
-        }
-        if identity
-            .email
-            .as_deref()
-            .is_none_or(|email: &str| !email.eq_ignore_ascii_case(&owner.email))
-        {
-            return Err(io::Error::other(format!("provider returned the wrong email for '{}'", owner.email)).into());
-        }
-        let memberships: Vec<IdentityTenantRow> = sqlx::query_as!(
-            IdentityTenantRow,
-            r#"
-            SELECT tenant_id
-            FROM account_identities
-            WHERE issuer = $1 AND subject = $2
-            "#,
-            auth_issuer,
-            identity.subject,
-        )
-        .fetch_all(pool)
-        .await?;
-        if memberships
-            .iter()
-            .any(|membership: &IdentityTenantRow| membership.tenant_id != args.tenant_id)
-        {
-            return Err(io::Error::other(format!(
-                "owner email '{}' is already mapped to another tenant",
-                owner.email
-            ))
-            .into());
-        }
-        info!(
-            tenant_id = %args.tenant_id,
-            owner_email = owner.email,
-            auth_subject = identity.subject,
-            "Tenant owner external identity resolved"
-        );
-        resolved.push(ResolvedOwner {
-            account_id: Uuid::new_v4(),
-            username: owner.username.clone(),
-            email: owner.email.clone(),
-            subject: identity.subject,
-        });
-    }
-    let subject_values: Value = Value::Array(
-        resolved
-            .iter()
-            .map(|owner: &ResolvedOwner| json!({ "email": owner.email, "subject": owner.subject }))
-            .collect(),
-    );
-    sqlx::query!(
-        r#"
-        UPDATE platform_tenant_bootstrap_requests
-        SET auth_subjects = $2, updated_at = CURRENT_TIMESTAMP
-        WHERE idempotency_key = $1 AND status = 'processing'
-        "#,
-        args.idempotency_key,
-        subject_values,
-    )
-    .execute(pool)
-    .await?;
-    Ok(resolved)
-}
-
-async fn commit_tenant(
-    pool: &PgPool,
-    args: &BootstrapArgs,
-    owners: &[ResolvedOwner],
-    auth_issuer: &str,
-    operator_account: &str,
-) -> Result<(), Box<dyn Error>> {
-    let mut transaction: Transaction<'_, Postgres> = pool.begin().await?;
-    let existing_tenant: Option<ExistingTenantRow> = sqlx::query_as!(
-        ExistingTenantRow,
-        "SELECT slug, display_name FROM tenants WHERE id = $1 OR lower(slug) = lower($2)",
-        args.tenant_id,
-        args.tenant_slug,
-    )
-    .fetch_optional(&mut *transaction)
-    .await?;
-    if let Some(existing) = existing_tenant {
-        return Err(io::Error::other(format!(
-            "tenant already exists as '{}' / '{}'; use the original completed idempotency key instead",
-            existing.slug, existing.display_name
-        ))
-        .into());
-    }
-    sqlx::query!(
-        r#"
-        INSERT INTO tenants (id, slug, display_name, status)
-        VALUES ($1, $2, $3, 'active')
-        "#,
-        args.tenant_id,
-        args.tenant_slug,
-        args.tenant_display_name,
-    )
-    .execute(&mut *transaction)
-    .await?;
-    let _tenant_context = sqlx::query!(
-        "SELECT set_config('app.tenant_id', $1, TRUE)",
-        args.tenant_id.to_string()
-    )
-    .fetch_one(&mut *transaction)
-    .await?;
-    let first_owner_id: Uuid = owners
-        .first()
-        .map(|owner: &ResolvedOwner| owner.account_id)
-        .ok_or_else(|| io::Error::other("at least one resolved owner is required"))?;
-    for owner in owners {
-        sqlx::query!(
-            r#"
-            INSERT INTO accounts (
-                id, tenant_id, username, email, status, primary_role_code,
-                created_by_account_id, updated_by_account_id
-            )
-            VALUES ($1, $2, $3, $4, 'active', 'tenant_owner', NULL, NULL)
-            "#,
-            owner.account_id,
-            args.tenant_id,
-            owner.username,
-            owner.email,
-        )
-        .execute(&mut *transaction)
-        .await?;
-        sqlx::query!(
-            r#"
-            INSERT INTO account_roles (tenant_id, account_id, role_code, assigned_by_account_id)
-            VALUES ($1, $2, 'tenant_owner', $3)
-            "#,
-            args.tenant_id,
-            owner.account_id,
-            first_owner_id,
-        )
-        .execute(&mut *transaction)
-        .await?;
-        sqlx::query!(
-            r#"
-            INSERT INTO account_identities (issuer, subject, tenant_id, account_id)
-            VALUES ($1, $2, $3, $4)
-            "#,
-            auth_issuer,
-            owner.subject,
-            args.tenant_id,
-            owner.account_id,
-        )
-        .execute(&mut *transaction)
-        .await?;
-    }
-    sqlx::query!(
-        r#"
-        UPDATE accounts
-        SET created_by_account_id = $2, updated_by_account_id = $2,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE tenant_id = $1
-          AND id = ANY($3::UUID[])
-        "#,
-        args.tenant_id,
-        first_owner_id,
-        &owners
-            .iter()
-            .map(|owner: &ResolvedOwner| owner.account_id)
-            .collect::<Vec<Uuid>>(),
-    )
-    .execute(&mut *transaction)
-    .await?;
-    let audit_after: Value = json!({
-        "tenant_slug": args.tenant_slug,
-        "tenant_display_name": args.tenant_display_name,
-        "owner_account_ids": owners.iter().map(|owner: &ResolvedOwner| owner.account_id).collect::<Vec<Uuid>>(),
-        "platform_operator": operator_account,
-        "idempotency_key": args.idempotency_key,
-    });
-    sqlx::query!(
-        r#"
-        INSERT INTO access_control_audit_log (
-            tenant_id, actor_account_id, action, object_type, object_id, after_value
-        )
-        VALUES ($1, $2, 'tenant.bootstrap', 'tenant', $3, $4)
-        "#,
-        args.tenant_id,
-        first_owner_id,
-        args.tenant_id.to_string(),
-        audit_after,
-    )
-    .execute(&mut *transaction)
-    .await?;
-    sqlx::query!(
-        r#"
-        UPDATE platform_tenant_bootstrap_requests
-        SET status = 'completed', last_error_code = NULL,
-            completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-        WHERE idempotency_key = $1 AND status = 'processing'
-        "#,
-        args.idempotency_key,
-    )
-    .execute(&mut *transaction)
-    .await?;
-    transaction.commit().await?;
-    Ok(())
-}
-
-async fn mark_failed(pool: &PgPool, idempotency_key: Uuid, error_code: &str) {
-    let result: Result<sqlx::postgres::PgQueryResult, sqlx::Error> = sqlx::query!(
-        r#"
-        UPDATE platform_tenant_bootstrap_requests
-        SET status = 'failed', last_error_code = $2, completed_at = NULL,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE idempotency_key = $1 AND status <> 'completed'
-        "#,
-        idempotency_key,
-        error_code,
-    )
-    .execute(pool)
-    .await;
-    match result {
-        Ok(update) => warn!(
-            idempotency_key = %idempotency_key,
-            error_code,
-            rows_affected = update.rows_affected(),
-            "Platform tenant bootstrap marked failed; provider identities were retained for retry"
-        ),
-        Err(update_error) => error!(
-            idempotency_key = %idempotency_key,
-            error_code,
-            error = %update_error,
-            "Platform tenant bootstrap failure status could not be persisted"
-        ),
-    }
-}
-
-fn fingerprint_request(args: &BootstrapArgs, owners: &[OwnerInput], key: &[u8]) -> Result<String, io::Error> {
-    let mut digest: Hmac<Sha256> =
-        Hmac::<Sha256>::new_from_slice(key).map_err(|_| io::Error::other("invalid provisioning fingerprint key"))?;
-    update_fingerprint(&mut digest, &args.tenant_id.to_string());
-    update_fingerprint(&mut digest, &args.tenant_slug);
-    update_fingerprint(&mut digest, &args.tenant_display_name);
-    for owner in owners {
-        update_fingerprint(&mut digest, &owner.username);
-        update_fingerprint(&mut digest, &owner.email);
-        update_fingerprint(&mut digest, &owner.password);
-    }
-    let bytes = digest.finalize().into_bytes();
-    let mut fingerprint = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        write!(&mut fingerprint, "{byte:02x}").expect("writing to a String cannot fail");
-    }
-    Ok(fingerprint)
-}
-
-fn update_fingerprint(digest: &mut Hmac<Sha256>, value: &str) {
-    digest.update(&value.len().to_be_bytes());
-    digest.update(value.as_bytes());
-}
-
-fn provisioning_fingerprint_key() -> Result<Vec<u8>, io::Error> {
-    let encoded_key: String = required_env("AUTH_PROVISIONING_FINGERPRINT_KEY_BASE64")?;
-    let key: Vec<u8> = STANDARD
-        .decode(encoded_key)
-        .map_err(|_| io::Error::other("AUTH_PROVISIONING_FINGERPRINT_KEY_BASE64 must be valid standard base64"))?;
-    if key.len() < 32 {
-        return Err(io::Error::other(
-            "AUTH_PROVISIONING_FINGERPRINT_KEY_BASE64 must decode to at least 32 bytes",
-        ));
-    }
-    Ok(key)
 }
 
 fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {

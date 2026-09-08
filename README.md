@@ -757,7 +757,7 @@ resolving the provider identity. The backend reuses an existing normalized-email
 GoTrue identity when present and creates one only when absent. An initial
 password applies only to a newly created identity; tenant membership never
 resets credentials for an existing identity. The password is neither logged nor included in a
-recoverable ledger; only a SHA-256 request fingerprint is persisted, and that
+recoverable ledger; only a keyed HMAC-SHA-256 request fingerprint is persisted, and that
 fingerprint covers the selected branches.
 
 After GoTrue accepts the identity, Shepherd commits the application account,
@@ -917,13 +917,14 @@ The seeded account catalog currently supplies managers, supervisors, and staff
 for the head and north branches; the south branch and its Vietnamese customer
 catalog demonstrate expansion without inventing extra identities. There are
 16 accounts per tenant and 48 application accounts.
-There are 48 distinct GoTrue identities. The development owners are
+There are 48 tenant-account GoTrue identities, plus the separately initialized platform administrator. The development owners are
 `acme_owner` / `acme.owner@shepherd.local`, `acme1_owner` /
 `acme1.owner@shepherd.local`, and `acme2_owner` /
 `acme2.owner@shepherd.local`; no identity is currently shared by development
-tenants. The system bootstrap operator is `iceorca` /
-`iceorca.admin@shepherd.local`, configured in `.env`, and is not a tenant login
-or application account. The full eight-column copy/paste catalog—tenant UUID,
+tenants. The legacy CLI bootstrap operator is configured separately in
+ignored `.env`. The web system administrator is a separate Supabase login
+initialized from the ignored `deploy/shepherd/dev/system-admin.env` file
+and has no tenant application account unless explicitly provisioned. The full eight-column copy/paste catalog—tenant UUID,
 tenant slug, tenant name, role, username, email, password, and branch code—is
 `scripts/dev-auth-accounts.tsv`. It is the single source of truth for
 development tenants and accounts: the shell provisions credentials through the
@@ -934,10 +935,10 @@ so sign in again afterward.
 
 ### Tenant and initial-owner bootstrap
 
-The first owner cannot use `/admin/auth-users` because no tenant membership
-exists yet. Shepherd therefore packages `shepherd-tenant-bootstrap` as the
-profile-gated, one-shot `tenant-bootstrap` Compose service. It is an operator
-tool, not a public HTTP endpoint and not a long-lived container. Use the
+The system administrator can create a tenant and its first owner through
+`/system-admin` without tenant membership. For operator CLI usage, Shepherd also packages `shepherd-tenant-bootstrap` as the
+profile-gated, one-shot `tenant-bootstrap` Compose service. It remains an operator CLI tool; the authenticated system console uses the same
+application workflow through its platform-only API. Use the
 documented wrapper from the repository root:
 
 ```bash
@@ -1021,3 +1022,80 @@ worst-case delivery time.
 
 Detailed product invariants, architecture rules, API boundaries, and development
 commands are maintained in [AGENTS.md](./AGENTS.md).
+
+
+### System administrator console and self-service passwords
+
+The authenticated system console is `/system-admin`. Platform identity is
+independent of tenant accounts: `platform_administrators` maps the verified
+JWT `issuer + subject` to an active operator. Tenant roles, JWT/user metadata,
+email claims, and branch headers cannot grant this authority. Middleware
+queries this table on every platform request; sensitive writes hold the
+operator row while executing so revocation cannot race accepted mutations.
+The browser calls `GET /api/platform/session` after sign-in, and a mapped
+operator can enter the console with zero tenant memberships.
+
+Initialize the development operator by copying
+`deploy/shepherd/dev/system-admin.env.example` to
+`deploy/shepherd/dev/system-admin.env`, setting `SYSTEM_ADMIN_USERNAME`,
+`SYSTEM_ADMIN_EMAIL`, and a single-quoted `SYSTEM_ADMIN_PASSWORD`, then:
+
+```sh
+chmod 600 deploy/shepherd/dev/system-admin.env
+docker compose --profile tools run --rm --no-deps system-admin-init
+```
+
+The populated file is ignored by Git and consumed only by the one-shot
+initializer. The initializer creates the Supabase identity via its Admin API
+and registers platform authority; an existing active, confirmed identity keeps
+its current password. Editing the file does not reset an existing password.
+Use the profile menu to change it. After a development database reset,
+`scripts/dev-data-seeding.sh` also runs the initializer when this file exists.
+To replace an operator, initialize the replacement explicitly and revoke the
+old `platform_administrators.is_active` mapping through an operator-controlled
+database action; changing a tenant role never creates a platform administrator.
+
+`POST /api/platform/tenants` accepts the generated
+`TenantBootstrapRequest`: tenant UUID, normalized slug/name, idempotency UUID,
+and 1–10 initial owners (the current UI creates one). It shares the application
+bootstrap/database workflow with the existing CLI. The UI retains an uncertain
+request in memory for retry, never in persistent browser storage. Reuse the
+same UUIDs and unchanged input; HMAC-SHA-256 fingerprints bind owner inputs,
+including passwords, without storing plaintext credentials. Completed replay
+returns the original tenant. A per-request PostgreSQL advisory lock serializes
+retries, and identity locks recheck existing membership inside the final
+transaction. Tenants, template-derived roles/permissions, owner accounts,
+identity links, and the `tenant.bootstrap` audit commit together. Provider
+identities survive link failures for retry; existing credentials are never reset.
+The first owner needs no HR employee or branch to sign in and create the first
+branch. The existing single-tenant onboarding policy still rejects owners
+already mapped to a different tenant.
+
+`GET/PUT /api/platform/log-level` reads the current tracing filter or accepts
+`{ "level": "error" | "warn" | "info" | "debug" | "trace" }`. The runtime uses
+a reloadable `tracing_subscriber` filter, so changes take effect without
+restarting the server or Compose. Requests are serialized and append immutable
+`platform_administration_events` audit rows before application. Custom filter
+directives are rejected; verbose levels apply to Shepherd/infra targets while
+third-party HTTP libraries stay at warn to avoid wire/credential logging.
+The setting is process-local and resets to `RUST_LOG` at process restart.
+Platform APIs use the existing configured administration rate limit and are
+mounted outside tenant/branch resolution.
+
+Every signed-in account, including a system administrator with no tenant, gets
+**Đổi mật khẩu** in the top-right profile menu. The browser sends only
+`current_password` and `password` to the authenticated Supabase
+`PUT /user` endpoint. Development Compose enforces
+`GOTRUE_SECURITY_UPDATE_PASSWORD_REQUIRE_CURRENT_PASSWORD=true`; omitting or
+misstating the current password rejects a normal password change even through
+a crafted direct request. Supabase owns hashing, password policy, session
+handling, and password audit; Shepherd stores and logs neither password.
+The form requires current/new/confirmation fields and clears secrets after
+success or dismissal. Provider recovery/first-password enrollment remain
+separate provider workflows and are not exposed by this menu.
+
+Run `node scripts/smoke-platform-admin.mjs` against the development stack to
+check every seeded organizational role is denied platform operations,
+bootstrap replay/first-branch creation, password authentication and rejection,
+and log reload without restart. The script creates a unique test tenant/owner
+and removes them afterward, preserving the real platform audit history.

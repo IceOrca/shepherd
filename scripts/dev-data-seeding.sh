@@ -180,3 +180,6 @@ docker compose exec -T redis-cache sh -c \
 unique_auth_identity_count="$(printf '%s' "${auth_subjects_by_email_json}" | jq 'length')"
 echo "Development data is ready for ${seeded_auth_account_count} tenant accounts linked to ${unique_auth_identity_count} Auth identities"
 echo "Login catalog: ${dev_accounts_file}"
+if [ -f deploy/shepherd/dev/system-admin.env ]; then
+    docker compose --profile tools run --rm --no-deps system-admin-init
+fi

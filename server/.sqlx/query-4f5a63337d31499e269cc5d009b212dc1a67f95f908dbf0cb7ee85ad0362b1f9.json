@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO platform_administration_events (actor_issuer, actor_subject, action, details) VALUES ($1, $2, 'logging.level.requested', $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4f5a63337d31499e269cc5d009b212dc1a67f95f908dbf0cb7ee85ad0362b1f9"
+}

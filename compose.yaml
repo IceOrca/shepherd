@@ -171,6 +171,14 @@ services:
       supabase-auth:
         condition: service_healthy
 
+  system-admin-init:
+    extends:
+      service: tenant-bootstrap
+    profiles: [ "tools" ]
+    env_file:
+      - ./deploy/shepherd/dev/system-admin.env
+    entrypoint: [ "cargo", "run", "--quiet", "-p", "shepherd-runtime", "--bin", "shepherd-system-admin-init" ]
+
   client:
     build:
       context: ./client/web
@@ -227,6 +235,7 @@ services:
       GOTRUE_JWT_ADMIN_ROLES: ${AUTH_ADMIN_JWT_ROLE:-}
       GOTRUE_JWT_EXP: ${AUTH_JWT_EXPIRY_SECS:-900}
       GOTRUE_DISABLE_SIGNUP: "true"
+      GOTRUE_SECURITY_UPDATE_PASSWORD_REQUIRE_CURRENT_PASSWORD: "true"
       GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
       GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED: "false"
       GOTRUE_MAILER_AUTOCONFIRM: "true"

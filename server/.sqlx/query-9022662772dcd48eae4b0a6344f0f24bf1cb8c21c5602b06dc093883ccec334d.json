@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO platform_administrators (issuer, subject, username, email) VALUES ($1, $2, $3, $4) ON CONFLICT (issuer, subject) DO UPDATE SET username = EXCLUDED.username, email = EXCLUDED.email, is_active = TRUE",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9022662772dcd48eae4b0a6344f0f24bf1cb8c21c5602b06dc093883ccec334d"
+}

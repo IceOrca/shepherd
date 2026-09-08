@@ -2,6 +2,7 @@ import { LoaderCircle } from "lucide-react";
 import { lazy, Suspense, type ReactNode } from "react";
 import { Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
 import { AuthUsersPage } from "../features/admin/AuthUsersPage";
+import { SystemAdminPage } from "../features/admin/SystemAdminPage";
 import { AccessControlPage } from "../features/admin/AccessControlPage";
 import { LoginPage } from "../features/auth/LoginPage";
 import { useAuth } from "../features/auth/AuthProvider";
@@ -90,6 +91,7 @@ export function AppRouter() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route element={<SessionGate />}>
+        <Route path="/system-admin" element={<SystemAdminPage />} />
         <Route element={<OperationsLayout />}>
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<OperationsOverviewPage />} />

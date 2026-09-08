@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO platform_administration_events (actor_issuer, actor_subject, action, details) VALUES ($1, $2, 'administrator.initialize', '{}'::jsonb)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "415f840533bd29aab2a944eb3503f1a6bd0115a1fb99e20c235548bf0c499f7d"
+}

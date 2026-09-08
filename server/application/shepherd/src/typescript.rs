@@ -80,6 +80,14 @@ use crate::{
 pub fn contract() -> String {
     let config: Config = Config::new().with_large_int("number");
     let mut output: String = String::new();
+    push::<crate::platform::core::TenantBootstrapOwner>(&mut output, &config);
+    push::<crate::platform::core::TenantBootstrapRequest>(&mut output, &config);
+    push::<crate::platform::core::TenantBootstrapResult>(&mut output, &config);
+    push::<crate::platform::core::PlatformProfile>(&mut output, &config);
+    push::<crate::platform::core::PlatformSession>(&mut output, &config);
+    push::<crate::platform::core::ServerLogLevel>(&mut output, &config);
+    push::<crate::platform::core::ServerLogLevelRequest>(&mut output, &config);
+    push::<crate::platform::core::ServerLogFilter>(&mut output, &config);
 
     push::<RoleCode>(&mut output, &config);
     push::<PermissionCode>(&mut output, &config);

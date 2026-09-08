@@ -1,5 +1,21 @@
 // This file is generated from Rust API DTOs. Do not edit it manually.
 
+export type TenantBootstrapOwner = { username: string, email: string, password: string, };
+
+export type TenantBootstrapRequest = { tenant_id: string, tenant_slug: string, tenant_display_name: string, idempotency_key: string, owners: Array<TenantBootstrapOwner>, };
+
+export type TenantBootstrapResult = { tenant_id: string, tenant_slug: string, owner_count: number, replayed: boolean, };
+
+export type PlatformProfile = { username: string, email: string, };
+
+export type PlatformSession = { administrator: PlatformProfile | null, };
+
+export type ServerLogLevel = "error" | "warn" | "info" | "debug" | "trace";
+
+export type ServerLogLevelRequest = { level: ServerLogLevel, };
+
+export type ServerLogFilter = { filter: string, };
+
 export type RoleCode = string;
 
 export type PermissionCode = string;

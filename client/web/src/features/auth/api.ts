@@ -1,4 +1,4 @@
-import type { CurrentUserProfile, TenantMembershipSummary } from "../../api/generated/contracts";
+import type { CurrentUserProfile, TenantMembershipSummary, PlatformProfile, PlatformSession } from "../../api/generated/contracts";
 import {
   apiRequest,
   setApiAccessToken,
@@ -35,7 +35,8 @@ export interface AuthSettings {
 
 export interface ApplicationSessionContext {
   memberships: TenantMembershipSummary[];
-  profile: CurrentUserProfile;
+  profile: CurrentUserProfile | null;
+  administrator: PlatformProfile | null;
 }
 
 export type OAuthProvider = "google" | "facebook";
@@ -257,8 +258,8 @@ export async function signInWithPassword(
   try {
     const context: ApplicationSessionContext = await resolveApplicationSession(preferredTenantId);
     console.info("Password sign-in completed after application account resolution", {
-      tenantId: context.profile.tenant_id,
-      accountId: context.profile.account_id,
+      tenantId: context.profile?.tenant_id,
+      accountId: context.profile?.account_id,
     });
     return context;
   } catch (error: unknown) {
@@ -313,8 +314,8 @@ export async function restoreSession(preferredTenantId: string | null): Promise<
   }
   const context: ApplicationSessionContext = await resolveApplicationSession(preferredTenantId);
   console.info("Browser authentication session restored", {
-    tenantId: context.profile.tenant_id,
-    accountId: context.profile.account_id,
+    tenantId: context.profile?.tenant_id,
+    accountId: context.profile?.account_id,
   });
   return context;
 }
@@ -343,7 +344,9 @@ async function resolveApplicationSession(preferredTenantId: string | null): Prom
   setApiActiveTenantId(null);
   setApiActiveBranchId(null);
   const memberships: TenantMembershipSummary[] = await apiRequest<TenantMembershipSummary[]>("/api/tenants");
+  const platform: PlatformSession = await apiRequest<PlatformSession>("/api/platform/session");
   if (memberships.length === 0) {
+    if (platform.administrator !== null) return { memberships, profile: null, administrator: platform.administrator };
     console.warn("Authenticated GoTrue identity has no active Staffing tenant membership");
     throw new AuthenticationError("Tài khoản chưa được cấp quyền vào doanh nghiệp nào.");
   }
@@ -356,7 +359,32 @@ async function resolveApplicationSession(preferredTenantId: string | null): Prom
     selectedTenantId: selectedMembership.tenant_id,
     membershipCount: memberships.length,
   });
-  return { memberships, profile };
+  return { memberships, profile, administrator: platform.administrator };
+}
+
+export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+  const accessToken: string | null = await refreshAccessToken();
+  if (!accessToken) throw new AuthenticationError("Vui lòng đăng nhập lại.");
+  console.info("Password change requested without logging credentials");
+  const response: Response = await fetch(`${AUTH_URL}/user`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify({ current_password: currentPassword, password: newPassword }),
+  });
+  if (!response.ok) {
+    let code: string | undefined;
+    try { const payload: AuthErrorPayload = await response.json() as AuthErrorPayload; code = payload.error_code; } catch { /* Use a safe generic message. */ }
+    const messages: Record<string, string> = {
+      current_password_mismatch: "Mật khẩu hiện tại không đúng.",
+      current_password_invalid: "Mật khẩu hiện tại không đúng.",
+      current_password_required: "Vui lòng nhập mật khẩu hiện tại.",
+      same_password: "Mật khẩu mới phải khác mật khẩu hiện tại.",
+      weak_password: "Mật khẩu mới chưa đáp ứng yêu cầu bảo mật.",
+      over_request_rate_limit: "Bạn thao tác quá nhanh. Vui lòng thử lại sau.",
+    };
+    throw new AuthenticationError(messages[code ?? ""] ?? "Không thể đổi mật khẩu. Vui lòng kiểm tra thông tin hoặc đăng nhập lại.");
+  }
+  console.info("Password change completed", { status: response.status });
 }
 
 export async function logoutSession(): Promise<void> {

@@ -20,6 +20,10 @@ path = "src/bin/typescript.rs"
 name = "shepherd-tenant-bootstrap"
 path = "src/bin/tenant_bootstrap.rs"
 
+[[bin]]
+name = "shepherd-system-admin-init"
+path = "src/bin/system_admin_init.rs"
+
 [dependencies]
 axum.workspace = true
 base64.workspace = true

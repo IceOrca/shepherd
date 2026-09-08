@@ -6,7 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { CurrentUserProfile, TenantMembershipSummary } from "../../api/generated/contracts";
+import type { CurrentUserProfile, TenantMembershipSummary, PlatformProfile } from "../../api/generated/contracts";
 import {
   setApiActiveBranchId,
   setApiActiveTenantId,
@@ -27,6 +27,7 @@ type AuthStatus = "loading" | "authenticated" | "anonymous";
 interface AuthContextValue {
   status: AuthStatus;
   profile: CurrentUserProfile | null;
+  administrator: PlatformProfile | null;
   memberships: TenantMembershipSummary[];
   refreshProfile(): Promise<void>;
   selectTenant(tenantId: string): Promise<void>;
@@ -58,6 +59,7 @@ function initializeActiveBranch(profile: CurrentUserProfile): CurrentUserProfile
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>("loading");
   const [profile, setProfile] = useState<CurrentUserProfile | null>(null);
+  const [administrator, setAdministrator] = useState<PlatformProfile | null>(null);
   const [memberships, setMemberships] = useState<TenantMembershipSummary[]>([]);
 
   useEffect(() => {
@@ -67,15 +69,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void restoreSession(preferredTenantId)
       .then((restoredContext: ApplicationSessionContext) => {
         if (active) {
-          localStorage.setItem(TENANT_STORAGE_KEY, restoredContext.profile.tenant_id);
+          if (restoredContext.profile) localStorage.setItem(TENANT_STORAGE_KEY, restoredContext.profile.tenant_id);
           setMemberships(restoredContext.memberships);
-          setProfile(initializeActiveBranch(restoredContext.profile));
+          setProfile(restoredContext.profile ? initializeActiveBranch(restoredContext.profile) : null);
+          setAdministrator(restoredContext.administrator);
           setStatus("authenticated");
         }
       })
       .catch(() => {
         if (active) {
           setProfile(null);
+          setAdministrator(null);
           setMemberships([]);
           setApiActiveTenantId(null);
           setApiActiveBranchId(null);
@@ -92,6 +96,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAuthenticationRefreshHandler(() => refreshAccessToken(true));
     setAuthenticationLostHandler(() => {
       setProfile(null);
+          setAdministrator(null);
       setMemberships([]);
       setApiActiveTenantId(null);
       setApiActiveBranchId(null);
@@ -108,6 +113,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () => ({
       status,
       profile,
+      administrator,
       memberships,
       async refreshProfile(): Promise<void> {
         if (!profile) return;
@@ -164,9 +170,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           password,
           preferredTenantId,
         );
-        localStorage.setItem(TENANT_STORAGE_KEY, restoredContext.profile.tenant_id);
+        if (restoredContext.profile) localStorage.setItem(TENANT_STORAGE_KEY, restoredContext.profile.tenant_id);
         setMemberships(restoredContext.memberships);
-        setProfile(initializeActiveBranch(restoredContext.profile));
+        setProfile(restoredContext.profile ? initializeActiveBranch(restoredContext.profile) : null);
+          setAdministrator(restoredContext.administrator);
         setStatus("authenticated");
       },
       async logout(): Promise<void> {
@@ -174,6 +181,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           await logoutSession();
         } finally {
           setProfile(null);
+          setAdministrator(null);
           setMemberships([]);
           setApiActiveTenantId(null);
           setApiActiveBranchId(null);
@@ -181,7 +189,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       },
     }),
-    [memberships, profile, status],
+    [memberships, profile, administrator, status],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

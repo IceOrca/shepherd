@@ -5,7 +5,6 @@ import {
   CalendarClock,
   CircleDollarSign,
   ChevronRight,
-  CircleUserRound,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -22,7 +21,8 @@ import {
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { Navigate, NavLink, Outlet, useLocation } from "react-router-dom";
+import { ProfileMenu } from "../features/auth/ProfileMenu";
 import { useAuth } from "../features/auth/AuthProvider";
 import { listBranches, operationsQueryKeys } from "../features/operations/api";
 import {
@@ -248,7 +248,7 @@ export function OperationsLayout() {
   });
 
   if (!profile) {
-    return null;
+    return auth.administrator ? <Navigate to="/system-admin" replace /> : null;
   }
 
   const visibleNavigation = navigation.filter((item: NavigationItem): boolean =>
@@ -486,11 +486,7 @@ export function OperationsLayout() {
                 {isOnline ? "Đang kết nối" : "Ngoại tuyến"}
               </div>
               <div className="hidden h-8 w-px bg-slate-200 sm:block" />
-              <div className="hidden text-right md:block">
-                <p className="text-sm font-semibold text-slate-800">{profile.username}</p>
-                <p className="text-xs text-slate-500">{roleLabel(profile.primary_role)}</p>
-              </div>
-              <CircleUserRound className="size-9 text-slate-400" />
+              <ProfileMenu />
             </div>
           </div>
         </header>

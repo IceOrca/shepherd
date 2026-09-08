@@ -123,6 +123,31 @@ impl SupabaseAuthUserList {
 }
 
 impl SupabaseAuthAdmin {
+    /// Operator-only initialization. Existing identities keep their credentials.
+    pub async fn provision_platform_identity(
+        &self,
+        username: &str,
+        email: &str,
+        password: &str,
+    ) -> Result<ExternalIdentity, ExtAdminErr> {
+        if let Some(identity) = self.find_identity_by_email(email).await? {
+            if identity.status != ExternalIdentityStatus::Active || !identity.email_confirmed {
+                return Err(ExtAdminErr::Conflict(
+                    "The administrator identity must be active and email-confirmed".to_owned(),
+                ));
+            }
+            return Ok(identity);
+        }
+        let token: String = self.admin_token_signer.sign().map_err(map_supabase_auth_error)?;
+        let response: reqwest::Response = self.client.post(self.admin_users_url(None).map_err(map_supabase_auth_error)?)
+            .bearer_auth(token)
+            .json(&serde_json::json!({"email": email, "password": password, "email_confirm": true, "user_metadata": {"username": username}}))
+            .send().await.map_err(|error: reqwest::Error| map_supabase_auth_error(SupabaseAuthError::Transport(error)))?;
+        let user: SupabaseAuthUser = read_supabase_auth_response(response)
+            .await
+            .map_err(map_supabase_auth_error)?;
+        Ok(user.into())
+    }
     pub fn from_env() -> Result<Arc<Self>, ConfigErr> {
         debug!("Loading Supabase Auth identity administration configuration");
         let raw_url: String = required_env("AUTH_ADMIN_URL").ok_or(ConfigErr::MissingUrl)?;
