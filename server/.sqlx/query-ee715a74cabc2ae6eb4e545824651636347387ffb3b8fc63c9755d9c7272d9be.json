@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "ROLLBACK TO SAVEPOINT expense_settlement_probe",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "ee715a74cabc2ae6eb4e545824651636347387ffb3b8fc63c9755d9c7272d9be"
+}

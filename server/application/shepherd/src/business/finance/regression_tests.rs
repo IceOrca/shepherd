@@ -8,6 +8,278 @@ use crate::business::{
 };
 
 #[tokio::test]
+async fn employee_can_correct_own_unconfirmed_record_created_by_manager() -> TestResult {
+    let mut fixture: Fixture = Fixture::new().await?;
+    let tenant_id: Uuid = fixture.tenant_id;
+    let category_id: Uuid = Uuid::new_v4();
+    let expense_id: Uuid = Uuid::new_v4();
+    let advance_id: Uuid = Uuid::new_v4();
+    let connection: &mut PgConnection = &mut fixture.transaction;
+    sqlx::query!(
+        "INSERT INTO business_expense_categories (id, tenant_id, code, display_name) VALUES ($1, $2, 'test-owner-created', 'Owner-created test')",
+        category_id,
+        tenant_id,
+    )
+    .execute(&mut *connection)
+    .await?;
+    sqlx::query!(
+        r#"
+        INSERT INTO business_expense_claims (
+            id, tenant_id, category_id, funding_source, paid_by_employee_id,
+            paid_on, payroll_inclusion_on, description, claimed_amount,
+            currency, submitted_by_account_id, submission_idempotency_key
+        ) VALUES (
+            $1, $2, $3, 'employee_personal', $4, CURRENT_DATE, CURRENT_DATE,
+            'Manager-created staff expense', 500000, 'VND', $5, $6
+        )
+        "#,
+        expense_id,
+        tenant_id,
+        category_id,
+        fixture.staff_id,
+        fixture.manager_account_id,
+        Uuid::new_v4(),
+    )
+    .execute(&mut *connection)
+    .await?;
+    sqlx::query!(
+        r#"
+        INSERT INTO hr_salary_advances (
+            id, tenant_id, employee_id, requested_amount, currency, reason,
+            paid_on, payroll_inclusion_on, requested_by_account_id,
+            request_idempotency_key
+        ) VALUES (
+            $1, $2, $3, 500000, 'VND', 'Manager-created staff advance',
+            CURRENT_DATE, CURRENT_DATE, $4, $5
+        )
+        "#,
+        advance_id,
+        tenant_id,
+        fixture.staff_id,
+        fixture.manager_account_id,
+        Uuid::new_v4(),
+    )
+    .execute(&mut *connection)
+    .await?;
+
+    set_correction_context(
+        &mut *connection,
+        fixture.staff_account_id,
+        Uuid::new_v4(),
+        "Employee corrects own expense",
+    )
+    .await?;
+    sqlx::query!(
+        "UPDATE business_expense_claims SET description = 'Employee-corrected expense', version = version + 1 WHERE tenant_id = $1 AND id = $2",
+        tenant_id,
+        expense_id,
+    )
+    .execute(&mut *connection)
+    .await?;
+    set_correction_context(
+        &mut *connection,
+        fixture.staff_account_id,
+        Uuid::new_v4(),
+        "Employee corrects own advance",
+    )
+    .await?;
+    sqlx::query!(
+        "UPDATE hr_salary_advances SET reason = 'Employee-corrected advance', version = version + 1 WHERE tenant_id = $1 AND id = $2",
+        tenant_id,
+        advance_id,
+    )
+    .execute(&mut *connection)
+    .await?;
+
+    fixture.transaction.rollback().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn closed_cash_month_rejects_manual_reimbursement_and_recovery() -> TestResult {
+    let mut fixture: Fixture = Fixture::new().await?;
+    let tenant_id: Uuid = fixture.tenant_id;
+    let category_id: Uuid = Uuid::new_v4();
+    let expense_id: Uuid = Uuid::new_v4();
+    let advance_id: Uuid = Uuid::new_v4();
+    let connection: &mut PgConnection = &mut fixture.transaction;
+    sqlx::query!(
+        "INSERT INTO business_expense_categories (id, tenant_id, code, display_name) VALUES ($1, $2, 'test-closed-cash', 'Closed cash test')",
+        category_id,
+        tenant_id,
+    )
+    .execute(&mut *connection)
+    .await?;
+    sqlx::query!(
+        r#"
+        INSERT INTO business_expense_claims (
+            id, tenant_id, category_id, funding_source, paid_by_employee_id,
+            paid_on, payroll_inclusion_on, description, claimed_amount,
+            currency, submitted_by_account_id, submission_idempotency_key
+        ) VALUES (
+            $1, $2, $3, 'employee_personal', $4, CURRENT_DATE, CURRENT_DATE,
+            'Closed-month expense', 500000, 'VND', $5, $6
+        )
+        "#,
+        expense_id,
+        tenant_id,
+        category_id,
+        fixture.staff_id,
+        fixture.staff_account_id,
+        Uuid::new_v4(),
+    )
+    .execute(&mut *connection)
+    .await?;
+    sqlx::query!(
+        r#"
+        UPDATE business_expense_claims
+        SET status = 'approved', approved_amount = claimed_amount,
+            approved_by_account_id = $3, approved_at = CURRENT_TIMESTAMP,
+            version = version + 1
+        WHERE tenant_id = $1 AND id = $2
+        "#,
+        tenant_id,
+        expense_id,
+        fixture.manager_account_id,
+    )
+    .execute(&mut *connection)
+    .await?;
+    sqlx::query!(
+        r#"
+        INSERT INTO hr_salary_advances (
+            id, tenant_id, employee_id, requested_amount, currency, reason,
+            paid_on, payroll_inclusion_on, requested_by_account_id,
+            request_idempotency_key
+        ) VALUES (
+            $1, $2, $3, 500000, 'VND', 'Closed-month advance',
+            CURRENT_DATE, CURRENT_DATE, $4, $5
+        )
+        "#,
+        advance_id,
+        tenant_id,
+        fixture.staff_id,
+        fixture.staff_account_id,
+        Uuid::new_v4(),
+    )
+    .execute(&mut *connection)
+    .await?;
+    sqlx::query!(
+        r#"
+        UPDATE hr_salary_advances
+        SET status = 'approved', approved_amount = requested_amount,
+            approved_by_account_id = $3, approved_at = CURRENT_TIMESTAMP,
+            version = version + 1
+        WHERE tenant_id = $1 AND id = $2
+        "#,
+        tenant_id,
+        advance_id,
+        fixture.manager_account_id,
+    )
+    .execute(&mut *connection)
+    .await?;
+    sqlx::query!(
+        r#"
+        UPDATE hr_salary_advances
+        SET status = 'disbursed', disbursed_by_account_id = $3,
+            disbursement_reference = 'Closed-month disbursement',
+            disbursed_at = CURRENT_TIMESTAMP, version = version + 1
+        WHERE tenant_id = $1 AND id = $2
+        "#,
+        tenant_id,
+        advance_id,
+        fixture.manager_account_id,
+    )
+    .execute(&mut *connection)
+    .await?;
+    sqlx::query!(
+        r#"
+        INSERT INTO business_financial_period_events (
+            tenant_id, branch_id, period_start, status, revision_number,
+            reason, actor_account_id, idempotency_key
+        ) VALUES (
+            $1, $2, date_trunc('month', CURRENT_DATE)::DATE, 'closed', 1,
+            'Close manual cash settlement test', $3, $4
+        )
+        "#,
+        tenant_id,
+        fixture.branch_id,
+        fixture.manager_account_id,
+        Uuid::new_v4(),
+    )
+    .execute(&mut *connection)
+    .await?;
+
+    sqlx::query!("SAVEPOINT expense_settlement_probe")
+        .execute(&mut *connection)
+        .await?;
+    let reimbursement_error: sqlx::Error = sqlx::query!(
+        r#"
+        INSERT INTO business_expense_reimbursements (
+            id, tenant_id, expense_claim_id, employee_id, amount, currency,
+            payment_reference, recorded_by_account_id, idempotency_key
+        ) VALUES ($1, $2, $3, $4, 100000, 'VND', 'Late reimbursement', $5, $6)
+        "#,
+        Uuid::new_v4(),
+        tenant_id,
+        expense_id,
+        fixture.staff_id,
+        fixture.manager_account_id,
+        Uuid::new_v4(),
+    )
+    .execute(&mut *connection)
+    .await
+    .expect_err("a closed cash month must reject manual reimbursement");
+    assert_eq!(
+        reimbursement_error
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref(),
+        Some("55000")
+    );
+    sqlx::query!("ROLLBACK TO SAVEPOINT expense_settlement_probe")
+        .execute(&mut *connection)
+        .await?;
+
+    sqlx::query!("SAVEPOINT advance_settlement_probe")
+        .execute(&mut *connection)
+        .await?;
+    let recovery_error: sqlx::Error = sqlx::query!(
+        r#"
+        INSERT INTO hr_salary_advance_recoveries (
+            id, tenant_id, salary_advance_id, employee_id, amount, currency,
+            recovery_source, settlement_reference, recorded_by_account_id,
+            idempotency_key
+        ) VALUES (
+            $1, $2, $3, $4, 100000, 'VND', 'manual_repayment',
+            'Late recovery', $5, $6
+        )
+        "#,
+        Uuid::new_v4(),
+        tenant_id,
+        advance_id,
+        fixture.staff_id,
+        fixture.manager_account_id,
+        Uuid::new_v4(),
+    )
+    .execute(&mut *connection)
+    .await
+    .expect_err("a closed cash month must reject manual advance recovery");
+    assert_eq!(
+        recovery_error
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref(),
+        Some("55000")
+    );
+    sqlx::query!("ROLLBACK TO SAVEPOINT advance_settlement_probe")
+        .execute(&mut *connection)
+        .await?;
+
+    fixture.transaction.rollback().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn finance_replay_rechecks_reassigned_subject_and_permission_overrides() -> TestResult {
     let mut fixture: Fixture = Fixture::new().await?;
     let tenant_id: Uuid = fixture.tenant_id;

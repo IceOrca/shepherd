@@ -14,7 +14,7 @@ import {
   TrendingUp,
   UsersRound,
 } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import type {
   EmployeeSalaryConfig,
   EmployeeSalaryRateCreateReq,
@@ -35,6 +35,11 @@ import {
   type MonthRangeFilterController,
 } from "../../shared/components/MonthRangeFilterFields";
 import { roleLabel } from "../../shared/lib/format";
+import {
+  clearIdempotencyAttempt,
+  idempotencyKeyForPayload,
+  type IdempotencyAttemptRef,
+} from "../../shared/lib/idempotency";
 import { useAuth } from "../auth/AuthProvider";
 import { useOperationsScope } from "../operations/OperationsScopeProvider";
 import {
@@ -50,6 +55,16 @@ import {
 
 type ReportTab = "financial" | "payroll" | "salary";
 type ScopeMode = "tenant" | "active_branch";
+
+interface FinancialPeriodAction {
+  branchId: string;
+  period: FinancialPeriodState;
+}
+
+interface FinancialPeriodMutation {
+  branchId: string;
+  request: FinancialPeriodChangeRequest;
+}
 
 function monthLabel(value: string): string {
   const [year, month] = value.split("-");
@@ -388,9 +403,11 @@ export function PayrollAccountingPage(): React.JSX.Element {
     effective_from: localDateInput(new Date()),
   });
   const [feedback, setFeedback] = useState<string | null>(null);
-  const [periodAction, setPeriodAction] = useState<FinancialPeriodState | null>(
+  const [periodAction, setPeriodAction] = useState<FinancialPeriodAction | null>(
     null,
   );
+  const salaryAttempt: IdempotencyAttemptRef = useRef(null);
+  const periodAttempt: IdempotencyAttemptRef = useRef(null);
 
   const activeBranchId: string | null = auth.profile?.active_branch_id ?? null;
   const reportBranchIds: string[] =
@@ -470,8 +487,10 @@ export function PayrollAccountingPage(): React.JSX.Element {
     enabled: canReadFinancial && validRange && activeBranchId !== null,
   });
   const salaryMutation = useMutation({
-    mutationFn: createEmployeeSalaryRate,
+    mutationFn: (request: EmployeeSalaryRateCreateReq): Promise<EmployeeSalaryConfig> =>
+      createEmployeeSalaryRate(request, idempotencyKeyForPayload(salaryAttempt, request)),
     onSuccess: (record: EmployeeSalaryConfig): void => {
+      clearIdempotencyAttempt(salaryAttempt);
       void queryClient.invalidateQueries({
         queryKey: financeQueryKeys.salaryConfigurations,
       });
@@ -492,13 +511,16 @@ export function PayrollAccountingPage(): React.JSX.Element {
   const periodMutation = useMutation<
     FinancialPeriodState,
     Error,
-    FinancialPeriodChangeRequest
+    FinancialPeriodMutation
   >({
-    mutationFn: (
-      request: FinancialPeriodChangeRequest,
-    ): Promise<FinancialPeriodState> =>
-      changeFinancialPeriodForBranch(activeBranchId ?? "", request),
+    mutationFn: (mutation: FinancialPeriodMutation): Promise<FinancialPeriodState> =>
+      changeFinancialPeriodForBranch(
+        mutation.branchId,
+        mutation.request,
+        idempotencyKeyForPayload(periodAttempt, mutation),
+      ),
     onSuccess: (period: FinancialPeriodState): void => {
+      clearIdempotencyAttempt(periodAttempt);
       void queryClient.invalidateQueries({
         queryKey: financeQueryKeys.financialPeriods,
       });
@@ -737,8 +759,9 @@ export function PayrollAccountingPage(): React.JSX.Element {
                       <button
                         className="action-secondary mt-4 w-full"
                         onClick={(): void => {
+                          clearIdempotencyAttempt(periodAttempt);
                           periodMutation.reset();
-                          setPeriodAction(period);
+                          setPeriodAction({ branchId: activeBranchId ?? "", period });
                         }}
                         type="button"
                       >
@@ -1386,12 +1409,16 @@ export function PayrollAccountingPage(): React.JSX.Element {
       {periodAction ? (
         <FinancialPeriodDialog
           error={periodMutation.error}
-          onClose={(): void => setPeriodAction(null)}
+          onClose={(): void => {
+            clearIdempotencyAttempt(periodAttempt);
+            periodMutation.reset();
+            setPeriodAction(null);
+          }}
           onSubmit={(request: FinancialPeriodChangeRequest): void =>
-            periodMutation.mutate(request)
+            periodMutation.mutate({ branchId: periodAction.branchId, request })
           }
           pending={periodMutation.isPending}
-          period={periodAction}
+          period={periodAction.period}
         />
       ) : null}
     </section>

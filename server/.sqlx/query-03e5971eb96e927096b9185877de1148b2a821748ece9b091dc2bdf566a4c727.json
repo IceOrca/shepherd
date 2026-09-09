@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SAVEPOINT advance_settlement_probe",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "03e5971eb96e927096b9185877de1148b2a821748ece9b091dc2bdf566a4c727"
+}

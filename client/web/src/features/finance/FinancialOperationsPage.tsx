@@ -14,7 +14,7 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import type {
   Customer,
   Employee,
@@ -38,6 +38,11 @@ import type {
 } from "../../api/generated/contracts";
 import { friendlyApiError } from "../../shared/api/client";
 import { CursorPagination } from "../../shared/components/CursorPagination";
+import {
+  clearIdempotencyAttempt,
+  idempotencyKeyForPayload,
+  type IdempotencyAttemptRef,
+} from "../../shared/lib/idempotency";
 import { useAuth } from "../auth/AuthProvider";
 import { listCustomers, listEmployees, operationsQueryKeys } from "../operations/api";
 import {
@@ -480,6 +485,20 @@ export function FinancialOperationsPage(): React.JSX.Element {
   const [advancePage, setAdvancePage] = useState<number>(1);
   const [historyPage, setHistoryPage] = useState<number>(1);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const expenseAttempt: IdempotencyAttemptRef = useRef(null);
+  const advanceAttempt: IdempotencyAttemptRef = useRef(null);
+  const actionAttempt: IdempotencyAttemptRef = useRef(null);
+  const correctionAttempt: IdempotencyAttemptRef = useRef(null);
+  const closeExpenseForm = (): void => {
+    clearIdempotencyAttempt(expenseAttempt);
+    expenseCreateMutation.reset();
+    setExpenseFormOpen(false);
+  };
+  const closeAdvanceForm = (): void => {
+    clearIdempotencyAttempt(advanceAttempt);
+    advanceCreateMutation.reset();
+    setAdvanceFormOpen(false);
+  };
   const activeTab: FinanceTab = tab === "expenses" && !canReadExpenses
     ? "advances"
     : tab === "advances" && !canReadAdvances
@@ -627,8 +646,10 @@ export function FinancialOperationsPage(): React.JSX.Element {
   };
 
   const expenseCreateMutation = useMutation({
-    mutationFn: createExpense,
+    mutationFn: (payload: ExpenseClaimCreateReq): Promise<ExpenseClaim> =>
+      createExpense(payload, idempotencyKeyForPayload(expenseAttempt, payload)),
     onSuccess: (record: ExpenseClaim): void => {
+      clearIdempotencyAttempt(expenseAttempt);
       invalidateFinance();
       setFeedback(`Đã ghi nhận chi phí ${formatMoney(record.claimed_amount, record.currency)}.`);
       setExpenseFormOpen(false);
@@ -637,8 +658,10 @@ export function FinancialOperationsPage(): React.JSX.Element {
   });
 
   const advanceCreateMutation = useMutation({
-    mutationFn: createSalaryAdvance,
+    mutationFn: (payload: SalaryAdvanceCreateReq): Promise<SalaryAdvance> =>
+      createSalaryAdvance(payload, idempotencyKeyForPayload(advanceAttempt, payload)),
     onSuccess: (record: SalaryAdvance): void => {
+      clearIdempotencyAttempt(advanceAttempt);
       invalidateFinance();
       setFeedback(`Đã tạo yêu cầu tạm ứng cho ${record.employee_name}.`);
       setAdvanceFormOpen(false);
@@ -648,17 +671,19 @@ export function FinancialOperationsPage(): React.JSX.Element {
 
   const actionMutation = useMutation<ExpenseClaim | SalaryAdvance, Error, ActionPayload>({
     mutationFn: async (payload: ActionPayload): Promise<ExpenseClaim | SalaryAdvance> => {
+      const idempotencyKey: string = idempotencyKeyForPayload(actionAttempt, payload);
       switch (payload.action.kind) {
-        case "expense_approve": return approveExpense(payload.action.record.id, { approved_amount: payload.amount, reason: payload.reason || null });
-        case "expense_reject": return rejectExpense(payload.action.record.id, { reason: payload.reason });
-        case "expense_reimburse": return reimburseExpense(payload.action.record.id, { amount: payload.amount, reference: payload.reference });
-        case "advance_approve": return approveSalaryAdvance(payload.action.record.id, { approved_amount: payload.amount, reason: payload.reason || null });
-        case "advance_reject": return rejectSalaryAdvance(payload.action.record.id, { reason: payload.reason });
-        case "advance_disburse": return disburseSalaryAdvance(payload.action.record.id, { reference: payload.reference });
-        case "advance_recover": return recoverSalaryAdvance(payload.action.record.id, { amount: payload.amount, source: payload.recoverySource, reference: payload.reference });
+        case "expense_approve": return approveExpense(payload.action.record.id, { approved_amount: payload.amount, reason: payload.reason || null }, idempotencyKey);
+        case "expense_reject": return rejectExpense(payload.action.record.id, { reason: payload.reason }, idempotencyKey);
+        case "expense_reimburse": return reimburseExpense(payload.action.record.id, { amount: payload.amount, reference: payload.reference }, idempotencyKey);
+        case "advance_approve": return approveSalaryAdvance(payload.action.record.id, { approved_amount: payload.amount, reason: payload.reason || null }, idempotencyKey);
+        case "advance_reject": return rejectSalaryAdvance(payload.action.record.id, { reason: payload.reason }, idempotencyKey);
+        case "advance_disburse": return disburseSalaryAdvance(payload.action.record.id, { reference: payload.reference }, idempotencyKey);
+        case "advance_recover": return recoverSalaryAdvance(payload.action.record.id, { amount: payload.amount, source: payload.recoverySource, reference: payload.reference }, idempotencyKey);
       }
     },
     onSuccess: (): void => {
+      clearIdempotencyAttempt(actionAttempt);
       invalidateFinance();
       setFeedback("Đã cập nhật nghiệp vụ tài chính và lưu dấu vết kiểm toán.");
       setAction(null);
@@ -666,10 +691,14 @@ export function FinancialOperationsPage(): React.JSX.Element {
   });
 
   const correctionMutation = useMutation<ExpenseClaim | SalaryAdvance, Error, CorrectionPayload>({
-    mutationFn: (payload: CorrectionPayload): Promise<ExpenseClaim | SalaryAdvance> => payload.kind === "expense"
-      ? correctExpense(payload.recordId, payload.request)
-      : correctSalaryAdvance(payload.recordId, payload.request),
+    mutationFn: (payload: CorrectionPayload): Promise<ExpenseClaim | SalaryAdvance> => {
+      const idempotencyKey: string = idempotencyKeyForPayload(correctionAttempt, payload);
+      return payload.kind === "expense"
+        ? correctExpense(payload.recordId, payload.request, idempotencyKey)
+        : correctSalaryAdvance(payload.recordId, payload.request, idempotencyKey);
+    },
     onSuccess: (record: ExpenseClaim | SalaryAdvance): void => {
+      clearIdempotencyAttempt(correctionAttempt);
       invalidateFinance();
       setFeedback(`Đã lưu phiên bản ${record.revision_number}; dữ liệu cũ vẫn được giữ trong lịch sử.`);
       setCorrectionTarget(null);
@@ -720,8 +749,8 @@ export function FinancialOperationsPage(): React.JSX.Element {
             <option value="all">Tất cả trạng thái</option><option value="requested">Chờ duyệt</option><option value="approved">Chờ chi tiền</option><option value="disbursed">Đang thu hồi</option><option value="recovered">Đã thu hồi đủ</option>
           </select>
         )}
-        {activeTab === "expenses" && canCreateExpense ? <button className="action-primary" onClick={(): void => { setExpenseDraft({ ...emptyExpenseDraft, category_id: categoriesQuery.data?.[0]?.id ?? "" }); setExpenseFormOpen(true); setFeedback(null); }} type="button"><Plus className="size-4" />Ghi nhận chi phí</button> : null}
-        {activeTab === "advances" && canCreateAdvance ? <button className="action-primary" disabled={!canManageAdvances && !ownEmployeeId} onClick={(): void => { setAdvanceDraft({ ...emptyAdvanceDraft, employee_id: canManageAdvances ? "" : ownEmployeeId ?? "" }); setAdvanceFormOpen(true); setFeedback(null); }} type="button"><Plus className="size-4" />Tạo tạm ứng</button> : null}
+        {activeTab === "expenses" && canCreateExpense ? <button className="action-primary" onClick={(): void => { clearIdempotencyAttempt(expenseAttempt); expenseCreateMutation.reset(); setExpenseDraft({ ...emptyExpenseDraft, category_id: categoriesQuery.data?.[0]?.id ?? "" }); setExpenseFormOpen(true); setFeedback(null); }} type="button"><Plus className="size-4" />Ghi nhận chi phí</button> : null}
+        {activeTab === "advances" && canCreateAdvance ? <button className="action-primary" disabled={!canManageAdvances && !ownEmployeeId} onClick={(): void => { clearIdempotencyAttempt(advanceAttempt); advanceCreateMutation.reset(); setAdvanceDraft({ ...emptyAdvanceDraft, employee_id: canManageAdvances ? "" : ownEmployeeId ?? "" }); setAdvanceFormOpen(true); setFeedback(null); }} type="button"><Plus className="size-4" />Tạo tạm ứng</button> : null}
       </div>
 
       {activeTab === "expenses" ? (
@@ -753,7 +782,7 @@ export function FinancialOperationsPage(): React.JSX.Element {
       )}
 
       {expenseFormOpen ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/50 p-4"><form className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl" onSubmit={(event: FormEvent<HTMLFormElement>): void => { event.preventDefault(); expenseCreateMutation.mutate({ ...expenseDraft, description: expenseDraft.description.trim(), evidence_reference: expenseDraft.evidence_reference?.trim() || null, paid_by_employee_id: expenseDraft.funding_source === "employee_personal" ? expenseDraft.paid_by_employee_id : null, customer_id: expenseDraft.customer_id || null }); }}><div className="flex items-start justify-between gap-4"><div><h2 className="text-xl font-black text-slate-950">Ghi nhận chi phí phát sinh</h2><p className="mt-1 text-sm text-slate-500">Phân biệt rõ tiền công ty và tiền cá nhân đã chi hộ.</p></div><button aria-label="Đóng" className="grid size-9 place-items-center rounded-lg hover:bg-slate-100" onClick={(): void => setExpenseFormOpen(false)} type="button"><X className="size-5" /></button></div><div className="mt-6 grid gap-4 sm:grid-cols-2">
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/50 p-4"><form className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl" onSubmit={(event: FormEvent<HTMLFormElement>): void => { event.preventDefault(); expenseCreateMutation.mutate({ ...expenseDraft, description: expenseDraft.description.trim(), evidence_reference: expenseDraft.evidence_reference?.trim() || null, paid_by_employee_id: expenseDraft.funding_source === "employee_personal" ? expenseDraft.paid_by_employee_id : null, customer_id: expenseDraft.customer_id || null }); }}><div className="flex items-start justify-between gap-4"><div><h2 className="text-xl font-black text-slate-950">Ghi nhận chi phí phát sinh</h2><p className="mt-1 text-sm text-slate-500">Phân biệt rõ tiền công ty và tiền cá nhân đã chi hộ.</p></div><button aria-label="Đóng" className="grid size-9 place-items-center rounded-lg hover:bg-slate-100" onClick={closeExpenseForm} type="button"><X className="size-5" /></button></div><div className="mt-6 grid gap-4 sm:grid-cols-2">
           <label className="text-sm font-semibold text-slate-700">Nguồn tiền<select className="mt-2 min-h-11 w-full rounded-xl border-slate-300" onChange={(event): void => setExpenseDraft((current): ExpenseClaimCreateReq => ({ ...current, funding_source: event.target.value as ExpenseClaimCreateReq["funding_source"], paid_by_employee_id: null }))} value={expenseDraft.funding_source}><option value="company_funds">Tiền công ty</option><option value="employee_personal">Nhân viên chi hộ</option></select></label>
           <label className="text-sm font-semibold text-slate-700">Loại chi phí<select className="mt-2 min-h-11 w-full rounded-xl border-slate-300" onChange={(event): void => setExpenseDraft((current): ExpenseClaimCreateReq => ({ ...current, category_id: event.target.value }))} required value={expenseDraft.category_id}><option value="">Chọn loại chi phí</option>{(categoriesQuery.data ?? []).map((category: ExpenseCategory): React.JSX.Element => <option key={category.id} value={category.id}>{category.display_name}</option>)}</select></label>
           {expenseDraft.funding_source === "employee_personal" ? <label className="text-sm font-semibold text-slate-700">Người đã chi tiền<select className="mt-2 min-h-11 w-full rounded-xl border-slate-300" onChange={(event): void => setExpenseDraft((current): ExpenseClaimCreateReq => ({ ...current, paid_by_employee_id: event.target.value || null }))} required value={expenseDraft.paid_by_employee_id ?? ""}><option value="">Chọn nhân viên</option>{expenseEmployeeOptions.filter((employee: Employee): boolean => employee.status === "active").map((employee: Employee): React.JSX.Element => <option key={employee.id} value={employee.id}>{employee.display_name} · {employee.employee_code}</option>)}</select></label> : null}
@@ -764,20 +793,20 @@ export function FinancialOperationsPage(): React.JSX.Element {
           {canReadCustomers ? <label className="text-sm font-semibold text-slate-700">Khách hàng liên quan (không bắt buộc)<select className="mt-2 min-h-11 w-full rounded-xl border-slate-300" onChange={(event): void => setExpenseDraft((current): ExpenseClaimCreateReq => ({ ...current, customer_id: event.target.value || null }))} value={expenseDraft.customer_id ?? ""}><option value="">Không gắn khách hàng</option>{customerOptions.map((customer: Customer): React.JSX.Element => <option key={customer.id} value={customer.id}>{customer.name}</option>)}</select>{customersQuery.hasNextPage ? <button className="mt-2 text-xs font-semibold text-blue-700" disabled={customersQuery.isFetchingNextPage} onClick={() => void customersQuery.fetchNextPage()} type="button">{customersQuery.isFetchingNextPage ? "Đang tải..." : "Tải thêm khách hàng"}</button> : null}</label> : null}
           <label className="text-sm font-semibold text-slate-700 sm:col-span-2">Nội dung chi phí<textarea className="mt-2 min-h-24 w-full rounded-xl border-slate-300" maxLength={1000} onChange={(event): void => setExpenseDraft((current): ExpenseClaimCreateReq => ({ ...current, description: event.target.value }))} required value={expenseDraft.description} /></label>
           <label className="text-sm font-semibold text-slate-700 sm:col-span-2">Số hóa đơn, ảnh hoặc tham chiếu chứng từ<input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" maxLength={500} onChange={(event): void => setExpenseDraft((current): ExpenseClaimCreateReq => ({ ...current, evidence_reference: event.target.value }))} value={expenseDraft.evidence_reference ?? ""} /></label>
-        </div>{employeesQuery.hasNextPage ? <button className="mt-3 text-xs font-semibold text-blue-700" disabled={employeesQuery.isFetchingNextPage} onClick={() => void employeesQuery.fetchNextPage()} type="button">{employeesQuery.isFetchingNextPage ? "Đang tải..." : "Tải thêm nhân viên"}</button> : null}{expenseCreateMutation.error ? <p className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{friendlyApiError(expenseCreateMutation.error, "Không thể ghi nhận chi phí.")}</p> : null}<div className="mt-6 flex justify-end gap-3"><button className="action-secondary" onClick={(): void => setExpenseFormOpen(false)} type="button">Hủy</button><button className="action-primary" disabled={expenseCreateMutation.isPending} type="submit">{expenseCreateMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <Plus className="size-4" />}Gửi duyệt</button></div></form></div>
+        </div>{employeesQuery.hasNextPage ? <button className="mt-3 text-xs font-semibold text-blue-700" disabled={employeesQuery.isFetchingNextPage} onClick={() => void employeesQuery.fetchNextPage()} type="button">{employeesQuery.isFetchingNextPage ? "Đang tải..." : "Tải thêm nhân viên"}</button> : null}{expenseCreateMutation.error ? <p className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{friendlyApiError(expenseCreateMutation.error, "Không thể ghi nhận chi phí.")}</p> : null}<div className="mt-6 flex justify-end gap-3"><button className="action-secondary" onClick={closeExpenseForm} type="button">Hủy</button><button className="action-primary" disabled={expenseCreateMutation.isPending} type="submit">{expenseCreateMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <Plus className="size-4" />}Gửi duyệt</button></div></form></div>
       ) : null}
 
       {advanceFormOpen ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/50 p-4"><form className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl" onSubmit={(event: FormEvent<HTMLFormElement>): void => { event.preventDefault(); advanceCreateMutation.mutate({ ...advanceDraft, reason: advanceDraft.reason.trim() }); }}><div className="flex items-start justify-between gap-4"><div><h2 className="text-xl font-black text-slate-950">Tạo yêu cầu tạm ứng lương</h2><p className="mt-1 text-sm text-slate-500">Số dư còn lại sẽ tự động khấu trừ khi khóa kỳ lương đã chọn.</p></div><button aria-label="Đóng" className="grid size-9 place-items-center rounded-lg hover:bg-slate-100" onClick={(): void => setAdvanceFormOpen(false)} type="button"><X className="size-5" /></button></div><div className="mt-6 grid gap-4">
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/50 p-4"><form className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl" onSubmit={(event: FormEvent<HTMLFormElement>): void => { event.preventDefault(); advanceCreateMutation.mutate({ ...advanceDraft, reason: advanceDraft.reason.trim() }); }}><div className="flex items-start justify-between gap-4"><div><h2 className="text-xl font-black text-slate-950">Tạo yêu cầu tạm ứng lương</h2><p className="mt-1 text-sm text-slate-500">Số dư còn lại sẽ tự động khấu trừ khi khóa kỳ lương đã chọn.</p></div><button aria-label="Đóng" className="grid size-9 place-items-center rounded-lg hover:bg-slate-100" onClick={closeAdvanceForm} type="button"><X className="size-5" /></button></div><div className="mt-6 grid gap-4">
           <label className="text-sm font-semibold text-slate-700">Nhân viên<select className="mt-2 min-h-11 w-full rounded-xl border-slate-300" disabled={!canManageAdvances} onChange={(event): void => setAdvanceDraft((current): SalaryAdvanceCreateReq => ({ ...current, employee_id: event.target.value }))} required value={advanceDraft.employee_id}><option value="">Chọn nhân viên</option>{advanceEmployeeOptions.filter((employee: Employee): boolean => employee.status === "active").map((employee: Employee): React.JSX.Element => <option key={employee.id} value={employee.id}>{employee.display_name} · {employee.employee_code}</option>)}</select></label>
           <div className="grid gap-4 sm:grid-cols-2"><label className="text-sm font-semibold text-slate-700">Số tiền<input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" inputMode="decimal" onChange={(event): void => setAdvanceDraft((current): SalaryAdvanceCreateReq => ({ ...current, requested_amount: event.target.value }))} required value={advanceDraft.requested_amount} /></label><label className="text-sm font-semibold text-slate-700">Tiền tệ<input className="mt-2 min-h-11 w-full rounded-xl border-slate-300 uppercase" maxLength={3} onChange={(event): void => setAdvanceDraft((current): SalaryAdvanceCreateReq => ({ ...current, currency: event.target.value.toUpperCase() }))} required value={advanceDraft.currency} /></label></div>
           <div className="grid gap-4 sm:grid-cols-2"><label className="text-sm font-semibold text-slate-700">Ngày chi<input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" onChange={(event): void => setAdvanceDraft((current): SalaryAdvanceCreateReq => ({ ...current, paid_on: event.target.value }))} required type="date" value={advanceDraft.paid_on} /></label><label className="text-sm font-semibold text-slate-700">Tính vào kỳ lương<input className="mt-2 min-h-11 w-full rounded-xl border-slate-300" min={advanceDraft.paid_on} onChange={(event): void => setAdvanceDraft((current): SalaryAdvanceCreateReq => ({ ...current, payroll_inclusion_on: event.target.value }))} required type="date" value={advanceDraft.payroll_inclusion_on} /></label></div>
           <label className="text-sm font-semibold text-slate-700">Lý do tạm ứng<textarea className="mt-2 min-h-24 w-full rounded-xl border-slate-300" maxLength={500} onChange={(event): void => setAdvanceDraft((current): SalaryAdvanceCreateReq => ({ ...current, reason: event.target.value }))} required value={advanceDraft.reason} /></label>
-        </div>{employeesQuery.hasNextPage ? <button className="mt-3 text-xs font-semibold text-blue-700" disabled={employeesQuery.isFetchingNextPage} onClick={() => void employeesQuery.fetchNextPage()} type="button">{employeesQuery.isFetchingNextPage ? "Đang tải..." : "Tải thêm nhân viên"}</button> : null}{advanceCreateMutation.error ? <p className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{friendlyApiError(advanceCreateMutation.error, "Không thể tạo tạm ứng.")}</p> : null}<div className="mt-6 flex justify-end gap-3"><button className="action-secondary" onClick={(): void => setAdvanceFormOpen(false)} type="button">Hủy</button><button className="action-primary" disabled={advanceCreateMutation.isPending} type="submit">{advanceCreateMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <Plus className="size-4" />}Gửi duyệt</button></div></form></div>
+        </div>{employeesQuery.hasNextPage ? <button className="mt-3 text-xs font-semibold text-blue-700" disabled={employeesQuery.isFetchingNextPage} onClick={() => void employeesQuery.fetchNextPage()} type="button">{employeesQuery.isFetchingNextPage ? "Đang tải..." : "Tải thêm nhân viên"}</button> : null}{advanceCreateMutation.error ? <p className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{friendlyApiError(advanceCreateMutation.error, "Không thể tạo tạm ứng.")}</p> : null}<div className="mt-6 flex justify-end gap-3"><button className="action-secondary" onClick={closeAdvanceForm} type="button">Hủy</button><button className="action-primary" disabled={advanceCreateMutation.isPending} type="submit">{advanceCreateMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <Plus className="size-4" />}Gửi duyệt</button></div></form></div>
       ) : null}
 
-      {action ? <ActionDialog action={action} error={actionMutation.error} onClose={(): void => setAction(null)} onSubmit={(payload): void => actionMutation.mutate({ action, ...payload })} pending={actionMutation.isPending} /> : null}
-      {correctionTarget ? <CorrectionDialog categories={categoriesQuery.data ?? []} customers={customerOptions} employees={correctionEmployeeOptions} error={correctionMutation.error} onClose={(): void => setCorrectionTarget(null)} onSubmit={(payload: CorrectionPayload): void => correctionMutation.mutate(payload)} pending={correctionMutation.isPending} target={correctionTarget} /> : null}
+      {action ? <ActionDialog action={action} error={actionMutation.error} onClose={(): void => { clearIdempotencyAttempt(actionAttempt); actionMutation.reset(); setAction(null); }} onSubmit={(payload): void => actionMutation.mutate({ action, ...payload })} pending={actionMutation.isPending} /> : null}
+      {correctionTarget ? <CorrectionDialog categories={categoriesQuery.data ?? []} customers={customerOptions} employees={correctionEmployeeOptions} error={correctionMutation.error} onClose={(): void => { clearIdempotencyAttempt(correctionAttempt); correctionMutation.reset(); setCorrectionTarget(null); }} onSubmit={(payload: CorrectionPayload): void => correctionMutation.mutate(payload)} pending={correctionMutation.isPending} target={correctionTarget} /> : null}
       {historyTarget ? <RevisionHistoryDialog advanceRevisions={visibleAdvanceRevisions} currentPage={historyPage} error={(historyTarget.kind === "expense" ? expenseRevisionsQuery.error : advanceRevisionsQuery.error) as Error | null} expenseRevisions={visibleExpenseRevisions} hasNextPage={historyTarget.kind === "expense" ? historyPage < expenseHistoryPages.length || expenseRevisionsQuery.hasNextPage : historyPage < advanceHistoryPages.length || advanceRevisionsQuery.hasNextPage} nextPagePending={historyTarget.kind === "expense" ? expenseRevisionsQuery.isFetchingNextPage : advanceRevisionsQuery.isFetchingNextPage} onClose={(): void => setHistoryTarget(null)} onPageChange={changeHistoryPage} pending={historyTarget.kind === "expense" ? expenseRevisionsQuery.isPending : advanceRevisionsQuery.isPending} target={historyTarget} /> : null}
     </section>
   );

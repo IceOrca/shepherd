@@ -61,6 +61,13 @@ impl TryFrom<FinancialPeriodRow> for FinancialPeriodState {
     }
 }
 
+fn financial_period_replay_matches(result: &FinancialPeriodState, input: &FinancialPeriodChangeInput) -> bool {
+    result.period_start == input.period_start
+        && result.status == input.status
+        && input.expected_revision_number.checked_add(1) == Some(result.revision_number)
+        && result.reason.as_deref() == Some(input.reason.as_str())
+}
+
 #[derive(FromRow)]
 struct SalaryConfigurationRow {
     employee_id: Uuid,
@@ -73,6 +80,12 @@ struct SalaryConfigurationRow {
     currency: Option<String>,
     effective_from: Option<NaiveDate>,
     effective_to: Option<NaiveDate>,
+}
+
+#[derive(FromRow)]
+struct SalaryRateReplayRow {
+    employee_id: Uuid,
+    payload_matches: bool,
 }
 
 impl TryFrom<SalaryConfigurationRow> for EmployeeSalaryConfig {
@@ -395,6 +408,9 @@ impl FinancialReportRepo {
         .map_err(map_sqlx)?
         {
             let result: FinancialPeriodState = row.try_into()?;
+            if !financial_period_replay_matches(&result, input) {
+                return Err(FinanceError::Conflict);
+            }
             transaction.commit().await.map_err(map_sqlx)?;
             return Ok(result);
         }
@@ -863,20 +879,36 @@ impl FinancialReportRepo {
             return Err(FinanceError::NotFound);
         }
 
-        let existing_employee: Option<Uuid> = sqlx::query_scalar!(
-            "SELECT employee_id FROM hr_employee_salary_rates WHERE tenant_id = $1 AND created_by_account_id = $2 AND idempotency_key = $3",
+        let replay: Option<SalaryRateReplayRow> = sqlx::query_as!(
+            SalaryRateReplayRow,
+            r#"
+            SELECT employee_id,
+                   (employee_id = $4
+                    AND monthly_amount = $5::NUMERIC
+                    AND currency = $6
+                    AND effective_from = $7) AS "payload_matches!"
+            FROM hr_employee_salary_rates
+            WHERE tenant_id = $1
+              AND created_by_account_id = $2
+              AND idempotency_key = $3
+            "#,
             tenant_id,
             actor_account_id,
             idempotency_key,
+            input.employee_id,
+            &monthly_amount,
+            &input.currency,
+            input.effective_from,
         )
         .fetch_optional(&mut *connection)
         .await
         .map_err(map_sqlx)?;
-        if let Some(employee_id) = existing_employee {
-            if employee_id != input.employee_id {
+        if let Some(existing) = replay {
+            if !existing.payload_matches {
                 return Err(FinanceError::Conflict);
             }
-            let result = salary_configuration(&mut *connection, tenant_id, employee_id).await?;
+            let result: EmployeeSalaryConfig =
+                salary_configuration(&mut *connection, tenant_id, existing.employee_id).await?;
             transaction.commit().await.map_err(map_sqlx)?;
             return Ok(result);
         }
@@ -1043,10 +1075,53 @@ mod tests {
     use infra_postgres::{DatabaseAdapter, with_active_branch};
     use uuid::Uuid;
 
-    use super::FinancialReportRepo;
-    use crate::business::finance::reporting::core::{EmployeeSalaryRateInput, FinancialPeriodState, FinancialPeriodStatus};
+    use super::{FinancialReportRepo, financial_period_replay_matches};
+    use crate::business::finance::{
+        core::FinanceError,
+        reporting::core::{
+            EmployeeSalaryConfig, EmployeeSalaryRateInput, FinancialPeriodChangeInput, FinancialPeriodState,
+            FinancialPeriodStatus,
+        },
+    };
 
     type TestResult = Result<(), Box<dyn Error>>;
+
+    #[test]
+    fn financial_period_replay_requires_the_complete_original_command() {
+        let period_start: NaiveDate = NaiveDate::from_ymd_opt(2026, 9, 1).expect("valid static date");
+        let result: FinancialPeriodState = FinancialPeriodState {
+            branch_id: Uuid::new_v4(),
+            period_start,
+            status: FinancialPeriodStatus::Closed,
+            revision_number: 3,
+            reason: Some("Month reviewed and closed".to_owned()),
+            actor_username: Some("owner".to_owned()),
+            occurred_at: None,
+        };
+        let original: FinancialPeriodChangeInput = FinancialPeriodChangeInput {
+            period_start,
+            status: FinancialPeriodStatus::Closed,
+            expected_revision_number: 2,
+            reason: "Month reviewed and closed".to_owned(),
+        };
+        assert!(financial_period_replay_matches(&result, &original));
+
+        let changed_status: FinancialPeriodChangeInput = FinancialPeriodChangeInput {
+            status: FinancialPeriodStatus::Open,
+            ..original.clone()
+        };
+        assert!(!financial_period_replay_matches(&result, &changed_status));
+        let changed_reason: FinancialPeriodChangeInput = FinancialPeriodChangeInput {
+            reason: "Different operation".to_owned(),
+            ..original.clone()
+        };
+        assert!(!financial_period_replay_matches(&result, &changed_reason));
+        let changed_revision: FinancialPeriodChangeInput = FinancialPeriodChangeInput {
+            expected_revision_number: 1,
+            ..original
+        };
+        assert!(!financial_period_replay_matches(&result, &changed_revision));
+    }
 
     #[tokio::test]
     async fn open_financial_period_without_an_event_decodes_nullable_audit_fields() -> TestResult {
@@ -1176,6 +1251,7 @@ mod tests {
         let tomorrow = today
             .checked_add_days(Days::new(1))
             .expect("the current date must have a following day");
+        let first_key: Uuid = Uuid::new_v4();
         let first_repo = FinancialReportRepo::new_arc(Arc::clone(&database));
         let second_repo = Arc::clone(&first_repo);
         let first = async move {
@@ -1184,7 +1260,7 @@ mod tests {
                     .create_salary_rate(
                         tenant_id,
                         account_id,
-                        Uuid::new_v4(),
+                        first_key,
                         &EmployeeSalaryRateInput {
                             employee_id,
                             monthly_amount: "10000000".to_owned(),
@@ -1217,6 +1293,24 @@ mod tests {
         let (first_result, second_result) = tokio::join!(first, second);
         first_result?;
         second_result?;
+
+        let changed_replay: Result<EmployeeSalaryConfig, FinanceError> = with_active_branch(branch_id, async {
+            FinancialReportRepo::new_arc(Arc::clone(&database))
+                .create_salary_rate(
+                    tenant_id,
+                    account_id,
+                    first_key,
+                    &EmployeeSalaryRateInput {
+                        employee_id,
+                        monthly_amount: "12000000".to_owned(),
+                        currency: "VND".to_owned(),
+                        effective_from: today,
+                    },
+                )
+                .await
+        })
+        .await;
+        assert!(matches!(changed_replay, Err(FinanceError::Conflict)));
 
         let mut verify = database.begin_tenant(tenant_id).await?;
         let versions = sqlx::query!(

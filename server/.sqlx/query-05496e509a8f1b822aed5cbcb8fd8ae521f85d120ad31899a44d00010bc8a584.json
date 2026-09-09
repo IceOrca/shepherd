@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE business_expense_claims\n        SET status = 'approved', approved_amount = claimed_amount,\n            approved_by_account_id = $3, approved_at = CURRENT_TIMESTAMP,\n            version = version + 1\n        WHERE tenant_id = $1 AND id = $2\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "05496e509a8f1b822aed5cbcb8fd8ae521f85d120ad31899a44d00010bc8a584"
+}

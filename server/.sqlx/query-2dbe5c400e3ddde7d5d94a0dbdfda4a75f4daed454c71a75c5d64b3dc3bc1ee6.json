@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO business_expense_categories (id, tenant_id, code, display_name) VALUES ($1, $2, 'test-closed-cash', 'Closed cash test')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2dbe5c400e3ddde7d5d94a0dbdfda4a75f4daed454c71a75c5d64b3dc3bc1ee6"
+}

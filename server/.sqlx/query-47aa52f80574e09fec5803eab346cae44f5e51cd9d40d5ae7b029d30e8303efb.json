@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE hr_salary_advances SET reason = 'Employee-corrected advance', version = version + 1 WHERE tenant_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "47aa52f80574e09fec5803eab346cae44f5e51cd9d40d5ae7b029d30e8303efb"
+}

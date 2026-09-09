@@ -42,8 +42,8 @@ export const financeQueryKeys = {
   financialPeriods: ["finance", "periods"] as const,
 };
 
-function mutationHeaders(): HeadersInit {
-  return { "Idempotency-Key": crypto.randomUUID() };
+function mutationHeaders(idempotencyKey: string): HeadersInit {
+  return { "Idempotency-Key": idempotencyKey };
 }
 
 export function listExpenseCategories(): Promise<ExpenseCategory[]> {
@@ -71,18 +71,22 @@ export function listExpenses(
   return apiRequest<ExpensePageRsp>(`/api/business/finance/expenses${pageQuery(cursor, status, search)}`);
 }
 
-export function createExpense(payload: ExpenseClaimCreateReq): Promise<ExpenseClaim> {
+export function createExpense(payload: ExpenseClaimCreateReq, idempotencyKey: string): Promise<ExpenseClaim> {
   return apiRequest<ExpenseClaim>("/api/business/finance/expenses", {
     method: "POST",
-    headers: mutationHeaders(),
+    headers: mutationHeaders(idempotencyKey),
     body: JSON.stringify(payload),
   });
 }
 
-export function correctExpense(expenseId: string, payload: ExpenseCorrectionReq): Promise<ExpenseClaim> {
+export function correctExpense(
+  expenseId: string,
+  payload: ExpenseCorrectionReq,
+  idempotencyKey: string,
+): Promise<ExpenseClaim> {
   return apiRequest<ExpenseClaim>(`/api/business/finance/expenses/${expenseId}/correct`, {
     method: "POST",
-    headers: mutationHeaders(),
+    headers: mutationHeaders(idempotencyKey),
     body: JSON.stringify(payload),
   });
 }
@@ -96,26 +100,38 @@ export function listExpenseRevisions(
   );
 }
 
-export function approveExpense(expenseId: string, payload: FinancialDecisionReq): Promise<ExpenseClaim> {
+export function approveExpense(
+  expenseId: string,
+  payload: FinancialDecisionReq,
+  idempotencyKey: string,
+): Promise<ExpenseClaim> {
   return apiRequest<ExpenseClaim>(`/api/business/finance/expenses/${expenseId}/approve`, {
     method: "POST",
-    headers: mutationHeaders(),
+    headers: mutationHeaders(idempotencyKey),
     body: JSON.stringify(payload),
   });
 }
 
-export function rejectExpense(expenseId: string, payload: FinancialRejectionRequest): Promise<ExpenseClaim> {
+export function rejectExpense(
+  expenseId: string,
+  payload: FinancialRejectionRequest,
+  idempotencyKey: string,
+): Promise<ExpenseClaim> {
   return apiRequest<ExpenseClaim>(`/api/business/finance/expenses/${expenseId}/reject`, {
     method: "POST",
-    headers: mutationHeaders(),
+    headers: mutationHeaders(idempotencyKey),
     body: JSON.stringify(payload),
   });
 }
 
-export function reimburseExpense(expenseId: string, payload: FinancialSettlementReq): Promise<ExpenseClaim> {
+export function reimburseExpense(
+  expenseId: string,
+  payload: FinancialSettlementReq,
+  idempotencyKey: string,
+): Promise<ExpenseClaim> {
   return apiRequest<ExpenseClaim>(`/api/business/finance/expenses/${expenseId}/reimburse`, {
     method: "POST",
-    headers: mutationHeaders(),
+    headers: mutationHeaders(idempotencyKey),
     body: JSON.stringify(payload),
   });
 }
@@ -130,10 +146,10 @@ export function listSalaryAdvances(
   );
 }
 
-export function createSalaryAdvance(payload: SalaryAdvanceCreateReq): Promise<SalaryAdvance> {
+export function createSalaryAdvance(payload: SalaryAdvanceCreateReq, idempotencyKey: string): Promise<SalaryAdvance> {
   return apiRequest<SalaryAdvance>("/api/business/finance/salary-advances", {
     method: "POST",
-    headers: mutationHeaders(),
+    headers: mutationHeaders(idempotencyKey),
     body: JSON.stringify(payload),
   });
 }
@@ -141,10 +157,11 @@ export function createSalaryAdvance(payload: SalaryAdvanceCreateReq): Promise<Sa
 export function correctSalaryAdvance(
   advanceId: string,
   payload: SalaryAdvanceCorrectionReq,
+  idempotencyKey: string,
 ): Promise<SalaryAdvance> {
   return apiRequest<SalaryAdvance>(`/api/business/finance/salary-advances/${advanceId}/correct`, {
     method: "POST",
-    headers: mutationHeaders(),
+    headers: mutationHeaders(idempotencyKey),
     body: JSON.stringify(payload),
   });
 }
@@ -161,10 +178,11 @@ export function listSalaryAdvanceRevisions(
 export function approveSalaryAdvance(
   advanceId: string,
   payload: FinancialDecisionReq,
+  idempotencyKey: string,
 ): Promise<SalaryAdvance> {
   return apiRequest<SalaryAdvance>(`/api/business/finance/salary-advances/${advanceId}/approve`, {
     method: "POST",
-    headers: mutationHeaders(),
+    headers: mutationHeaders(idempotencyKey),
     body: JSON.stringify(payload),
   });
 }
@@ -172,10 +190,11 @@ export function approveSalaryAdvance(
 export function rejectSalaryAdvance(
   advanceId: string,
   payload: FinancialRejectionRequest,
+  idempotencyKey: string,
 ): Promise<SalaryAdvance> {
   return apiRequest<SalaryAdvance>(`/api/business/finance/salary-advances/${advanceId}/reject`, {
     method: "POST",
-    headers: mutationHeaders(),
+    headers: mutationHeaders(idempotencyKey),
     body: JSON.stringify(payload),
   });
 }
@@ -183,10 +202,11 @@ export function rejectSalaryAdvance(
 export function disburseSalaryAdvance(
   advanceId: string,
   payload: SalaryAdvanceDisburseReq,
+  idempotencyKey: string,
 ): Promise<SalaryAdvance> {
   return apiRequest<SalaryAdvance>(`/api/business/finance/salary-advances/${advanceId}/disburse`, {
     method: "POST",
-    headers: mutationHeaders(),
+    headers: mutationHeaders(idempotencyKey),
     body: JSON.stringify(payload),
   });
 }
@@ -194,10 +214,11 @@ export function disburseSalaryAdvance(
 export function recoverSalaryAdvance(
   advanceId: string,
   payload: SalaryAdvanceRecoveryReq,
+  idempotencyKey: string,
 ): Promise<SalaryAdvance> {
   return apiRequest<SalaryAdvance>(`/api/business/finance/salary-advances/${advanceId}/recover`, {
     method: "POST",
-    headers: mutationHeaders(),
+    headers: mutationHeaders(idempotencyKey),
     body: JSON.stringify(payload),
   });
 }
@@ -209,10 +230,11 @@ export function listSalaryConfigurations(cursor: string | null = null): Promise<
 
 export function createEmployeeSalaryRate(
   payload: EmployeeSalaryRateCreateReq,
+  idempotencyKey: string,
 ): Promise<EmployeeSalaryConfig> {
   return apiRequest<EmployeeSalaryConfig>("/api/business/finance/salary-configurations", {
     method: "POST",
-    headers: mutationHeaders(),
+    headers: mutationHeaders(idempotencyKey),
     body: JSON.stringify(payload),
   });
 }
@@ -236,10 +258,11 @@ export function listFinancialPeriodsForBranch(
 export function changeFinancialPeriodForBranch(
   branchId: string,
   payload: FinancialPeriodChangeRequest,
+  idempotencyKey: string,
 ): Promise<FinancialPeriodState> {
   return apiRequestForBranch<FinancialPeriodState>("/api/business/finance/periods", branchId, {
     method: "POST",
-    headers: mutationHeaders(),
+    headers: mutationHeaders(idempotencyKey),
     body: JSON.stringify(payload),
   });
 }

@@ -441,6 +441,21 @@ lock before employee or record locks, using the same ordering as period close;
 independent urgent starts therefore serialize without a shared-lock upgrade
 deadlock.
 
+The browser keeps the same idempotency key while retrying an unchanged finance
+command after an uncertain response and clears it only after success or explicit
+dismissal; changing the payload starts a new attempt. Financial-period retries
+must match month, target state, expected revision, and reason. Monthly-salary
+retries must match employee, exact numeric amount, currency, and effective date.
+Employees correct their own unconfirmed expense or advance by current business
+subject even when an authorized manager or owner originally created it; the
+original submitter/requester remains audit provenance, not ownership.
+
+Manual reimbursements and manual advance recoveries use their server-owned cash
+timestamp in the fixed branch time zone. PostgreSQL rejects the insert when that
+local month is closed, so these cash movements cannot rewrite an already locked
+operating report. Payroll-created settlements remain linked to the exact close
+event and keep their separate payroll inclusion date.
+
 Completed urgent-work intervals are checked against every customer-local month
 they overlap. Open start and finish months do not allow a manual declaration or
 live session to cross a closed intermediate month.

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE hr_salary_advances\n        SET status = 'approved', approved_amount = requested_amount,\n            approved_by_account_id = $3, approved_at = CURRENT_TIMESTAMP,\n            version = version + 1\n        WHERE tenant_id = $1 AND id = $2\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5580fa1c06f13a04364e1ad2fda2b393242f4e0d0113d7b207bc6f7f9ea21b10"
+}
