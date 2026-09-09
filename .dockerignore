@@ -1,0 +1,8 @@
+**
+!client/
+!client/web/
+!client/web/**
+!deploy/
+!deploy/Caddy/
+!deploy/Caddy/prod/
+!deploy/Caddy/prod/Caddyfile

@@ -32,6 +32,7 @@ auth_origin="${AUTH_ORIGIN_PROD:-}"
 auth_public_url="${AUTH_PUBLIC_URL_PROD:-}"
 web_origin="${SHEPHERD_WEB_ORIGIN_PROD:-}"
 expected_ipv4="${PUBLIC_VPS_IPV4_PROD:-}"
+web_dns_name="${web_origin#https://}"
 expected_auth_origin="https://${auth_dns_name}"
 expected_auth_public_url="${expected_auth_origin}/auth/v1"
 
@@ -55,6 +56,18 @@ if [ "${auth_origin}" = "${web_origin}" ]; then
     exit 2
 fi
 
+case "${web_origin}" in
+    https://*/*|https://*:*)
+        echo >&2 "SHEPHERD_WEB_ORIGIN_PROD must be an HTTPS origin without a path or explicit port"
+        exit 2
+        ;;
+    https://*) ;;
+    *)
+        echo >&2 "SHEPHERD_WEB_ORIGIN_PROD must be an HTTPS origin"
+        exit 2
+        ;;
+esac
+
 case "${auth_dns_name}" in
     auth.example.com)
         echo >&2 "Replace the documentation-only AUTH_DNS_NAME_PROD before validation"
@@ -62,7 +75,19 @@ case "${auth_dns_name}" in
         ;;
 esac
 
-echo "Required DNS record: ${auth_dns_name} A ${expected_ipv4:-<PUBLIC_VPS_IPV4_PROD>}"
+echo "Required DNS records:"
+echo "  ${web_dns_name} A ${expected_ipv4:-<PUBLIC_VPS_IPV4_PROD>}"
+echo "  ${auth_dns_name} A ${expected_ipv4:-<PUBLIC_VPS_IPV4_PROD>}"
+
+resolved_web_ipv4_addresses="$(getent ahostsv4 "${web_dns_name}" | awk '{ print $1 }' | sort -u || true)"
+if [ -z "${resolved_web_ipv4_addresses}" ]; then
+    echo >&2 "Shepherd web hostname does not resolve to an IPv4 address: ${web_dns_name}"
+    exit 1
+fi
+if [ -n "${expected_ipv4}" ] && ! printf '%s\n' "${resolved_web_ipv4_addresses}" | grep -Fqx "${expected_ipv4}"; then
+    echo >&2 "Shepherd web hostname does not resolve to PUBLIC_VPS_IPV4_PROD=${expected_ipv4}"
+    exit 1
+fi
 
 resolved_ipv4_addresses="$(getent ahostsv4 "${auth_dns_name}" | awk '{ print $1 }' | sort -u || true)"
 if [ -z "${resolved_ipv4_addresses}" ]; then
@@ -71,6 +96,8 @@ if [ -z "${resolved_ipv4_addresses}" ]; then
 fi
 
 echo "Resolved IPv4 addresses:"
+printf 'Web:\n%s\n' "${resolved_web_ipv4_addresses}"
+printf 'Auth:\n'
 printf '%s\n' "${resolved_ipv4_addresses}"
 
 if [ -n "${expected_ipv4}" ] && ! printf '%s\n' "${resolved_ipv4_addresses}" | grep -Fqx "${expected_ipv4}"; then

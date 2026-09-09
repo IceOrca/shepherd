@@ -1,6 +1,7 @@
 services:
   postgres-db:
     restart: unless-stopped
+    command: [ "postgres", "-p", "${POSTGRES_PORT_PROD:?required}" ]
     ports: !reset []
     environment:
       POSTGRES_USER: ${POSTGRES_USER_PROD:?required}
@@ -11,6 +12,8 @@ services:
     secrets:
       - source: postgres_password
         target: postgres_password
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER_PROD:?required} -d ${POSTGRES_DB_PROD:?required} -p ${POSTGRES_PORT_PROD:?required}" ]
     mem_limit: ${POSTGRES_MEMORY_LIMIT:-1g}
     cpus: ${POSTGRES_CPU_LIMIT:-1.5}
     pids_limit: ${POSTGRES_PIDS_LIMIT:-128}
@@ -22,16 +25,46 @@ services:
       POSTGRES_PASSWORD: !reset null
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_DB: ${POSTGRES_DB_PROD:?required}
+      PG_APP_PASSWORD: !reset null
+      PG_APP_PASSWORD_FILE: /run/secrets/app_db_password
       AUTH_DB_PASSWORD: !reset null
       AUTH_DB_PASSWORD_FILE: /run/secrets/auth_db_password
     secrets:
       - source: postgres_password
         target: postgres_password
+      - source: app_db_password
+        target: app_db_password
       - source: auth_db_password
         target: auth_db_password
     mem_limit: ${POSTGRES_BOOTSTRAP_MEMORY_LIMIT:-128m}
     cpus: ${POSTGRES_BOOTSTRAP_CPU_LIMIT:-0.25}
     pids_limit: ${POSTGRES_BOOTSTRAP_PIDS_LIMIT:-32}
+
+  database-migrate:
+    build: !reset null
+    image: ${SHEPHERD_SERVER_IMAGE:-iceorca/shepherd-srv:0.1.0}
+    pull_policy: always
+    restart: "no"
+    environment:
+      APP_ENV: production
+      POSTGRES_HOST: postgres-db
+      POSTGRES_PORT_PROD: ${POSTGRES_PORT_PROD:?required}
+      POSTGRES_DB_PROD: ${POSTGRES_DB_PROD:?required}
+      PG_APP_USER: ${PG_APP_USER:?required}
+      PG_APP_PASSWORD_FILE: /run/secrets/app_db_password
+    entrypoint: [ "/app/start-production.sh" ]
+    command: [ "/app/shepherd-migrate" ]
+    secrets:
+      - source: server_prod_env
+        target: server_prod_env
+      - source: app_db_password
+        target: app_db_password
+    depends_on:
+      postgres-bootstrap:
+        condition: service_completed_successfully
+    mem_limit: ${DATABASE_MIGRATE_MEMORY_LIMIT:-256m}
+    cpus: ${DATABASE_MIGRATE_CPU_LIMIT:-0.5}
+    pids_limit: ${DATABASE_MIGRATE_PIDS_LIMIT:-64}
 
   redis-cache:
     restart: unless-stopped
@@ -44,21 +77,21 @@ services:
     pids_limit: ${REDIS_PIDS_LIMIT:-64}
 
   server:
-    build:
-      context: ./server
-      dockerfile: Dockerfile.prod
-      target: runner
-      args:
-        SHEPHERD_CARGO_FEATURES: ${SHEPHERD_CARGO_FEATURES:-}
-    image: iceorca/shepherd-srv:0.1.0
+    build: !reset null
+    image: ${SHEPHERD_SERVER_IMAGE:-iceorca/shepherd-srv:0.1.0}
+    pull_policy: always
     restart: unless-stopped
     command: [ "/app/shepherd-srv" ]
     env_file: !reset []
-    ports: !reset []
     volumes: !reset []
     environment:
       APP_ENV: production
       DATABASE_URL: !reset null
+      POSTGRES_HOST: postgres-db
+      POSTGRES_PORT_PROD: ${POSTGRES_PORT_PROD:?required}
+      POSTGRES_DB_PROD: ${POSTGRES_DB_PROD:?required}
+      PG_APP_USER: ${PG_APP_USER:?required}
+      PG_APP_PASSWORD_FILE: /run/secrets/app_db_password
       HOST_IP: 0.0.0.0
       HOST_PORT: ${BACKEND_PORT_PROD:?required}
       REDIS_CACHE_URL: !reset null
@@ -89,30 +122,28 @@ services:
     secrets:
       - source: server_prod_env
         target: server_prod_env
+      - source: app_db_password
+        target: app_db_password
+    ports: !reset []
     expose:
       - ${BACKEND_PORT_PROD:?required}
     mem_limit: ${BACKEND_MEMORY_LIMIT:-768m}
     cpus: ${BACKEND_CPU_LIMIT:-1.5}
     pids_limit: ${BACKEND_PIDS_LIMIT:-256}
     stop_grace_period: 30s
+    depends_on:
+      database-migrate:
+        condition: service_completed_successfully
 
   client:
-    build:
-      context: ./client/web
-      dockerfile: Dockerfile.prod
-      target: builder
-      args:
-        VITE_SHEPHERD_AUTH_URL: ${AUTH_PUBLIC_URL_PROD:?required}
-        VITE_PLANNED_STAFFING_ENABLED: ${VITE_PLANNED_STAFFING_ENABLED:-false}
-    image: iceorca/shepherd-cli-builder:0.1.0
-    restart: unless-stopped
-    command: [ "npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "${FRONTEND_PROD_PORT:-4173}" ]
+    # The compiled UI is embedded in the production Caddy image. Disable the
+    # development Vite service so no Node preview server enters production.
+    profiles: [ "development-client-disabled" ]
     env_file: !reset []
     volumes: !reset []
-    ports: !override
-      - "127.0.0.1:${FRONTEND_PROD_PORT:-4173}:${FRONTEND_PROD_PORT:-4173}"
-    expose:
-      - ${FRONTEND_PROD_PORT:-4173}
+    ports: !reset []
+    expose: !reset []
+    depends_on: !reset {}
 
   supabase-auth:
     restart: unless-stopped
@@ -121,11 +152,16 @@ services:
       API_EXTERNAL_URL: ${AUTH_PUBLIC_URL_PROD:?required}
       GOTRUE_SITE_URL: ${SHEPHERD_WEB_ORIGIN_PROD:?required}
       GOTRUE_URI_ALLOW_LIST: ${AUTH_REDIRECT_ALLOW_LIST_PROD:-${SHEPHERD_WEB_ORIGIN_PROD}/**}
-      GOTRUE_DB_DATABASE_URL: ${AUTH_DATABASE_URL_PROD:?required}
+      POSTGRES_DB: ${POSTGRES_DB_PROD:?required}
+      AUTH_DB_PORT: ${POSTGRES_PORT_PROD:?required}
+      AUTH_DB_USER: ${AUTH_DB_USER:-supabase_auth_admin}
+      AUTH_DB_PASSWORD_FILE: /run/secrets/auth_db_password
+      AUTH_PROD_ENV_FILE: /run/secrets/auth_prod_env
+      GOTRUE_DB_DATABASE_URL: !reset null
       GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_ENABLED: "true"
       GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_URI: pg-functions://${POSTGRES_DB_PROD:?required}/public/shepherd_custom_access_token_hook
-      GOTRUE_JWT_SECRET: ${AUTH_JWT_SECRET_PROD:?required}
-      GOTRUE_JWT_KEYS: ${AUTH_JWT_KEYS_PROD:?required}
+      GOTRUE_JWT_SECRET: !reset null
+      GOTRUE_JWT_KEYS: !reset null
       GOTRUE_JWT_VALID_METHODS: ${AUTH_JWT_VALID_METHODS_PROD:?required}
       GOTRUE_JWT_ADMIN_ROLES: ${AUTH_ADMIN_JWT_ROLE_PROD:?required}
       GOTRUE_JWT_ISSUER: ${AUTH_PUBLIC_URL_PROD:?required}
@@ -137,38 +173,48 @@ services:
       GOTRUE_SMTP_HOST: ${AUTH_SMTP_HOST_PROD:?required}
       GOTRUE_SMTP_PORT: ${AUTH_SMTP_PORT_PROD:?required}
       GOTRUE_SMTP_USER: ${AUTH_SMTP_USER_PROD:?required}
-      GOTRUE_SMTP_PASS: ${AUTH_SMTP_PASSWORD_PROD:?required}
+      GOTRUE_SMTP_PASS: !reset null
       GOTRUE_SMTP_SENDER_NAME: ${AUTH_SMTP_SENDER_NAME_PROD:-Shepherd}
       GOTRUE_EXTERNAL_GOOGLE_ENABLED: ${AUTH_GOOGLE_ENABLED_PROD:-false}
       GOTRUE_EXTERNAL_GOOGLE_CLIENT_ID: ${AUTH_GOOGLE_CLIENT_ID_PROD:-}
-      GOTRUE_EXTERNAL_GOOGLE_SECRET: ${AUTH_GOOGLE_CLIENT_SECRET_PROD:-}
+      GOTRUE_EXTERNAL_GOOGLE_SECRET: !reset null
       GOTRUE_EXTERNAL_GOOGLE_REDIRECT_URI: ${AUTH_PUBLIC_URL_PROD:?required}/callback
       GOTRUE_EXTERNAL_FACEBOOK_ENABLED: ${AUTH_FACEBOOK_ENABLED_PROD:-false}
       GOTRUE_EXTERNAL_FACEBOOK_CLIENT_ID: ${AUTH_FACEBOOK_CLIENT_ID_PROD:-}
-      GOTRUE_EXTERNAL_FACEBOOK_SECRET: ${AUTH_FACEBOOK_CLIENT_SECRET_PROD:-}
+      GOTRUE_EXTERNAL_FACEBOOK_SECRET: !reset null
       GOTRUE_EXTERNAL_FACEBOOK_REDIRECT_URI: ${AUTH_PUBLIC_URL_PROD:?required}/callback
-    ports: !override
-      - "127.0.0.1:${AUTH_EDGE_PORT_PROD:-9999}:9999"
+    ports: !reset []
     expose:
       - "9999"
+    secrets:
+      - source: auth_db_password
+        target: auth_db_password
+      - source: auth_prod_env
+        target: auth_prod_env
     mem_limit: ${AUTH_MEMORY_LIMIT:-256m}
     cpus: ${AUTH_CPU_LIMIT:-0.5}
     pids_limit: ${AUTH_PIDS_LIMIT:-128}
     stop_grace_period: 15s
+    depends_on:
+      database-migrate:
+        condition: service_completed_successfully
 
   tenant-bootstrap:
-    build:
-      context: ./server
-      dockerfile: Dockerfile.prod
-      target: runner
-    image: iceorca/shepherd-srv:0.1.0
+    build: !reset null
+    image: ${SHEPHERD_SERVER_IMAGE:-iceorca/shepherd-srv:0.1.0}
+    pull_policy: always
     working_dir: /app
     env_file: !reset []
     environment:
       APP_ENV: production
       DATABASE_URL: !reset null
-      AUTH_ADMIN_URL: !reset null
-      AUTH_ISSUER_URL: !reset null
+      POSTGRES_HOST: postgres-db
+      POSTGRES_PORT_PROD: ${POSTGRES_PORT_PROD:?required}
+      POSTGRES_DB_PROD: ${POSTGRES_DB_PROD:?required}
+      PG_APP_USER: ${PG_APP_USER:?required}
+      PG_APP_PASSWORD_FILE: /run/secrets/app_db_password
+      AUTH_ADMIN_URL: http://supabase-auth:9999
+      AUTH_ISSUER_URL: ${AUTH_PUBLIC_URL_PROD:?required}
       AUTH_ADMIN_JWT_ALGORITHM: ${AUTH_ADMIN_JWT_ALGORITHM_PROD:?required}
       AUTH_ADMIN_JWT_ROLE: ${AUTH_ADMIN_JWT_ROLE_PROD:?required}
       AUTH_ADMIN_JWT_ISSUER: ${AUTH_PUBLIC_URL_PROD:?required}
@@ -180,33 +226,114 @@ services:
       TENANT_BOOTSTRAP_ADMIN_SECRET_FILE: /run/secrets/tenant_bootstrap_admin_secret
       RUST_LOG: ${RUST_LOG:-info}
     volumes: !reset []
-    entrypoint: [ "/app/shepherd-tenant-bootstrap" ]
+    entrypoint: [ "/app/start-production.sh" ]
+    command: [ "/app/shepherd-tenant-bootstrap" ]
     secrets:
       - source: server_prod_env
         target: server_prod_env
+      - source: app_db_password
+        target: app_db_password
       - source: tenant_bootstrap_admin_secret
         target: tenant_bootstrap_admin_secret
     mem_limit: ${TENANT_BOOTSTRAP_MEMORY_LIMIT:-256m}
     cpus: ${TENANT_BOOTSTRAP_CPU_LIMIT:-0.5}
     pids_limit: ${TENANT_BOOTSTRAP_PIDS_LIMIT:-64}
 
-  # Development Caddy is replaced by the host edge in production.
-  caddy:
-    profiles: [ "development-edge-disabled" ]
-    ports: !reset []
+  system-admin-init:
+    build: !reset null
+    image: ${SHEPHERD_SERVER_IMAGE:-iceorca/shepherd-srv:0.1.0}
+    pull_policy: always
+    working_dir: /app
+    env_file: !reset []
+    environment:
+      APP_ENV: production
+      DATABASE_URL: !reset null
+      POSTGRES_HOST: postgres-db
+      POSTGRES_PORT_PROD: ${POSTGRES_PORT_PROD:?required}
+      POSTGRES_DB_PROD: ${POSTGRES_DB_PROD:?required}
+      PG_APP_USER: ${PG_APP_USER:?required}
+      PG_APP_PASSWORD_FILE: /run/secrets/app_db_password
+      AUTH_ADMIN_URL: http://supabase-auth:9999
+      AUTH_ISSUER_URL: ${AUTH_PUBLIC_URL_PROD:?required}
+      AUTH_ADMIN_JWT_ALGORITHM: ${AUTH_ADMIN_JWT_ALGORITHM_PROD:?required}
+      AUTH_ADMIN_JWT_ROLE: ${AUTH_ADMIN_JWT_ROLE_PROD:?required}
+      AUTH_ADMIN_JWT_ISSUER: ${AUTH_PUBLIC_URL_PROD:?required}
+      AUTH_ADMIN_JWT_AUDIENCE: ${AUTH_AUDIENCE_PROD:?required}
+      AUTH_ADMIN_JWT_EXPIRY_SECS: ${AUTH_ADMIN_JWT_EXPIRY_SECS_PROD:?required}
+      TENANT_BOOTSTRAP_ADMIN_ACCOUNT: !reset null
+      TENANT_BOOTSTRAP_ADMIN_EMAIL: !reset null
+      TENANT_BOOTSTRAP_ADMIN_SECRET: !reset null
     volumes: !reset []
-    depends_on: !reset {}
+    entrypoint: [ "/app/start-production.sh" ]
+    command: [ "/app/shepherd-system-admin-init" ]
+    secrets:
+      - source: server_prod_env
+        target: server_prod_env
+      - source: app_db_password
+        target: app_db_password
+      - source: system_admin_env
+        target: system_admin_env
+    mem_limit: ${SYSTEM_ADMIN_INIT_MEMORY_LIMIT:-256m}
+    cpus: ${SYSTEM_ADMIN_INIT_CPU_LIMIT:-0.5}
+    pids_limit: ${SYSTEM_ADMIN_INIT_PIDS_LIMIT:-64}
+
+  caddy:
+    build: !reset null
+    image: ${SHEPHERD_WEB_IMAGE:-iceorca/shepherd-web:0.1.0}
+    pull_policy: always
+    restart: unless-stopped
+    environment:
+      REMOTE_DEV_DNS_NAME: !reset null
+      AUTH_DEV_DNS_NAME: !reset null
+      SHEPHERD_API_DEV_UPSTREAM: !reset null
+      SHEPHERD_WEB_DEV_UPSTREAM: !reset null
+      AUTH_DEV_UPSTREAM: !reset null
+      SHEPHERD_WEB_ORIGIN_PROD: ${SHEPHERD_WEB_ORIGIN_PROD:?required}
+      AUTH_DNS_NAME_PROD: ${AUTH_DNS_NAME_PROD:?required}
+      ACME_EMAIL_PROD: ${ACME_EMAIL_PROD:?required}
+      SHEPHERD_API_PROD_UPSTREAM: server:${BACKEND_PORT_PROD:?required}
+      AUTH_PROD_UPSTREAM: supabase-auth:9999
+    ports: !override
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes: !override
+      - caddy_data:/data
+      - caddy_config:/config
+    healthcheck:
+      test: [ "CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    depends_on: !override
+      supabase-auth:
+        condition: service_healthy
+      server:
+        condition: service_started
+    mem_limit: ${CADDY_MEMORY_LIMIT:-256m}
+    cpus: ${CADDY_CPU_LIMIT:-0.5}
+    pids_limit: ${CADDY_PIDS_LIMIT:-128}
+    stop_grace_period: 30s
 
 volumes: !override
   pg_data:
   redis_data:
+  caddy_data:
+  caddy_config:
 
 secrets:
   postgres_password:
-    file: ${SVR_SECRETS_DIR:?SVR_SECRETS_DIR_must_be_set}/postgres_pw
+    file: ${SVR_SECRETS_DIR:?SVR_SECRETS_DIR_must_be_set}/postgres_root_pw
   server_prod_env:
     file: ${SVR_SECRETS_DIR:?SVR_SECRETS_DIR_must_be_set}/server.prod.env
+  app_db_password:
+    file: ${SVR_SECRETS_DIR:?SVR_SECRETS_DIR_must_be_set}/app_db_password
   auth_db_password:
     file: ${SVR_SECRETS_DIR:?SVR_SECRETS_DIR_must_be_set}/auth_db_password
+  auth_prod_env:
+    file: ${SVR_SECRETS_DIR:?SVR_SECRETS_DIR_must_be_set}/auth.prod.env
   tenant_bootstrap_admin_secret:
     file: ${SVR_SECRETS_DIR:?SVR_SECRETS_DIR_must_be_set}/tenant_bootstrap_admin_secret
+  system_admin_env:
+    file: ${SVR_SECRETS_DIR:?SVR_SECRETS_DIR_must_be_set}/system-admin.prod.env

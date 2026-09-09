@@ -1,18 +1,30 @@
-FROM node:24-alpine AS builder
+# syntax=docker/dockerfile:1
+# check=skip=SecretsUsedInArgOrEnv
+# VITE_SHEPHERD_AUTH_URL is an intentionally public browser endpoint embedded
+# in the static artifact; it is not an authentication credential.
+FROM node:24.20.0-alpine AS builder
 WORKDIR /app/shepherd_client
 
-COPY package*.json ./
+COPY client/web/package*.json ./
 RUN npm ci
 
-COPY . .
+COPY client/web/ .
 ARG VITE_SHEPHERD_AUTH_URL
 ARG VITE_PLANNED_STAFFING_ENABLED=false
 ENV VITE_SHEPHERD_AUTH_URL=${VITE_SHEPHERD_AUTH_URL}
 ENV VITE_PLANNED_STAFFING_ENABLED=${VITE_PLANNED_STAFFING_ENABLED}
-RUN test -n "${VITE_SHEPHERD_AUTH_URL}"
+RUN test -n "${VITE_SHEPHERD_AUTH_URL}" \
+    && test "${VITE_SHEPHERD_AUTH_URL}" != "https://auth.example.com/auth/v1" \
+    && case "${VITE_SHEPHERD_AUTH_URL}" in https://*/auth/v1) true ;; *) false ;; esac
 RUN npm run lint && npm run build
 
-# BuildKit can export this target directly to the host for Caddy to serve:
-# docker build --file Dockerfile.prod --target export --output type=local,dest=dist .
+# Keep an export target for offline inspection, while production runs the
+# immutable Caddy image below instead of copying files onto the VPS host.
 FROM scratch AS export
 COPY --from=builder /app/shepherd_client/dist /
+
+FROM caddy:2.11.4-alpine AS runner
+COPY --from=builder /app/shepherd_client/dist /srv
+COPY deploy/Caddy/prod/Caddyfile /etc/caddy/Caddyfile
+
+EXPOSE 80 443 443/udp

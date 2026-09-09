@@ -25,7 +25,7 @@ struct OwnerInput {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    load_environment()?;
+    shepherd_runtime::load_environment(&[])?;
     Debugging::init();
     let args: BootstrapArgs = parse_args()?;
     let owners: Vec<OwnerInput> = load_owners(Path::new(&args.owners_file))?;
@@ -60,16 +60,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     )
     .await?;
     print_result(&args, result.owner_count, result.replayed);
-    Ok(())
-}
-
-fn load_environment() -> Result<(), io::Error> {
-    if std::env::var("APP_ENV").as_deref() == Ok("production") {
-        dotenvy::from_path(Path::new("/run/secrets/server_prod_env"))
-            .map_err(|error: dotenvy::Error| io::Error::other(format!("load production environment: {error}")))?;
-    } else {
-        let _loaded: Result<std::path::PathBuf, dotenvy::Error> = dotenvy::dotenv();
-    }
     Ok(())
 }
 

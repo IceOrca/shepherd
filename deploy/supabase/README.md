@@ -85,40 +85,47 @@ never run it in production.
 
 ## Production
 
-Set `AUTH_DATABASE_URL_PROD`, `AUTH_JWT_SECRET_PROD`,
-`AUTH_JWT_KEYS_PROD`, and `AUTH_JWT_VALID_METHODS_PROD` in the protected
-VPS environment file. Generate independent production material; never copy
-`deploy/supabase/dev/auth.env`. The helper writes private material only to
-new mode-0600 files and refuses to overwrite either target:
+Keep only non-secret Auth policy and URL values in the VPS Compose environment.
+Put the GoTrue database password in `${SVR_SECRETS_DIR}/auth_db_password` and
+the signing, SMTP, and optional provider secrets in
+`${SVR_SECRETS_DIR}/auth.prod.env`. Generate independent production material;
+never copy `deploy/supabase/dev/auth.env`. The helper writes private material
+only to new mode-0600 files and refuses to overwrite either target:
 
 ```sh
 set -a
 . /path/to/protected/compose.prod.env
 set +a
 sh scripts/generate-auth-production-keys.sh \
-  /path/to/protected/generated-auth.prod.env \
+  /path/to/protected/auth.prod.env \
   /path/to/protected/generated-server-admin.prod.env
 ```
 
-Merge the first snippet into the protected Compose environment and the second
-into `${SVR_SECRETS_DIR}/server.prod.env`, then remove the temporary snippets
-through the deployment system's secure secret workflow. The resulting
-`AUTH_JWT_KEYS_PROD` contains the private Ed25519 access signer and only the
-public ES256 administration key. The server secret environment contains only
-the ES256 private key and its `kid`; production Compose maps the remaining
-`AUTH_ADMIN_JWT_*` policy from explicit `*_PROD` variables.
+The first output is already shell-quoted for direct mounting. Append the
+`GOTRUE_SMTP_PASS` and any enabled provider secrets from
+`deploy/secrets_example/auth.prod.env.example`; merge the second snippet into
+`${SVR_SECRETS_DIR}/server.prod.env`, then remove that temporary snippet through
+the deployment system's secure secret workflow. `GOTRUE_JWT_KEYS` contains the
+private Ed25519 access signer and only the public ES256 administration key. The
+server secret environment contains only the ES256 private key and its `kid`;
+production Compose maps the remaining `AUTH_ADMIN_JWT_*` policy from explicit
+non-secret `*_PROD` variables.
 
-The Auth database URL must connect to the same production database as Shepherd
-and include `?search_path=auth`; Shepherd's server-side URL must explicitly use
-`public`. Run Shepherd migrations before starting a new GoTrue deployment so
-the custom access-token hook and its least-privilege grant exist.
+Production startup reads the Auth database password secret and constructs a URL
+to the shared database with `search_path=auth`; the Shepherd entrypoint does the
+same with its independent password and an explicit `public` search path. The
+password files must contain URL-safe ASCII characters. The one-shot
+`database-migrate` service runs Shepherd migrations before starting a new
+GoTrue deployment so the custom access-token hook and its least-privilege grant
+exist.
 Production disables public signup and requires SMTP for invitations and
 recovery. Google and Facebook remain opt-in through the corresponding
 `AUTH_*_PROD` variables.
 
-Production Compose uses the same startup dependency: PostgreSQL health,
-successful one-shot bootstrap, then GoTrue and Shepherd. Bootstrap credentials
-come from Compose secrets, and the job retains no persistent state.
+Production Compose uses a strict startup dependency: PostgreSQL health,
+successful one-shot role bootstrap, successful one-shot Shepherd migration,
+then GoTrue and Shepherd. Bootstrap credentials come from Compose secrets, and
+neither one-shot job retains private state.
 
 Keep the Auth image pinned, monitor upstream security releases, and back up its
 shared PostgreSQL database as one consistent unit. A restore must preserve both
@@ -159,7 +166,8 @@ For production, pass the protected deployment environment and its key
 variable:
 
 ```sh
-sh scripts/manage-auth-access-key.sh prepare /path/to/compose.prod.env AUTH_JWT_KEYS_PROD
+sh scripts/manage-auth-access-key.sh prepare \
+  /etc/shepherd/secrets/auth.prod.env GOTRUE_JWT_KEYS
 ```
 
 Repeat with `activate` and `retire`, recreating the production Auth service

@@ -76,7 +76,7 @@ docker run --rm \
     -e AUTH_ACCESS_JWT_ROTATION_INTERVAL_SECS \
     -e AUTH_ACCESS_JWT_STANDBY_PROPAGATION_SECS \
     -e AUTH_ACCESS_JWT_KEY_OVERLAP_SECS \
-    node:24-alpine node -e '
+    node:24.20.0-alpine node -e '
 const crypto = require("crypto");
 
 const jwtSecret = crypto.randomBytes(48).toString("base64url");

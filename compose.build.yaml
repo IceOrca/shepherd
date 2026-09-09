@@ -1,0 +1,25 @@
+# Local/CI production-image build overlay. Do not include this file in the VPS
+# runtime command; compose.prod.yaml deliberately removes every build context.
+services:
+  server:
+    pull_policy: build
+    build:
+      context: ./server
+      dockerfile: Dockerfile.prod
+      target: runner
+      args:
+        SHEPHERD_CARGO_FEATURES: ${SHEPHERD_CARGO_FEATURES:-}
+      provenance: mode=max
+      sbom: true
+
+  caddy:
+    pull_policy: build
+    build:
+      context: .
+      dockerfile: client/web/Dockerfile.prod
+      target: runner
+      args:
+        VITE_SHEPHERD_AUTH_URL: ${AUTH_PUBLIC_URL_PROD:?required}
+        VITE_PLANNED_STAFFING_ENABLED: ${VITE_PLANNED_STAFFING_ENABLED:-false}
+      provenance: mode=max
+      sbom: true

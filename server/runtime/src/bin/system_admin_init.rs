@@ -5,6 +5,7 @@ use supabase_auth::SupabaseAuthAdmin;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+    shepherd_runtime::load_environment(&["/run/secrets/system_admin_env"])?;
     let username: String = std::env::var("SYSTEM_ADMIN_USERNAME")?;
     let email: String = std::env::var("SYSTEM_ADMIN_EMAIL")?.trim().to_lowercase();
     let password: String = std::env::var("SYSTEM_ADMIN_PASSWORD")?;

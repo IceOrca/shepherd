@@ -1,6 +1,6 @@
 #![cfg_attr(debug_assertions, allow(unused))]
 
-use std::{net::SocketAddr, path::Path, time::Duration};
+use std::{net::SocketAddr, time::Duration};
 
 use infra_kernel::debug::Debugging;
 use tokio::signal;
@@ -11,7 +11,8 @@ use tokio::net::TcpListener;
 
 #[tokio::main]
 async fn main() {
-    load_environment();
+    shepherd_runtime::load_environment(&[])
+        .unwrap_or_else(|error: std::io::Error| panic!("load runtime environment: {error}"));
     Debugging::init();
 
     let shepherd_runtime::RuntimeParts { host, router, worker } = shepherd_runtime::build().await;
@@ -77,15 +78,6 @@ fn positive_env_u64(name: &str, default: u64) -> u64 {
             );
             default
         }
-    }
-}
-
-fn load_environment() {
-    if std::env::var("APP_ENV") == Ok("development".to_owned()) {
-        dotenvy::dotenv().ok();
-    } else {
-        dotenvy::from_path(Path::new("/run/secrets/server_prod_env"))
-            .unwrap_or_else(|error: dotenvy::Error| panic!("production environment file is unavailable: {error}"));
     }
 }
 

@@ -1,4 +1,4 @@
-FROM rust:1-slim-trixie AS builder
+FROM rust:1.98.1-slim-trixie AS builder
 WORKDIR /app/shepherd_server
 
 RUN apt-get update \

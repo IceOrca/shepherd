@@ -163,7 +163,7 @@ volumes: !override
 
 secrets:
   postgres_password:
-    file: ${SVR_SECRETS_DIR:?SVR_SECRETS_DIR_must_be_set}/postgres_pw
+    file: ${SVR_SECRETS_DIR:?SVR_SECRETS_DIR_must_be_set}/postgres_root_pw
   server_prod_env:
     file: ${SVR_SECRETS_DIR:?SVR_SECRETS_DIR_must_be_set}/server.prod.env
   keycloak_db_password:

@@ -50,7 +50,7 @@ docker run --rm \
     -e AUTH_ADMIN_JWT_ISSUER \
     -e AUTH_ADMIN_JWT_AUDIENCE \
     -e AUTH_ADMIN_JWT_EXPIRY_SECS \
-    node:24-alpine node -e '
+    node:24.20.0-alpine node -e '
 const crypto = require("crypto");
 
 const encode = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");

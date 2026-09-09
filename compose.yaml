@@ -1,6 +1,6 @@
 services:
   postgres-db:
-    image: postgres:18-alpine
+    image: postgres:18.6-alpine
     container_name: shepherd-postgres
     restart: unless-stopped
     environment:
@@ -19,7 +19,7 @@ services:
       retries: 20
 
   postgres-bootstrap:
-    image: postgres:18-alpine
+    image: postgres:18.6-alpine
     container_name: shepherd-pg-bootstrap
     restart: "no"
     environment:
@@ -29,9 +29,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
       PG_APP_USER: ${PG_APP_USER}
-      PG_APP_PASSWORD: ${PG_APP_PASSWORD}
+      PG_APP_PASSWORD: ${PG_APP_PASSWORD:-}
       AUTH_DB_USER: ${AUTH_DB_USER}
-      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD}
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:-}
       SHEPHERD_POSTGRES_BOOTSTRAP_JOB: "1"
     volumes:
       - ./scripts/bootstrap-postgres.sh:/usr/local/bin/bootstrap-postgres.sh:ro
@@ -41,7 +41,7 @@ services:
         condition: service_healthy
 
   redis-cache:
-    image: redis:8-alpine
+    image: redis:8.10.1-alpine
     container_name: shepherd-redis
     restart: unless-stopped
     ports:
@@ -69,14 +69,14 @@ services:
       - ./deploy/shepherd/dev/hr-pii.env
     environment:
       APP_ENV: development
-      DATABASE_URL: ${DATABASE_URL}
-      REDIS_CACHE_URL: ${REDIS_CACHE_URL}
-      REDIS_QUEUE_URL: ${REDIS_QUEUE_URL}
+      DATABASE_URL: ${DATABASE_URL:-}
+      REDIS_CACHE_URL: ${REDIS_CACHE_URL:-}
+      REDIS_QUEUE_URL: ${REDIS_QUEUE_URL:-}
       HOST_IP: 0.0.0.0
       HOST_PORT: ${BACKEND_PORT:-8000}
       TRUSTED_PROXY_CIDRS: 127.0.0.1/32,::1/128,172.16.0.0/12
       RUST_LOG: ${RUST_LOG:-debug}
-      AUTH_ISSUER_URL: ${AUTH_ISSUER_URL}
+      AUTH_ISSUER_URL: ${AUTH_ISSUER_URL:-}
       AUTH_ACCOUNT_CACHE_TTL_SECS: ${AUTH_ACCOUNT_CACHE_TTL_SECS:-60}
       AUTH_JWKS_URL: http://supabase-auth:9999/.well-known/jwks.json
       AUTH_AUDIENCE: ${AUTH_AUDIENCE:-authenticated}
@@ -139,9 +139,9 @@ services:
       - ./deploy/supabase/dev/auth-admin.env
     environment:
       APP_ENV: development
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: ${DATABASE_URL:-}
       AUTH_ADMIN_URL: http://supabase-auth:9999
-      AUTH_ISSUER_URL: ${AUTH_ISSUER_URL}
+      AUTH_ISSUER_URL: ${AUTH_ISSUER_URL:-}
       AUTH_ADMIN_JWT_ALGORITHM: ${AUTH_ADMIN_JWT_ALGORITHM:-}
       AUTH_ADMIN_JWT_ROLE: ${AUTH_ADMIN_JWT_ROLE:-}
       AUTH_ADMIN_JWT_ISSUER: ${AUTH_ISSUER_URL:-}
@@ -195,7 +195,7 @@ services:
     environment:
       VITE_SHEPHERD_DEV_PROXY_TARGET: http://server:${BACKEND_PORT:-8000}
       VITE_SHEPHERD_AUTH_DEV_PROXY_TARGET: http://supabase-auth:9999
-      VITE_SHEPHERD_AUTH_URL: ${AUTH_PUBLIC_URL}
+      VITE_SHEPHERD_AUTH_URL: ${AUTH_PUBLIC_URL:-}
       VITE_STAFFING_GPS_ENABLED: "false"
       VITE_PLANNED_STAFFING_ENABLED: ${VITE_PLANNED_STAFFING_ENABLED:-false}
     volumes:
@@ -207,7 +207,7 @@ services:
       - server
 
   supabase-auth:
-    image: supabase/gotrue:v2.196.0
+    image: supabase/gotrue:v2.197.0
     container_name: shepherd-auth
     restart: unless-stopped
     env_file:
@@ -220,16 +220,16 @@ services:
       AUTH_DB_STARTUP_TIMEOUT_SECS: ${AUTH_DB_STARTUP_TIMEOUT_SECS:-240}
       AUTH_DB_STARTUP_RETRY_INTERVAL_SECS: ${AUTH_DB_STARTUP_RETRY_INTERVAL_SECS:-2}
       AUTH_DB_STARTUP_PROBE_TIMEOUT_SECS: ${AUTH_DB_STARTUP_PROBE_TIMEOUT_SECS:-2}
-      API_EXTERNAL_URL: ${AUTH_PUBLIC_URL}
-      GOTRUE_SITE_URL: ${SHEPHERD_PUBLIC_URL}
-      GOTRUE_URI_ALLOW_LIST: ${SHEPHERD_PUBLIC_URL}/**,http://localhost:${FRONTEND_DEV_PORT:-5173}/**
+      API_EXTERNAL_URL: ${AUTH_PUBLIC_URL:-}
+      GOTRUE_SITE_URL: ${SHEPHERD_PUBLIC_URL:-}
+      GOTRUE_URI_ALLOW_LIST: ${SHEPHERD_PUBLIC_URL:-}/**,http://localhost:${FRONTEND_DEV_PORT:-5173}/**
       GOTRUE_DB_DRIVER: postgres
-      GOTRUE_DB_DATABASE_URL: postgres://${AUTH_DB_USER}:${AUTH_DB_PASSWORD}@postgres-db:${POSTGRES_PORT:-5432}/${POSTGRES_DB}?search_path=auth
+      GOTRUE_DB_DATABASE_URL: postgres://${AUTH_DB_USER}:${AUTH_DB_PASSWORD:-}@postgres-db:${POSTGRES_PORT:-5432}/${POSTGRES_DB}?search_path=auth
       DB_NAMESPACE: auth
       GOTRUE_DB_MAX_POOL_SIZE: 10
       GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_ENABLED: "true"
       GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_URI: pg-functions://${POSTGRES_DB}/public/shepherd_custom_access_token_hook
-      GOTRUE_JWT_ISSUER: ${AUTH_ISSUER_URL}
+      GOTRUE_JWT_ISSUER: ${AUTH_ISSUER_URL:-}
       GOTRUE_JWT_AUD: ${AUTH_AUDIENCE:-authenticated}
       GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
       GOTRUE_JWT_ADMIN_ROLES: ${AUTH_ADMIN_JWT_ROLE:-}
@@ -242,11 +242,11 @@ services:
       GOTRUE_EXTERNAL_GOOGLE_ENABLED: ${AUTH_GOOGLE_ENABLED:-false}
       GOTRUE_EXTERNAL_GOOGLE_CLIENT_ID: ${AUTH_GOOGLE_CLIENT_ID:-}
       GOTRUE_EXTERNAL_GOOGLE_SECRET: ${AUTH_GOOGLE_CLIENT_SECRET:-}
-      GOTRUE_EXTERNAL_GOOGLE_REDIRECT_URI: ${AUTH_PUBLIC_URL}/callback
+      GOTRUE_EXTERNAL_GOOGLE_REDIRECT_URI: ${AUTH_PUBLIC_URL:-}/callback
       GOTRUE_EXTERNAL_FACEBOOK_ENABLED: ${AUTH_FACEBOOK_ENABLED:-false}
       GOTRUE_EXTERNAL_FACEBOOK_CLIENT_ID: ${AUTH_FACEBOOK_CLIENT_ID:-}
       GOTRUE_EXTERNAL_FACEBOOK_SECRET: ${AUTH_FACEBOOK_CLIENT_SECRET:-}
-      GOTRUE_EXTERNAL_FACEBOOK_REDIRECT_URI: ${AUTH_PUBLIC_URL}/callback
+      GOTRUE_EXTERNAL_FACEBOOK_REDIRECT_URI: ${AUTH_PUBLIC_URL:-}/callback
     ports:
       - "127.0.0.1:${AUTH_PORT:-9999}:9999"
     volumes:
@@ -266,12 +266,12 @@ services:
         condition: service_completed_successfully
 
   caddy:
-    image: caddy:2.11-alpine
+    image: caddy:2.11.4-alpine
     container_name: shepherd-caddy
     restart: unless-stopped
     environment:
-      REMOTE_DEV_DNS_NAME: ${REMOTE_DEV_DNS_NAME}
-      AUTH_DEV_DNS_NAME: ${AUTH_DEV_DNS_NAME}
+      REMOTE_DEV_DNS_NAME: ${REMOTE_DEV_DNS_NAME:-}
+      AUTH_DEV_DNS_NAME: ${AUTH_DEV_DNS_NAME:-}
       SHEPHERD_API_DEV_UPSTREAM: server:${BACKEND_PORT:-8000}
       SHEPHERD_WEB_DEV_UPSTREAM: client:${FRONTEND_DEV_PORT:-5173}
       AUTH_DEV_UPSTREAM: supabase-auth:9999

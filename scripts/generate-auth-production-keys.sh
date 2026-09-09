@@ -1,8 +1,8 @@
 #!/bin/sh
 
-# Generate new production key snippets without printing private material. Merge
-# the first output into the protected Compose environment and the second into
-# the mounted server.prod.env only after reviewing their variable names.
+# Generate new production key snippets without printing private material. Use
+# the first output as the mounted auth.prod.env secret and merge the second into
+# server.prod.env only after reviewing their variable names.
 
 set -eu
 
@@ -82,8 +82,9 @@ docker run --rm \
     -e AUTH_ACCESS_JWT_ROTATION_INTERVAL_SECS \
     -e AUTH_ACCESS_JWT_STANDBY_PROPAGATION_SECS \
     -e AUTH_ACCESS_JWT_KEY_OVERLAP_SECS \
-    node:24-alpine node -e '
+    node:24.20.0-alpine node -e '
 const crypto = require("crypto");
+const shellQuoted = (value) => `${String.fromCharCode(39)}${value}${String.fromCharCode(39)}`;
 
 const jwtSecret = crypto.randomBytes(48).toString("base64url");
 const { privateKey: accessPrivateKey } = crypto.generateKeyPairSync("ed25519");
@@ -107,20 +108,19 @@ const keys = [
   },
 ];
 
-console.log(`AUTH_JWT_SECRET_PROD=${jwtSecret}`);
-console.log(`AUTH_JWT_KEYS_PROD=${JSON.stringify(keys)}`);
-console.log(`AUTH_JWT_VALID_METHODS_PROD=${process.env.AUTH_JWT_VALID_METHODS_PROD}`);
-console.log(`AUTH_ACCESS_JWT_ROTATION_INTERVAL_SECS=${process.env.AUTH_ACCESS_JWT_ROTATION_INTERVAL_SECS}`);
-console.log(`AUTH_ACCESS_JWT_STANDBY_PROPAGATION_SECS=${process.env.AUTH_ACCESS_JWT_STANDBY_PROPAGATION_SECS}`);
-console.log(`AUTH_ACCESS_JWT_KEY_OVERLAP_SECS=${process.env.AUTH_ACCESS_JWT_KEY_OVERLAP_SECS}`);
-console.log(`AUTH_ACCESS_JWT_CURRENT_KID=${accessKid}`);
-console.log(`AUTH_ACCESS_JWT_CURRENT_CREATED_AT=${createdAt}`);
+console.log(`GOTRUE_JWT_SECRET=${shellQuoted(jwtSecret)}`);
+console.log(`GOTRUE_JWT_KEYS=${shellQuoted(JSON.stringify(keys))}`);
+console.log(`AUTH_ACCESS_JWT_ROTATION_INTERVAL_SECS=${shellQuoted(process.env.AUTH_ACCESS_JWT_ROTATION_INTERVAL_SECS)}`);
+console.log(`AUTH_ACCESS_JWT_STANDBY_PROPAGATION_SECS=${shellQuoted(process.env.AUTH_ACCESS_JWT_STANDBY_PROPAGATION_SECS)}`);
+console.log(`AUTH_ACCESS_JWT_KEY_OVERLAP_SECS=${shellQuoted(process.env.AUTH_ACCESS_JWT_KEY_OVERLAP_SECS)}`);
+console.log(`AUTH_ACCESS_JWT_CURRENT_KID=${shellQuoted(accessKid)}`);
+console.log(`AUTH_ACCESS_JWT_CURRENT_CREATED_AT=${shellQuoted(createdAt)}`);
 console.log(`AUTH_ADMIN_JWT_PRIVATE_KEY_BASE64=${Buffer.from(adminPrivatePem).toString("base64")}`);
 console.log(`AUTH_ADMIN_JWT_KEY_ID=${adminKid}`);
 console.log(`AUTH_PROVISIONING_FINGERPRINT_KEY_BASE64=${provisioningFingerprintKey}`);
 ' > "${combined_temporary_path}"
 
-sed -n '/^AUTH_JWT_/p; /^AUTH_ACCESS_/p' "${combined_temporary_path}" > "${auth_temporary_path}"
+sed -n '/^GOTRUE_JWT_/p; /^AUTH_ACCESS_/p' "${combined_temporary_path}" > "${auth_temporary_path}"
 sed -n '/^AUTH_ADMIN_JWT_/p; /^AUTH_PROVISIONING_FINGERPRINT_KEY_BASE64=/p' "${combined_temporary_path}" > "${admin_temporary_path}"
 mv "${auth_temporary_path}" "${auth_output_path}"
 mv "${admin_temporary_path}" "${admin_output_path}"

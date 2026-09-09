@@ -1,11 +1,11 @@
 #!/bin/sh
 
-# Build a production frontend artifact with the public Supabase Auth origin
-# embedded by Vite. The output is staged separately for atomic deployment.
+# Build the immutable production web/edge image with its public Auth URL
+# embedded by Vite and the production Caddyfile included in the runtime layer.
 set -eu
 
 environment_file="${1:-deploy/secrets_example/example.env}"
-requested_output_directory="${2:-}"
+requested_image="${2:-}"
 
 if [ ! -f "${environment_file}" ]; then
     echo >&2 "Production environment file does not exist: ${environment_file}"
@@ -47,27 +47,20 @@ if [ "${auth_public_url}" != "${expected_auth_public_url}" ]; then
     exit 2
 fi
 
-if [ -n "${requested_output_directory}" ]; then
-    output_directory="${requested_output_directory}"
-    mkdir -p "${output_directory}"
-    if find "${output_directory}" -mindepth 1 -print -quit | grep -q .; then
-        echo >&2 "Refusing to mix an artifact into a non-empty directory: ${output_directory}"
-        exit 2
-    fi
-else
-    output_directory="$(mktemp -d /tmp/shepherd-web-dist.XXXXXX)"
-fi
+image_name="${requested_image:-${SHEPHERD_WEB_IMAGE:-iceorca/shepherd-web:0.1.0}}"
 
-echo "Building Shepherd web artifact"
+echo "Building Shepherd web/Caddy image"
 echo "Auth URL: ${auth_public_url}"
-echo "Output directory: ${output_directory}"
+echo "Image: ${image_name}"
 
 docker build \
     --file client/web/Dockerfile.prod \
-    --target export \
+    --target runner \
+    --provenance=mode=max \
+    --sbom=true \
     --build-arg "VITE_SHEPHERD_AUTH_URL=${auth_public_url}" \
-    --output "type=local,dest=${output_directory}" \
-    client/web
+    --build-arg "VITE_PLANNED_STAFFING_ENABLED=${VITE_PLANNED_STAFFING_ENABLED:-false}" \
+    --tag "${image_name}" \
+    .
 
-echo "Production web artifact is ready: ${output_directory}"
-echo "Deploy this directory atomically to ${SHEPHERD_WEB_DIST_ROOT:-/var/www/shepherd/dist}"
+echo "Production web/Caddy image is ready: ${image_name}"

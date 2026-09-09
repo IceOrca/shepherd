@@ -48,66 +48,65 @@ The watchdog checks once per minute and is a no-op while the edge is healthy.
 It starts with the user's systemd session; the machine-wide service remains the
 preferred boot-before-login protection.
 
-Production uses the host Caddy configuration in `deploy/Caddy/prod/Caddyfile`.
-The Auth and server containers remain loopback-only. The host edge forwards
-their public paths and serves the React build directly, so production does not
-run a frontend or Nginx container. Production Auth uses a separate public
-origin and the same Supabase-compatible path as development:
+Production packages `deploy/Caddy/prod/Caddyfile` and the compiled React
+application into the image named by `SHEPHERD_WEB_IMAGE`. That Caddy service
+runs in the same private Compose network as Shepherd and GoTrue. Production
+Auth uses a separate public origin and the same Supabase-compatible path as
+development:
 
 - Shepherd UI: `${SHEPHERD_WEB_ORIGIN_PROD}`
 - Auth API: `${AUTH_ORIGIN_PROD}/auth/v1/*`
 
-Create DNS `A` and optional `AAAA` records for `AUTH_DNS_NAME_PROD` that
-point to the public VPS. Set
+Create DNS `A` and optional `AAAA` records for both the web hostname and
+`AUTH_DNS_NAME_PROD` that point to the public VPS. Set
 `AUTH_ORIGIN_PROD=https://${AUTH_DNS_NAME_PROD}` and
 `AUTH_PUBLIC_URL_PROD=${AUTH_ORIGIN_PROD}/auth/v1`. Caddy obtains the public
 TLS certificate after DNS resolves and ports 80/443 reach the VPS. Keep
-GoTrue's port loopback-only.
+GoTrue private to the Compose network.
 
-The production edge is deliberately different from development. Compose
-disables its Caddy service, and host Caddy listens on wildcard ports rather
-than binding `PUBLIC_VPS_IPV4_PROD` explicitly. The public VPS address is DNS
-validation data only, so delayed assignment of that address cannot leave a
-partially networked Docker Caddy container. Install the supplied systemd
-drop-in on the VPS to make host Caddy wait for `network-online.target` and
-restart after a transient startup failure:
+Set `ACME_EMAIL_PROD` to a monitored operator address. The production
+Caddyfile explicitly uses Let's Encrypt's production ACME directory. Caddy
+obtains and renews both certificates automatically; do not install Certbot or
+add a certificate-renewal cron job.
+
+Compose Caddy is the only production service that publishes host ports:
 
 ```sh
-sudo install -D -m 0644 \
-  deploy/systemd/caddy.service.d/shepherd-network-online.conf \
-  /etc/systemd/system/caddy.service.d/shepherd-network-online.conf
-sudo systemctl daemon-reload
-sudo systemctl restart caddy
+docker compose --env-file /etc/shepherd/shepherd.env \
+  -f compose.yaml -f compose.prod.yaml up -d --wait
 ```
 
 Do not add a Caddy `bind` directive for `PUBLIC_VPS_IPV4_PROD`; wildcard
-listeners remain valid while the host network converges.
+listeners let Docker publish TCP 80/443 and UDP 443 on the VPS. The
+`caddy_data` and `caddy_config` volumes preserve ACME account and certificate
+state across image replacement and container recreation.
+Deleting `caddy_data` discards ACME account and certificate state and can
+cause unnecessary reissuance or rate-limit pressure.
 
-Build the static frontend artifact with the pinned Node image:
+The edge proxies Shepherd at `server:${BACKEND_PORT_PROD}` and GoTrue at
+`supabase-auth:9999` using private Docker DNS. The API, Auth, PostgreSQL, and
+Redis services have no production host mapping.
+
+Build the immutable web/Caddy image on the trusted PC with the PC-only build
+overlay, then push both application images:
 
 ```sh
-sh scripts/build-production-web.sh /etc/shepherd/shepherd.env
+docker compose --env-file /etc/shepherd/shepherd.env \
+  -f compose.yaml -f compose.prod.yaml -f compose.build.yaml \
+  build --pull --push server caddy
 ```
 
-The script embeds the non-secret `AUTH_PUBLIC_URL_PROD` in the Vite artifact
-and writes to a new temporary staging directory by default. Deploy the staged
-artifact to `/var/www/shepherd/dist`, or set `SHEPHERD_WEB_DIST_ROOT` to
-another absolute path. Deploy the directory atomically so Caddy never observes
-a partially replaced set of hashed assets and `index.html`.
+The build embeds the non-secret `AUTH_PUBLIC_URL_PROD`, runs frontend lint and
+the optimized Vite build, copies the result into `/srv`, and publishes SBOM
+and provenance attestations. The VPS uses only `compose.yaml +
+compose.prod.yaml`, pulls the image, and starts with `--no-build`. Production
+never runs `vite preview` and requires no host static-file directory.
 
 After deploying and starting Caddy and GoTrue, verify DNS, public TLS, disabled
 signup, and CORS:
 
 ```sh
 sh scripts/check-production-auth-edge.sh /etc/shepherd/shepherd.env
-```
-
-On the VPS, point the checker at the installed Caddyfile as well so deployment
-drift cannot introduce an explicit public-IP bind:
-
-```sh
-SHEPHERD_PRODUCTION_CADDYFILE=/etc/caddy/Caddyfile \
-  sh scripts/check-production-auth-edge.sh /etc/shepherd/shepherd.env
 ```
 
 Do not expose PostgreSQL, the Auth container, or the Shepherd server directly

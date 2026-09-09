@@ -33,7 +33,7 @@ file_mode="$(stat -c '%a' "${environment_file}")"
 
 docker run --rm -i \
     -v "$(pwd)/scripts:/workspace/scripts:ro" \
-    node:24-alpine \
+    node:24.20.0-alpine \
     node /workspace/scripts/manage-auth-access-key.mjs \
     "${operation}" "${keys_variable}" "${force_flag}" \
     < "${environment_file}" > "${temporary_path}"

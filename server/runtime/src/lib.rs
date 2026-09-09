@@ -1,6 +1,6 @@
 #![cfg_attr(debug_assertions, allow(unused))]
 
-use std::sync::Arc;
+use std::{io, path::Path, sync::Arc};
 
 use tokio_util::sync::CancellationToken;
 use axum::Router;
@@ -12,6 +12,23 @@ pub struct RuntimeParts {
     pub host: Arc<HostInfa>,
     pub router: Router,
     pub worker: Worker,
+}
+
+/// Load the ordinary development dotenv file or the required mounted
+/// production environment files. Production callers may add a tool-specific
+/// secret after the shared server environment.
+pub fn load_environment(additional_production_secrets: &[&str]) -> Result<(), io::Error> {
+    if std::env::var("APP_ENV").as_deref() == Ok("production") {
+        for path in std::iter::once("/run/secrets/server_prod_env").chain(additional_production_secrets.iter().copied())
+        {
+            dotenvy::from_path(Path::new(path)).map_err(|error: dotenvy::Error| {
+                io::Error::other(format!("load production environment {path}: {error}"))
+            })?;
+        }
+    } else {
+        let _loaded: Result<std::path::PathBuf, dotenvy::Error> = dotenvy::dotenv();
+    }
+    Ok(())
 }
 
 pub async fn build() -> RuntimeParts {

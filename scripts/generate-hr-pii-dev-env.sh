@@ -18,7 +18,7 @@ umask 077
 temporary_path="$(mktemp)"
 trap 'rm -f "${temporary_path}"' EXIT HUP INT TERM
 
-docker run --rm node:24-alpine node -e '
+docker run --rm node:24.20.0-alpine node -e '
 const crypto = require("crypto");
 const encryptionKey = crypto.randomBytes(32).toString("base64");
 const lookupKey = crypto.randomBytes(32).toString("base64");

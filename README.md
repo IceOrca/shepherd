@@ -628,6 +628,13 @@ with `docker compose ps -a` and
 `docker compose logs postgres-db postgres-bootstrap supabase-auth` rather than
 restarting the graph blindly.
 
+The production merge adds a second one-shot gate named `database-migrate`.
+It runs the migrations embedded in the pinned Shepherd release image after
+`postgres-bootstrap` succeeds and before either GoTrue or the API starts. On a
+fresh volume this creates the application schema and Auth token hook; on later
+starts it applies only new migrations. `postgres-bootstrap` and
+`database-migrate` both ending as `Exited (0)` is the healthy steady state.
+
 ### Rust development build storage
 
 Rust artifacts are kept in the persistent `server_target` Docker volume so
@@ -687,36 +694,38 @@ DNS, Caddy, GoTrue, Shepherd, and the frontend have separate responsibilities:
 
 ```text
 Browser
-  ├─ https://businessdomain.com/api/*       -> Caddy -> Shepherd
-  └─ https://auth.businessdomain.com/auth/v1/*
-                                             -> Caddy strips /auth/v1
-                                             -> GoTrue on 127.0.0.1:9999
+  ├─ https://www.entertainment17.work/api/* -> Compose Caddy -> Shepherd
+  └─ https://auth.entertainment17.work/auth/v1/*
+                                             -> Compose Caddy strips /auth/v1
+                                             -> GoTrue on the private network
 ```
 
-DNS does not create the Auth hostname automatically. Create an `A` record
-mapping `auth.businessdomain.com` to the public VPS IPv4 address. Add an
-`AAAA` record only when the VPS has working public IPv6. Keep GoTrue port
-`9999`, PostgreSQL, Redis, and the Shepherd server private; only Caddy accepts
-public traffic on ports 80 and 443.
+DNS is external to Compose. Create `A` records mapping both
+`www.entertainment17.work` and `auth.entertainment17.work` to
+`103.153.68.125`. Add `AAAA` records only when the VPS has working public
+IPv6. Keep GoTrue port `9999`, PostgreSQL, Redis, and the Shepherd server
+private; only Caddy accepts public traffic on TCP 80/443 and optional HTTP/3
+traffic on UDP 443.
 
 Start from `deploy/secrets_example/example.env` and replace its reserved
-example values:
+example values. This file is deliberately non-secret:
 
 ```env
-PUBLIC_VPS_IPV4_PROD=203.0.113.50
+PUBLIC_VPS_IPV4_PROD=103.153.68.125
 PUBLIC_VPS_IPV6_PROD=
 
-SHEPHERD_WEB_ORIGIN_PROD=https://businessdomain.com
-AUTH_DNS_NAME_PROD=auth.businessdomain.com
+SHEPHERD_WEB_ORIGIN_PROD=https://www.entertainment17.work
+AUTH_DNS_NAME_PROD=auth.entertainment17.work
 AUTH_ORIGIN_PROD=https://${AUTH_DNS_NAME_PROD}
 AUTH_PUBLIC_URL_PROD=${AUTH_ORIGIN_PROD}/auth/v1
-AUTH_REDIRECT_ALLOW_LIST_PROD=https://businessdomain.com/**
+AUTH_REDIRECT_ALLOW_LIST_PROD=https://www.entertainment17.work/**
+ACME_EMAIL_PROD=your-real-operator-email@your-domain
 ```
 
 These values form one contract:
 
-- Caddy serves `https://${AUTH_DNS_NAME_PROD}` and strips `/auth/v1` only
-  while proxying to GoTrue.
+- The production Caddy container serves both public origins and strips
+  `/auth/v1` only while proxying to the private GoTrue service.
 - GoTrue uses `AUTH_PUBLIC_URL_PROD` as `API_EXTERNAL_URL`, its JWT issuer,
   and the base of `/callback`.
 - Shepherd validates `AUTH_PUBLIC_URL_PROD` as the JWT issuer while loading
@@ -726,26 +735,124 @@ These values form one contract:
 - Google, Facebook, and other configured providers must allow the exact
   callback `${AUTH_PUBLIC_URL_PROD}/callback`.
 
-Build a staged frontend artifact after configuring the real environment:
+Create `${SVR_SECRETS_DIR}` as a root/operator-owned mode-`0700` directory.
+Copy the templates below to the exact production filenames and replace every
+placeholder; each resulting file must be mode `0600` or `0400`:
+
+| Template | Production filename | Purpose |
+| --- | --- | --- |
+| `postgres_pw.prod.example` | `postgres_pw` | PostgreSQL bootstrap administrator password |
+| `pg_app_password.prod.example` | `pg_app_password` | Shepherd application database password |
+| `auth_db_password.prod.example` | `auth_db_password` | GoTrue database-role password |
+| `auth.prod.env.example` | `auth.prod.env` | GoTrue signing, SMTP, and optional provider secrets |
+| `server.prod.env.example` | `server.prod.env` | API administration signer, PII keys, Redis, quotas, and notification credentials |
+| `tenant_bootstrap_admin_secret.example` | `tenant_bootstrap_admin_secret` | legacy tenant-bootstrap operator secret |
+| `system-admin.prod.env.example` | `system-admin.prod.env` | initial platform-administrator login |
+
+Generate all three database password files with URL-safe random characters,
+for example `openssl rand -hex 32`. The production entrypoints construct the
+two schema-specific PostgreSQL URLs in-process, so database credentials never
+appear in the rendered Compose environment or `docker inspect`. JWT, SMTP, and
+social-provider secrets likewise belong in `auth.prod.env`, not
+`shepherd.env`.
+
+Before building or starting anything, run the offline preflight:
+
+```sh
+sh scripts/check-production-config.sh /etc/shepherd/shepherd.env
+```
+
+It validates placeholders, secret presence and permissions, the Auth URL
+contract, the merged Compose model, and the production Caddyfile without printing
+secret values.
+
+Build and publish application images only from the trusted PC or CI machine.
+Log in with a Docker Hub personal access token that can write the
+`iceorca/shepherd-srv` and `iceorca/shepherd-web` repositories:
+
+```sh
+docker login --username iceorca
+docker compose --env-file /etc/shepherd/shepherd.env \
+  -f compose.yaml -f compose.prod.yaml -f compose.build.yaml \
+  build --pull --push server caddy
+```
+
+The server image contains the non-root API runtime plus the migration,
+tenant-bootstrap, and system-administrator one-shot binaries. Use an immutable
+release tag through `SHEPHERD_SERVER_IMAGE`. The web image named by
+`SHEPHERD_WEB_IMAGE` contains the compiled Vite application, Caddy, and its
+production routing configuration. The PC-only `compose.build.yaml` produces
+SBOM and maximum provenance attestations. Never include that overlay in a VPS
+command.
+
+To build only the web/Caddy image:
 
 ```sh
 sh scripts/build-production-web.sh /etc/shepherd/shepherd.env
 ```
 
 The build refuses an empty Auth URL, the documentation-only
-`auth.example.com` value, and a non-empty output directory. Deploy the
-reported staging directory atomically to `SHEPHERD_WEB_DIST_ROOT`.
+`auth.example.com` value, or a non-HTTPS URL without `/auth/v1`. Production
+does not run Node/Vite or copy frontend files onto the host; the runtime layer
+is the immutable Caddy image.
 
-After DNS resolves and GoTrue, Shepherd, and Caddy are running with the same
-URL chain, verify the public boundary:
+On the VPS, log in with a read-only token when the Docker Hub repositories are
+private, then pull every runtime image. The ordinary production merge contains
+no build context:
 
 ```sh
+docker login --username iceorca
+docker compose --env-file /etc/shepherd/shepherd.env \
+  -f compose.yaml -f compose.prod.yaml pull
+docker compose --env-file /etc/shepherd/shepherd.env \
+  -f compose.yaml -f compose.prod.yaml \
+  up -d --wait --pull always --no-build
+```
+
+Expect both one-shot setup services to show `Exited (0)`. Any other exit blocks
+GoTrue and the API; inspect that service's logs rather than repeatedly running
+`up`. Caddy is the only service with published ports. Its `caddy_data` and
+`caddy_config` named volumes preserve ACME account and certificate state.
+
+Use a new non-`latest` tag for every release, ideally a semantic version plus
+the Git commit. After pushing, record the registry digest reported by Docker
+Hub. For the strongest deployment pin, set each VPS image variable to
+`repository:tag@sha256:digest`; this prevents a moved tag from changing the
+next pull.
+
+#### Let's Encrypt certificates
+
+No Certbot installation or renewal cron job is needed. The production
+Caddyfile pins the public ACME issuer to Let's Encrypt, registers with
+`ACME_EMAIL_PROD`, obtains certificates after both DNS records reach the VPS,
+and renews them automatically before expiry. Before starting Caddy:
+
+- Set both DNS `A` records to `103.153.68.125`; use DNS-only mode if the DNS
+  provider offers an HTTP proxy.
+- Allow inbound TCP 80 and 443. Keep UDP 443 open only when HTTP/3 is desired.
+- Ensure no host service or another container already owns ports 80 or 443.
+- Preserve and back up the `caddy_data` volume. Do not recreate or delete it
+  during ordinary releases.
+
+Watch first issuance without exposing secrets:
+
+```sh
+docker compose --env-file /etc/shepherd/shepherd.env \
+  -f compose.yaml -f compose.prod.yaml logs --follow caddy
+```
+
+Then verify both public certificates and redirects:
+
+```sh
+curl --fail --show-error --head https://www.entertainment17.work
+curl --fail --show-error \
+  https://auth.entertainment17.work/auth/v1/settings
 sh scripts/check-production-auth-edge.sh /etc/shepherd/shepherd.env
 ```
 
-Run it on the VPS with
-`SHEPHERD_PRODUCTION_CADDYFILE=/etc/caddy/Caddyfile` to validate the deployed
-file rather than only the repository copy.
+Normal image upgrades retain the named volumes, so automatic renewal continues
+without operator action. A DNS change, closed challenge port, deleted
+`caddy_data` volume, or stopped Caddy container can prevent renewal.
 
 The checker sends no credentials or tokens. It verifies the DNS address,
 public HTTP-to-HTTPS redirect, TLS, wildcard-listener policy,
@@ -768,11 +875,11 @@ When sudo is not available, the login-scoped fallback can be installed with
 per minute without recreating a healthy edge. The machine-wide service remains
 the preferred boot-before-login protection.
 
-Production does not have that explicit-IP Docker race: Compose disables its
-Caddy edge and host Caddy listens on wildcard ports. Install
-`deploy/systemd/caddy.service.d/shepherd-network-online.conf` on the VPS so the
-host service follows `network-online.target` and retries transient failures;
-keep `PUBLIC_VPS_IPV4_PROD` for DNS checks rather than a Caddy `bind` address.
+Production Compose Caddy uses wildcard listeners, so do not add a `bind`
+directive for `PUBLIC_VPS_IPV4_PROD`. Docker's restart policy restores the
+edge after daemon or VPS restart, while the persisted Caddy volumes retain TLS
+state. Caddy reaches `server:8000` and `supabase-auth:9999` only through the
+private Compose network; PostgreSQL and Redis are private there as well.
 
 Changing from an old same-origin issuer to the Auth subdomain is a coordinated
 cutover. Rebuild the frontend and recreate GoTrue and Shepherd together before
@@ -1020,9 +1127,10 @@ bootstrap secret. Development keeps these in the ignored `.env`. Production
 keeps the account/email in the deployment environment and mounts
 `${SVR_SECRETS_DIR}/tenant_bootstrap_admin_secret`; copy the placeholder from
 `deploy/secrets_example/tenant_bootstrap_admin_secret.example`. The production
-server secret environment must also provide `DATABASE_URL`, `AUTH_ADMIN_URL`,
-the `AUTH_ADMIN_JWT_*` signer settings, and `AUTH_ISSUER_URL` as shown in
-`deploy/secrets_example/server.prod.env.example`.
+server secret environment provides the `AUTH_ADMIN_JWT_*` signer settings shown
+in `deploy/secrets_example/server.prod.env.example`. Compose supplies the
+public issuer and private Auth service URL, while the image entrypoint derives
+`DATABASE_URL` from the separately mounted `pg_app_password` secret.
 
 Each request is fingerprinted without storing a plaintext password and claimed
 in `platform_tenant_bootstrap_requests`. The tool creates or reuses each
@@ -1141,6 +1249,22 @@ and registers platform authority; an existing active, confirmed identity keeps
 its current password. Editing the file does not reset an existing password.
 Use the profile menu to change it. After a development database reset,
 `scripts/dev-data-seeding.sh` also runs the initializer when this file exists.
+
+For production, create mode-`0600`
+`${SVR_SECRETS_DIR}/system-admin.prod.env` from
+`deploy/secrets_example/system-admin.prod.env.example`. After the normal
+production graph is healthy, initialize the operator once with:
+
+```sh
+docker compose --env-file /etc/shepherd/shepherd.env \
+  -f compose.yaml -f compose.prod.yaml \
+  --profile tools run --rm --no-deps system-admin-init
+```
+
+The production override runs the compiled one-shot binary and mounts only the
+server, application-database-password, and system-administrator secrets; it
+does not inherit the development Cargo container or ignored development
+credential file.
 To replace an operator, initialize the replacement explicitly and revoke the
 old `platform_administrators.is_active` mapping through an operator-controlled
 database action; changing a tenant role never creates a platform administrator.

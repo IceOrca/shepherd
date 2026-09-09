@@ -1,4 +1,4 @@
-FROM rust:1-slim-trixie AS base
+FROM rust:1.98.1-slim-trixie AS base
 WORKDIR /app/shepherd_server
 
 RUN apt-get update \
@@ -18,15 +18,25 @@ RUN cargo clippy --all --workspace --features="${SHEPHERD_CARGO_FEATURES}" \
     && cargo build --release -p shepherd-runtime \
         --features="${SHEPHERD_CARGO_FEATURES}" \
         --bin shepherd-srv \
-        --bin shepherd-tenant-bootstrap
+        --bin shepherd-migrate \
+        --bin shepherd-tenant-bootstrap \
+        --bin shepherd-system-admin-init
 
 
-FROM debian:trixie-slim AS runner
+FROM debian:13.6-slim AS runner
 WORKDIR /app
+
+RUN groupadd --system --gid 10001 shepherd \
+    && useradd --system --uid 10001 --gid shepherd --home-dir /nonexistent --shell /usr/sbin/nologin shepherd
 
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=builder /app/shepherd_server/target/linux-amd64/release/shepherd-srv /app/shepherd-srv
+COPY --from=builder /app/shepherd_server/target/linux-amd64/release/shepherd-migrate /app/shepherd-migrate
 COPY --from=builder /app/shepherd_server/target/linux-amd64/release/shepherd-tenant-bootstrap /app/shepherd-tenant-bootstrap
+COPY --from=builder /app/shepherd_server/target/linux-amd64/release/shepherd-system-admin-init /app/shepherd-system-admin-init
+COPY --chmod=0555 scripts/start-production.sh /app/start-production.sh
 
 EXPOSE 8000
+USER shepherd:shepherd
+ENTRYPOINT ["/app/start-production.sh"]
 CMD ["/app/shepherd-srv"]

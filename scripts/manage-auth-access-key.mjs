@@ -15,10 +15,18 @@ if (forceFlag && !force) {
 const original = fs.readFileSync(0, "utf8");
 const lines = original.replace(/\n$/, "").split("\n");
 const values = new Map();
+const shellQuotedNames = new Set();
 for (const line of lines) {
   const match = /^([A-Z][A-Z0-9_]*)=(.*)$/.exec(line);
   if (match) {
-    values.set(match[1], match[2]);
+    const name = match[1];
+    const rawValue = match[2];
+    if (rawValue.startsWith("'") && rawValue.endsWith("'")) {
+      shellQuotedNames.add(name);
+      values.set(name, rawValue.slice(1, -1));
+    } else {
+      values.set(name, rawValue);
+    }
   }
 }
 
@@ -79,6 +87,16 @@ const privateEd25519 = (key, kid) => ({
 });
 const setValue = (name, value) => values.set(name, String(value));
 const deleteValue = (name) => values.delete(name);
+const formattedValue = (name) => {
+  const value = values.get(name);
+  if (!shellQuotedNames.has(name)) {
+    return value;
+  }
+  if (value.includes("'")) {
+    throw new Error(`${name} cannot be represented in the shell-quoted Auth secret file`);
+  }
+  return `'${value}'`;
+};
 const writeEnvironment = () => {
   const emitted = new Set();
   const output = lines
@@ -92,11 +110,11 @@ const writeEnvironment = () => {
         return line;
       }
       emitted.add(match[1]);
-      return `${match[1]}=${values.get(match[1])}`;
+      return `${match[1]}=${formattedValue(match[1])}`;
     });
   for (const [name, value] of values) {
     if (!emitted.has(name)) {
-      output.push(`${name}=${value}`);
+      output.push(`${name}=${formattedValue(name)}`);
     }
   }
   process.stdout.write(`${output.join("\n")}\n`);

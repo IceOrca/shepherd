@@ -1,3 +1,8 @@
+{
+	email {$ACME_EMAIL_PROD}
+	acme_ca https://acme-v02.api.letsencrypt.org/directory
+}
+
 (common) {
 	encode zstd gzip
 	header {
@@ -11,11 +16,11 @@
 # Public Shepherd application and API endpoints.
 {$SHEPHERD_WEB_ORIGIN_PROD:https://erp.example.com} {
 	import common
-	root * {$SHEPHERD_WEB_DIST_ROOT:/var/www/shepherd/dist}
+	root * /srv
 
 	@api path /api/* /hr/* /business/*
 	handle @api {
-		reverse_proxy {$SHEPHERD_API_PROD_UPSTREAM:127.0.0.1:8000}
+		reverse_proxy {$SHEPHERD_API_PROD_UPSTREAM:server:8000}
 	}
 
 	@immutable_assets {
@@ -38,12 +43,12 @@
 }
 
 # Standalone Supabase Auth boundary. Keep /auth/v1 public and strip it only on
-# the loopback hop to GoTrue's root routes.
+# the private Docker-network hop to GoTrue's root routes.
 https://{$AUTH_DNS_NAME_PROD:auth.example.com} {
 	import common
 
 	handle_path /auth/v1/* {
-		reverse_proxy {$AUTH_PROD_UPSTREAM:127.0.0.1:9999}
+		reverse_proxy {$AUTH_PROD_UPSTREAM:supabase-auth:9999}
 	}
 
 	handle {
