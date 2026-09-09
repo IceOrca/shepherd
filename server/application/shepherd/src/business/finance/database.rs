@@ -153,6 +153,12 @@ struct SalaryAdvanceRow {
     updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, FromRow)]
+struct CreationReplayRow {
+    id: Uuid,
+    payload_matches: bool,
+}
+
 impl TryFrom<SalaryAdvanceRow> for SalaryAdvance {
     type Error = FinanceError;
 
@@ -486,6 +492,108 @@ async fn fetch_advance(
     row.try_into()
 }
 
+async fn find_expense_creation_replay(
+    connection: &mut PgConnection,
+    tenant_id: Uuid,
+    actor_account_id: Uuid,
+    idempotency_key: Uuid,
+    input: &ExpenseClaimInput,
+    claimed_amount: &BigDecimal,
+) -> Result<Option<CreationReplayRow>, FinanceError> {
+    sqlx::query_as!(
+        CreationReplayRow,
+        r#"
+        SELECT claim.id,
+               COALESCE(
+                   revision.category_id = $4
+                   AND revision.funding_source = $5
+                   AND revision.paid_by_employee_id IS NOT DISTINCT FROM $6
+                   AND revision.customer_id IS NOT DISTINCT FROM $7
+                   AND revision.urgent_work_report_id IS NOT DISTINCT FROM $8
+                   AND revision.staffing_assignment_id IS NOT DISTINCT FROM $9
+                   AND revision.paid_on = $10
+                   AND revision.payroll_inclusion_on = $11
+                   AND revision.description = $12
+                   AND revision.evidence_reference IS NOT DISTINCT FROM $13
+                   AND revision.claimed_amount = $14::NUMERIC
+                   AND revision.currency = $15,
+                   FALSE
+               ) AS "payload_matches!"
+        FROM business_expense_claims AS claim
+        LEFT JOIN business_expense_claim_revisions AS revision
+          ON revision.tenant_id = claim.tenant_id
+         AND revision.expense_claim_id = claim.id
+         AND revision.revision_number = 1
+        WHERE claim.tenant_id = $1
+          AND claim.submitted_by_account_id = $2
+          AND claim.submission_idempotency_key = $3
+        "#,
+        tenant_id,
+        actor_account_id,
+        idempotency_key,
+        input.category_id,
+        input.funding_source.as_code(),
+        input.paid_by_employee_id,
+        input.customer_id,
+        input.urgent_work_report_id,
+        input.staffing_assignment_id,
+        input.paid_on,
+        input.payroll_inclusion_on,
+        &input.description,
+        input.evidence_reference.as_deref(),
+        claimed_amount,
+        &input.currency,
+    )
+    .fetch_optional(connection)
+    .await
+    .map_err(map_sqlx)
+}
+
+async fn find_advance_creation_replay(
+    connection: &mut PgConnection,
+    tenant_id: Uuid,
+    actor_account_id: Uuid,
+    idempotency_key: Uuid,
+    input: &SalaryAdvanceInput,
+    requested_amount: &BigDecimal,
+) -> Result<Option<CreationReplayRow>, FinanceError> {
+    sqlx::query_as!(
+        CreationReplayRow,
+        r#"
+        SELECT advance.id,
+               COALESCE(
+                   revision.employee_id = $4
+                   AND revision.requested_amount = $5::NUMERIC
+                   AND revision.currency = $6
+                   AND revision.reason = $7
+                   AND revision.paid_on = $8
+                   AND revision.payroll_inclusion_on = $9,
+                   FALSE
+               ) AS "payload_matches!"
+        FROM hr_salary_advances AS advance
+        LEFT JOIN hr_salary_advance_revisions AS revision
+          ON revision.tenant_id = advance.tenant_id
+         AND revision.salary_advance_id = advance.id
+         AND revision.revision_number = 1
+        WHERE advance.tenant_id = $1
+          AND advance.requested_by_account_id = $2
+          AND advance.request_idempotency_key = $3
+        "#,
+        tenant_id,
+        actor_account_id,
+        idempotency_key,
+        input.employee_id,
+        requested_amount,
+        &input.currency,
+        &input.reason,
+        input.paid_on,
+        input.payroll_inclusion_on,
+    )
+    .fetch_optional(connection)
+    .await
+    .map_err(map_sqlx)
+}
+
 fn map_sqlx(error: sqlx::Error) -> FinanceError {
     if let Some(database_error) = error.as_database_error() {
         return match database_error.code().as_deref() {
@@ -651,6 +759,33 @@ impl FinanceRepo {
             .await
             .map_err(map_sqlx)?;
         let connection: &mut PgConnection = transaction.connection();
+        let claimed_amount: BigDecimal = BigDecimal::from_str(&input.claimed_amount)
+            .map_err(|_| FinanceError::InvalidInput("claimed amount is not a valid number"))?;
+        if let Some(replay) = find_expense_creation_replay(
+            &mut *connection,
+            tenant_id,
+            actor_account_id,
+            idempotency_key,
+            input,
+            &claimed_amount,
+        )
+        .await?
+        {
+            require_current_financial_read(
+                &mut *connection,
+                tenant_id,
+                actor_account_id,
+                replay.id,
+                FinancialSubject::Expense,
+            )
+            .await?;
+            if !replay.payload_matches {
+                return Err(FinanceError::Conflict);
+            }
+            let result: ExpenseClaim = fetch_expense(&mut *connection, tenant_id, replay.id).await?;
+            commit(transaction).await?;
+            return Ok(result);
+        }
         let payer_is_allowed: bool = match input.paid_by_employee_id {
             Some(employee_id) => sqlx::query_scalar!(
                 r#"SELECT EXISTS(
@@ -672,8 +807,6 @@ impl FinanceRepo {
             return Err(FinanceError::Forbidden);
         }
         let expense_id: Uuid = Uuid::new_v4();
-        let claimed_amount: BigDecimal = BigDecimal::from_str(&input.claimed_amount)
-            .map_err(|_| FinanceError::InvalidInput("claimed amount is not a valid number"))?;
         let evidence_reference: Option<&str> = input.evidence_reference.as_deref();
         let inserted_id: Option<Uuid> = sqlx::query_scalar!(
             r#"
@@ -1243,6 +1376,31 @@ impl FinanceRepo {
             .map_err(map_sqlx)?;
         let connection: &mut PgConnection = transaction.connection();
         let requested_amount = parse_decimal(&input.requested_amount, "requested amount is not a valid number")?;
+        if let Some(replay) = find_advance_creation_replay(
+            &mut *connection,
+            tenant_id,
+            actor_account_id,
+            idempotency_key,
+            input,
+            &requested_amount,
+        )
+        .await?
+        {
+            require_current_financial_read(
+                &mut *connection,
+                tenant_id,
+                actor_account_id,
+                replay.id,
+                FinancialSubject::SalaryAdvance,
+            )
+            .await?;
+            if !replay.payload_matches {
+                return Err(FinanceError::Conflict);
+            }
+            let result: SalaryAdvance = fetch_advance(&mut *connection, tenant_id, replay.id).await?;
+            commit(transaction).await?;
+            return Ok(result);
+        }
         let employee_allowed: bool = sqlx::query_scalar!(
             r#"SELECT EXISTS(
                 SELECT 1 FROM hr_employees
@@ -1785,8 +1943,8 @@ mod tests {
 
     use super::{FinanceRepo, correction_actor_allowed, correction_allowed_for_status};
     use crate::business::finance::core::{
-        ExpenseClaim, ExpenseCorrectionInput, ExpenseFundingSource, ExpenseListQuery, FinancialCorrectionAccess,
-        SalaryAdvanceInput, SalaryAdvanceListQuery, SalaryAdvanceStatus,
+        ExpenseClaim, ExpenseClaimInput, ExpenseCorrectionInput, ExpenseFundingSource, ExpenseListQuery, FinanceError,
+        FinancialCorrectionAccess, SalaryAdvanceInput, SalaryAdvanceListQuery, SalaryAdvanceStatus,
     };
 
     type TestResult = Result<(), Box<dyn Error>>;
@@ -1916,27 +2074,23 @@ mod tests {
             let categories = repo.list_expense_categories(tenant_id).await?;
             let category_id = categories.first().ok_or("default expense category was not created")?.id;
             let paid_on = NaiveDate::from_ymd_opt(2026, 9, 5).ok_or("invalid static test date")?;
+            let idempotency_key = Uuid::new_v4();
+            let input = ExpenseClaimInput {
+                category_id,
+                funding_source: ExpenseFundingSource::CompanyFunds,
+                paid_by_employee_id: None,
+                customer_id: None,
+                urgent_work_report_id: None,
+                staffing_assignment_id: None,
+                paid_on,
+                payroll_inclusion_on: paid_on,
+                description: "Database decoding regression".to_owned(),
+                evidence_reference: None,
+                claimed_amount: "125000.0000".to_owned(),
+                currency: "VND".to_owned(),
+            };
             let created = repo
-                .create_expense(
-                    tenant_id,
-                    account_id,
-                    false,
-                    Uuid::new_v4(),
-                    &crate::business::finance::core::ExpenseClaimInput {
-                        category_id,
-                        funding_source: ExpenseFundingSource::CompanyFunds,
-                        paid_by_employee_id: None,
-                        customer_id: None,
-                        urgent_work_report_id: None,
-                        staffing_assignment_id: None,
-                        paid_on,
-                        payroll_inclusion_on: paid_on,
-                        description: "Database decoding regression".to_owned(),
-                        evidence_reference: None,
-                        claimed_amount: "125000.0000".to_owned(),
-                        currency: "VND".to_owned(),
-                    },
-                )
+                .create_expense(tenant_id, account_id, false, idempotency_key, &input)
                 .await?;
             let corrected = repo
                 .correct_expense(
@@ -1989,6 +2143,32 @@ mod tests {
             assert!(expense.paid_by_employee_id.is_none());
             assert!(expense.paid_by_employee_name.is_none());
             assert!(expense.approved_by_username.is_none());
+
+            let mut close = database.begin_tenant(tenant_id).await?;
+            sqlx::query!(
+                "INSERT INTO business_financial_period_events (tenant_id, branch_id, period_start, status, revision_number, reason, actor_account_id, idempotency_key) VALUES ($1, $2, DATE '2026-09-01', 'closed', 1, 'Close replay regression period', $3, $4)",
+                tenant_id,
+                branch_id,
+                account_id,
+                Uuid::new_v4(),
+            )
+            .execute(close.connection())
+            .await?;
+            close.commit().await?;
+
+            let replayed = repo
+                .create_expense(tenant_id, account_id, false, idempotency_key, &input)
+                .await?;
+            assert_eq!(replayed.id, created.id);
+            let conflicting = ExpenseClaimInput {
+                description: "Different request using an old key".to_owned(),
+                ..input
+            };
+            assert!(matches!(
+                repo.create_expense(tenant_id, account_id, false, idempotency_key, &conflicting)
+                    .await,
+                Err(FinanceError::Conflict)
+            ));
             Ok(())
         })
         .await;
@@ -2006,6 +2186,11 @@ mod tests {
             .execute(cleanup.connection())
             .await?;
             sqlx::query!(
+                "ALTER TABLE business_financial_period_events DISABLE TRIGGER business_financial_period_events_immutable"
+            )
+            .execute(cleanup.connection())
+            .await?;
+            sqlx::query!(
                 "DELETE FROM business_expense_claim_events WHERE tenant_id = $1",
                 tenant_id
             )
@@ -2018,6 +2203,9 @@ mod tests {
             .execute(cleanup.connection())
             .await?;
             sqlx::query!("DELETE FROM business_expense_claims WHERE tenant_id = $1", tenant_id)
+                .execute(cleanup.connection())
+                .await?;
+            sqlx::query!("DELETE FROM business_financial_period_events WHERE tenant_id = $1", tenant_id)
                 .execute(cleanup.connection())
                 .await?;
             sqlx::query!(
@@ -2061,6 +2249,11 @@ mod tests {
             .await?;
             sqlx::query!(
                 "ALTER TABLE business_expense_claims ENABLE TRIGGER business_expense_claims_no_delete"
+            )
+            .execute(cleanup.connection())
+            .await?;
+            sqlx::query!(
+                "ALTER TABLE business_financial_period_events ENABLE TRIGGER business_financial_period_events_immutable"
             )
             .execute(cleanup.connection())
             .await?;
@@ -2140,21 +2333,17 @@ mod tests {
         let repo = FinanceRepo::new_arc(Arc::clone(&database));
         let operation_result: TestResult = with_active_branch(branch_id, async {
             let paid_on = NaiveDate::from_ymd_opt(2026, 9, 6).ok_or("invalid static test date")?;
+            let idempotency_key = Uuid::new_v4();
+            let input = SalaryAdvanceInput {
+                employee_id,
+                requested_amount: "500000.0000".to_owned(),
+                currency: "VND".to_owned(),
+                reason: "Self-service salary advance".to_owned(),
+                paid_on,
+                payroll_inclusion_on: paid_on,
+            };
             let created = repo
-                .create_salary_advance(
-                    tenant_id,
-                    account_id,
-                    false,
-                    Uuid::new_v4(),
-                    &SalaryAdvanceInput {
-                        employee_id,
-                        requested_amount: "500000.0000".to_owned(),
-                        currency: "VND".to_owned(),
-                        reason: "Self-service salary advance".to_owned(),
-                        paid_on,
-                        payroll_inclusion_on: paid_on,
-                    },
-                )
+                .create_salary_advance(tenant_id, account_id, false, idempotency_key, &input)
                 .await?;
             assert_eq!(created.status, SalaryAdvanceStatus::Requested);
             assert!(created.approved_by_username.is_none());
@@ -2179,6 +2368,32 @@ mod tests {
             assert_eq!(page.items.len(), 1);
             let listed = page.items.first().ok_or("the requested advance must be listed")?;
             assert_eq!(listed.id, created.id);
+
+            let mut close = database.begin_tenant(tenant_id).await?;
+            sqlx::query!(
+                "INSERT INTO business_financial_period_events (tenant_id, branch_id, period_start, status, revision_number, reason, actor_account_id, idempotency_key) VALUES ($1, $2, DATE '2026-09-01', 'closed', 1, 'Close replay regression period', $3, $4)",
+                tenant_id,
+                branch_id,
+                account_id,
+                Uuid::new_v4(),
+            )
+            .execute(close.connection())
+            .await?;
+            close.commit().await?;
+
+            let replayed = repo
+                .create_salary_advance(tenant_id, account_id, false, idempotency_key, &input)
+                .await?;
+            assert_eq!(replayed.id, created.id);
+            let conflicting = SalaryAdvanceInput {
+                reason: "Different request using an old key".to_owned(),
+                ..input
+            };
+            assert!(matches!(
+                repo.create_salary_advance(tenant_id, account_id, false, idempotency_key, &conflicting)
+                    .await,
+                Err(FinanceError::Conflict)
+            ));
             Ok(())
         })
         .await;
@@ -2193,6 +2408,11 @@ mod tests {
             sqlx::query!("ALTER TABLE hr_salary_advances DISABLE TRIGGER hr_salary_advances_no_delete")
                 .execute(cleanup.connection())
                 .await?;
+            sqlx::query!(
+                "ALTER TABLE business_financial_period_events DISABLE TRIGGER business_financial_period_events_immutable"
+            )
+            .execute(cleanup.connection())
+            .await?;
             sqlx::query!("DELETE FROM hr_salary_advance_events WHERE tenant_id = $1", tenant_id)
                 .execute(cleanup.connection())
                 .await?;
@@ -2205,6 +2425,12 @@ mod tests {
             sqlx::query!("DELETE FROM hr_salary_advances WHERE tenant_id = $1", tenant_id)
                 .execute(cleanup.connection())
                 .await?;
+            sqlx::query!(
+                "DELETE FROM business_financial_period_events WHERE tenant_id = $1",
+                tenant_id
+            )
+            .execute(cleanup.connection())
+            .await?;
             sqlx::query!(
                 "DELETE FROM hr_employees WHERE tenant_id = $1 AND id = $2",
                 tenant_id,
@@ -2248,6 +2474,11 @@ mod tests {
             sqlx::query!("ALTER TABLE hr_salary_advances ENABLE TRIGGER hr_salary_advances_no_delete")
                 .execute(cleanup.connection())
                 .await?;
+            sqlx::query!(
+                "ALTER TABLE business_financial_period_events ENABLE TRIGGER business_financial_period_events_immutable"
+            )
+            .execute(cleanup.connection())
+            .await?;
             cleanup.commit().await?;
             Ok(())
         })

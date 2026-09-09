@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO business_staffing_jobs (id, tenant_id, branch_id, code, name) VALUES ($1, $2, $3, 'sibling-job', 'Sibling Job')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "59024f5f229af6852cc8d4dcc2142333b103bae657ba0de3e0205b2151c26d9a"
+}

@@ -314,6 +314,82 @@ async fn require_manage_permission(
     }
 }
 
+#[cfg(test)]
+mod deactivation_tests {
+    use sqlx::PgConnection;
+    use uuid::Uuid;
+
+    use crate::business::test_support::{Fixture, TestResult};
+
+    #[tokio::test]
+    async fn sibling_branch_with_unfinished_work_cannot_be_disabled() -> TestResult {
+        let mut fixture = Fixture::new().await?;
+        let tenant_id = fixture.tenant_id;
+        let sibling_id = fixture.sibling_id;
+        let actor_id = fixture.manager_account_id;
+        let customer_id = Uuid::new_v4();
+        let job_id = Uuid::new_v4();
+        let connection: &mut PgConnection = &mut fixture.transaction;
+
+        sqlx::query_scalar!(
+            r#"SELECT set_config('app.branch_id', $1, TRUE) AS "branch_context!""#,
+            sibling_id.to_string(),
+        )
+        .fetch_one(&mut *connection)
+        .await?;
+        sqlx::query!(
+            "INSERT INTO business_customers (id, tenant_id, branch_id, code, name, address, time_zone, created_by_account_id, updated_by_account_id) VALUES ($1, $2, $3, 'sibling-customer', 'Sibling Customer', 'Test address', 'Asia/Bangkok', $4, $4)",
+            customer_id,
+            tenant_id,
+            sibling_id,
+            actor_id,
+        )
+        .execute(&mut *connection)
+        .await?;
+        sqlx::query!(
+            "INSERT INTO business_staffing_jobs (id, tenant_id, branch_id, code, name) VALUES ($1, $2, $3, 'sibling-job', 'Sibling Job')",
+            job_id,
+            tenant_id,
+            sibling_id,
+        )
+        .execute(&mut *connection)
+        .await?;
+        sqlx::query!(
+            "INSERT INTO business_staffing_shifts (id, tenant_id, branch_id, customer_id, job_id, starts_at, ends_at, required_workers, created_by_account_id, updated_by_account_id) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + INTERVAL '1 hour', 1, $6, $6)",
+            Uuid::new_v4(),
+            tenant_id,
+            sibling_id,
+            customer_id,
+            job_id,
+            actor_id,
+        )
+        .execute(&mut *connection)
+        .await?;
+        sqlx::query_scalar!(
+            r#"SELECT set_config('app.branch_id', $1, TRUE) AS "branch_context!""#,
+            fixture.branch_id.to_string(),
+        )
+        .fetch_one(&mut *connection)
+        .await?;
+
+        let result = sqlx::query!(
+            "UPDATE branches SET status = 'disabled' WHERE tenant_id = $1 AND id = $2",
+            tenant_id,
+            sibling_id
+        )
+        .execute(&mut *connection)
+        .await;
+        let sqlstate = result.err().and_then(|error| {
+            error
+                .as_database_error()
+                .and_then(|database| database.code().map(|code| code.into_owned()))
+        });
+        assert_eq!(sqlstate.as_deref(), Some("55000"));
+        fixture.transaction.rollback().await?;
+        Ok(())
+    }
+}
+
 async fn insert_audit(
     conn: &mut PgConnection,
     tenant_id: Uuid,

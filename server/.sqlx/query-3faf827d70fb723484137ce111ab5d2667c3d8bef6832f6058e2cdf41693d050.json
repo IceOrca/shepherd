@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "ALTER TABLE business_financial_period_events ENABLE TRIGGER business_financial_period_events_immutable",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "3faf827d70fb723484137ce111ab5d2667c3d8bef6832f6058e2cdf41693d050"
+}

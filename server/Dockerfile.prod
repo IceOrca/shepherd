@@ -21,7 +21,7 @@ RUN cargo clippy --all --workspace --features="${SHEPHERD_CARGO_FEATURES}" \
         --bin shepherd-tenant-bootstrap
 
 
-FROM debian:bookworm-slim AS runner
+FROM debian:trixie-slim AS runner
 WORKDIR /app
 
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt

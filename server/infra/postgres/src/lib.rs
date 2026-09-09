@@ -72,6 +72,22 @@ impl DatabaseAdapter {
         self.client.begin_tenant_with_branch(tenant_id, branch_id).await
     }
 
+    /// Opens a read-only, repeatable-read transaction with the same tenant and
+    /// active-branch RLS context. Multi-query exports use this to ensure their
+    /// data and status metadata describe one database snapshot.
+    pub async fn begin_tenant_snapshot(&self, tenant_id: Uuid) -> Result<TenantTransaction, TenantDbErr> {
+        let branch_id: Option<Uuid> = active_branch_id();
+        trace!(
+            operation = "postgres.begin_tenant_snapshot",
+            tenant_id = %tenant_id,
+            branch_id = ?branch_id,
+            "Opening repeatable-read RLS-scoped tenant snapshot"
+        );
+        self.client
+            .begin_tenant_snapshot_with_branch(tenant_id, branch_id)
+            .await
+    }
+
     /// Runs one SQLx operation inside an automatically committed tenant- and
     /// active-branch-scoped transaction. Multi-step domain workflows coordinate locks or map
     /// business errors should continue to use `begin_tenant` explicitly.

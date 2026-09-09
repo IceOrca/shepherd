@@ -236,6 +236,18 @@ impl FinancialReportService {
         self.repo.operating_report(tenant_id, start_date, end_date).await
     }
 
+    pub async fn operating_export_snapshot(
+        &self,
+        tenant_id: Uuid,
+        start_date: NaiveDate,
+        end_date: NaiveDate,
+    ) -> Result<(OperatingFinancialReport, Vec<FinancialPeriodState>), FinanceError> {
+        validate_range(start_date, end_date)?;
+        self.repo
+            .operating_export_snapshot(tenant_id, start_date, end_date)
+            .await
+    }
+
     pub async fn payroll_report(
         &self,
         tenant_id: Uuid,
@@ -244,6 +256,16 @@ impl FinancialReportService {
     ) -> Result<PayrollReport, FinanceError> {
         validate_range(start_date, end_date)?;
         self.repo.payroll_report(tenant_id, start_date, end_date).await
+    }
+
+    pub async fn payroll_export_snapshot(
+        &self,
+        tenant_id: Uuid,
+        start_date: NaiveDate,
+        end_date: NaiveDate,
+    ) -> Result<(PayrollReport, Vec<FinancialPeriodState>), FinanceError> {
+        validate_range(start_date, end_date)?;
+        self.repo.payroll_export_snapshot(tenant_id, start_date, end_date).await
     }
 }
 

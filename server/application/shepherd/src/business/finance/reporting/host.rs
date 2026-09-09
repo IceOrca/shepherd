@@ -160,17 +160,11 @@ async fn export_report_xlsx(
                 let branch_id: Uuid = *branch_id;
                 let (report, branch_periods): (OperatingFinancialReport, Vec<FinancialPeriodState>) =
                     infra_postgres::with_active_branch(branch_id, async {
-                        let report: OperatingFinancialReport = context
+                        context
                             .core
                             .financial_reporting
-                            .operating_report(user.tenant_id, payload.start_date, payload.end_date)
-                            .await?;
-                        let branch_periods: Vec<FinancialPeriodState> = context
-                            .core
-                            .financial_reporting
-                            .list_financial_periods(user.tenant_id, payload.start_date, payload.end_date)
-                            .await?;
-                        Ok::<_, FinanceError>((report, branch_periods))
+                            .operating_export_snapshot(user.tenant_id, payload.start_date, payload.end_date)
+                            .await
                     })
                     .await
                     .map_err(|report_error| reporting_status("prepare financial report export", &user, report_error))?;
@@ -188,17 +182,11 @@ async fn export_report_xlsx(
                 let branch_id: Uuid = *branch_id;
                 let (report, branch_periods): (PayrollReport, Vec<FinancialPeriodState>) =
                     infra_postgres::with_active_branch(branch_id, async {
-                        let report: PayrollReport = context
+                        context
                             .core
                             .financial_reporting
-                            .payroll_report(user.tenant_id, payload.start_date, payload.end_date)
-                            .await?;
-                        let branch_periods: Vec<FinancialPeriodState> = context
-                            .core
-                            .financial_reporting
-                            .list_financial_periods(user.tenant_id, payload.start_date, payload.end_date)
-                            .await?;
-                        Ok::<_, FinanceError>((report, branch_periods))
+                            .payroll_export_snapshot(user.tenant_id, payload.start_date, payload.end_date)
+                            .await
                     })
                     .await
                     .map_err(|report_error| reporting_status("prepare payroll report export", &user, report_error))?;

@@ -117,7 +117,29 @@ impl PostgresCli {
         tenant_id: Uuid,
         branch_id: Option<Uuid>,
     ) -> Result<TenantTransaction, TenantDbErr> {
+        self.begin_tenant_with_branch_mode(tenant_id, branch_id, false).await
+    }
+
+    pub async fn begin_tenant_snapshot_with_branch(
+        &self,
+        tenant_id: Uuid,
+        branch_id: Option<Uuid>,
+    ) -> Result<TenantTransaction, TenantDbErr> {
+        self.begin_tenant_with_branch_mode(tenant_id, branch_id, true).await
+    }
+
+    async fn begin_tenant_with_branch_mode(
+        &self,
+        tenant_id: Uuid,
+        branch_id: Option<Uuid>,
+        repeatable_read_only: bool,
+    ) -> Result<TenantTransaction, TenantDbErr> {
         let mut tran: Transaction<'static, Postgres> = self.pool.begin().await?;
+        if repeatable_read_only {
+            sqlx::query!("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+                .execute(&mut *tran)
+                .await?;
+        }
         let tenant_is_active: bool = sqlx::query_scalar!(
             r#"SELECT EXISTS 
             (SELECT 1 
@@ -359,6 +381,35 @@ mod tests {
     #[derive(Debug)]
     struct TestIdRow {
         id: Uuid,
+    }
+
+    #[tokio::test]
+    async fn tenant_snapshot_is_repeatable_read_and_read_only() -> Result<(), Box<dyn std::error::Error>> {
+        let database_url: String = std::env::var("DATABASE_URL")?;
+        let client: PostgresCli = PostgresCli::connect(&database_url).await?;
+        let tenant_id = Uuid::new_v4();
+        let tenant_slug = format!("snapshot-{}", tenant_id.simple());
+        client
+            .ensure_tenant_registration(tenant_id, &tenant_slug, "Snapshot transaction test")
+            .await?;
+
+        let mut transaction = client.begin_tenant_snapshot_with_branch(tenant_id, None).await?;
+        let isolation: String =
+            sqlx::query_scalar!(r#"SELECT current_setting('transaction_isolation') AS "setting!""#,)
+                .fetch_one(transaction.connection())
+                .await?;
+        let read_only: String =
+            sqlx::query_scalar!(r#"SELECT current_setting('transaction_read_only') AS "setting!""#,)
+                .fetch_one(transaction.connection())
+                .await?;
+        assert_eq!(isolation, "repeatable read");
+        assert_eq!(read_only, "on");
+        transaction.rollback().await?;
+
+        sqlx::query!("DELETE FROM tenants WHERE id = $1", tenant_id)
+            .execute(client.pool())
+            .await?;
+        Ok(())
     }
 
     #[tokio::test]

@@ -200,6 +200,91 @@ async fn branch(connection: &mut PgConnection, tenant_id: Uuid) -> Result<Branch
     .ok_or(FinanceError::NotFound)
 }
 
+async fn financial_periods(
+    connection: &mut PgConnection,
+    tenant_id: Uuid,
+    branch_id: Uuid,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+) -> Result<Vec<FinancialPeriodState>, FinanceError> {
+    let rows: Vec<FinancialPeriodRow> = sqlx::query_as!(
+        FinancialPeriodRow,
+        r#"
+        SELECT $2::UUID AS "branch_id!",
+               month.period_start::DATE AS "period_start!",
+               COALESCE(event.status, 'open') AS "status!",
+               COALESCE(event.revision_number, 0) AS "revision_number!",
+               event.reason AS "reason?",
+               account.username AS "actor_username?",
+               event.occurred_at AS "occurred_at?"
+        FROM generate_series(
+            date_trunc('month', $3::DATE),
+            date_trunc('month', $4::DATE),
+            INTERVAL '1 month'
+        ) AS month(period_start)
+        LEFT JOIN LATERAL (
+            SELECT period.status, period.revision_number, period.reason,
+                   period.actor_account_id, period.occurred_at
+            FROM business_financial_period_events AS period
+            WHERE period.tenant_id = $1
+              AND period.branch_id = $2
+              AND period.period_start = month.period_start::DATE
+            ORDER BY period.revision_number DESC
+            LIMIT 1
+        ) AS event ON TRUE
+        LEFT JOIN accounts AS account
+          ON account.tenant_id = $1 AND account.id = event.actor_account_id
+        ORDER BY month.period_start DESC
+        "#,
+        tenant_id,
+        branch_id,
+        start_date,
+        end_date,
+    )
+    .fetch_all(connection)
+    .await
+    .map_err(map_sqlx)?;
+    rows.into_iter().map(TryInto::try_into).collect()
+}
+
+async fn operating_lines(
+    connection: &mut PgConnection,
+    tenant_id: Uuid,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+) -> Result<Vec<OperatingFinancialLine>, FinanceError> {
+    let rows: Vec<OperatingLineRow> = sqlx::query_file_as!(
+        OperatingLineRow,
+        "src/business/finance/reporting/sql/operating_report.sql",
+        tenant_id,
+        start_date,
+        end_date,
+    )
+    .fetch_all(connection)
+    .await
+    .map_err(map_sqlx)?;
+    Ok(rows.into_iter().map(Into::into).collect())
+}
+
+async fn payroll_lines(
+    connection: &mut PgConnection,
+    tenant_id: Uuid,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+) -> Result<Vec<PayrollLine>, FinanceError> {
+    let rows: Vec<PayrollLineRow> = sqlx::query_file_as!(
+        PayrollLineRow,
+        "src/business/finance/reporting/sql/payroll_report.sql",
+        tenant_id,
+        start_date,
+        end_date,
+    )
+    .fetch_all(connection)
+    .await
+    .map_err(map_sqlx)?;
+    rows.into_iter().map(TryInto::try_into).collect()
+}
+
 async fn salary_configuration(
     connection: &mut PgConnection,
     tenant_id: Uuid,
@@ -246,6 +331,16 @@ impl FinancialReportRepo {
         })
     }
 
+    async fn begin_snapshot(&self, tenant_id: Uuid) -> Result<TenantTransaction, FinanceError> {
+        self.db
+            .begin_tenant_snapshot(tenant_id)
+            .await
+            .map_err(|error: TenantDbErr| {
+                error!(tenant_id = %tenant_id, reason = %error, "Financial reporting snapshot transaction failed");
+                FinanceError::BackendUnavailable
+            })
+    }
+
     pub async fn list_financial_periods(
         &self,
         tenant_id: Uuid,
@@ -255,44 +350,8 @@ impl FinancialReportRepo {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
         let connection: &mut PgConnection = transaction.connection();
         let branch_row: BranchRow = branch(&mut *connection, tenant_id).await?;
-        let rows: Vec<FinancialPeriodRow> = sqlx::query_as!(
-            FinancialPeriodRow,
-            r#"
-            SELECT $2::UUID AS "branch_id!",
-                   month.period_start::DATE AS "period_start!",
-                   COALESCE(event.status, 'open') AS "status!",
-                   COALESCE(event.revision_number, 0) AS "revision_number!",
-                   event.reason AS "reason?",
-                   account.username AS "actor_username?",
-                   event.occurred_at AS "occurred_at?"
-            FROM generate_series(
-                date_trunc('month', $3::DATE),
-                date_trunc('month', $4::DATE),
-                INTERVAL '1 month'
-            ) AS month(period_start)
-            LEFT JOIN LATERAL (
-                SELECT period.status, period.revision_number, period.reason,
-                       period.actor_account_id, period.occurred_at
-                FROM business_financial_period_events AS period
-                WHERE period.tenant_id = $1
-                  AND period.branch_id = $2
-                  AND period.period_start = month.period_start::DATE
-                ORDER BY period.revision_number DESC
-                LIMIT 1
-            ) AS event ON TRUE
-            LEFT JOIN accounts AS account
-              ON account.tenant_id = $1 AND account.id = event.actor_account_id
-            ORDER BY month.period_start DESC
-            "#,
-            tenant_id,
-            branch_row.id,
-            start_date,
-            end_date,
-        )
-        .fetch_all(&mut *connection)
-        .await
-        .map_err(map_sqlx)?;
-        let result: Vec<FinancialPeriodState> = rows.into_iter().map(TryInto::try_into).collect::<Result<_, _>>()?;
+        let result: Vec<FinancialPeriodState> =
+            financial_periods(&mut *connection, tenant_id, branch_row.id, start_date, end_date).await?;
         transaction.commit().await.map_err(map_sqlx)?;
         Ok(result)
     }
@@ -892,24 +951,40 @@ impl FinancialReportRepo {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
         let connection: &mut PgConnection = transaction.connection();
         let branch_row: BranchRow = branch(&mut *connection, tenant_id).await?;
-        let rows: Vec<OperatingLineRow> = sqlx::query_file_as!(
-            OperatingLineRow,
-            "src/business/finance/reporting/sql/operating_report.sql",
-            tenant_id,
-            start_date,
-            end_date,
-        )
-        .fetch_all(&mut *connection)
-        .await
-        .map_err(map_sqlx)?;
+        let lines: Vec<OperatingFinancialLine> =
+            operating_lines(&mut *connection, tenant_id, start_date, end_date).await?;
         transaction.commit().await.map_err(map_sqlx)?;
         Ok(OperatingFinancialReport {
             branch_id: branch_row.id,
             branch_name: branch_row.name,
             start_date,
             end_date,
-            lines: rows.into_iter().map(Into::into).collect(),
+            lines,
         })
+    }
+
+    pub async fn operating_export_snapshot(
+        &self,
+        tenant_id: Uuid,
+        start_date: NaiveDate,
+        end_date: NaiveDate,
+    ) -> Result<(OperatingFinancialReport, Vec<FinancialPeriodState>), FinanceError> {
+        let mut transaction: TenantTransaction = self.begin_snapshot(tenant_id).await?;
+        let connection: &mut PgConnection = transaction.connection();
+        let branch_row: BranchRow = branch(&mut *connection, tenant_id).await?;
+        let lines: Vec<OperatingFinancialLine> =
+            operating_lines(&mut *connection, tenant_id, start_date, end_date).await?;
+        let periods: Vec<FinancialPeriodState> =
+            financial_periods(&mut *connection, tenant_id, branch_row.id, start_date, end_date).await?;
+        let report = OperatingFinancialReport {
+            branch_id: branch_row.id,
+            branch_name: branch_row.name,
+            start_date,
+            end_date,
+            lines,
+        };
+        transaction.commit().await.map_err(map_sqlx)?;
+        Ok((report, periods))
     }
 
     pub async fn payroll_report(
@@ -921,17 +996,7 @@ impl FinancialReportRepo {
         let mut transaction: TenantTransaction = self.begin_tenant(tenant_id).await?;
         let connection: &mut PgConnection = transaction.connection();
         let branch_row: BranchRow = branch(&mut *connection, tenant_id).await?;
-        let rows: Vec<PayrollLineRow> = sqlx::query_file_as!(
-            PayrollLineRow,
-            "src/business/finance/reporting/sql/payroll_report.sql",
-            tenant_id,
-            start_date,
-            end_date,
-        )
-        .fetch_all(&mut *connection)
-        .await
-        .map_err(map_sqlx)?;
-        let lines: Vec<PayrollLine> = rows.into_iter().map(TryInto::try_into).collect::<Result<_, _>>()?;
+        let lines: Vec<PayrollLine> = payroll_lines(&mut *connection, tenant_id, start_date, end_date).await?;
         transaction.commit().await.map_err(map_sqlx)?;
         Ok(PayrollReport {
             branch_id: branch_row.id,
@@ -940,6 +1005,29 @@ impl FinancialReportRepo {
             end_date,
             lines,
         })
+    }
+
+    pub async fn payroll_export_snapshot(
+        &self,
+        tenant_id: Uuid,
+        start_date: NaiveDate,
+        end_date: NaiveDate,
+    ) -> Result<(PayrollReport, Vec<FinancialPeriodState>), FinanceError> {
+        let mut transaction: TenantTransaction = self.begin_snapshot(tenant_id).await?;
+        let connection: &mut PgConnection = transaction.connection();
+        let branch_row: BranchRow = branch(&mut *connection, tenant_id).await?;
+        let lines: Vec<PayrollLine> = payroll_lines(&mut *connection, tenant_id, start_date, end_date).await?;
+        let periods: Vec<FinancialPeriodState> =
+            financial_periods(&mut *connection, tenant_id, branch_row.id, start_date, end_date).await?;
+        let report = PayrollReport {
+            branch_id: branch_row.id,
+            branch_name: branch_row.name,
+            start_date,
+            end_date,
+            lines,
+        };
+        transaction.commit().await.map_err(map_sqlx)?;
+        Ok((report, periods))
     }
 }
 

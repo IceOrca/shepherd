@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO business_financial_period_events (tenant_id, branch_id, period_start, status, revision_number, reason, actor_account_id, idempotency_key) VALUES ($1, $2, DATE '2026-09-01', 'closed', 1, 'Close replay regression period', $3, $4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c95fe9fec702f5f607f56ccc337acd426a0bd161f30dfce15058f03447eba516"
+}

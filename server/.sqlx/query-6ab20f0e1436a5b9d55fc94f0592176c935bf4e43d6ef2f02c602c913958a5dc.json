@@ -1,0 +1,49 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT claim.id,\n               COALESCE(\n                   revision.category_id = $4\n                   AND revision.funding_source = $5\n                   AND revision.paid_by_employee_id IS NOT DISTINCT FROM $6\n                   AND revision.customer_id IS NOT DISTINCT FROM $7\n                   AND revision.urgent_work_report_id IS NOT DISTINCT FROM $8\n                   AND revision.staffing_assignment_id IS NOT DISTINCT FROM $9\n                   AND revision.paid_on = $10\n                   AND revision.payroll_inclusion_on = $11\n                   AND revision.description = $12\n                   AND revision.evidence_reference IS NOT DISTINCT FROM $13\n                   AND revision.claimed_amount = $14::NUMERIC\n                   AND revision.currency = $15,\n                   FALSE\n               ) AS \"payload_matches!\"\n        FROM business_expense_claims AS claim\n        LEFT JOIN business_expense_claim_revisions AS revision\n          ON revision.tenant_id = claim.tenant_id\n         AND revision.expense_claim_id = claim.id\n         AND revision.revision_number = 1\n        WHERE claim.tenant_id = $1\n          AND claim.submitted_by_account_id = $2\n          AND claim.submission_idempotency_key = $3\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "business_expense_claims",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "payload_matches!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Date",
+        "Date",
+        "Text",
+        "Text",
+        "Numeric",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "6ab20f0e1436a5b9d55fc94f0592176c935bf4e43d6ef2f02c602c913958a5dc"
+}

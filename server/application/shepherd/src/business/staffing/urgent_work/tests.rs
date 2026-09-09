@@ -500,6 +500,12 @@ impl Fixture {
         )
         .execute(transaction.connection())
         .await?;
+        sqlx::query!(
+            "ALTER TABLE business_financial_period_events \
+             DISABLE TRIGGER business_financial_period_events_immutable",
+        )
+        .execute(transaction.connection())
+        .await?;
         let outbox_delete: PgQueryResult =
             sqlx::query!("DELETE FROM notification_outbox WHERE tenant_id = $1", self.tenant_id)
                 .execute(transaction.connection())
@@ -590,6 +596,12 @@ impl Fixture {
             sqlx::query!("DELETE FROM hr_employees WHERE tenant_id = $1", self.tenant_id)
                 .execute(transaction.connection())
                 .await?;
+        sqlx::query!(
+            "DELETE FROM business_financial_period_events WHERE tenant_id = $1",
+            self.tenant_id,
+        )
+        .execute(transaction.connection())
+        .await?;
         let job_delete: PgQueryResult = sqlx::query!(
             "DELETE FROM business_staffing_jobs WHERE tenant_id = $1",
             self.tenant_id
@@ -659,6 +671,12 @@ impl Fixture {
         sqlx::query!(
             "ALTER TABLE business_assignment_reconciliation_revisions \
              ENABLE TRIGGER business_assignment_reconciliation_revisions_no_update_delete",
+        )
+        .execute(transaction.connection())
+        .await?;
+        sqlx::query!(
+            "ALTER TABLE business_financial_period_events \
+             ENABLE TRIGGER business_financial_period_events_immutable",
         )
         .execute(transaction.connection())
         .await?;
@@ -843,6 +861,51 @@ async fn manual_self_declaration_is_immutable_idempotent_and_keyset_paginated() 
                 .report_id,
             first.report_id,
         );
+        Ok(())
+    })
+    .await;
+    let cleanup_result: TestResult = fixture.cleanup().await;
+    cleanup_result?;
+    test_result
+}
+
+#[tokio::test]
+async fn manual_declaration_rejects_a_closed_intermediate_financial_month() -> TestResult {
+    let fixture: Fixture = Fixture::create().await?;
+    let test_result: TestResult = infra_postgres::with_active_branch(fixture.branch_id, async {
+        let mut close = fixture.database.begin_tenant(fixture.tenant_id).await?;
+        sqlx::query!(
+            "INSERT INTO business_financial_period_events (tenant_id, branch_id, period_start, status, revision_number, reason, actor_account_id, idempotency_key) VALUES ($1, $2, DATE '2026-08-01', 'closed', 1, 'Close interval regression month', $3, $4)",
+            fixture.tenant_id,
+            fixture.branch_id,
+            fixture.actor_account_id,
+            Uuid::new_v4(),
+        )
+        .execute(close.connection())
+        .await?;
+        close.commit().await?;
+
+        let result = fixture
+            .urgent_service()
+            .submit_manual(
+                fixture.tenant_id,
+                fixture.actor_account_id,
+                UrgentWorkManualInput {
+                    customer_id: fixture.customer_id,
+                    started_at: Utc
+                        .with_ymd_and_hms(2026, 7, 31, 3, 0, 0)
+                        .single()
+                        .ok_or_else(|| io::Error::other("manual start timestamp is invalid"))?,
+                    ended_at: Utc
+                        .with_ymd_and_hms(2026, 9, 1, 3, 0, 0)
+                        .single()
+                        .ok_or_else(|| io::Error::other("manual end timestamp is invalid"))?,
+                    note: Some("Cross-month declaration regression".to_owned()),
+                    idempotency_key: Uuid::new_v4(),
+                },
+            )
+            .await;
+        assert!(matches!(result, Err(UrgentStaffingErr::Conflict)));
         Ok(())
     })
     .await;

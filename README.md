@@ -366,7 +366,10 @@ The server recalculates the same authoritative synchronous reports used by the
 web page; the browser never reconstructs financial totals from displayed or
 paginated rows. Whole-business requests evaluate the dedicated export
 permission separately for every requested branch and run each report under
-that branch's validated RLS context. The two permissions are
+that branch's validated RLS context. Each branch's report lines and financial-
+period metadata are read in one read-only, repeatable-read transaction, so a
+concurrent correction or period close cannot combine values and lock status
+from different database snapshots. The two permissions are
 `finance.operating_reports.export` and `hr.payroll.export`.
 
 Generated workbooks contain Vietnamese business headings, typed date, money,
@@ -430,10 +433,17 @@ snapshot retains older identity details.
 Creation and correction retries for expenses and salary advances recheck
 current subject ownership and effective read permissions, including account
 allow/deny overrides. An old idempotency key cannot expose a record reassigned
-to another employee. Financially guarded business writes acquire the branch
+to another employee. Creation looks up an existing key under the branch lock
+before attempting an insert, so a retry remains valid after its financial
+month closes. The retried request must match revision 1's original payload;
+using the key for different input conflicts. Financially guarded business writes acquire the branch
 lock before employee or record locks, using the same ordering as period close;
 independent urgent starts therefore serialize without a shared-lock upgrade
 deadlock.
+
+Completed urgent-work intervals are checked against every customer-local month
+they overlap. Open start and finish months do not allow a manual declaration or
+live session to cross a closed intermediate month.
 
 A branch's time zone can be changed only before it has financial activity
 (expense, advance, salary, reconciled result, settlement, or period decision).
@@ -442,12 +452,13 @@ Branch name/status edits and unchanged time-zone submissions remain allowed.
 The database enforces this even when branch administration targets a sibling
 of the active write branch.
 
-Apply migration `20260908000100_guard_closed_payroll_sources.sql` through the
-normal SQLx migration workflow; no database reset or history deletion is
-needed. Regenerate the SQLx offline cache after applying it. Regression tests
-cover concurrent independent urgent starts, salary locks/reopening, payroll
-identity deduplication, current-authority retries, and sibling-branch time-zone
-protection.
+Apply migrations `20260908000100_guard_closed_payroll_sources.sql` and
+`20260909000100_fix_reviewed_backend_integrity.sql` through the normal SQLx
+migration workflow; production needs no database reset or history deletion.
+Regenerate the SQLx offline cache after applying them. Regression tests cover
+concurrent independent urgent starts, salary locks/reopening, payroll identity
+deduplication, current-authority retries, retries after period close, complete
+urgent interval coverage, and sibling-branch time-zone/deactivation protection.
 
 PostgreSQL triggers reject updates/deletes on revision and period-event tables
 and reject deletion of the financial projections. `REVOKE` from `PUBLIC` is
@@ -822,7 +833,7 @@ The access-control console at `/admin/access-control` manages three related area
 - **Roles and permissions:** edit the tenant's permission set for protected system roles or create additional tenant- or branch-scoped operational roles from the application permission catalog.
 - **Audit:** review immutable access-control changes with actor, target, before/after data, and server timestamp.
 
-Branch maintenance is a separate business-domain workflow at `/admin/branches`, implemented by `branch/host.rs -> branch/core.rs -> branch/database.rs`. Its API is `GET /api/business/branches/manage`, `POST /api/business/branches`, and `PUT /api/business/branches/{branch_id}`. `business.branches.manage` controls UI visibility and API authority; the initial tenant-owner role owns that permission, while authorized TenantOwner/System Admin configuration may grant it without adding a role-name check to branch handlers. Because creation and whole-branch maintenance have no pre-existing branch scope, the database transaction requires the permission at tenant scope. It normalizes and validates the branch, stores creator/updater provenance, and appends `branch.create` or `branch.update` to `access_control_audit_log` atomically. Branches are disabled rather than deleted, and successful mutations invalidate tenant authorization caches so tenant-scoped accounts immediately resolve the new active-branch set.
+Branch maintenance is a separate business-domain workflow at `/admin/branches`, implemented by `branch/host.rs -> branch/core.rs -> branch/database.rs`. Its API is `GET /api/business/branches/manage`, `POST /api/business/branches`, and `PUT /api/business/branches/{branch_id}`. `business.branches.manage` controls UI visibility and API authority; the initial tenant-owner role owns that permission, while authorized TenantOwner/System Admin configuration may grant it without adding a role-name check to branch handlers. Because creation and whole-branch maintenance have no pre-existing branch scope, the database transaction requires the permission at tenant scope. It normalizes and validates the branch, stores creator/updater provenance, and appends `branch.create` or `branch.update` to `access_control_audit_log` atomically. Branches are disabled rather than deleted. PostgreSQL checks the exact target branch for unfinished planned or urgent work even when another sibling is the request's active branch, while retaining tenant RLS and restoring that request context. Successful mutations invalidate tenant authorization caches so tenant-scoped accounts immediately resolve the new active-branch set.
 
 The access-control console uses `GET /api/admin/access-control` for its snapshot and the scoped role/user mutation routes below `/api/admin/access-control/roles` and `/users/{account_id}`. `/admin/auth-users` remains the provider-link and tenant-account workflow; its status action enables or disables only the account in the active tenant.
 
