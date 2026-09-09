@@ -1017,6 +1017,36 @@ jobs mixed into the development seed data.
 
 ## Background worker resilience
 
+Shared in-process mutation workflows own their capabilities inside a
+`Mutex<...MutationCtx>` or `RwLock<...MutationCtx>`. Mutation methods require
+`&mut self`, context fields/constructors stay private, and callers either use
+the locking entry point or hold its RAII write guard for the complete operation.
+Do not separate an empty lock from independently accessible mutation resources.
+
+JWKS refresh owns the HTTP client and the sole cache publisher inside
+`Mutex<JwksMutationCtx>`. Validators read a read-only published snapshot without
+waiting for provider HTTP. Freshness is rechecked after acquiring the mutex;
+unknown-key cooldown, bounded HTTP, and stale-key fallback remain unchanged.
+Runtime logging owns the reload handle and current filter inside
+`RwLock<LogMutationCtx>`: `Debugging::read().await` supplies read access and
+`Debugging::write().await` supplies the only mutable context. Platform logging
+holds that write guard across reading the old filter, auditing, and reload.
+There is no separate unguarded `Debugging::set_level` API.
+
+The shared web-bootstrap endpoint owns a `Mutex<TenantBootstrapMutationCtx>`
+containing its database/provider capabilities. It rejects overlapping requests
+before obtaining database connections and retains the guard across administrator
+revalidation and bootstrap. Dropping any of these guards on return, error, or
+async cancellation releases admission automatically; it does not undo an
+already committed database or provider operation. PostgreSQL row/advisory locks,
+transactions, and persistent idempotency remain the cross-process protection.
+
+Data-owning locks already used for notification receivers and authorization
+state remain unchanged. The database-test-only `Mutex<()>` is deliberately a
+fixture barrier, not a mutation-resource lock. Uncompiled legacy-auth reference
+code is unchanged and remains unavailable to builds. No schema, HTTP contract,
+frontend, or configuration change is required for this ownership refactor.
+
 Finite asynchronous jobs run with explicit execution deadlines. Long-lived
 services such as the notification-outbox dispatcher instead remain active until
 cooperative cancellation, while every provider call and delivery attempt is

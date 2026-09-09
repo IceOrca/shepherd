@@ -8,14 +8,13 @@ use axum::{
     routing::{get, post},
 };
 use infra_auth::{AuthService, ext_service::AuthedPrincipal};
-use infra_kernel::debug::Debugging;
+use infra_kernel::debug::{Debugging, LogMutationCtx};
 use serde_json::json;
-use super::{bootstrap, database, core::*};
+use super::{database, core::*};
 use tracing::{error, warn, info, debug, trace};
 
-// Tenant onboarding is rare; serialize it before acquiring pooled connections.
-static BOOTSTRAP_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-static LOGGING_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+mod bootstrap;
+use bootstrap::TenantBootstrapEndpoint;
 
 type ApiError = (StatusCode, Json<serde_json::Value>);
 fn failure(s: StatusCode, msg: &str) -> ApiError {
@@ -35,8 +34,12 @@ async fn profile(auth: &AuthService, principal: &AuthedPrincipal) -> Result<Opti
 }
 
 pub fn routes(auth: Arc<AuthService>) -> Router {
+    let bootstrap: Arc<TenantBootstrapEndpoint> = Arc::new(TenantBootstrapEndpoint::new(
+        auth.db.pool().clone(),
+        Arc::clone(&auth.auth_admin),
+    ));
     let admin: Router<Arc<AuthService>> = Router::new()
-        .route("/platform/tenants", post(create_tenant))
+        .route("/platform/tenants", post(create_tenant).layer(Extension(bootstrap)))
         .route("/platform/log-level", get(log_filter).put(set_log_level))
         .layer(crate::ratelimiting::protected_route_layer(crate::ratelimit::policy(
             crate::ratelimit::AppRouteGroup::Administration,
@@ -80,7 +83,7 @@ async fn session(
 }
 
 async fn create_tenant(
-    State(auth): State<Arc<AuthService>>,
+    Extension(bootstrap): Extension<Arc<TenantBootstrapEndpoint>>,
     Extension(principal): Extension<AuthedPrincipal>,
     Extension(admin): Extension<PlatformProfile>,
     Json(mut request): Json<TenantBootstrapRequest>,
@@ -88,41 +91,16 @@ async fn create_tenant(
     request
         .normalize()
         .map_err(|message: String| failure(StatusCode::UNPROCESSABLE_ENTITY, &message))?;
-    let _permit: tokio::sync::MutexGuard<'_, ()> = BOOTSTRAP_GATE.try_lock().map_err(|_| {
-        failure(
-            StatusCode::CONFLICT,
-            "Một doanh nghiệp khác đang được khởi tạo. Vui lòng thử lại.",
-        )
-    })?;
-    let guard: sqlx::Transaction<'static, sqlx::Postgres> =
-        database::lock_administrator(auth.db.pool(), &principal.issuer, &principal.subject)
-            .await
-            .map_err(|error: sqlx::Error| {
-                if matches!(error, sqlx::Error::RowNotFound) {
-                    failure(StatusCode::FORBIDDEN, "Quyền quản trị đã bị thu hồi.")
-                } else {
-                    failure(StatusCode::SERVICE_UNAVAILABLE, "Không thể kiểm tra quyền quản trị.")
-                }
-            })?;
-    tracing::info!(tenant_id = %request.tenant_id, actor = %principal.subject, "Platform tenant bootstrap requested");
-    let result: TenantBootstrapResult = bootstrap::bootstrap(auth.db.pool(), auth.auth_admin.as_ref(), &principal.issuer, &request, &principal.subject, &admin.email)
-        .await.map_err(|error| {
-            tracing::warn!(tenant_id = %request.tenant_id, reason = %error, "Platform tenant bootstrap rejected");
-            failure(StatusCode::CONFLICT, "Không thể tạo doanh nghiệp. Kiểm tra mã doanh nghiệp và email chủ sở hữu; giữ nguyên yêu cầu để thử lại nếu dịch vụ bị gián đoạn.")
-        })?;
-    guard.commit().await.map_err(|_err: sqlx::Error| {
-        failure(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Hãy gửi lại cùng yêu cầu để kiểm tra kết quả.",
-        )
-    })?;
-    Ok(Json(result))
+    bootstrap.create(&principal, &admin, &request).await.map(Json)
 }
 
 async fn log_filter() -> Result<Json<ServerLogFilter>, ApiError> {
+    let context: tokio::sync::RwLockReadGuard<'_, LogMutationCtx> =
+        Debugging::read().await.map_err(|_: String| -> ApiError {
+            failure(StatusCode::SERVICE_UNAVAILABLE, "Không thể đọc cấu hình ghi log.")
+        })?;
     Ok(Json(ServerLogFilter {
-        filter: Debugging::filter()
-            .map_err(|_| failure(StatusCode::SERVICE_UNAVAILABLE, "Không thể đọc cấu hình ghi log."))?,
+        filter: context.filter().to_owned(),
     }))
 }
 
@@ -131,13 +109,15 @@ async fn set_log_level(
     Extension(principal): Extension<AuthedPrincipal>,
     Json(request): Json<ServerLogLevelRequest>,
 ) -> Result<Json<ServerLogFilter>, ApiError> {
-    let _permit: tokio::sync::MutexGuard<'_, ()> = LOGGING_GATE.lock().await;
+    let mut context: tokio::sync::RwLockWriteGuard<'_, LogMutationCtx> =
+        Debugging::write().await.map_err(|_: String| -> ApiError {
+            failure(StatusCode::SERVICE_UNAVAILABLE, "Không thể đọc cấu hình ghi log.")
+        })?;
     let guard: sqlx::Transaction<'static, sqlx::Postgres> =
         database::lock_administrator(auth.db.pool(), &principal.issuer, &principal.subject)
             .await
             .map_err(|_| failure(StatusCode::FORBIDDEN, "Không thể xác nhận quyền quản trị."))?;
-    let before: String =
-        Debugging::filter().map_err(|_| failure(StatusCode::SERVICE_UNAVAILABLE, "Không thể đọc cấu hình ghi log."))?;
+    let before: String = context.filter().to_owned();
     let result: Result<(), sqlx::Error> = database::audit_log_request(
         auth.db.pool(),
         &principal.issuer,
@@ -150,7 +130,8 @@ async fn set_log_level(
         tracing::error!(reason = %error, "Platform logging audit failed");
         failure(StatusCode::SERVICE_UNAVAILABLE, "Không thể lưu lịch sử thay đổi log.")
     })?;
-    let filter: String = Debugging::set_level(request.level.as_str())
+    let filter: String = context
+        .set_level(request.level.as_str())
         .map_err(|_err: String| failure(StatusCode::SERVICE_UNAVAILABLE, "Không thể cập nhật mức log."))?;
     tracing::warn!(actor = %principal.subject, level = request.level.as_str(), "Server log level changed without restart");
     guard

@@ -1,31 +1,21 @@
-use std::{sync::Arc, time::Instant};
-use std::time::Duration;
+use std::sync::Arc;
 use jsonwebtoken::{
     Algorithm, DecodingKey, Validation, decode, decode_header,
     jwk::{Jwk, JwkSet, KeyOperations, PublicKeyUse},
 };
-use tokio::sync::{RwLockReadGuard, MutexGuard};
-use tokio::sync::{Mutex, RwLock};
 use reqwest::Client;
 use tracing::{debug, error, info, trace, warn};
 
 use super::{AccessTokenClaims, AccessTokenErr, AuthedPrincipal, OidcJwksVerifierCfg};
 
-const UNKNOWN_KID_REFRESH_COOLDOWN_SECS: u64 = 10;
-
-#[derive(Default)]
-struct CachedJwks {
-    set: JwkSet,
-    fetched_at: Option<Instant>,
-}
+mod jwks;
+use jwks::JwksCache;
 
 /// Validates access tokens locally and refreshes provider signing keys on a
 /// bounded interval or immediately when the provider rotates to an unknown KID.
 pub struct OidcJwksVerifier {
     config: OidcJwksVerifierCfg,
-    client: reqwest::Client,
-    jwks: RwLock<CachedJwks>,
-    refresh_guard: Mutex<()>,
+    jwks: JwksCache,
 }
 
 impl OidcJwksVerifier {
@@ -50,9 +40,7 @@ impl OidcJwksVerifier {
             })?;
         let service: Arc<OidcJwksVerifier> = Arc::new(Self {
             config,
-            client,
-            jwks: RwLock::new(CachedJwks::default()),
-            refresh_guard: Mutex::new(()),
+            jwks: JwksCache::new(client),
         });
         service.refresh_jwks(false).await?;
         info!("External identity provider initialized");
@@ -112,13 +100,8 @@ impl OidcJwksVerifier {
     }
 
     async fn decoding_key(&self, kid: &str, alg: Algorithm) -> Result<DecodingKey, AccessTokenErr> {
-        let (cached_jwk, cache_is_fresh): (Option<Jwk>, bool) = {
-            let cache: RwLockReadGuard<CachedJwks> = self.jwks.read().await;
-            let is_fresh: bool = cache
-                .fetched_at
-                .is_some_and(|fetched_at: Instant| fetched_at.elapsed() < self.config.jwks_refresh_interval);
-            (cache.set.find(kid).cloned(), is_fresh)
-        };
+        let (cached_jwk, cache_is_fresh): (Option<Jwk>, bool) =
+            self.jwks.lookup(kid, self.config.jwks_refresh_interval);
         if cache_is_fresh && let Some(jwk) = &cached_jwk {
             trace!(kid, "Using fresh cached external signing key");
             return decoding_key_from_jwk(jwk, alg);
@@ -132,11 +115,8 @@ impl OidcJwksVerifier {
         match self.refresh_jwks(cached_jwk.is_none()).await {
             Ok(()) => self
                 .jwks
-                .read()
-                .await
-                .set
-                .find(kid)
-                .cloned()
+                .lookup(kid, self.config.jwks_refresh_interval)
+                .0
                 .ok_or(AccessTokenErr::UnknownKey)
                 .and_then(|jwk: Jwk| decoding_key_from_jwk(&jwk, alg)),
             Err(error) => {
@@ -152,47 +132,7 @@ impl OidcJwksVerifier {
     }
 
     async fn refresh_jwks(&self, force: bool) -> Result<(), AccessTokenErr> {
-        let _refresh_guard: MutexGuard<()> = self.refresh_guard.lock().await;
-        let cache_age: Option<Duration> = self
-            .jwks
-            .read()
-            .await
-            .fetched_at
-            .map(|fetched_at: Instant| fetched_at.elapsed());
-        let cache_is_fresh: bool = cache_age.is_some_and(|age: Duration| age < self.config.jwks_refresh_interval);
-        let unknown_kid_refresh_is_throttled: bool =
-            force && cache_age.is_some_and(|age: Duration| age.as_secs() < UNKNOWN_KID_REFRESH_COOLDOWN_SECS);
-        if (cache_is_fresh && !force) || unknown_kid_refresh_is_throttled {
-            trace!(
-                force,
-                cache_is_fresh, unknown_kid_refresh_is_throttled, "External signing-key refresh skipped"
-            );
-            return Ok(());
-        }
-
-        debug!(force, "Fetching external signing keys");
-        let set: JwkSet = self
-            .client
-            .get(&self.config.jwks_url)
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .map_err(AccessTokenErr::JwksUnavailable)?
-            .json::<JwkSet>()
-            .await
-            .map_err(AccessTokenErr::JwksUnavailable)?;
-        if set.keys.is_empty() {
-            error!("External identity provider returned an empty signing-key set");
-            return Err(AccessTokenErr::EmptyJwks);
-        }
-        let key_count: usize = set.keys.len();
-
-        *self.jwks.write().await = CachedJwks {
-            set,
-            fetched_at: Some(Instant::now()),
-        };
-        info!(key_count, force, "External signing-key cache refreshed");
-        Ok(())
+        self.jwks.refresh(&self.config, force).await
     }
 }
 
@@ -205,12 +145,7 @@ impl OidcJwksVerifier {
             .expect("test HTTP client");
         Self {
             config,
-            client,
-            jwks: RwLock::new(CachedJwks {
-                set,
-                fetched_at: Some(Instant::now()),
-            }),
-            refresh_guard: Mutex::new(()),
+            jwks: JwksCache::with_keys(client, set),
         }
     }
 }

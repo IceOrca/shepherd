@@ -14,6 +14,7 @@ use tracing::{error, warn, info, debug, trace};
 use std::sync::Arc;
 
 #[cfg(test)]
+// This is a fixture scheduling barrier, not ownership of business mutation state.
 static DATABASE_INTEGRATION_TEST_LOCK: std::sync::LazyLock<std::sync::Arc<tokio::sync::Mutex<()>>> =
     std::sync::LazyLock::new(|| std::sync::Arc::new(tokio::sync::Mutex::new(())));
 

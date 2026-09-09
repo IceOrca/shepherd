@@ -302,6 +302,37 @@ Background work must be explicitly bounded according to its lifecycle:
 - Tokio cannot forcibly terminate a running `spawn_blocking` closure. Blocking handlers must periodically inspect cancellation when appropriate, and callers must not treat an elapsed async waiting deadline as proof that a blocking side effect stopped.
 - An in-memory worker timeout logs and cancels the current async future but does not invent a retry policy. Durable retries belong to the owning application, must use persisted state, and require idempotent operations because an external side effect can race with timeout or cancellation.
 
+For in-process mutation serialization, prefer capability-owning
+`Mutex<DomainMutationCtx>` / `RwLock<DomainMutationCtx>` over a detached
+`Mutex<()>` gate. Keep context construction and fields private; do not implement
+`Clone` or expose mutable capabilities independently of the guard. Put sensitive
+operations on `&mut self` context methods and expose only a locking entry point
+or an RAII write guard. Hold the guard across the whole read/validate/await/write
+sequence. A read guard must not permit mutation. Guard drop releases access on
+success, error, and cancellation, but cannot compensate committed external
+effects. Process-local locks never replace PostgreSQL transactions, RLS, row
+locks, advisory locks, or persistent idempotency.
+
+JWKS refresh uses `Mutex<JwksMutationCtx>` with the HTTP client and sole
+`watch::Sender` cache publisher inside the context. A read-only receiver keeps
+cached-key validation available during bounded HTTP refresh; never expose the
+publisher or a cache-write bypass to the verifier. Recheck freshness/cooldown
+after acquiring the mutex and publish only a successfully decoded non-empty
+key set. Tracing uses `RwLock<LogMutationCtx>` for the reload handle plus current
+filter. `Debugging::{read,write}` return guards; only the writable context
+exposes `set_level(&mut self, ...)`. Platform logging retains that guard from
+the old-filter read through audit, reload, and administrator-transaction finish.
+The web-bootstrap endpoint shares one `Mutex<TenantBootstrapMutationCtx>`
+across router clones and acquires it before any pooled connection; its context
+owns the database/provider capabilities and administrator revalidation workflow.
+
+Do not mechanically convert already data-owning locks or the test-only fixture
+barrier into empty marker contexts. The retained legacy-auth source is
+uncompiled reference material and stays untouched. Test real guarded workflows
+for concurrency and failure/cancellation release; include a compile-fail check
+that a logging read guard cannot invoke mutation. This refactor changes no
+database schema, HTTP DTO, browser behavior, or environment contract.
+
 The notification dispatcher is a long-lived cancellation-driven worker backed by `notification_outbox`. Notification destinations and outbox rows are branch-owned. Producers must persist the branch ID and use the full `(tenant_id, branch_id, event_type, aggregate_id, channel, destination)` idempotency key; never silently broaden delivery to another branch. Provider HTTP and whole-delivery deadlines, polling, claim size, maximum attempts, exponential retry base/cap, processing-lock recovery, and process shutdown are environment-configured. It checks cancellation during active passes and between deliveries. A timed-out provider delivery is a retryable failure; an interrupted processing record is recovered through its bounded processing-lock lease. The configured processing-lock window must cover the worst-case claimed batch and is raised with a warning when it is too short.
 
 Application code lives in `server/applications/shepherd/` and is divided by business area:
